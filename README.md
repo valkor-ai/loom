@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/loom-logo.svg" alt="Loom" width="560">
   <p><strong>Loop engineering for agentic software delivery.</strong></p>
-  <p>An open delivery harness that turns Claude Code, Codex, OpenCode and other coding agents into repeatable software delivery systems.</p>
+  <p>An open delivery harness that turns Claude Code, Codex, OpenCode and other coding agents into repeatable software delivery systems. Harness for Coding Agents</p>
   <p>
     <a href="./README.zh-CN.md">Simplified Chinese</a>
     ·
