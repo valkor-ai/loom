@@ -9,6 +9,7 @@ const MAX_RECENT_EVENTS = 100;
 
 export type TokenSavingEventSource =
   | "compact_envelope"
+  | "inspect_selectors"
   | "request_manifest_refs";
 
 export type TokenSavingEventInput = {
@@ -176,7 +177,7 @@ function normalizeTelemetryFile(value: unknown): TokenSavingSummary {
 
 function normalizeStoredEvent(value: Record<string, unknown>): TokenSavingEvent | null {
   const source = value.source;
-  if (source !== "compact_envelope" && source !== "request_manifest_refs") return null;
+  if (source !== "compact_envelope" && source !== "inspect_selectors" && source !== "request_manifest_refs") return null;
   const fullBytes = numberValue(value.fullBytes);
   const compactBytes = numberValue(value.compactBytes);
   const bytesAvoided = numberValue(value.bytesAvoided);

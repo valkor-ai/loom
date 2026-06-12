@@ -280,13 +280,14 @@ Resume state | Next action、active operation refs、continuation rules | 反复
 
 这个模式和 compress-cache-retrieve 的精神接近：先展示紧凑 projection，保留完整 artifact 的可回取路径，并且只在正确性需要时展开。对 Loom 来说，关键约束是 contracts 必须保持精确。省 token 靠的是结构化 refs 和 targeted retrieval，而不是把 agent 必须遵守的权威内容总结掉。
 
-Loom 会把这条路径的本地聚合 telemetry 写入 `.loom/metrics/token-saving.json`，并通过 `status` 展示累计结果。Telemetry 只保存字节数、估算节省 token、事件来源和 refs；不会保存 prompts、artifact 正文、日志或用户内容。
+Loom 会把这条路径的本地聚合 telemetry 写入 `.loom/metrics/token-saving.json`，并通过 `status` 展示累计结果；详细本地报告可以用 `loom metrics token-saving` 查看。Telemetry 覆盖 compact envelopes、ref-first request manifests 和 targeted `inspect` selector reads。它只保存字节数、估算节省 token、事件来源和 refs；不会保存 prompts、artifact 正文、日志或用户内容。
 
 ## 了解更多
 
 需求 | 命令或文件
 --- | ---
 查看可用命令 | `"$HOME/.loom/bin/loom-cli" --help`
+查看省 token telemetry | `"$HOME/.loom/bin/loom-cli" metrics token-saving --project-root /path/to/project`
 安装或刷新全部 adapters | `npm run plugin:install-adapters`
 安装或刷新 Codex adapter | `npm run plugin:install-codex`
 安装或刷新 Claude Code adapter | `npm run plugin:install-claude`

@@ -25,6 +25,7 @@ import {
 } from "./deploy";
 import { handleInit } from "./init";
 import { createInspectHandler } from "./inspect";
+import { handleTokenSavingMetrics } from "./metrics";
 import { createNextTaskHandler } from "./next-task";
 import { createPlanHandler } from "./plan";
 import { createPlanningContractCreateHandler } from "./planning-contract";
@@ -62,6 +63,9 @@ export async function runCli(argv: string[]): Promise<void> {
 
   registerSimpleCommand(program, "init", "Initialize loom state", handleInit);
   registerSimpleCommand(program, "status", "Show loom project status", handleStatus);
+
+  const metrics = program.command("metrics").description("Show local loom metrics");
+  registerSimpleCommand(metrics, "token-saving", "Show token-saving telemetry", handleTokenSavingMetrics);
 
   program
     .command("inspect")

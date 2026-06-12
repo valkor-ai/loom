@@ -37,15 +37,24 @@ function captureStdout(fn) {
   return output;
 }
 
-function runStatus(projectRoot) {
-  const output = execFileSync(process.execPath, [cli, "status", "--project-root", projectRoot, "--json", "--compact"], {
+function runJson(args, projectRoot, options = {}) {
+  const cliArgs = [cli, ...args, "--project-root", projectRoot, "--json"];
+  if (options.compact) {
+    cliArgs.push("--compact");
+  }
+  const output = execFileSync(process.execPath, cliArgs, {
     cwd: repoRoot,
     encoding: "utf8",
     env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `status failed: ${output}`);
+  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
+  return envelope;
+}
+
+function runStatus(projectRoot) {
+  const envelope = runJson(["status"], projectRoot, { compact: true });
   return envelope.data;
 }
 
@@ -108,12 +117,15 @@ async function main() {
     rules: Array.from({ length: 100 }, (_, index) => `${sentinel}-rule-${index}-${"x".repeat(40)}`),
   });
 
+  runJson(["inspect", "--request", ".loom/tmp/request.json", "--field", "outputContract.schemaShape"], projectRoot);
+
   const telemetryFile = projectFile(projectRoot, ".loom/metrics/token-saving.json");
   const telemetry = readJson(telemetryFile);
   assert.equal(telemetry.schemaVersion, "1.0", "telemetry schema version");
-  assert.equal(telemetry.totals.eventCount, 2, "expected compact envelope and request manifest events");
+  assert.equal(telemetry.totals.eventCount, 3, "expected compact envelope, request manifest, and inspect selector events");
   assertSourceTotals(telemetry, "compact_envelope", 1);
   assertSourceTotals(telemetry, "request_manifest_refs", 1);
+  assertSourceTotals(telemetry, "inspect_selectors", 1);
   assert.equal(JSON.stringify(telemetry).includes(sentinel), false, "telemetry must not store prompt, request, or artifact bodies");
   assert.ok(
     telemetry.recentEvents.every((event) => event.fullBytes > event.compactBytes),
@@ -122,15 +134,21 @@ async function main() {
 
   const status = runStatus(projectRoot);
   assert.equal(status.tokenSaving.telemetryRef, ".loom/metrics/token-saving.json", "status telemetry ref");
-  assert.equal(status.tokenSaving.eventCount, 2, "status must expose the current telemetry total");
+  assert.equal(status.tokenSaving.eventCount, 3, "status must expose the current telemetry total");
   assert.deepEqual(
     Object.keys(status.tokenSaving.bySource).sort(),
-    ["compact_envelope", "request_manifest_refs"],
+    ["compact_envelope", "inspect_selectors", "request_manifest_refs"],
     "status must expose source totals",
   );
 
-  const afterStatus = await readTokenSavingSummary(projectRoot);
-  assert.equal(afterStatus.totals.eventCount, 2, "status must not mutate token-saving telemetry while displaying it");
+  const metrics = runJson(["metrics", "token-saving"], projectRoot, { compact: true }).data.tokenSaving;
+  assert.equal(metrics.telemetryRef, ".loom/metrics/token-saving.json", "metrics telemetry ref");
+  assert.equal(metrics.eventCount, 3, "metrics command must expose the current telemetry total");
+  assert.ok(metrics.recentEvents.some((event) => event.source === "inspect_selectors"), "metrics command must expose inspect selector events");
+  assert.equal(JSON.stringify(metrics).includes(sentinel), false, "metrics command must not expose prompt, request, or artifact bodies");
+
+  const afterReadCommands = await readTokenSavingSummary(projectRoot);
+  assert.equal(afterReadCommands.totals.eventCount, 3, "status and metrics must not mutate token-saving telemetry while displaying it");
 }
 
 main().catch((error) => {

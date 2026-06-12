@@ -278,13 +278,14 @@ Resume state | Next action, active operation refs, continuation rules | Repeated
 
 The pattern is similar in spirit to compress-cache-retrieve: show a compact projection first, keep the full artifact retrievable, and expand only when correctness requires it. For Loom, the important constraint is that contracts stay exact. Token savings come from structured refs and targeted retrieval, not from summarizing away the authority the agent must obey.
 
-Loom records local aggregate telemetry for this path in `.loom/metrics/token-saving.json` and surfaces the totals through `status`. The telemetry stores byte counts, estimated tokens saved, event sources, and refs only; it does not store prompts, artifact bodies, logs, or user content.
+Loom records local aggregate telemetry for this path in `.loom/metrics/token-saving.json` and surfaces totals through `status`; use `loom metrics token-saving` for the detailed local report. The telemetry covers compact envelopes, ref-first request manifests, and targeted `inspect` selector reads. It stores byte counts, estimated tokens saved, event sources, and refs only; it does not store prompts, artifact bodies, logs, or user content.
 
 ## Learn More
 
 Need | Command or file
 --- | ---
 See available commands | `"$HOME/.loom/bin/loom-cli" --help`
+Inspect token-saving telemetry | `"$HOME/.loom/bin/loom-cli" metrics token-saving --project-root /path/to/project`
 Install or refresh all adapters | `npm run plugin:install-adapters`
 Install or refresh Codex adapter | `npm run plugin:install-codex`
 Install or refresh Claude Code adapter | `npm run plugin:install-claude`

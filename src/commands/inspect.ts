@@ -4,6 +4,8 @@ import { invalidArgument, LoomError } from "../core/errors";
 import { ok } from "./envelope";
 import { readJsonFile } from "../core/state/fs";
 import { normalizeAgentActionForRequest } from "../core/operations/agent-action";
+import { hydrateRequestManifest } from "../core/operations/request-manifest";
+import { prettyJsonByteLength, recordTokenSavingEvent } from "../core/operations/token-saving-telemetry";
 import type { CliEnvelope, CommandContext } from "./types";
 
 export function createInspectHandler(options: {
@@ -59,11 +61,13 @@ export function createInspectHandler(options: {
         },
       };
     }
-    return ok("inspect", ctx.projectRoot, {
+    const data = {
       requestRef,
       requestedFields: fields,
       fields: resolvedFields,
-    }, fields.length === 1 ? "Field inspected." : "Fields inspected.");
+    };
+    await recordInspectTelemetry(ctx.projectRoot, requestFile, requestRef, data, resolvedFields);
+    return ok("inspect", ctx.projectRoot, data, fields.length === 1 ? "Field inspected." : "Fields inspected.");
   };
 }
 
@@ -499,4 +503,48 @@ function resolveProjectFile(projectRoot: string, fileRef: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function recordInspectTelemetry(
+  projectRoot: string,
+  requestFile: string,
+  requestRef: string,
+  data: Record<string, unknown>,
+  resolvedFields: Record<string, {
+    status: "resolved" | "not_available";
+    value: unknown;
+    fieldRead: {
+      status: "resolved" | "not_available";
+      resolvedRefKey: string | null;
+      resolvedRef: string | null;
+      selector: string;
+      source: "request_root" | "request_manifest_ref";
+      unavailableReason?: string;
+    };
+  }>,
+): Promise<void> {
+  try {
+    await recordTokenSavingEvent({
+      projectRoot,
+      source: "inspect_selectors",
+      command: "inspect",
+      artifactRef: requestRef,
+      fullBytes: prettyJsonByteLength(await hydrateRequestManifest(projectRoot, requestFile)),
+      compactBytes: prettyJsonByteLength(data),
+      metadata: {
+        fieldCount: Object.keys(resolvedFields).length,
+        fields: Object.keys(resolvedFields),
+        sources: [...new Set(Object.values(resolvedFields).map((field) => field.fieldRead.source))],
+        resolvedRefKeys: [
+          ...new Set(
+            Object.values(resolvedFields)
+              .map((field) => field.fieldRead.resolvedRefKey)
+              .filter((refKey): refKey is string => typeof refKey === "string" && refKey.length > 0),
+          ),
+        ],
+      },
+    });
+  } catch {
+    // Telemetry must never block inspect reads.
+  }
 }

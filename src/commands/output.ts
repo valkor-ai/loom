@@ -25,7 +25,7 @@ export function printEnvelope(envelope: CliEnvelope, options: { compact?: boolea
 }
 
 function shouldRecordCompactEnvelopeTelemetry(envelope: CliEnvelope): boolean {
-  return envelope.command !== "status";
+  return envelope.command !== "status" && !envelope.command.startsWith("metrics.");
 }
 
 function compactEnvelope(envelope: CliEnvelope): Record<string, unknown> {
