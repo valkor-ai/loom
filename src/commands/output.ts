@@ -9,7 +9,7 @@ import {
 export function printEnvelope(envelope: CliEnvelope, options: { compact?: boolean } = {}): void {
   const payload = options.compact ? compactEnvelope(envelope) : envelope;
   const json = options.compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
-  if (options.compact) {
+  if (options.compact && shouldRecordCompactEnvelopeTelemetry(envelope)) {
     recordTokenSavingEventSync({
       projectRoot: envelope.projectRoot,
       source: "compact_envelope",
@@ -22,6 +22,10 @@ export function printEnvelope(envelope: CliEnvelope, options: { compact?: boolea
     });
   }
   process.stdout.write(`${json}\n`);
+}
+
+function shouldRecordCompactEnvelopeTelemetry(envelope: CliEnvelope): boolean {
+  return envelope.command !== "status";
 }
 
 function compactEnvelope(envelope: CliEnvelope): Record<string, unknown> {
