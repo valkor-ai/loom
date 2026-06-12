@@ -10,6 +10,11 @@ import { getLoomPaths } from "../state/paths";
 import { type OperationProgressSignal, progressSignalForOperation, readOperationLease } from "./control";
 import { hydrateRequestManifest } from "./request-manifest";
 import { type PossibleRuntimeForegroundStall, possibleRuntimeForegroundStall } from "./runtime-stall";
+import {
+  projectRelativeTelemetryPath,
+  readTokenSavingSummary,
+  type TokenSavingSummary,
+} from "./token-saving-telemetry";
 import { completedDeliveryUserMessage, type LoomCommandSurface } from "./user-guidance";
 
 export type GetStatusInput = {
@@ -32,8 +37,18 @@ export type GetStatusResult = {
   nextAction: LoomStatusV1["nextAction"];
   effectiveNextAction: LoomStatusV1["effectiveNextAction"] | null;
   activeOperation: ActiveOperationStatus | null;
+  tokenSaving: TokenSavingStatus | null;
   userGuidance: string | null;
   warnings: string[];
+};
+
+type TokenSavingStatus = {
+  telemetryRef: string;
+  updatedAt: string;
+  eventCount: number;
+  bytesAvoided: number;
+  estimatedTokensSaved: number;
+  bySource: TokenSavingSummary["totals"]["bySource"];
 };
 
 type ActiveOperationStatus = {
@@ -93,6 +108,7 @@ export async function getStatus(input: GetStatusInput): Promise<GetStatusResult>
     const activeOperation = status.activeDeliveryId
       ? await activeOperationStatus(paths.root, status.activeDeliveryId, commandSurface)
       : null;
+    const tokenSaving = await tokenSavingStatus(paths.root);
     const userGuidance = activeOperation?.resumeCommand.guidance
       ?? (!status.activeDeliveryId && status.phase === "completed" ? completedDeliveryUserMessage(commandSurface) : null);
 
@@ -111,6 +127,7 @@ export async function getStatus(input: GetStatusInput): Promise<GetStatusResult>
       nextAction: status.nextAction,
       effectiveNextAction: status.effectiveNextAction ?? null,
       activeOperation,
+      tokenSaving,
       userGuidance,
       warnings,
     };
@@ -128,6 +145,21 @@ export async function getStatus(input: GetStatusInput): Promise<GetStatusResult>
     }
     throw error;
   }
+}
+
+async function tokenSavingStatus(projectRoot: string): Promise<TokenSavingStatus | null> {
+  const telemetry = await readTokenSavingSummary(projectRoot);
+  if (!telemetry || telemetry.totals.eventCount === 0) {
+    return null;
+  }
+  return {
+    telemetryRef: projectRelativeTelemetryPath(projectRoot),
+    updatedAt: telemetry.updatedAt,
+    eventCount: telemetry.totals.eventCount,
+    bytesAvoided: telemetry.totals.bytesAvoided,
+    estimatedTokensSaved: telemetry.totals.estimatedTokensSaved,
+    bySource: telemetry.totals.bySource,
+  };
 }
 
 async function activeOperationStatus(

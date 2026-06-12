@@ -7,6 +7,8 @@ export type LoomPaths = {
   loomDir: string;
   configFile: string;
   statusFile: string;
+  metricsDir: string;
+  tokenSavingTelemetryFile: string;
   gitignoreFile: string;
   directories: string[];
 };
@@ -23,9 +25,11 @@ export function resolveProjectRoot(projectRoot: string): string {
 export function getLoomPaths(projectRoot: string): LoomPaths {
   const root = resolveProjectRoot(projectRoot);
   const loomDir = path.join(root, LOOM_DIR);
+  const metricsDir = path.join(loomDir, "metrics");
   const relativeDirs = [
     path.join("contracts", "repo-signals"),
     "deliveries",
+    "metrics",
     "tmp",
   ];
 
@@ -34,6 +38,8 @@ export function getLoomPaths(projectRoot: string): LoomPaths {
     loomDir,
     configFile: path.join(loomDir, "config.json"),
     statusFile: path.join(loomDir, "status.json"),
+    metricsDir,
+    tokenSavingTelemetryFile: path.join(metricsDir, "token-saving.json"),
     gitignoreFile: path.join(loomDir, ".gitignore"),
     directories: relativeDirs.map((dir) => path.join(loomDir, dir)),
   };

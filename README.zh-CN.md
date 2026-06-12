@@ -13,6 +13,8 @@
     ·
     <a href="#如何使用">如何使用</a>
     ·
+    <a href="#省-token-的上下文方案">省 Token</a>
+    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
@@ -239,6 +241,46 @@ Loom 在项目本地创建 `.loom/` 交付状态，并把它作为 agent 下一�
 5. 记录证据并运行验证。
 6. Review、修复、再次检查。
 7. 报告最终交付状态。
+
+## 省 Token 的上下文方案
+
+Loom 的省 token 发生在交付协议层。它不会要求 agent 把所有 artifact 都塞进聊天上下文，也不会对交付 contracts 做有损压缩。完整的 source of truth 留在 `.loom/`，进入对话的只是当前步骤需要的 projection、refs、selectors 和 recovery commands。
+
+```text
+Your coding agent / app
+(Codex, Claude Code, OpenCode, future adapters...)
+        |
+        | delivery goal . repo context . logs . tests . preview evidence
+        v
++----------------------------------------------------------------------------+
+| Loom  (项目本地交付状态；完整 artifacts 留在 .loom/)                       |
+|----------------------------------------------------------------------------|
+| Dynamic workflow router -> Request manifest -> Agent read plan              |
+|                              |                                             |
+|                              |- .refs/*.json        full authority          |
+|                              |- fieldGroups         grouped required reads  |
+|                              |- inspect selectors   targeted retrieval      |
+|                              `- compact envelope    next action + refs      |
+|                                                                            |
+| Task contracts . evidence windows . fullLogRef . review/repair/resume state |
++----------------------------------------------------------------------------+
+        |
+        | compact instruction + selected refs + retrieval path
+        v
+Agent turn / LLM context
+```
+
+机制 | 进入上下文的内容 | 留在上下文外的内容
+--- | --- | ---
+Ref-first request manifests | 当前 request path、必读 field groups、selector hints | `.refs/*.json` 下的大字段
+Compact read plans | `agentAction.read.fieldGroups` 和 `inspect` commands | 除非 field group 要求，否则不读取整份 request artifact
+Evidence windows | Error windows、diagnostics、summaries、`fullLogRef` | 完整 build、test、deploy logs
+Task contracts | 有边界的 task scope、acceptance refs、result path、submit command | 除非被选中，否则不读取历史 task plans、results 和 reviews
+Resume state | Next action、active operation refs、continuation rules | 反复整仓读取或整段交付历史重读
+
+这个模式和 compress-cache-retrieve 的精神接近：先展示紧凑 projection，保留完整 artifact 的可回取路径，并且只在正确性需要时展开。对 Loom 来说，关键约束是 contracts 必须保持精确。省 token 靠的是结构化 refs 和 targeted retrieval，而不是把 agent 必须遵守的权威内容总结掉。
+
+Loom 会把这条路径的本地聚合 telemetry 写入 `.loom/metrics/token-saving.json`，并通过 `status` 展示累计结果。Telemetry 只保存字节数、估算节省 token、事件来源和 refs；不会保存 prompts、artifact 正文、日志或用户内容。
 
 ## 了解更多
 

@@ -1,9 +1,26 @@
 import type { CliEnvelope } from "./types";
 import { agentFacingInstruction } from "./agent-facing-instruction";
+import {
+  compactJsonByteLength,
+  prettyJsonByteLength,
+  recordTokenSavingEventSync,
+} from "../core/operations/token-saving-telemetry";
 
 export function printEnvelope(envelope: CliEnvelope, options: { compact?: boolean } = {}): void {
   const payload = options.compact ? compactEnvelope(envelope) : envelope;
   const json = options.compact ? JSON.stringify(payload) : JSON.stringify(payload, null, 2);
+  if (options.compact) {
+    recordTokenSavingEventSync({
+      projectRoot: envelope.projectRoot,
+      source: "compact_envelope",
+      command: envelope.command,
+      fullBytes: prettyJsonByteLength(envelope),
+      compactBytes: compactJsonByteLength(payload),
+      metadata: {
+        ok: envelope.ok,
+      },
+    });
+  }
   process.stdout.write(`${json}\n`);
 }
 
@@ -94,6 +111,7 @@ function compactData(data: unknown): unknown {
     "attempts",
     "maxAttempts",
     "truncated",
+    "tokenSaving",
     "userGuidance",
     "warnings",
   ]) {

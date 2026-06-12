@@ -13,6 +13,8 @@
     ·
     <a href="#how-to-use">How to Use</a>
     ·
+    <a href="#token-saving-context">Token Saving</a>
+    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
@@ -237,6 +239,46 @@ Loom creates project-local delivery state under `.loom/` and uses it as the sour
 5. Record evidence and run verification.
 6. Review, repair, and re-check.
 7. Report the final delivery state.
+
+## Token-Saving Context
+
+Loom saves tokens at the delivery-protocol layer. It does not ask the agent to keep every artifact in chat, and it does not lossy-compress delivery contracts. The complete source of truth stays in `.loom/`; the chat-visible surface carries the current projection, refs, selectors, and recovery commands.
+
+```text
+Your coding agent / app
+(Codex, Claude Code, OpenCode, future adapters...)
+        |
+        | delivery goal . repo context . logs . tests . preview evidence
+        v
++----------------------------------------------------------------------------+
+| Loom  (project-local delivery state; full artifacts stay in .loom/)         |
+|----------------------------------------------------------------------------|
+| Dynamic workflow router -> Request manifest -> Agent read plan              |
+|                              |                                             |
+|                              |- .refs/*.json        full authority          |
+|                              |- fieldGroups         grouped required reads  |
+|                              |- inspect selectors   targeted retrieval      |
+|                              `- compact envelope    next action + refs      |
+|                                                                            |
+| Task contracts . evidence windows . fullLogRef . review/repair/resume state |
++----------------------------------------------------------------------------+
+        |
+        | compact instruction + selected refs + retrieval path
+        v
+Agent turn / LLM context
+```
+
+Mechanism | What enters context | What stays out of context
+--- | --- | ---
+Ref-first request manifests | Current request path, required field groups, selector hints | Large request fields stored under `.refs/*.json`
+Compact read plans | `agentAction.read.fieldGroups` and `inspect` commands | Whole request artifacts unless a field group requires them
+Evidence windows | Error windows, diagnostics, summaries, `fullLogRef` | Full build, test, and deploy logs
+Task contracts | Bounded task scope, acceptance refs, result path, submit command | Historical task plans, results, and reviews unless selected
+Resume state | Next action, active operation refs, continuation rules | Repeated whole-repository or whole-delivery rereads
+
+The pattern is similar in spirit to compress-cache-retrieve: show a compact projection first, keep the full artifact retrievable, and expand only when correctness requires it. For Loom, the important constraint is that contracts stay exact. Token savings come from structured refs and targeted retrieval, not from summarizing away the authority the agent must obey.
+
+Loom records local aggregate telemetry for this path in `.loom/metrics/token-saving.json` and surfaces the totals through `status`. The telemetry stores byte counts, estimated tokens saved, event sources, and refs only; it does not store prompts, artifact bodies, logs, or user content.
 
 ## Learn More
 
