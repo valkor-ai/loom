@@ -1542,6 +1542,15 @@ function taskResult(request) {
       notes: [],
     },
     notes: [],
+    requirementDetailEvidence: (request.task.requirementDetailRefs ?? []).map((detailId) => ({
+      detailId,
+      status: "satisfied",
+      verificationIds: request.task.verificationIntents
+        .filter((intent) => (intent.requirementDetailRefs ?? []).includes(detailId))
+        .map((intent) => intent.verificationId),
+      evidenceRefs: ["src/layered.js", request.task.verificationIntents[0].verificationId],
+      summary: "The validation detail is implemented and verified by the layered fixture source and static verification intent.",
+    })),
     conceptEvidence: [{
       conceptRef: "concept-core-validation",
       evidenceType: "code",
@@ -2240,11 +2249,29 @@ function main() {
     assert.equal(review.instruction.requestRef, review.requestPath);
     assert.equal(review.instruction.resultFile, reviewRequest.outputContract.resultFile);
     assert.ok(reviewRequest.agentAction.read.required.includes("conceptReviewMatrix"));
+    assert.ok(reviewRequest.agentAction.read.required.includes("detailReviewMatrix"));
     assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.conceptReviewRules"));
+    assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.requirementDetailReview"));
     assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("conceptRef from conceptReviewMatrix")));
+    assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("detailReviewMatrix")));
     assert.equal(reviewRequest.conceptReviewMatrix[0].conceptRef, "concept-core-validation");
     assert.equal(reviewRequest.conceptReviewMatrix[0].priority, "must_understand");
     assert.ok(reviewRequest.conceptReviewMatrix[0].mustNotMisinterpretAs.includes("deployment work"));
+    assert.ok(
+      reviewRequest.detailReviewMatrix.some((item) =>
+        item.status === "satisfied" &&
+        item.taskRefs.includes("task-core") &&
+        item.evidenceRefs.includes("result-layered")
+      ),
+      "ReviewRequest must carry requirement detail review matrix from TaskResult evidence.",
+    );
+    assert.ok(
+      reviewRequest.outputContract.reviewSignals.some((signal) =>
+        signal.kind === "requirement_detail_evidence" &&
+        signal.detailSatisfied === true
+      ),
+      "ReviewRequest reviewSignals must include satisfied requirement detail evidence facts.",
+    );
     mark("L3", "ReviewRequest create returned auto-runnable instruction");
     assert.deepEqual(readJson(projectFile(root, reviewRequest.changeContextRef)).changedFiles.map((file) => file.path), ["src/layered.js", "package-lock.json"]);
     const manualReviewFile = reviewRequest.outputContract.resultFile.replace(/result\.json$/, "manual-result.json");

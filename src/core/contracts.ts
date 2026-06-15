@@ -1495,6 +1495,14 @@ export const verificationResultSchema = z.object({
   summary: z.string().min(1),
 });
 
+export const requirementDetailEvidenceSchema = z.object({
+  detailId: z.string().min(1),
+  status: z.enum(["satisfied", "partially_satisfied", "not_satisfied", "not_verified"]),
+  verificationIds: refsSchema,
+  evidenceRefs: refsSchema,
+  summary: z.string().min(1),
+});
+
 export const selfRepairSummarySchema = z.object({
   attempted: z.boolean(),
   attemptCount: z.number().int().nonnegative(),
@@ -1544,6 +1552,7 @@ export const taskResultSchema = z.object({
   notes: refsSchema,
   frontendExperienceSelfCheck: z.record(z.unknown()).optional(),
   runtimeDeliveryEvidence: runtimeDeliveryEvidenceSchema.optional(),
+  requirementDetailEvidence: z.array(requirementDetailEvidenceSchema).optional(),
   conceptEvidence: z.array(z.object({
     conceptRef: z.string().min(1),
     evidenceType: conceptEvidenceTypeSchema,
@@ -1695,6 +1704,14 @@ export const reviewRequestSchema = z.object({
     taskRefs: refsSchema,
     evidenceRefs: refsSchema,
     mustNotMisinterpretAs: refsSchema,
+  })).optional(),
+  detailReviewMatrix: z.array(z.object({
+    detailId: z.string().min(1),
+    taskRefs: refsSchema,
+    expectedVerificationIds: refsSchema,
+    evidenceRefs: refsSchema,
+    status: z.enum(["satisfied", "partially_satisfied", "not_satisfied", "not_verified", "missing"]),
+    summary: z.string().min(1),
   })).optional(),
   changeSet: z.record(z.unknown()).optional(),
   reviewRules: z.object({

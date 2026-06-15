@@ -296,6 +296,7 @@ const taskResultRequiredTopLevelFields = [
   "failure",
   "executionContinuity",
   "notes",
+  "requirementDetailEvidence",
   "blockedReasons",
   "createdAt",
   "updatedAt",
@@ -2740,6 +2741,7 @@ async function buildTaskExecutionRequest(
       "outputContract.schemaShape.frontendExperienceSelfCheck.operationPathsCovered",
       "outputContract.schemaShape.frontendExperienceSelfCheck.knownGaps",
     ] : []),
+    ...(requirementDetailSnapshot.length > 0 ? ["outputContract.schemaShape.requirementDetailEvidence"] : []),
     ...(requestTask.conceptRefs && requestTask.conceptRefs.length > 0 ? ["outputContract.schemaShape.conceptEvidence"] : []),
     "outputContract.schemaShape.notes",
     "outputContract.schemaShape.blockedReasons",
@@ -2816,6 +2818,7 @@ async function buildTaskExecutionRequest(
           ] : []),
           "changedFiles must list intended deliverables only, not node_modules, caches, logs, dist, build, or other incidental side effects.",
           "When task.conceptRefs is non-empty, write conceptEvidence for every task conceptRef using the exact concept ids from taskConceptGrounding.",
+          "When task.requirementDetailRefs is non-empty, write requirementDetailEvidence for every task.requirementDetailRefs detailId using the exact detailId values from sourceContext.requirementDetailSnapshot.",
           "When conceptEvidence is required for an object operation, make the summary identify the concrete field meaning, operation invariant, validation/blocking reason, state transition, or visible feedback that was protected.",
           "If verification fails after allowed self-repair, still submit a failed or blocked TaskResult instead of asking the user whether to continue.",
         ],
@@ -3067,6 +3070,7 @@ async function buildTaskExecutionRequest(
         "For frontend tasks, use frontendBackendBindings as coding guidance for user-action-to-interface wiring. If a needed binding is absent, read AAC/TaskPlan/source and continue; do not treat projection absence as a validator failure.",
         "When task acceptance or concept grounding names concrete object fields, object operations, blocking reasons, state changes, or visible feedback, verificationResults and conceptEvidence must mention the matching implemented or verified behavior instead of only reporting that the module exists.",
         "When sourceContext.requirementDetailSnapshot is non-empty, verificationResults should identify the relevant detailId or detail title in the summary for each verificationIntents[].requirementDetailRefs item.",
+        "When task.requirementDetailRefs is non-empty, requirementDetailEvidence must include each detailId with status, verificationIds, evidenceRefs, and a summary tied to implementation or verification evidence.",
         ...(workflowClosureRequirements.length > 0 ? [
           "For tasks with closureRequirementRefs, frontendExperienceSelfCheck.status=satisfied is valid only when frontendExperienceSelfCheck.dataBinding.mode=wired and frontendExperienceSelfCheck.knownGaps is empty.",
           "If the task remains static_only_with_reason, mocked_with_reason, or has knownGaps for required closure, use partially_satisfied/not_satisfied in frontendExperienceSelfCheck and completed_with_notes/failed/blocked according to the actual implementation and verification outcome.",
@@ -3217,6 +3221,15 @@ function taskResultSchemaShape(taskPlan: TaskPlan, task: Task): Record<string, u
       knownGaps: ["remaining frontend gaps or []"],
       notes: ["How the UI work satisfies or partially satisfies the frontend requirement."],
     } : undefined,
+    requirementDetailEvidence: (task.requirementDetailRefs ?? []).map((detailId) => ({
+      detailId,
+      status: "satisfied | partially_satisfied | not_satisfied | not_verified",
+      verificationIds: task.verificationIntents
+        .filter((intent) => (intent.requirementDetailRefs ?? []).includes(detailId))
+        .map((intent) => intent.verificationId),
+      evidenceRefs: ["project-relative changed file, test, API/UI/runtime evidence ref, or verificationId"],
+      summary: "How this task implemented or verified the detail. Mention the concrete field, rule, state, flow, UI/API binding, blocking reason, or feedback covered.",
+    })),
     conceptEvidence: (task.conceptRefs ?? []).length > 0 ? (task.conceptRefs ?? []).map((conceptRef) => ({
       conceptRef,
       evidenceType: "code | test | api | ui | runtime | documentation",

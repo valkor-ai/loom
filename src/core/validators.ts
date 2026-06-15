@@ -162,6 +162,10 @@ const ISSUE_TEMPLATES: Record<string, IssueTemplate> = {
     message: "A covered current-phase requirement detail is not assigned to TaskPlan tasks and verification intents.",
     repairHint: "Assign the detailId through task.requirementDetailRefs and verificationIntents[].requirementDetailRefs, or repair AAC if the detail is not actually covered by architecture artifacts.",
   },
+  TASK_RESULT_DETAIL_EVIDENCE_INVALID: {
+    message: "TaskResult requirement detail evidence is missing, invalid, or inconsistent with assigned detail refs.",
+    repairHint: "Add requirementDetailEvidence entries for every task.requirementDetailRefs detailId and link them to valid verificationIds.",
+  },
   REVIEW_RESULT_STATUS_INCONSISTENT: {
     message: "ReviewResult decision or routing is inconsistent with findings.",
     repairHint: "Repair only ReviewResult contract fields and return a complete replacement ReviewResult.",
@@ -695,6 +699,7 @@ export function validateTaskResult(candidate: unknown, request: TaskExecutionReq
   }
   validateExecutionContinuity(result, issues);
   validateRuntimeDeliveryEvidence(result, request, issues);
+  validateRequirementDetailEvidence(result, request, issues);
   validateConceptEvidence(result, request, issues);
   validateWorkflowClosureTaskResult(result, request, issues);
   if (result.status === "blocked") {
@@ -820,6 +825,62 @@ function validateConceptEvidence(result: TaskResult, request: TaskExecutionReque
   for (const evidence of result.conceptEvidence ?? []) {
     if (!allowedConceptRefs.has(evidence.conceptRef)) {
       issues.push(issue("TASK_RESULT_REF_INVALID", `/conceptEvidence/${evidence.conceptRef}`));
+    }
+  }
+}
+
+function validateRequirementDetailEvidence(result: TaskResult, request: TaskExecutionRequest, issues: ContractIssue[]): void {
+  const requiredDetailIds = uniqueStrings([
+    ...(request.task.requirementDetailRefs ?? []),
+    ...request.task.verificationIntents.flatMap((intent) => intent.requirementDetailRefs ?? []),
+  ]);
+  if (requiredDetailIds.length === 0) {
+    return;
+  }
+  const allowedDetailIds = new Set([
+    ...requiredDetailIds,
+    ...((request.sourceContext.requirementDetailSnapshot ?? [])
+      .map((item) => typeof item.detailId === "string" ? item.detailId : null)
+      .filter((item): item is string => Boolean(item))),
+  ]);
+  const verificationIds = new Set(request.task.verificationIntents.map((intent) => intent.verificationId));
+  const expectedVerificationByDetail = new Map<string, Set<string>>();
+  for (const intent of request.task.verificationIntents) {
+    for (const detailId of intent.requirementDetailRefs ?? []) {
+      const refs = expectedVerificationByDetail.get(detailId) ?? new Set<string>();
+      refs.add(intent.verificationId);
+      expectedVerificationByDetail.set(detailId, refs);
+    }
+  }
+  const evidenceByDetail = new Map((result.requirementDetailEvidence ?? []).map((item) => [item.detailId, item]));
+  for (const evidence of result.requirementDetailEvidence ?? []) {
+    if (!allowedDetailIds.has(evidence.detailId)) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}`));
+    }
+    if (evidence.verificationIds.length === 0) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}/verificationIds`));
+    }
+    for (const verificationId of evidence.verificationIds) {
+      if (!verificationIds.has(verificationId)) {
+        issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}/verificationIds/${verificationId}`));
+      }
+    }
+    const expectedVerificationIds = expectedVerificationByDetail.get(evidence.detailId);
+    if (expectedVerificationIds && !evidence.verificationIds.some((verificationId) => expectedVerificationIds.has(verificationId))) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}/verificationIds`));
+    }
+  }
+  if (result.status !== "completed" && result.status !== "completed_with_notes") {
+    return;
+  }
+  for (const detailId of requiredDetailIds) {
+    const evidence = evidenceByDetail.get(detailId);
+    if (!evidence) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${detailId}`));
+      continue;
+    }
+    if (result.status === "completed" && evidence.status !== "satisfied") {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${detailId}/status`));
     }
   }
 }
@@ -1095,6 +1156,9 @@ export function validateReviewResult(candidate: unknown, request: ReviewRequest)
   if ((result.decision === "approved" || result.decision === "approved_with_notes") && hasUnsatisfiedWorkflowClosureSignal(request)) {
     issues.push(issue("REVIEW_RESULT_STATUS_INCONSISTENT", "/decision"));
   }
+  if ((result.decision === "approved" || result.decision === "approved_with_notes") && hasUnsatisfiedRequirementDetailSignal(request)) {
+    issues.push(issue("REVIEW_RESULT_STATUS_INCONSISTENT", "/decision"));
+  }
 
   const expectedTopAction = expectedReviewTopAction(result, request);
   if (result.nextAction.type !== expectedTopAction) {
@@ -1122,6 +1186,20 @@ function hasUnsatisfiedWorkflowClosureSignal(request: ReviewRequest): boolean {
     }
     const record = signal as Record<string, unknown>;
     return record.kind === "frontend_workflow_closure" && record.closureSatisfied === false;
+  });
+}
+
+function hasUnsatisfiedRequirementDetailSignal(request: ReviewRequest): boolean {
+  const signals = request.outputContract.reviewSignals;
+  if (!Array.isArray(signals)) {
+    return false;
+  }
+  return signals.some((signal) => {
+    if (!signal || typeof signal !== "object" || Array.isArray(signal)) {
+      return false;
+    }
+    const record = signal as Record<string, unknown>;
+    return record.kind === "requirement_detail_evidence" && record.detailSatisfied === false;
   });
 }
 
@@ -1808,6 +1886,10 @@ function duplicates(values: string[]): string[] {
     seen.add(value);
   }
   return [...dupes];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.length > 0))];
 }
 
 function getArtifactSets(aac: ArchitectureArtifactContract): {
