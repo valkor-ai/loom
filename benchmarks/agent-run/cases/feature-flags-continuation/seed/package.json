@@ -1,0 +1,9 @@
+{
+  "name": "feature-flags-continuation-seed",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

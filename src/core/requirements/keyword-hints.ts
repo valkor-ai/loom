@@ -1,6 +1,7 @@
 import type {
   RequirementKeywordHint,
   RequirementKeywordHints,
+  RequirementKeywordHintsCompact,
   RequirementSectionKeywordHints,
 } from "./types";
 
@@ -120,14 +121,23 @@ export function generateKeywordHints(input: {
     })
     .filter((section) => section.keywords.length > 0);
 
+  const roundedGlobalKeywords = globalKeywords.map(roundHint);
+  const roundedSectionKeywords = sectionKeywords.map((section) => ({
+    ...section,
+    keywords: section.keywords.map(roundHint),
+  }));
+  const status = globalKeywords.length > 0 ? "completed" : "empty";
+  const languageHints = detectLanguages(input.sources.map((source) => source.text).join("\n"));
+  const compact = compactKeywordHints(status, languageHints, roundedGlobalKeywords, roundedSectionKeywords);
+
   return {
     schemaVersion: "1.0",
     deliveryId: input.deliveryId,
     source: "tfidf_keyword_hints",
     usage: "advisory_only",
-    status: globalKeywords.length > 0 ? "completed" : "empty",
+    status,
     generatedAt: input.generatedAt,
-    languageHints: detectLanguages(input.sources.map((source) => source.text).join("\n")),
+    languageHints,
     sourceTextRefs,
     extraction: {
       method: "local_tfidf",
@@ -135,11 +145,9 @@ export function generateKeywordHints(input: {
       globalLimit: GLOBAL_LIMIT,
       sectionLimit: SECTION_LIMIT,
     },
-    globalKeywords: globalKeywords.map(roundHint),
-    sectionKeywords: sectionKeywords.map((section) => ({
-      ...section,
-      keywords: section.keywords.map(roundHint),
-    })),
+    globalKeywords: roundedGlobalKeywords,
+    sectionKeywords: roundedSectionKeywords,
+    compact,
     rules: {
       advisoryOnly: true,
       mustNotTreatAsScope: true,
@@ -151,6 +159,7 @@ export function generateKeywordHints(input: {
 }
 
 function emptyHints(deliveryId: string, generatedAt: string, sourceTextRefs: string[]): RequirementKeywordHints {
+  const compact = compactKeywordHints("empty", [], [], []);
   return {
     schemaVersion: "1.0",
     deliveryId,
@@ -168,6 +177,7 @@ function emptyHints(deliveryId: string, generatedAt: string, sourceTextRefs: str
     },
     globalKeywords: [],
     sectionKeywords: [],
+    compact,
     rules: {
       advisoryOnly: true,
       mustNotTreatAsScope: true,
@@ -297,6 +307,36 @@ function roundHint(hint: RequirementKeywordHint): RequirementKeywordHint {
   return {
     ...hint,
     score: Number(hint.score.toFixed(6)),
+  };
+}
+
+function compactKeywordHints(
+  status: RequirementKeywordHintsCompact["status"],
+  languageHints: string[],
+  globalKeywords: RequirementKeywordHint[],
+  sectionKeywords: RequirementSectionKeywordHints[],
+): RequirementKeywordHintsCompact {
+  return {
+    usage: "advisory_only",
+    status,
+    languageHints,
+    topKeywords: globalKeywords.slice(0, 16).map((hint) => ({
+      keyword: hint.keyword,
+      occurrences: hint.occurrences,
+      sourceItemIds: hint.sourceItemIds.slice(0, 3),
+    })),
+    sectionKeywords: sectionKeywords.slice(0, 6).map((section) => ({
+      sectionId: section.sectionId,
+      sourceItemId: section.sourceItemId,
+      ...(section.title ? { title: section.title } : {}),
+      keywords: section.keywords.slice(0, 6).map((hint) => hint.keyword),
+    })),
+    rules: {
+      advisoryOnly: true,
+      mustNotTreatAsScope: true,
+      mustNotTreatAsAcceptance: true,
+      ignoreWhenIrrelevant: true,
+    },
   };
 }
 

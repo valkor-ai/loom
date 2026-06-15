@@ -7,16 +7,19 @@
     ·
     <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">技术报告</a>
     ·
-    <a href="#使用场景">使用场景</a>
+    <a href="./docs/use-cases.zh-CN.md">使用场景</a>
     ·
     <a href="#快速开始">快速开始</a>
     ·
     <a href="#如何使用">如何使用</a>
     ·
+    <a href="#省-token-的上下文方案">省 Token</a>
+    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
+    <a href="https://discord.gg/4VgM2wEFGB"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white"></a>
     <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
@@ -52,54 +55,6 @@ Token 浪费 | 项目摘要、任务图、后端/运行时状态、测试结果�
 
 这也是 Loom 和 prompt 文件、一次性 workflow、单 agent 脚本的区别：它把交付状态写入 `.loom/`，通过 agent-neutral CLI 暴露流程，并把验证、修复、预览和交接变成协议里的一级步骤。
 
-## 使用场景
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example3-web.mp4"><img src="./assets/example3-web.webp" alt="AI 产品发布站案例" width="420"></a>
-      <br>
-      <strong>Web - AI 产品发布站</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example4-web.mp4"><img src="./assets/example4-web.webp" alt="创作者数据工作台案例" width="420"></a>
-      <br>
-      <strong>Web - 创作者数据工作台</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example5-web.mp4"><img src="./assets/example5-web.webp" alt="互动营销 Microsite 案例" width="420"></a>
-      <br>
-      <strong>Web - 互动营销 Microsite</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example1-game.mp4"><img src="./assets/example-game1.webp" alt="飞行模拟器案例" width="420"></a>
-      <br>
-      <strong>Game - 飞行模拟器</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example2-finance.mp4"><img src="./assets/example2-finance.webp" alt="量化交易工作台案例" width="420"></a>
-      <br>
-      <strong>Finance - 量化交易工作台</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example6-research.mp4"><img src="./assets/example6-research.webp" alt="全球多样性物种研究案例" width="420"></a>
-      <br>
-      <strong>Research - 全球多样性物种研究</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example7-app.mp4"><img src="./assets/example7-app.webp" alt="饮食健康 App 案例" width="420"></a>
-      <br>
-      <strong>App - 饮食健康 App</strong>
-    </td>
-  </tr>
-</table>
-
 ## 从 Demo 到交付
 
 Vibe Coding 和 AI Coding 正在让越来越多的人具备软件构建能力。过去只有程序员和专业团队才能完成的事情，现在普通构建者也可以借助 Coding Agent 快速做出 Demo、产品原型，甚至开发自己日常使用的软件工具。
@@ -127,6 +82,36 @@ Backend readiness | 将数据库、Auth、Storage、Functions、环境变量、�
 UIX guidance | 将视觉方向、交互流程、响应式状态、可访问性期望和产品特定界面细节作为交付要求沉淀下来。
 Verification loop | 把 smoke test、Playwright 类验证、日志、错误摘要、修复请求和再次验证串成闭环。
 Multi-agent protocol | 让 Claude Code、Codex、OpenCode 等工具共享同一套交付流程。
+
+## 省 Token 的上下文方案
+
+整体上下文路径：
+
+```text
+Your coding agent / app
+(Codex, Claude Code, OpenCode, future adapters...)
+        |
+        | delivery goal . repo context . logs . tests . preview evidence
+        v
++----------------------------------------------------------------------------+
+| Loom  (项目本地交付状态；完整 artifacts 留在 .loom/)                       |
+|----------------------------------------------------------------------------|
+| Dynamic workflow router -> Request manifest -> Agent read plan              |
+|                              |                                             |
+|                              |- .refs/*.json        full authority          |
+|                              |- fieldGroups         grouped required reads  |
+|                              |- inspect selectors   targeted retrieval      |
+|                              `- compact envelope    next action + refs      |
+|                                                                            |
+| Task contracts . evidence windows . fullLogRef . review/repair/resume state |
++----------------------------------------------------------------------------+
+        |
+        | compact instruction + selected refs + retrieval path
+        v
+Agent turn / LLM context
+```
+
+最新 11-case agent-run benchmark 中，Codex + Loom 相比单独使用 Codex 节省了 15.8% token，同时保持 100% 完成度。当前数据对比可以查看 [最新 benchmark 结果](./benchmarks/agent-run/results/latest.md)，运行方式见 [run guide](./benchmarks/agent-run/README.md)。
 
 ## 前置条件
 

@@ -35,6 +35,7 @@
     "verify:protocol-boundary-audit": "node scripts/verify-protocol-boundary-audit.js",
     "verify:read-plan-inspect": "node scripts/verify-read-plan-inspect.js",
     "verify:read-plan-size-audit": "node scripts/verify-read-plan-size-audit.js",
+    "verify:token-saving-telemetry": "node scripts/verify-token-saving-telemetry.js",
     "verify:deploy-preview-validation": "node scripts/verify-deploy-preview-validation.js",
     "verify:deploy-structured-blockers": "npm run build && node scripts/verify-deploy-structured-blockers.js",
     "verify:deploy-active-operation-boundary": "npm run build && node scripts/verify-deploy-active-operation-boundary.js",

@@ -1,0 +1,21 @@
+{
+  "id": "fulfillment-operations-continuation",
+  "title": "Fulfillment Operations Continuation",
+  "seedDir": "fulfillment-operations-continuation/seed",
+  "request": "Continue the existing fulfillment queue from the prior phase. Add inventory-aware shipping readiness without replacing the in-memory order API: orders may define line items, the queue receives an injectable inventory map, reserveReadyOrders must allocate inventory in FIFO order for packed orders, backordered orders must explain shortages, and summarizeFulfillment must surface ready, reserved, backordered, shortage, fulfillmentStatus, and nextAction fields.",
+  "context": [
+    "Phase 1 already delivered addOrder, markPacked, markShipped, listOrders, and basic fulfillment summary behavior. The prior handoff is in docs/phase-1-fulfillment.md.",
+    "Operations notes in docs/ops-notes.md mention future warehouse sync and carrier labels, but this phase is only inventory-aware readiness inside the local queue.",
+    "Inventory must come from the injectable inventory object passed to createFulfillmentQueue; do not read files, network APIs, or process state.",
+    "reserveReadyOrders should allocate inventory in order creation order for packed orders only. Orders that cannot be fully allocated remain backordered with shortage details.",
+    "Do not add persistence, carrier integrations, warehouse jobs, or dependencies. Keep structured validation errors and clone returned objects."
+  ],
+  "successCriteria": [
+    "Existing fulfillment tests continue to pass.",
+    "addOrder accepts optional lineItems with sku and quantity validation.",
+    "reserveReadyOrders allocates injectable inventory in FIFO order for packed orders.",
+    "Backordered orders expose shortage details without being marked shipped.",
+    "summarizeFulfillment adds readyCount, reservedCount, backorderedCount, shortageCount, fulfillmentStatus, and nextAction."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}

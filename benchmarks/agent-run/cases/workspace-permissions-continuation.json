@@ -1,0 +1,21 @@
+{
+  "id": "workspace-permissions-continuation",
+  "title": "Workspace Permissions Continuation",
+  "seedDir": "workspace-permissions-continuation/seed",
+  "request": "Continue the existing workspace member registry from the prior phase. Add role-based access review without replacing the in-memory API: members keep roles, invitations may expire, canMemberPerform should evaluate role permissions, listActionableInvites should exclude expired invites, and summarizeAccess should surface admin counts, pending/expired invites, and least-privilege review status.",
+  "context": [
+    "Phase 1 delivered member add/remove/list, role updates, invitations, and a basic workspace summary. The prior handoff is in docs/phase-1-workspace.md.",
+    "Roles are owner, admin, editor, and viewer. Owners and admins can manage members; editors can edit content; viewers can only view.",
+    "Invitation expiry should use the injectable now() clock. Do not depend on wall-clock time.",
+    "pendingInviteCount should count pending invites that have not expired; expiredInviteCount should count pending invites past expiresAt. If any expired invite exists, reviewStatus should be needs_review and nextAction should be review_expired_invites.",
+    "Do not add authentication, persistence, email sending, or dependencies. Keep structured validation errors."
+  ],
+  "successCriteria": [
+    "Existing workspace tests continue to pass.",
+    "canMemberPerform evaluates view, edit, and manage_members permissions from member roles.",
+    "Invitations accept optional expiresAt and listActionableInvites excludes expired invites.",
+    "Invalid roles, actions, and expiry values throw structured validation errors.",
+    "summarizeAccess adds ownerCount, adminCount, pendingInviteCount, expiredInviteCount, reviewStatus, and nextAction."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}
