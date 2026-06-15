@@ -305,8 +305,9 @@ function suggestedActionsFor(
 
   if (failureKind === "docker_unavailable") {
     return [
-      "Docker is unavailable or the Docker daemon cannot be reached.",
-      "Start Docker, fix Docker permissions/context, or retry after Docker is healthy.",
+      "Docker is unavailable from the current Loom agent session.",
+      "Start Docker Desktop or the Docker daemon and verify `docker version` works from the same terminal/session.",
+      "If Docker works in a normal terminal but not in this agent chat, reopen or reconfigure the agent session with full local access / Docker command permission.",
       "Do not edit Dockerfile, Compose, or application code for this failure.",
       ...diagnosticActions(diagnostics),
     ];
@@ -406,7 +407,7 @@ function instructionFor(spec: DeploymentSpec, failureKind: DeploymentFailureKind
     case "logs":
       return `${base} Focus on whether the Compose project and service still exist before attempting file edits.`;
     case "docker_unavailable":
-      return "Docker is unavailable; do not edit deployment files. Ask the user to start Docker or fix Docker permissions.";
+      return "Docker is unavailable from the current Loom agent session; do not edit deployment files. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works in the same terminal/session, and enable full local access or Docker command permission if this agent chat is sandboxed.";
     case "unknown":
       return `${base} Use the command output to classify the failure before editing files.`;
   }

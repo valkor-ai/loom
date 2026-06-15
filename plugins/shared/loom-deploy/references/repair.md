@@ -13,7 +13,7 @@ Use this reference when executing a loom deployment repair request.
 - If the user approves bootstrap execution, use `loom deploy bootstrap --project-root /abs/project --kind <kind> --confirm` instead of hand-running migration commands.
 - Failure diagnostics live in `diagnostics`; use diagnostic `code`, `evidence`, and `suggestedAction` to prioritize the repair. These diagnostics may show missing native packages, missing modules, port conflicts, dependency connection/auth failures, pending migrations, missing env, or permissions.
 - `logs`: verify the Compose project/service still exists before editing files.
-- `docker_unavailable`: do not edit files; ask the user to start Docker or fix permissions.
+- `docker_unavailable`: do not edit files. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works from the same terminal/session, and enable full local access or Docker command permission if Docker works outside the agent chat but not inside it.
 - `registry_network`: do not edit files; Docker could not reach or authenticate with the image registry. Ask the user to retry, pre-pull the blocked image, configure Docker registry mirrors/proxy, or fix registry credentials/network access.
 - `build_command_failed`, `start_command_failed`, `http_probe_failed`, `preview_not_verified`: if the repair request reports `repairRoute=execution_repair`, do not edit deploy assets. Run the provided `repair request --source deploy` command, execute the synthetic repair request, submit it with `repair submit --source deploy`, then retry `deploy run`.
 - `unknown`: classify from stdout/stderr before editing.

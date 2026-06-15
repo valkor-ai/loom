@@ -1677,13 +1677,31 @@ async function verifyDeployRunDockerUnavailableWritesRepairRequest(projectRoot) 
   assert.equal(run.data.nextAction, "fix-docker");
   assert.equal(run.data.repair.failureKind, "docker_unavailable");
   assert.deepEqual(run.data.repair.editableFiles, []);
+  assert.equal(run.instruction.mode, "report_blocked");
+  assert.equal(run.instruction.nextAction.reason, "DOCKER_UNAVAILABLE");
+  assert.match(run.instruction.userMessage, /current agent session/i);
+  assert.match(run.instruction.userMessage, /full local access|Docker command permission/i);
+  assert.ok(
+    run.instruction.instructions.some((item) => /agent chat\/session not having full local shell or Docker access/i.test(item)),
+    "docker unavailable instruction must explain the agent session permission cause.",
+  );
+  assert.ok(
+    run.data.error.details.possibleCauses.some((cause) => /agent session.*full local shell\/Docker access/i.test(cause)),
+    "docker unavailable details must include agent session access as a possible cause.",
+  );
+  assert.ok(
+    run.data.error.details.userActions.some((action) => /full local access \/ Docker command permission/i.test(action)),
+    "docker unavailable details must include the full-access remediation.",
+  );
 
   const repair = runDeployRepair(projectRoot);
   assert.equal(repair.ok, true);
   assert.equal(repair.data.hasRepairRequest, true);
   assert.equal(repair.data.failureKind, "docker_unavailable");
   assert.equal(repair.data.nextAction, "none");
-  assert.ok(repair.data.suggestedActions.some((action) => /start docker|daemon|permissions/i.test(action)));
+  assert.ok(repair.data.suggestedActions.some((action) => /start Docker Desktop|daemon/i.test(action)));
+  assert.ok(repair.data.suggestedActions.some((action) => /agent chat|full local access|Docker command permission/i.test(action)));
+  assert.match(repair.data.instruction, /full local access|Docker command permission/i);
   assert.ok(!repair.data.suggestedActions.some((action) => /edit .*deployment files|repair the selected provider/i.test(action)));
 }
 

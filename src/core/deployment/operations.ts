@@ -1938,6 +1938,12 @@ function deployRunInstruction(repair: DeployRepairResult | null): Record<string,
   if (!repair) {
     return undefined;
   }
+  if (repair.failureKind === "docker_unavailable") {
+    return deployDockerUnavailableInstruction(repair);
+  }
+  if (repair.failureKind === "registry_network") {
+    return deployRegistryNetworkInstruction(repair);
+  }
   if (repair.nextAction === "edit-and-rerun") {
     return deployRepairInstruction(repair, "deploy run");
   }
@@ -1970,6 +1976,62 @@ function deployRunInstruction(repair: DeployRepairResult | null): Record<string,
     sourceSummary: "Deploy classified the failure as application code/runtime delivery repairable through execution repair.",
     primaryAction: "create_deploy_sourced_execution_repair",
   });
+}
+
+function deployDockerUnavailableInstruction(repair: DeployRepairResult): Record<string, unknown> {
+  return {
+    mode: "report_blocked",
+    autoContinue: false,
+    nextAction: {
+      type: "blocked",
+      reason: "DOCKER_UNAVAILABLE",
+      targetNode: "deploy",
+      refs: {
+        failureKind: repair.failureKind,
+        failureOwner: repair.failureOwner,
+        repairRoute: repair.repairRoute,
+        failureRef: repair.failureRef,
+        fullLogRef: repair.fullLogRef,
+      },
+    },
+    routingRule: "This is an environment/session access blocker, not a deploy asset repair. Do not edit Dockerfile, Compose, application code, package scripts, tests, or RuntimeDeliveryContract. Report the blocker and the exact user actions.",
+    userMessage: [
+      "Loom could not reach Docker from the current agent session.",
+      "Check these in order: start Docker Desktop or the Docker daemon; verify `docker version` works from the same terminal/session; if Docker works normally but not in this agent chat, reopen or reconfigure the agent session with full local access / Docker command permission, then rerun the same loom deploy command.",
+    ].join(" "),
+    instructions: [
+      "Report failureKind=docker_unavailable and nextAction=fix-docker as an environment/session access blocker.",
+      "Mention that a common cause is the agent chat/session not having full local shell or Docker access, even when Docker works elsewhere on the machine.",
+      "Do not suggest deploy repair or file edits for Docker unavailability.",
+      "After the user fixes Docker or agent permissions, rerun the same deploy run command.",
+    ],
+  };
+}
+
+function deployRegistryNetworkInstruction(repair: DeployRepairResult): Record<string, unknown> {
+  return {
+    mode: "report_blocked",
+    autoContinue: false,
+    nextAction: {
+      type: "blocked",
+      reason: "DOCKER_REGISTRY_NETWORK",
+      targetNode: "deploy",
+      refs: {
+        failureKind: repair.failureKind,
+        failureOwner: repair.failureOwner,
+        repairRoute: repair.repairRoute,
+        failureRef: repair.failureRef,
+        fullLogRef: repair.fullLogRef,
+      },
+    },
+    routingRule: "This is an external Docker registry/network blocker, not a deploy asset repair. Do not edit Dockerfile, Compose, application code, package scripts, tests, or RuntimeDeliveryContract unless a later deploy attempt returns a different repairable failure.",
+    userMessage: "Docker could not fetch required image metadata or layers. Fix Docker registry/network/proxy access, pre-pull the blocked image, or retry after registry access is healthy; then rerun the same loom deploy command.",
+    instructions: [
+      "Report failureKind=registry_network and nextAction=fix-docker as an external Docker registry/network blocker.",
+      "Do not suggest deploy repair or file edits for registry/network access failures.",
+      "After registry access is fixed, rerun the same deploy run command.",
+    ],
+  };
 }
 
 function deployRepairInstruction(

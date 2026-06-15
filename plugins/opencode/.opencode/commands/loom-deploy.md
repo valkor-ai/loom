@@ -76,7 +76,7 @@ If `deploy run` returns `completed: false`, inspect `data.repair` and the return
 - When the synthetic execution repair request includes `executionRules.sourceEditPreparationContract`, follow that contract before application code/script writes and before writing the repair resultFile.
 - If top-level `instruction.mode` is `deploy_repair_assets`, repair only `instruction.editableFiles`, then run `instruction.retryCommand`; if it fails, run `loom deploy repair --project-root /abs/project` and immediately follow the returned instruction.
 - If `nextAction` is `edit-and-rerun-up`, repair only returned `editableFiles`, then run `loom deploy up --project-root /abs/project`.
-- If `nextAction` is `fix-docker`, ask the user to start Docker, fix permissions, or pull the blocked base image/registry dependency.
+- If `nextAction` is `fix-docker`, report it as an environment/session access blocker. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works from the same terminal/session, enable full local access or Docker command permission if the agent chat is sandboxed, or fix registry/network access for blocked base images.
 - If `nextAction` is `request-user-approval`, explain protected files and ask before editing them.
 
 ## Structured Deploy Blockers
@@ -122,5 +122,5 @@ Rules:
 - For deploy-sourced execution repair, source and result writes are governed by `executionRules.sourceEditPreparationContract` when present; do not repeat malformed file-write/edit operations with missing path/content/edit arguments.
 - If `editableFiles` is empty for a RuntimeDeliveryContract, build command, start command, or preview probe mismatch, do not edit application code from deploy repair. Route through the normal loom delivery repair path.
 - If `editableFiles` is empty and `protectedFiles` is non-empty, ask the user before editing protected reused assets such as an existing `compose.yaml` or `Dockerfile`.
-- If the failure is `docker_unavailable`, do not edit deployment files; ask the user to start Docker or fix permissions.
+- If the failure is `docker_unavailable`, do not edit deployment files. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works from the same terminal/session, and enable full local access or Docker command permission if Docker works outside the agent chat but not inside it.
 - Stop after `maxAttempts` repair attempts and summarize the remaining failure.
