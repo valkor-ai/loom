@@ -60,6 +60,10 @@ While `deploy run`, `deploy up`, `deploy prepare`, `deploy down`, or `deploy boo
 
 Do not run raw `docker compose`, `docker build`, `docker run`, or manual container inspection as a substitute for Loom deploy observation. Do not kill, `pkill`, or stop deploy, Docker Compose, Docker build, or Loom-managed deployment processes.
 
+When the original `deploy run` tool call is still active, prefer waiting on that same tool session. Enter quiet observation mode: after one short "deploy is running" update, do not send progress chatter for repeated polls. For the first 120 seconds, do not run extra `deploy status`, `deploy inspect`, or `deploy logs` unless the original command returns, the user asks for status, or the CLI returns a blocker. After that initial quiet window, observe no more often than once every 60 seconds. Prefer `deploy status`; use `deploy logs` only after repeated unchanged status, explicit user request, or a returned repair/blocker instruction that requires logs.
+
+If a returned instruction has `mode: observe_active_deploy_operation`, obey `instruction.observationPolicy`. `operationActive=true` is not a completion point: do not send a final done/stuck/failed deploy response while it remains true. User-visible updates during active observation are allowed only for terminal result, phase change, blocker/repair request, explicit user status request, or the long-running threshold in `observationPolicy`.
+
 If the CLI returns `DEPLOY_OPERATION_ACTIVE`, report the active operation's `command`, `phase`, `elapsedMs`, and `logRef`. Then wait for user instruction or observe with `deploy status`, `deploy inspect`, or `deploy logs`; do not take over the running operation.
 
 If `deploy run` returns `completed: true`, report the URL plus preview verification result and health/status. Do not run raw `docker compose`, `docker build`, `docker run`, or manually recreate loom containers after a successful deploy command. Use `loom deploy status`, `loom deploy inspect`, `loom deploy validate`, `loom deploy logs`, or `loom deploy down` for follow-up checks.

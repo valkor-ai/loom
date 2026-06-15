@@ -58,6 +58,12 @@ function verifyActiveOperationBlocksMutations(projectRoot) {
     ]);
     assert.equal(details.agentFacingBlocker?.mode, "observe_active_operation");
     assert.equal(details.agentFacingBlocker?.retryPolicy?.autoRetry, false);
+    assert.equal(details.agentFacingBlocker?.observationPolicy?.quietMode, true);
+    assert.equal(details.agentFacingBlocker?.observationPolicy?.minNextObservationIntervalMs, 60_000);
+    assert.equal(
+      details.agentFacingBlocker?.observationPolicy?.userVisibleUpdatePolicy,
+      "terminal_result_or_phase_change_or_long_threshold_only",
+    );
     assert.ok(
       details.agentFacingBlocker?.allowedActions?.some((action) => /deploy status, deploy inspect, or deploy logs/i.test(action)),
       "active operation blocker must allow only observation commands.",
@@ -109,6 +115,19 @@ function assertActiveObservationInstruction(envelope, sourceCommand) {
   assert.equal(envelope.instruction?.mode, "observe_active_deploy_operation");
   assert.equal(envelope.instruction?.autoContinue, false);
   assert.equal(envelope.actionRequired, undefined, "active observation must not create an infinite auto-poll action.");
+  assert.equal(envelope.instruction?.observationPolicy?.quietMode, true);
+  assert.equal(envelope.instruction?.observationPolicy?.preferOriginalCommandWait, true);
+  assert.equal(envelope.instruction?.observationPolicy?.initialQuietWindowMs, 120_000);
+  assert.equal(envelope.instruction?.observationPolicy?.minNextObservationIntervalMs, 60_000);
+  assert.equal(
+    envelope.instruction?.observationPolicy?.logsPolicy,
+    "read_only_after_repeated_unchanged_status_or_user_request",
+  );
+  assert.equal(
+    envelope.instruction?.observationPolicy?.userVisibleUpdatePolicy,
+    "terminal_result_or_phase_change_or_long_threshold_only",
+  );
+  assert.equal(envelope.instruction?.observationPolicy?.finalResponsePolicy, "forbidden_while_operationActive_true");
   assert.equal(envelope.instruction?.nextAction?.reason, "DEPLOY_OPERATION_ACTIVE");
   assert.equal(envelope.instruction?.nextAction?.refs?.operationId, "deploy-op-live-observe");
   assert.equal(envelope.instruction?.nextAction?.refs?.command, "deploy.up");
@@ -126,6 +145,14 @@ function assertActiveObservationInstruction(envelope, sourceCommand) {
   assert.ok(
     envelope.instruction?.instructions?.some((item) => /deploy status, deploy inspect, or deploy logs/i.test(item)),
     "active observation instruction must restrict allowed observation commands.",
+  );
+  assert.ok(
+    envelope.instruction?.instructions?.some((item) => /waiting on the original deploy command/i.test(item)),
+    "active observation instruction must prefer the original deploy command session.",
+  );
+  assert.ok(
+    envelope.instruction?.instructions?.some((item) => /user-visible updates quiet/i.test(item)),
+    "active observation instruction must limit user-visible progress chatter.",
   );
   assert.ok(
     envelope.instruction?.instructions?.some((item) => /Do not run deploy run, deploy up, deploy down, raw docker/i.test(item)),
@@ -167,6 +194,11 @@ function verifyAdapterGuidance() {
   for (const relative of files) {
     const content = fs.readFileSync(path.join(repoRoot, relative), "utf8");
     assert.match(content, /DEPLOY_OPERATION_ACTIVE/, `${relative} must mention active operation blocker.`);
+    assert.match(content, /observe_active_deploy_operation/, `${relative} must handle active operation observation instruction.`);
+    assert.match(content, /instruction\.observationPolicy/, `${relative} must obey the CLI active observation policy.`);
+    assert.match(content, /first 120 seconds/, `${relative} must keep the initial deploy observation window quiet.`);
+    assert.match(content, /once every 60 seconds/, `${relative} must limit deploy observation cadence.`);
+    assert.match(content, /operationActive=true/, `${relative} must forbid final responses while deploy is active.`);
     assert.match(content, /deploy status.*deploy inspect.*deploy logs/s, `${relative} must limit observation commands.`);
     assert.match(content, /raw `docker compose`/, `${relative} must forbid raw docker compose.`);
     assert.match(content, /kill, `pkill`, or stop deploy/, `${relative} must forbid killing deploy processes.`);

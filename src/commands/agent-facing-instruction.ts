@@ -160,6 +160,7 @@ const ROUTING_KEYS = [
   "routingRule",
   "userMessage",
   "primaryAction",
+  "observationPolicy",
   "completionCondition",
   "possibleRuntimeForegroundStall",
   "stopRecoveryInstruction",

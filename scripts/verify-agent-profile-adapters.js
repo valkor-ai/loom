@@ -2014,6 +2014,31 @@ for (const file of [
   );
   assertIncludes(
     file,
+    "observe_active_deploy_operation",
+    `${file}: deploy adapter must preserve active deploy observation instruction handling`,
+  );
+  assertIncludes(
+    file,
+    "instruction.observationPolicy",
+    `${file}: deploy adapter must obey CLI-provided active deploy observation policy`,
+  );
+  assertIncludes(
+    file,
+    "first 120 seconds",
+    `${file}: deploy adapter must keep an initial quiet window for long deploy runs`,
+  );
+  assertIncludes(
+    file,
+    "once every 60 seconds",
+    `${file}: deploy adapter must limit active deploy observation cadence`,
+  );
+  assertIncludes(
+    file,
+    "operationActive=true",
+    `${file}: deploy adapter must not stop while deploy is still active`,
+  );
+  assertIncludes(
+    file,
     "DEPLOY_SOURCE_INSUFFICIENT",
     `${file}: deploy adapter must preserve structured source blocker handling`,
   );
@@ -2041,6 +2066,39 @@ for (const file of [
     file,
     "malformed",
     `${file}: deploy adapter must recover through the source edit contract after malformed write calls`,
+  );
+}
+for (const file of [
+  "plugins/codex/skills/loom/SKILL.md",
+  "plugins/claude-code/skills/loom/SKILL.md",
+  "plugins/claude-code/commands/loom.md",
+  "plugins/claude-code/commands/loom-deploy.md",
+  "plugins/opencode/.opencode/commands/loom.md",
+]) {
+  assertIncludes(
+    file,
+    "observe_active_deploy_operation",
+    `${file}: main deploy entrypoint must recognize active deploy observation instructions`,
+  );
+  assertIncludes(
+    file,
+    "instruction.observationPolicy",
+    `${file}: main deploy entrypoint must obey active deploy observation policy`,
+  );
+  assertIncludes(
+    file,
+    "first 120 seconds",
+    `${file}: main deploy entrypoint must preserve the initial quiet deploy window`,
+  );
+  assertIncludes(
+    file,
+    "once every 60 seconds",
+    `${file}: main deploy entrypoint must limit deploy observation cadence`,
+  );
+  assertIncludes(
+    file,
+    "operationActive=true",
+    `${file}: main deploy entrypoint must forbid final responses while deploy is active`,
   );
 }
 assertIncludes(

@@ -24,6 +24,8 @@ Route `$ARGUMENTS` as follows:
 - Otherwise, treat `$ARGUMENTS` as a new Loom delivery request and run the `plan` entrypoint, which initializes an empty project before creating the Brainstorm request:
   `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" plan --project-root "$PWD" --request "$ARGUMENTS"`
 
+If the first Bash command is a long-running deploy command, keep waiting on that same Bash session. After one short "deploy is running" update, stay quiet while polling the Bash session. Do not run extra `deploy status`, `deploy inspect`, or `deploy logs` during the first 120 seconds unless the original command returns, the user asks for status, or a blocker appears. After 120 seconds, use read-only observation no more often than once every 60 seconds; prefer `deploy status`, and use `deploy logs` only after repeated unchanged status or explicit user request. If any envelope returns `mode: observe_active_deploy_operation`, obey `instruction.observationPolicy`. Do not send a final done/stuck/failed deploy response while `operationActive=true`.
+
 After the Bash command returns, parse the JSON envelope. If it returns `actionRequired.autoContinue`, `actionRequired.mustRunImmediately`, `instruction.autoContinue`, or `instruction.mustRunImmediately`, immediately follow that returned instruction. Stop only for a real user gate, done report, blocked report, or non-repairable command failure.
 
 For `status`, report only the current Loom state and user guidance from the returned JSON. Do not start a new delivery from `status`.
