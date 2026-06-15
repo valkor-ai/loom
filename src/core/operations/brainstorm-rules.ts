@@ -19,11 +19,82 @@ export function phaseScopeOptionComparisonRules(): string[] {
   ];
 }
 
+export function businessScenarioConfirmationRules(): string[] {
+  return [
+    "The concept_grounding block must include a plain-language business scenario confirmation when the current phase has domain behavior or user operations.",
+    "Use wording like 'I will summarize the current business scenario first' rather than obscure terms. Do not use the Chinese word 反讲 as user-facing wording.",
+    "The scenario confirmation must name the actor or system, the business object or subject, the trigger, the operation goal, the expected result, and the boundary of what this phase will not do when applicable.",
+    "If the current phase is technical-only, state the concrete reason why business scenario confirmation is not applicable and summarize the technical workflow instead.",
+    "Store confirmed scenario details in existing fields: domainModel.businessFlows[].summary, scope.included[].items, acceptance[].statement, and conceptGrounding.phaseConceptGrounding.concepts[].explanation when the scenario carries high-risk meaning.",
+  ];
+}
+
+export function decisionImpactOrderingRules(): string[] {
+  return [
+    "The concept_grounding block must identify important clarification decisions before asking for confirmation, ordered by their downstream impact.",
+    "High-impact decisions are those that change phase scope, data model, business flow, frontend operation path, interface contract, acceptance outcome, runtime or delivery boundary.",
+    "For each high-impact decision, state what it affects in plain language and whether the decision is confirmed, unresolved, explicitly deferred, or not applicable.",
+    "Do not invent decisions only to fill a checklist. Include only decisions grounded in the source requirement, confirmed user answer, repository facts, or an explicit unresolved note.",
+    "Store confirmed decision impact in existing fields: scope reason/items for scope impact, acceptance statements for acceptance impact, conceptGrounding priority/attentionRank/humanReadableReason for high-risk impact, businessFlows summaries for flow impact, and frontendExperience operation paths for frontend impact.",
+  ];
+}
+
+export function businessLifecycleScanRules(): string[] {
+  return [
+    "The concept_grounding block must scan each key current-phase business object or subject for lifecycle actions that are actually relevant to this phase.",
+    "Lifecycle actions include create, query/select, view, update, approve/process, state change, terminate/cancel, and blocking/exception handling; do not force every action onto every object.",
+    "For each relevant lifecycle action, summarize inputs or fields, preconditions, validation or blocking reasons, success state changes, and visible or returned feedback when applicable.",
+    "For lifecycle actions that are explicitly out of scope or deferred, state that boundary in user language and preserve it in scope.deferred, scope.excluded, assumptions, or nextPhasePreview as appropriate.",
+    "Store confirmed lifecycle details in existing fields: scope.included[].items, acceptance[].statement, domainModel.businessFlows[].summary, conceptGrounding explanations, and frontendExperience operation paths when UI applies.",
+  ];
+}
+
+export function phaseScopeSelfCheckRules(): string[] {
+  return [
+    "Before presenting phase_scope for user confirmation, run a phase_scope self-check inside the block.",
+    "The self-check must verify that included, deferred, and excluded scope are explicit and that included scope names concrete objects, actions, workflows, deliverables, or boundaries when present in the source.",
+    "The self-check must verify that the chosen current phase cut explains why the work belongs now and what meaningful work is deferred or excluded.",
+    "The self-check must verify that nextPhasePreview carries remaining deferred or future scope when such scope exists.",
+    "If the phase_scope self-check finds unclear or missing current-phase boundaries, ask a focused scope question before marking phase_scope confirmed.",
+  ];
+}
+
+export function conceptGroundingSelfCheckRules(): string[] {
+  return [
+    "Before presenting concept_grounding for user confirmation, run a concept_grounding self-check inside the block.",
+    "The self-check must verify that every confirmed scope.included item is covered, explicitly unresolved, or explicitly deferred.",
+    "The self-check must verify that business scenario confirmation, decision impact ordering, and lifecycle scan have been considered when the current phase has domain behavior or user operations.",
+    "The self-check must verify that key objects or subjects include applicable field sets, operation inputs, preconditions, validation or blocking reasons, success states, state transitions, and visible or returned feedback.",
+    "If the concept_grounding self-check finds a relevant missing detail, ask a focused concept or business-rule question before marking concept_grounding confirmed.",
+  ];
+}
+
+export function frontendExperienceSelfCheckRules(): string[] {
+  return [
+    "Before presenting frontend_experience for user confirmation, run a frontend_experience self-check inside the block.",
+    "The self-check must verify whether UI is required, not required, or deferred, and must state the reason in user language.",
+    "When UI is required, the self-check must verify target discovery or selection, pagination/list behavior when relevant, grounded query criteria, action entry, input fields, success feedback, error feedback, business-blocking feedback, and refresh/readback behavior.",
+    "The self-check must verify that query criteria come from confirmed fields, user wording, acceptance details, business flow details, or repository facts; do not use a hardcoded industry field list.",
+    "If the frontend_experience self-check finds the operation path unclear, ask a focused frontend operation-path question before marking frontend_experience confirmed.",
+  ];
+}
+
+export function finalSummaryReviewRules(): string[] {
+  return [
+    "The final_summary block is a review gate, not the first place to discover business details.",
+    "Before presenting final_summary for user confirmation, verify that phase_scope, concept_grounding, and frontend_experience were already confirmed or explicitly skipped with reasons.",
+    "The final_summary must summarize confirmed scope, business scenario, decision impacts, lifecycle actions, concept or rule boundaries, frontend target or skip reason, nextPhasePreview, and explicit not-done or deferred details when applicable.",
+    "If the user corrects final_summary, do not submit BrainstormCandidate from the stale summary. Incorporate the correction into the affected existing fields and present an updated final_summary before setting finalSummaryConfirmed=true.",
+    "Do not use final_summary to hide missing block-level details; return to the relevant Brainstorm block in the same agent-managed conversation when detail is missing.",
+  ];
+}
+
 export function brainstormCandidateSelfReviewRules(): string[] {
   return [
-    "Before writing or submitting BrainstormCandidate, perform a self-review against the final_summary and the confirmed phase_scope option.",
+    "Before writing or submitting BrainstormCandidate, perform a self-review against the final_summary and each confirmed Brainstorm block.",
     "Self-review must verify that confirmed requirement details are stored in existing BrainstormCandidate fields rather than only in chat: scope.included[].items, acceptance[].statement, domainModel.businessFlows[].summary, conceptGrounding, frontendExperience/frontendExperienceDelta, and phasePlan.nextPhasePreview.",
     "Self-review must verify that every confirmed scope.included item has been considered in the concept_grounding scope-item coverage summary. If a scope item has no applicable detail, the candidate must preserve the concrete reason or unresolved note instead of silently dropping it.",
+    "Self-review must verify that business scenario confirmation, decision impact ordering, and lifecycle scan details are present in existing candidate fields when they applied to the current phase.",
     "Self-review must check that scope items name concrete objects, actions, rules, fields, states, or boundaries when those details were confirmed.",
     "Self-review must check that acceptance statements are executable outcomes and that businessFlows summarize flow steps, preconditions, validation or blocking rules, blocking reasons, success state, and input/display/pass-through fields when applicable.",
     "Self-review must check that domain phases preserve a natural-language object-operation summary: key business objects, key field sets, supported operations, operation inputs, preconditions, validation or blocking reasons, success state changes, and user-visible feedback.",
@@ -109,11 +180,18 @@ export function brainstormRequirementSemanticRules(): string[] {
     "If a required semantic detail for the confirmed current phase is unclear after reading the provided refs, ask the user in the relevant Brainstorm block before accepting; do not let downstream PGC/AAC/TaskPlan rediscover missing requirement rules from scratch.",
     "concept_grounding must cover confirmed business objects, key object field sets, operations on those objects, operation inputs, key flow logic, rule boundaries, state transitions, blocking reasons, and user-visible feedback when those details are relevant; it must not become only a glossary of nouns.",
     "frontendExperience/frontendExperienceDelta is required only for UI or user-visible workflow phases; conceptGrounding may be none_required or not_applicable only with a concrete reason.",
+    ...phaseScopeSelfCheckRules(),
     ...scopeItemCoverageClarificationRules(),
     ...scopeItemCoverageCandidateRules(),
+    ...businessScenarioConfirmationRules(),
+    ...decisionImpactOrderingRules(),
+    ...businessLifecycleScanRules(),
+    ...conceptGroundingSelfCheckRules(),
     ...businessObjectOperationClarificationRules(),
     ...businessObjectOperationCandidateRules(),
+    ...frontendExperienceSelfCheckRules(),
     ...frontendOperationPathClarificationRules(),
     ...frontendOperationPathCandidateRules(),
+    ...finalSummaryReviewRules(),
   ];
 }

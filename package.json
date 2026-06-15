@@ -21,6 +21,7 @@
     "verify:phase-aware-source-consistency": "node scripts/verify-phase-aware-source-consistency.js",
     "verify:technical-baseline-reuse-signals": "node scripts/verify-technical-baseline-reuse-signals.js",
     "verify:greenfield-technical-baseline": "node scripts/verify-greenfield-technical-baseline-confirmation.js",
+    "verify:brainstorm-block-self-check": "node scripts/verify-brainstorm-block-self-check.js",
     "verify:brainstorm-business-detail": "node scripts/verify-brainstorm-business-detail-grounding.js",
     "verify:brainstorm-frontend-operation-path": "node scripts/verify-brainstorm-frontend-operation-path.js",
     "verify:next-task-execute-instruction": "node scripts/verify-layered-self-validation.js && node scripts/verify-auto-runnable-transition-contract.js",
