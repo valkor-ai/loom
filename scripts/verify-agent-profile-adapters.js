@@ -47,6 +47,11 @@ function assertNotIncludes(file, needle, message) {
   assert.equal(read(file).includes(needle), false, `${file}: ${message}`);
 }
 
+function assertMaxLines(file, maxLines, message) {
+  const lineCount = read(file).split(/\r?\n/).length;
+  assert.ok(lineCount <= maxLines, `${file}: ${message}; found ${lineCount}, max ${maxLines}`);
+}
+
 function runClaudeWorkflowGuard(input, fixture) {
   const guardPath = path.join(repoRoot, "plugins/claude-code/hooks/loom-workflow-guard.js");
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-claude-hook-"));
@@ -2068,6 +2073,31 @@ for (const file of [
     `${file}: deploy adapter must recover through the source edit contract after malformed write calls`,
   );
 }
+assertMaxLines(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  170,
+  "Codex deploy skill must stay adapter-facing and not grow back into deploy engine documentation",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "## Target Architecture",
+  "Codex deploy skill must not contain deploy engine architecture documentation",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "## References",
+  "Codex deploy skill must use Knowledge Layout instead of a second references catalog",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "Strategy resolver chooses",
+  "Codex deploy skill must not duplicate deploy provider selection logic",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "Validator should run",
+  "Codex deploy skill must not duplicate deploy validation internals",
+);
 for (const file of [
   "plugins/codex/skills/loom/SKILL.md",
   "plugins/claude-code/skills/loom/SKILL.md",
