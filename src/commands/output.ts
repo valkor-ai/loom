@@ -98,6 +98,7 @@ function compactData(data: unknown): unknown {
     "truncated",
     "userGuidance",
     "warnings",
+    "codeEvidenceReadGuide",
   ]) {
     if (key in data) {
       output[key] = data[key];

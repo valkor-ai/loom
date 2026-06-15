@@ -2047,6 +2047,15 @@ async function verifyDeployInspect(projectRoot) {
   assert.equal(inspect.data.summary.missingEnvCount, 1);
   assert.equal(inspect.data.repair.failureKind, "healthcheck");
   assert.ok(inspect.data.files.composePath);
+  assert.equal(inspect.data.codeEvidenceReadGuide.ref, ".loom/deployment/evidence/latest-code-evidence.json");
+  assert.ok(
+    inspect.data.codeEvidenceReadGuide.targetedFields.some((field) => field.field === "dependencyFacts.services"),
+    "deploy inspect must expose targeted dependency evidence guidance.",
+  );
+  assert.ok(
+    inspect.data.codeEvidenceReadGuide.readPolicy.avoid.some((rule) => /full evidence JSON/i.test(rule)),
+    "deploy inspect must tell agents not to print the full code evidence artifact.",
+  );
 }
 
 async function verifyDeployInspectRefresh(projectRoot) {

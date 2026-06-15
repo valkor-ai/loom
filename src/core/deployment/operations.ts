@@ -196,6 +196,7 @@ export type DeployInspectResult = {
   providerCandidates: DeploymentSpec["providerCandidates"];
   workspace: DeploymentSpec["workspace"] | null;
   codeEvidence: DeploymentSpec["codeEvidence"] | null;
+  codeEvidenceReadGuide: Record<string, unknown> | null;
   detectedStack: DeploymentSpec["detectedStack"] | null;
   files: DeploymentSpec["files"] | null;
   compose: DeploymentSpec["compose"] | null;
@@ -1176,6 +1177,7 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
     providerCandidates: spec?.providerCandidates ?? [],
     workspace: spec?.workspace ?? null,
     codeEvidence: spec?.codeEvidence ?? null,
+    codeEvidenceReadGuide: deploymentCodeEvidenceReadGuide(spec?.codeEvidence?.ref ?? null),
     detectedStack: spec?.detectedStack ?? null,
     files: spec?.files ?? null,
     compose: spec?.compose ?? null,
@@ -1790,6 +1792,7 @@ function deploySourceBlockerProtocol(input: {
       "read the referenced deploy evidence only when more detail is needed",
       "ask the user for the requested decision when nextAction is ask_user",
     ],
+    evidenceReadGuide: deploymentCodeEvidenceReadGuide(input.evidenceRef),
     forbiddenActions: [
       "do not retry deploy prepare unchanged",
       "do not run deploy repair for this blocker",
@@ -1799,6 +1802,57 @@ function deploySourceBlockerProtocol(input: {
     retryPolicy: {
       autoRetry: false,
       retryOnlyAfter: "the missing facts, ambiguity, or conflicts in this blocker have been resolved",
+    },
+  };
+}
+
+function deploymentCodeEvidenceReadGuide(evidenceRef: string | null): Record<string, unknown> | null {
+  if (!evidenceRef) {
+    return null;
+  }
+  return {
+    ref: evidenceRef,
+    purpose: "Read only targeted deploy code evidence fields needed to explain or resolve a blocker; do not print the full evidence JSON into chat.",
+    targetedFields: [
+      {
+        field: "missingFacts",
+        useWhen: "DEPLOY_SOURCE_INSUFFICIENT or missing deployment source facts",
+      },
+      {
+        field: "conflicts",
+        useWhen: "DEPLOY_CONFLICT or conflicting baseline/code/deploy asset facts",
+      },
+      {
+        field: "runtimeFacts",
+        useWhen: "build/start/runtime entrypoint detection is unclear",
+      },
+      {
+        field: "dependencyFacts.services",
+        useWhen: "dependency service detection does not match project runtime needs",
+      },
+      {
+        field: "dependencyFacts.ambiguous",
+        useWhen: "dependency service candidates are ambiguous",
+      },
+      {
+        field: "baselineExpectation",
+        useWhen: "TechnicalBaseline expectations need to be compared with code evidence",
+      },
+      {
+        field: "existingDeployAssets",
+        useWhen: "existing Dockerfile or Compose assets may affect deploy behavior",
+      },
+      {
+        field: "warnings",
+        useWhen: "deploy prepared but reported code evidence warnings",
+      },
+    ],
+    readPolicy: {
+      default: "Start with codeEvidence summary from deploy inspect. Read this evidence ref only for the listed targeted fields.",
+      avoid: [
+        "do not read or paste the full evidence JSON unless targeted fields are insufficient",
+        "do not discover evidence by scanning unrelated .loom directories",
+      ],
     },
   };
 }

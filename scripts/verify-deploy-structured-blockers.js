@@ -93,6 +93,15 @@ function assertNoAgentRunnableRepair(envelope, label) {
   assert.equal("repairRoute" in details, false, `${label}: error details must not include repairRoute.`);
   assert.equal(details.agentFacingBlocker?.mode, "report_blocker", `${label}: error details must expose report-only blocker protocol.`);
   assert.equal(details.agentFacingBlocker?.retryPolicy?.autoRetry, false, `${label}: blocker protocol must forbid auto retry.`);
+  assert.equal(details.agentFacingBlocker?.evidenceReadGuide?.ref, details.evidenceRef, `${label}: blocker protocol must point to the exact evidence ref.`);
+  assert.ok(
+    details.agentFacingBlocker?.evidenceReadGuide?.targetedFields?.some((field) => field.field === "missingFacts"),
+    `${label}: blocker protocol must expose targeted missingFacts evidence reads.`,
+  );
+  assert.ok(
+    details.agentFacingBlocker?.evidenceReadGuide?.targetedFields?.some((field) => field.field === "conflicts"),
+    `${label}: blocker protocol must expose targeted conflict evidence reads.`,
+  );
   assert.ok(
     details.agentFacingBlocker?.forbiddenActions?.some((action) => /deploy repair/i.test(action)),
     `${label}: blocker protocol must forbid deploy repair.`,
