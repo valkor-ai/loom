@@ -198,6 +198,83 @@ export const pgcAcceptanceCandidateSchema = z.object({
   priority: z.enum(["must", "should", "could"]),
 });
 
+export const requirementDetailKindSchema = z.enum([
+  "business_scenario",
+  "scope_boundary",
+  "object_field_set",
+  "object_operation",
+  "business_flow",
+  "validation_rule",
+  "blocking_rule",
+  "state_transition",
+  "frontend_operation_path",
+  "acceptance_outcome",
+  "assumption",
+  "deferred_or_excluded_boundary",
+]);
+
+export const requirementDetailImpactTagSchema = z.enum([
+  "scope",
+  "data_model",
+  "business_flow",
+  "frontend",
+  "interface",
+  "acceptance",
+  "runtime",
+]);
+
+export const requirementDetailLifecycleStageSchema = z.enum([
+  "create",
+  "query_select",
+  "view",
+  "update",
+  "approve_or_process",
+  "state_change",
+  "terminate_or_cancel",
+  "blocking_or_exception",
+  "not_applicable",
+]);
+
+export const requirementDetailQualitySchema = z.enum(["thin", "usable", "rich"]);
+
+export const requirementDetailItemSchema = z.object({
+  detailId: z.string().min(1),
+  kind: requirementDetailKindSchema,
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  requiredForCurrentPhase: z.boolean(),
+  priority: z.enum(["must", "should", "could"]),
+  sourceFieldRefs: stringArraySchema,
+  sourceRefs: stringArraySchema,
+  scopeRefs: stringArraySchema,
+  acceptanceRefs: stringArraySchema,
+  conceptRefs: stringArraySchema,
+  frontendRefs: stringArraySchema,
+  impactTags: z.array(requirementDetailImpactTagSchema),
+  lifecycleStage: requirementDetailLifecycleStageSchema,
+  quality: requirementDetailQualitySchema,
+  unresolvedNote: z.string().min(1).nullable(),
+});
+
+export const requirementDetailWarningSchema = z.object({
+  warningId: z.string().min(1),
+  detailId: z.string().min(1).nullable(),
+  sourceFieldRef: z.string().min(1).nullable(),
+  severity: z.enum(["info", "warning"]),
+  message: z.string().min(1),
+});
+
+export const requirementDetailsIndexSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  authority: z.literal("brainstorm_contract"),
+  sourceBrainstormContractRef: z.string().min(1),
+  items: z.array(requirementDetailItemSchema),
+  extractionWarnings: z.array(requirementDetailWarningSchema),
+});
+
+export type RequirementDetailItem = z.infer<typeof requirementDetailItemSchema>;
+export type RequirementDetailsIndex = z.infer<typeof requirementDetailsIndexSchema>;
+
 export const planningGenerationContractSchema = z.object({
   schemaVersion: z.literal("1.0"),
   planningContractId: z.string().min(1),
@@ -244,6 +321,7 @@ export const planningGenerationContractSchema = z.object({
     sourceRefs: stringArraySchema,
     contextNotes: stringArraySchema,
   }),
+  requirementDetails: requirementDetailsIndexSchema.optional(),
   planningRules: z.object({
     scopeIsolation: z.object({
       onlyPlanCurrentPhase: z.boolean(),

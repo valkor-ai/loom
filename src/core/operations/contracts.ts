@@ -12,6 +12,7 @@ import {
   type ArchitectureSectionsGenerationRequest,
   type PlanningGenerationContract,
   type RepoSignalSet,
+  type RequirementDetailsIndex,
   type TechnicalBaseline,
   type TechnicalBaselineRequest,
   architectureArtifactContractSchema,
@@ -1138,6 +1139,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
     ? toProjectRelative(root, repositoryContextPath(root, locator))
     : undefined;
   const brainstormContractRef = toProjectRelative(root, brainstormContractPath(root, locator.deliveryId));
+  const requirementDetails = buildRequirementDetailsIndex(brainstorm, phase, brainstormContractRef);
   const contextRefs = {
     brainstormContractRef,
     ...(repositoryContextRef ? { repositoryContextRef } : {}),
@@ -1193,6 +1195,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
         "Concept refs are confirmed Brainstorm semantic facts. CLI validates refs only; Agent performs semantic use.",
         "Frontend experience refs are user-confirmed product targets. AAC may engineer them but must not downgrade or override them without user decision.",
         "PGC mechanically preserves Brainstorm current-phase detail fields; do not summarize away phaseScope.*.items, phaseScope.acceptanceCandidates[].sourceRefs/capabilityRefs, planningInputs.businessFlows[].summary, concept refs, frontend refs, or frontend operation path details carried by those frontend refs.",
+        "PGC requirementDetails.items is the canonical detail index after Brainstorm. AAC, TaskPlan, TaskExecution, and Review should reference detailId instead of duplicating full detail text.",
       ],
     } : {}),
     technicalBaseline: {
@@ -1212,6 +1215,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
       sourceRefs: brainstorm.sources.map((source) => source.sourceId),
       contextNotes: ["Brainstorm contract 已确认当前阶段范围。"],
     },
+    requirementDetails,
     planningRules: {
       scopeIsolation: {
         onlyPlanCurrentPhase: true,
@@ -2045,6 +2049,380 @@ function scopeItemsForRefs<T extends { id: string; label: string; items?: string
       source: item?.source,
     };
   });
+}
+
+function buildRequirementDetailsIndex(
+  brainstorm: BrainstormContract,
+  phase: NonNullable<BrainstormContract["roadmap"]>["phases"][number],
+  brainstormContractRef: string,
+): RequirementDetailsIndex {
+  const allSourceIds = uniqueStrings(brainstorm.sources.map((source) => source.sourceId));
+  const currentScopeRefs = new Set(phase.scope.includedRefs);
+  const deferredScopeRefs = new Set(phase.scope.deferredRefs);
+  const excludedScopeRefs = new Set(phase.scope.excludedRefs);
+  const currentAcceptanceRefs = new Set(phase.acceptanceRefs);
+  const items: RequirementDetailsIndex["items"] = [];
+  const extractionWarnings: RequirementDetailsIndex["extractionWarnings"] = [];
+
+  const addItem = (input: {
+    kind?: RequirementDetailsIndex["items"][number]["kind"];
+    title: string;
+    summary: string;
+    requiredForCurrentPhase: boolean;
+    priority?: "must" | "should" | "could";
+    sourceFieldRefs: string[];
+    sourceRefs?: string[];
+    scopeRefs?: string[];
+    acceptanceRefs?: string[];
+    conceptRefs?: string[];
+    frontendRefs?: string[];
+    unresolvedNote?: string | null;
+  }): void => {
+    const summary = input.summary.trim();
+    if (!summary) {
+      return;
+    }
+    const sourceFieldRefs = uniqueStrings(input.sourceFieldRefs);
+    const kind = input.kind ?? inferRequirementDetailKind(summary);
+    const detailId = stableRequirementDetailId(kind, sourceFieldRefs, summary);
+    if (items.some((item) => item.detailId === detailId)) {
+      return;
+    }
+    const item: RequirementDetailsIndex["items"][number] = {
+      detailId,
+      kind,
+      title: truncateDetailTitle(input.title),
+      summary,
+      requiredForCurrentPhase: input.requiredForCurrentPhase,
+      priority: input.priority ?? (input.requiredForCurrentPhase ? "must" : "could"),
+      sourceFieldRefs,
+      sourceRefs: uniqueStrings(input.sourceRefs && input.sourceRefs.length > 0 ? input.sourceRefs : allSourceIds),
+      scopeRefs: uniqueStrings(input.scopeRefs ?? []),
+      acceptanceRefs: uniqueStrings(input.acceptanceRefs ?? []),
+      conceptRefs: uniqueStrings(input.conceptRefs ?? []),
+      frontendRefs: uniqueStrings(input.frontendRefs ?? []),
+      impactTags: inferRequirementDetailImpactTags(summary, kind),
+      lifecycleStage: inferRequirementDetailLifecycleStage(summary),
+      quality: inferRequirementDetailQuality(summary),
+      unresolvedNote: input.unresolvedNote ?? inferRequirementDetailUnresolvedNote(summary),
+    };
+    items.push(item);
+    if (item.quality === "thin") {
+      extractionWarnings.push({
+        warningId: stableRequirementDetailWarningId(item.detailId, "thin"),
+        detailId: item.detailId,
+        sourceFieldRef: item.sourceFieldRefs[0] ?? null,
+        severity: "warning",
+        message: "Requirement detail was extracted, but the source text is thin. Downstream stages must not invent missing business rules.",
+      });
+    }
+  };
+
+  const addScopeItems = (
+    bucket: "included" | "deferred" | "excluded",
+    scopeItems: BrainstormContract["scope"]["included"],
+    activeRefs: Set<string>,
+  ): void => {
+    scopeItems.forEach((scopeItem, scopeIndex) => {
+      if (!activeRefs.has(scopeItem.id)) {
+        return;
+      }
+      const requiredForCurrentPhase = bucket === "included";
+      const kind = bucket === "included" ? "scope_boundary" : "deferred_or_excluded_boundary";
+      const values = scopeItem.items && scopeItem.items.length > 0 ? scopeItem.items : [scopeItem.label];
+      values.forEach((value, itemIndex) => {
+        const sourceFieldRef = scopeItem.items && scopeItem.items.length > 0
+          ? `brainstorm.scope.${bucket}[${scopeIndex}].items[${itemIndex}]`
+          : `brainstorm.scope.${bucket}[${scopeIndex}].label`;
+        addItem({
+          kind,
+          title: `${scopeItem.label}: ${value}`,
+          summary: value,
+          requiredForCurrentPhase,
+          priority: requiredForCurrentPhase ? "must" : "could",
+          sourceFieldRefs: [sourceFieldRef],
+          scopeRefs: [scopeItem.id],
+          unresolvedNote: scopeItem.items && scopeItem.items.length > 0 ? null : "Scope item has no detailed items array; label was used as the detail source.",
+        });
+      });
+      if (!scopeItem.items || scopeItem.items.length === 0) {
+        extractionWarnings.push({
+          warningId: stableRequirementDetailWarningId(scopeItem.id, "scope-items-empty"),
+          detailId: null,
+          sourceFieldRef: `brainstorm.scope.${bucket}[${scopeIndex}]`,
+          severity: "warning",
+          message: `Scope ${scopeItem.id} has no items array, so PGC could only index the scope label.`,
+        });
+      }
+    });
+  };
+
+  addScopeItems("included", brainstorm.scope.included, currentScopeRefs);
+  addScopeItems("deferred", brainstorm.scope.deferred, deferredScopeRefs);
+  addScopeItems("excluded", brainstorm.scope.excluded, excludedScopeRefs);
+
+  brainstorm.acceptance.candidates.forEach((acceptance, index) => {
+    if (!currentAcceptanceRefs.has(acceptance.id)) {
+      return;
+    }
+    addItem({
+      kind: inferRequirementDetailKind(acceptance.statement, "acceptance_outcome"),
+      title: acceptance.id,
+      summary: acceptance.statement,
+      requiredForCurrentPhase: true,
+      priority: acceptance.priority,
+      sourceFieldRefs: [`brainstorm.acceptance.candidates[${index}].statement`],
+      sourceRefs: acceptance.sourceRefs,
+      acceptanceRefs: [acceptance.id],
+    });
+  });
+
+  brainstorm.domainModel.businessFlows.forEach((flow, index) => {
+    const acceptanceRefs = flow.capabilityRefs.flatMap((capabilityRef) =>
+      brainstorm.acceptance.candidates
+        .filter((acceptance) => acceptance.capabilityRefs.includes(capabilityRef) && currentAcceptanceRefs.has(acceptance.id))
+        .map((acceptance) => acceptance.id)
+    );
+    addItem({
+      kind: "business_flow",
+      title: flow.name,
+      summary: flow.summary,
+      requiredForCurrentPhase: true,
+      priority: "must",
+      sourceFieldRefs: [`brainstorm.domainModel.businessFlows[${index}].summary`],
+      acceptanceRefs,
+    });
+  });
+
+  const conceptSets = [
+    { path: "deliveryConceptGlossary", value: brainstorm.conceptGrounding?.deliveryConceptGlossary },
+    { path: "phaseConceptGrounding", value: brainstorm.conceptGrounding?.phaseConceptGrounding },
+  ];
+  for (const conceptSet of conceptSets) {
+    conceptSet.value?.concepts.forEach((concept, index) => {
+      const conceptInCurrentPhase =
+        concept.phaseRelevance === "current" ||
+        concept.scopeRefs.some((scopeRef) => currentScopeRefs.has(scopeRef)) ||
+        concept.acceptanceRefs.some((acceptanceRef) => currentAcceptanceRefs.has(acceptanceRef));
+      if (!conceptInCurrentPhase) {
+        return;
+      }
+      addItem({
+        kind: inferRequirementDetailKind(concept.explanation),
+        title: concept.term,
+        summary: concept.explanation,
+        requiredForCurrentPhase: concept.phaseRelevance === "current",
+        priority: concept.priority === "must_understand" ? "must" : concept.priority === "should_understand" ? "should" : "could",
+        sourceFieldRefs: [`brainstorm.conceptGrounding.${conceptSet.path}.concepts[${index}].explanation`],
+        scopeRefs: concept.scopeRefs.filter((scopeRef) => currentScopeRefs.has(scopeRef)),
+        acceptanceRefs: concept.acceptanceRefs.filter((acceptanceRef) => currentAcceptanceRefs.has(acceptanceRef)),
+        conceptRefs: [concept.conceptId],
+      });
+    });
+  }
+
+  const frontend = brainstorm.frontendExperience;
+  frontend?.dataViews?.forEach((view, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: view.name,
+      summary: `${view.purpose} Selection: ${view.selectionMode}. Pagination required: ${view.paginationRequired}.`,
+      requiredForCurrentPhase: frontend.required,
+      priority: frontend.required ? "must" : "could",
+      sourceFieldRefs: [`brainstorm.frontendExperience.dataViews[${index}]`],
+      sourceRefs: view.sourceRefs,
+      frontendRefs: [view.viewId],
+    });
+  });
+  frontend?.actions?.forEach((action, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: action.label,
+      summary: `${action.label}. Entry: ${action.entryPoint}. Refresh: ${action.refreshPolicy}. Success feedback: ${action.successFeedback.join("; ")}. Blocking or error feedback: ${action.blockingOrErrorFeedback.join("; ")}.`,
+      requiredForCurrentPhase: frontend.required,
+      priority: frontend.required ? "must" : "could",
+      sourceFieldRefs: [`brainstorm.frontendExperience.actions[${index}]`],
+      sourceRefs: action.sourceRefs,
+      frontendRefs: [action.actionId],
+    });
+  });
+  frontend?.operationPaths?.forEach((operationPath, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: operationPath.name,
+      summary: operationPath.selectionSummary,
+      requiredForCurrentPhase: frontend.required,
+      priority: frontend.required ? "must" : "could",
+      sourceFieldRefs: [`brainstorm.frontendExperience.operationPaths[${index}]`],
+      sourceRefs: operationPath.sourceRefs,
+      frontendRefs: [operationPath.pathId, ...operationPath.dataViewRefs, ...operationPath.actionRefs],
+    });
+  });
+
+  const frontendDelta = brainstorm.frontendExperienceDelta;
+  frontendDelta?.dataViewDeltas?.forEach((view, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: view.name,
+      summary: view.purpose,
+      requiredForCurrentPhase: frontendDelta.newSurfaceRequired || frontendDelta.affectedSurfaceRefs.length > 0,
+      priority: "should",
+      sourceFieldRefs: [`brainstorm.frontendExperienceDelta.dataViewDeltas[${index}]`],
+      sourceRefs: view.sourceRefs,
+      frontendRefs: [view.viewId],
+    });
+  });
+  frontendDelta?.actionDeltas?.forEach((action, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: action.label,
+      summary: `${action.label}. Entry: ${action.entryPoint}. Refresh: ${action.refreshPolicy}.`,
+      requiredForCurrentPhase: frontendDelta.newSurfaceRequired || frontendDelta.affectedSurfaceRefs.length > 0,
+      priority: "should",
+      sourceFieldRefs: [`brainstorm.frontendExperienceDelta.actionDeltas[${index}]`],
+      sourceRefs: action.sourceRefs,
+      frontendRefs: [action.actionId],
+    });
+  });
+  frontendDelta?.operationPathDeltas?.forEach((operationPath, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: operationPath.name,
+      summary: operationPath.selectionSummary,
+      requiredForCurrentPhase: frontendDelta.newSurfaceRequired || frontendDelta.affectedSurfaceRefs.length > 0,
+      priority: "should",
+      sourceFieldRefs: [`brainstorm.frontendExperienceDelta.operationPathDeltas[${index}]`],
+      sourceRefs: operationPath.sourceRefs,
+      frontendRefs: [operationPath.pathId, ...operationPath.dataViewRefs, ...operationPath.actionRefs],
+    });
+  });
+
+  brainstorm.scope.assumptions.forEach((assumption, index) => {
+    addItem({
+      kind: "assumption",
+      title: assumption.id,
+      summary: assumption.text,
+      requiredForCurrentPhase: assumption.requiresConfirmation === false,
+      priority: assumption.requiresConfirmation ? "should" : "could",
+      sourceFieldRefs: [`brainstorm.scope.assumptions[${index}].text`],
+      unresolvedNote: assumption.requiresConfirmation ? "Assumption still requires confirmation." : null,
+    });
+  });
+
+  return {
+    schemaVersion: "1.0",
+    authority: "brainstorm_contract",
+    sourceBrainstormContractRef: brainstormContractRef,
+    items,
+    extractionWarnings,
+  };
+}
+
+function stableRequirementDetailId(
+  kind: RequirementDetailsIndex["items"][number]["kind"],
+  sourceFieldRefs: string[],
+  summary: string,
+): string {
+  return `detail-${kind}-${createHash("sha1")
+    .update(`${sourceFieldRefs.join("|")}:${summary}`)
+    .digest("hex")
+    .slice(0, 10)}`;
+}
+
+function stableRequirementDetailWarningId(seed: string, suffix: string): string {
+  return `detail-warning-${createHash("sha1").update(`${seed}:${suffix}`).digest("hex").slice(0, 10)}`;
+}
+
+function inferRequirementDetailKind(
+  value: string,
+  fallback: RequirementDetailsIndex["items"][number]["kind"] = "business_scenario",
+): RequirementDetailsIndex["items"][number]["kind"] {
+  const text = value.toLowerCase();
+  if (matchesAny(text, ["frontend", "ui", "page", "screen", "list", "query", "select", "refresh", "页面", "列表", "查询", "选择", "刷新", "反馈"])) {
+    return "frontend_operation_path";
+  }
+  if (matchesAny(text, ["block", "blocking", "deny", "reject", "error", "invalid", "阻断", "拒绝", "失败", "无效", "原因"])) {
+    return "blocking_rule";
+  }
+  if (matchesAny(text, ["validate", "validation", "required", "format", "校验", "必填", "格式", "规则"])) {
+    return "validation_rule";
+  }
+  if (matchesAny(text, ["state", "status", "transition", "状态", "变更", "流转"])) {
+    return "state_transition";
+  }
+  if (matchesAny(text, ["field", "input", "display", "relationship", "字段", "录入", "展示", "关系"])) {
+    return "object_field_set";
+  }
+  if (matchesAny(text, ["create", "update", "approve", "cancel", "close", "submit", "operation", "action", "创建", "修改", "审批", "提交", "销户", "操作", "办理"])) {
+    return "object_operation";
+  }
+  if (matchesAny(text, ["flow", "workflow", "process", "流程", "步骤"])) {
+    return "business_flow";
+  }
+  return fallback;
+}
+
+function inferRequirementDetailImpactTags(
+  value: string,
+  kind: RequirementDetailsIndex["items"][number]["kind"],
+): RequirementDetailsIndex["items"][number]["impactTags"] {
+  const text = value.toLowerCase();
+  const tags = new Set<RequirementDetailsIndex["items"][number]["impactTags"][number]>();
+  if (kind === "scope_boundary" || kind === "deferred_or_excluded_boundary" || matchesAny(text, ["scope", "phase", "范围", "阶段", "边界"])) tags.add("scope");
+  if (kind === "object_field_set" || matchesAny(text, ["field", "data", "entity", "model", "字段", "数据", "模型", "关系"])) tags.add("data_model");
+  if (kind === "business_flow" || kind === "object_operation" || kind === "state_transition" || matchesAny(text, ["flow", "workflow", "process", "operation", "流程", "操作", "状态"])) tags.add("business_flow");
+  if (kind === "frontend_operation_path" || matchesAny(text, ["frontend", "ui", "page", "list", "query", "页面", "列表", "查询", "反馈"])) tags.add("frontend");
+  if (matchesAny(text, ["api", "interface", "request", "response", "http", "接口", "请求", "响应"])) tags.add("interface");
+  if (kind === "acceptance_outcome" || matchesAny(text, ["acceptance", "verify", "success", "验收", "验证", "成功"])) tags.add("acceptance");
+  if (matchesAny(text, ["runtime", "build", "start", "deploy", "运行", "构建", "启动", "部署"])) tags.add("runtime");
+  return tags.size > 0 ? [...tags] : ["scope"];
+}
+
+function inferRequirementDetailLifecycleStage(value: string): RequirementDetailsIndex["items"][number]["lifecycleStage"] {
+  const text = value.toLowerCase();
+  if (matchesAny(text, ["create", "open", "apply", "submit", "创建", "开户", "申请", "提交", "新增"])) return "create";
+  if (matchesAny(text, ["query", "search", "select", "list", "lookup", "查询", "搜索", "选择", "列表"])) return "query_select";
+  if (matchesAny(text, ["view", "detail", "display", "查看", "详情", "展示"])) return "view";
+  if (matchesAny(text, ["update", "edit", "change", "修改", "更新", "变更"])) return "update";
+  if (matchesAny(text, ["approve", "review", "process", "审批", "审核", "处理"])) return "approve_or_process";
+  if (matchesAny(text, ["state", "status", "transition", "状态", "流转"])) return "state_change";
+  if (matchesAny(text, ["terminate", "cancel", "close", "delete", "撤销", "取消", "销户", "删除", "终止"])) return "terminate_or_cancel";
+  if (matchesAny(text, ["block", "reject", "invalid", "error", "阻断", "拒绝", "失败", "异常"])) return "blocking_or_exception";
+  return "not_applicable";
+}
+
+function inferRequirementDetailQuality(value: string): RequirementDetailsIndex["items"][number]["quality"] {
+  const text = value.trim();
+  if (text.length < 36) {
+    return "thin";
+  }
+  const detailMarkers = [
+    "field", "input", "precondition", "validation", "blocking", "reason", "state", "feedback", "refresh",
+    "字段", "录入", "前置", "校验", "阻断", "原因", "状态", "反馈", "刷新",
+  ].filter((marker) => text.toLowerCase().includes(marker)).length;
+  if (text.length >= 160 || detailMarkers >= 3) {
+    return "rich";
+  }
+  return "usable";
+}
+
+function inferRequirementDetailUnresolvedNote(value: string): string | null {
+  const text = value.toLowerCase();
+  return matchesAny(text, ["unclear", "unknown", "tbd", "to be confirmed", "未确认", "不明确", "待确认"])
+    ? "Detail source contains unresolved wording."
+    : null;
+}
+
+function matchesAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+function truncateDetailTitle(value: string): string {
+  return value.length > 96 ? `${value.slice(0, 93)}...` : value;
 }
 
 function summarizeBaseline(baseline: TechnicalBaseline): Record<string, unknown> {
