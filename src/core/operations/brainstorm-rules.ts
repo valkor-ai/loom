@@ -117,3 +117,15 @@ export function brainstormRequirementSemanticRules(): string[] {
     ...frontendOperationPathCandidateRules(),
   ];
 }
+
+export function brainstormRequirementSemanticCompactRules(): string[] {
+  return [
+    "Read original requirement refs and confirmed decision refs before final_summary or BrainstormCandidate submit.",
+    "Preserve the confirmed current-phase semantics in existing BrainstormCandidate fields; avoid vague labels.",
+    "When business detail applies, confirm flows, objects, operations, fields, preconditions, validation/blocking, success states, frontend operation paths, deferred details, and source refs.",
+    "When business detail does not apply, state the concrete technical/non-domain reason instead of fabricating domain rules.",
+    "Write confirmed details into scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience/frontendExperienceDelta when applicable.",
+    "Acceptance statements must be source-grounded; keyword hints are advisory and never authority.",
+    "If a required semantic detail is unclear after reading refs, ask the user before accepting.",
+  ];
+}

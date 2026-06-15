@@ -302,26 +302,47 @@ const brainstormScopeCoreGroup = brainstormAction.read.fieldGroups.find((group) 
 const brainstormScopeAuthorityGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_phase_scope_authority");
 const brainstormConceptGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_concept_grounding_context");
 const brainstormKeywordHintsGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_keyword_hints_advisory");
-const brainstormCandidateWriteGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_write_contract");
+const brainstormCandidateWriteControlsGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_write_controls");
+const brainstormCandidateSchemaIdentityGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_schema_identity");
+const brainstormCandidateSchemaScopeGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_schema_scope");
+const brainstormCandidateSchemaConceptsGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_schema_concepts");
+const brainstormCandidateSchemaFrontendGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_schema_frontend");
+const brainstormCandidateSchemaHandoffGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_schema_handoff");
+const brainstormCandidateFinalSummaryRulesGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_final_summary_rules");
+const brainstormCandidateRequirementSemanticRulesGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_requirement_semantic_rules");
+const brainstormCandidateSelfReviewRulesGroup = brainstormAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_candidate_self_review_rules");
 assert.ok(brainstormScopeCoreGroup, "Brainstorm readPlan must include a phase_scope core group.");
 assert.ok(brainstormScopeAuthorityGroup, "Brainstorm readPlan must include a phase_scope authority group.");
 assert.ok(brainstormConceptGroup, "Brainstorm readPlan must include a concept grounding context group.");
 assert.ok(brainstormKeywordHintsGroup, "Brainstorm readPlan must expose keywordHints as a separate advisory group.");
-assert.ok(brainstormCandidateWriteGroup, "Brainstorm readPlan must include a candidate write contract group.");
+assert.ok(brainstormCandidateWriteControlsGroup, "Brainstorm readPlan must include a candidate write controls group.");
+assert.ok(brainstormCandidateSchemaIdentityGroup, "Brainstorm readPlan must include a candidate schema identity group.");
+assert.ok(brainstormCandidateSchemaScopeGroup, "Brainstorm readPlan must include a candidate schema scope group.");
+assert.ok(brainstormCandidateSchemaConceptsGroup, "Brainstorm readPlan must include a candidate schema concepts group.");
+assert.ok(brainstormCandidateSchemaFrontendGroup, "Brainstorm readPlan must include a candidate schema frontend group.");
+assert.ok(brainstormCandidateSchemaHandoffGroup, "Brainstorm readPlan must include a candidate schema handoff group.");
+assert.ok(brainstormCandidateFinalSummaryRulesGroup, "Brainstorm readPlan must include a candidate final summary rules group.");
+assert.ok(brainstormCandidateRequirementSemanticRulesGroup, "Brainstorm readPlan must include a candidate requirement semantic rules group.");
+assert.ok(brainstormCandidateSelfReviewRulesGroup, "Brainstorm readPlan must include a candidate self-review rules group.");
 assert.deepEqual(
   brainstormScopeCoreGroup.fields,
   [
-    "agentAction",
-    "requestManifest",
+    "agentAction.instruction",
+    "agentAction.stopConditions",
     "originalRequest",
     "contextRefs",
     "sourceFieldAccessHints",
     "firstClarificationGate",
-    "clarificationConversationProtocol",
+    "clarificationConversationProtocol.mode",
+    "clarificationConversationProtocol.oneTopicPerTurn",
+    "clarificationConversationProtocol.maxOptionsPerQuestion",
+    "clarificationConversationProtocol.avoidSchemaLanguageToUser",
+    "clarificationConversationProtocol.requiredBlocks",
+    "clarificationConversationProtocol.blockConfirmationRules.phase_scope",
+    "rules.phaseScopeOptionComparison",
     "clarificationGuidance",
     "riskGuidance",
     "confirmationRules",
-    "rules",
   ],
   "Brainstorm phase_scope core group must contain only current scope conversation controls.",
 );
@@ -332,18 +353,104 @@ assert.deepEqual(
 );
 assert.deepEqual(
   brainstormConceptGroup.fields,
-  ["conceptGroundingRequest"],
-  "Brainstorm concept group must hold concept-only context.",
+  [
+    "conceptGroundingRequest",
+    "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
+  ],
+  "Brainstorm concept group must hold concept-only context and narrow concept rules.",
 );
 assert.deepEqual(
-  brainstormCandidateWriteGroup.fields,
-  ["outputContract", "generationProtocol", "enumRefs"],
-  "Brainstorm write contract fields must be delayed until candidate writing.",
+  brainstormCandidateWriteControlsGroup.fields,
+  ["agentAction.write", "agentAction.submit", "agentAction.schema", "outputContract.candidateFile", "outputContract.schemaRef", "generationProtocol", "enumRefs"],
+  "Brainstorm write controls must be delayed and avoid reading the full outputContract.",
+);
+assert.deepEqual(
+  brainstormCandidateSchemaIdentityGroup.fields,
+  [
+    "outputContract.schemaShape.schemaVersion",
+    "outputContract.schemaShape.candidateId",
+    "outputContract.schemaShape.brainstormRunId",
+    "outputContract.schemaShape.deliveryId",
+    "outputContract.schemaShape.phaseId",
+    "outputContract.schemaShape.status",
+    "outputContract.schemaShape.requestSummary",
+    "outputContract.schemaShape.sources",
+  ],
+  "Brainstorm candidate identity schema fields must be a narrow schema projection.",
+);
+assert.deepEqual(
+  brainstormCandidateSchemaScopeGroup.fields,
+  [
+    "outputContract.schemaShape.scope",
+    "outputContract.schemaShape.roadmap",
+    "outputContract.schemaShape.phasePlan",
+    "outputContract.schemaShape.acceptance",
+  ],
+  "Brainstorm candidate scope schema fields must be isolated from unrelated schema sections.",
+);
+assert.deepEqual(
+  brainstormCandidateSchemaConceptsGroup.fields,
+  [
+    "outputContract.schemaShape.domainModel",
+    "outputContract.schemaShape.conceptGrounding",
+    "outputContract.schemaShape.conceptConfirmation",
+    "outputContract.schemaShape.clarificationProgress",
+  ],
+  "Brainstorm candidate concept schema fields must be isolated from unrelated schema sections.",
+);
+assert.deepEqual(
+  brainstormCandidateSchemaFrontendGroup.fields,
+  ["outputContract.schemaShape.frontendExperience"],
+  "Brainstorm candidate frontend schema fields must be isolated from unrelated schema sections.",
+);
+assert.deepEqual(
+  brainstormCandidateSchemaHandoffGroup.fields,
+  ["outputContract.schemaShape.handoff"],
+  "Brainstorm candidate handoff fields must contain only delayed handoff schema.",
+);
+assert.deepEqual(
+  brainstormCandidateFinalSummaryRulesGroup.fields,
+  [
+    "clarificationConversationProtocol.blockConfirmationRules.final_summary",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.appliesWhenAgentFinds",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+  ],
+  "Brainstorm final summary rules must be narrow rule sections instead of the full rules object.",
+);
+assert.deepEqual(
+  brainstormCandidateRequirementSemanticRulesGroup.fields,
+  ["rules.requirementSemanticGrounding.compactRules"],
+  "Brainstorm requirement semantic rules must default to the compact rule list.",
+);
+assert.deepEqual(
+  brainstormCandidateSelfReviewRulesGroup.fields,
+  ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"],
+  "Brainstorm self-review rules must be narrow rule sections instead of candidateRules.",
 );
 assert.equal(
-  brainstormScopeCoreGroup.fields.includes("outputContract") || brainstormScopeCoreGroup.fields.includes("generationProtocol") || brainstormScopeCoreGroup.fields.includes("enumRefs"),
+  brainstormScopeCoreGroup.fields.includes("outputContract") ||
+    brainstormScopeCoreGroup.fields.includes("agentAction") ||
+    brainstormScopeCoreGroup.fields.includes("clarificationConversationProtocol") ||
+    brainstormScopeCoreGroup.fields.includes("rules") ||
+    brainstormScopeCoreGroup.fields.includes("generationProtocol") ||
+    brainstormScopeCoreGroup.fields.includes("enumRefs"),
   false,
   "Brainstorm phase_scope core group must not read candidate write fields.",
+);
+assert.equal(
+  allFields(brainstormAction.read.fieldGroups).includes("outputContract") ||
+    allFields(brainstormAction.read.fieldGroups).includes("outputContract.schemaShape") ||
+    allFields(brainstormAction.read.fieldGroups).includes("outputContract.schemaShape.candidateRules") ||
+    allFields(brainstormAction.read.fieldGroups).includes("agentAction") ||
+    allFields(brainstormAction.read.fieldGroups).includes("clarificationConversationProtocol") ||
+    allFields(brainstormAction.read.fieldGroups).includes("requestManifest") ||
+    allFields(brainstormAction.read.fieldGroups).includes("rules"),
+  false,
+  "Brainstorm readPlan must not read full outputContract, schemaShape, candidateRules, agentAction, protocol, requestManifest, or rules.",
 );
 assert.equal(
   brainstormScopeAuthorityGroup.fields.includes("keywordHints"),
@@ -351,10 +458,10 @@ assert.equal(
   "Brainstorm phase_scope authority group must not read complete advisory keywordHints.",
 );
 assert.equal(brainstormKeywordHintsGroup.required, false, "Brainstorm keyword hints group must be optional.");
-assert.deepEqual(brainstormKeywordHintsGroup.fields, ["keywordHints"], "Brainstorm keyword hints group must read only keywordHints.");
+assert.deepEqual(brainstormKeywordHintsGroup.fields, ["keywordHints.compact"], "Brainstorm keyword hints group must read only the compact keywordHints projection.");
 assert.deepEqual(
   brainstormKeywordHintsGroup.readCommand.argv,
-  ["inspect", "--request", "{requestRef}", "--field", "keywordHints"],
+  ["inspect", "--request", "{requestRef}", "--field", "keywordHints.compact"],
   "Brainstorm keyword hints group must have a targeted inspect command.",
 );
 assert.ok(
@@ -388,7 +495,7 @@ const normalizedOldBrainstormAction = normalizeAgentActionForFieldGroups({
 assert.deepEqual(
   normalizedOldBrainstormAction.read.fieldGroups.map((group) => ({ groupId: group.groupId, fields: group.fields })),
   [
-    { groupId: "brainstorm_session_phase_scope_core", fields: ["agentAction", "contextRefs"] },
+    { groupId: "brainstorm_session_phase_scope_core", fields: ["agentAction.instruction", "agentAction.stopConditions", "contextRefs"] },
     {
       groupId: "brainstorm_session_phase_scope_authority",
       fields: [
@@ -401,7 +508,11 @@ assert.deepEqual(
         "latestRepositoryContext.contextQuality",
       ],
     },
-    { groupId: "brainstorm_session_keyword_hints_advisory", fields: ["keywordHints"] },
+    { groupId: "brainstorm_session_keyword_hints_advisory", fields: ["keywordHints.compact"] },
+    {
+      groupId: "brainstorm_session_candidate_write_controls",
+      fields: ["agentAction.write", "agentAction.submit", "agentAction.schema"],
+    },
   ],
   "CLI normalization must rewrite old Brainstorm groups into gate-scoped groups.",
 );
@@ -602,6 +713,25 @@ writeJson(path.join(tmp, ".loom/requests/tbr.json"), {
   assert.equal(parsed.data.fields.task.value.objective, "Full task objective text.");
   assert.equal(parsed.data.fields.task.value.writeBoundary.artifactRefs.modules[0], "module-1");
   assert.equal(parsed.data.fields.task.fieldRead.resolvedRefKey, "task");
+}
+
+{
+  const { result, parsed } = runCli(projectRoot, [
+    "inspect",
+    "--project-root", projectRoot,
+    "--request", ".loom/requests/request.json",
+    "--values-only",
+    "--field", "task,sourceContext.acceptanceSnapshot",
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.data.requestedFields, undefined, "values-only inspect must omit requestedFields metadata.");
+  assert.equal(parsed.data.fields.task.value, undefined, "values-only inspect must omit field wrapper objects.");
+  assert.equal(parsed.data.fields.task.fieldRead, undefined, "values-only inspect must omit fieldRead metadata.");
+  assert.equal(parsed.data.fields.task.taskId, "task-1");
+  assert.deepEqual(parsed.data.fields["sourceContext.acceptanceSnapshot"], [
+    { acceptanceId: "AC-1", statement: "Full acceptance statement." },
+  ]);
 }
 
 {

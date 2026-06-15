@@ -1,0 +1,20 @@
+{
+  "id": "support-sla-continuation",
+  "title": "Support SLA Continuation",
+  "seedDir": "support-sla-continuation/seed",
+  "request": "Continue the existing support queue from the prior phase. Add SLA-aware escalation while preserving the small in-memory API: tickets may include customerTier and openedAt, breached tickets must be detected from tier-specific SLA windows, and summarizeQueue must surface breach counts, tier breakdown, escalationStatus, and nextAction.",
+  "context": [
+    "Phase 1 already shipped add, assign, resolve, list, and summary behavior. The prior handoff is available in docs/phase-1-support.md.",
+    "SLA windows are enterprise 4 hours, business 24 hours, and standard 72 hours. Missing customerTier defaults to standard; missing openedAt defaults to the current clock.",
+    "Customer notes include future ideas such as AI replies, macros, and queue-worker alerts. This phase is only about deterministic SLA breach detection and escalation summary fields.",
+    "Do not add persistence, HTTP routing, queue workers, or dependency changes. Keep structured validation errors and the injectable now() clock."
+  ],
+  "successCriteria": [
+    "Existing support queue tests continue to pass.",
+    "addTicket accepts optional customerTier and openedAt, with standard and the current clock as defaults.",
+    "Invalid customer tiers and openedAt values throw structured validation errors.",
+    "listBreachedTickets returns unresolved tickets past the tier-specific SLA window.",
+    "summarizeQueue preserves existing summary fields and adds breachedCount, breachedByTier, escalationStatus, and nextAction."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}

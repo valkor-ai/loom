@@ -7,7 +7,7 @@
     ·
     <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">Technical Report</a>
     ·
-    <a href="#use-cases">Use Cases</a>
+    <a href="./docs/use-cases.md">Use Cases</a>
     ·
     <a href="#quick-start">Quick Start</a>
     ·
@@ -19,6 +19,7 @@
   </p>
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
+    <a href="https://discord.gg/4VgM2wEFGB"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white"></a>
     <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
@@ -54,54 +55,6 @@ The hard part is the harness around the model: durable state, scoped work, routi
 
 That is where Loom is different from prompt files, one-off workflows, and single-agent scripts: it stores delivery state in `.loom/`, exposes an agent-neutral CLI, and makes verification, repair, preview, and handoff first-class protocol steps.
 
-## Use Cases
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example3-web.mp4"><img src="./assets/example3-web.webp" alt="AI product launch site demo" width="420"></a>
-      <br>
-      <strong>Web - AI product launch site</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example4-web.mp4"><img src="./assets/example4-web.webp" alt="Creator analytics workspace demo" width="420"></a>
-      <br>
-      <strong>Web - Creator analytics workspace</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example5-web.mp4"><img src="./assets/example5-web.webp" alt="Interactive campaign microsite demo" width="420"></a>
-      <br>
-      <strong>Web - Interactive campaign microsite</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example1-game.mp4"><img src="./assets/example-game1.webp" alt="Flight simulator demo" width="420"></a>
-      <br>
-      <strong>Game - Flight simulator</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example2-finance.mp4"><img src="./assets/example2-finance.webp" alt="Quant trading workbench demo" width="420"></a>
-      <br>
-      <strong>Finance - Quant trading workbench</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example6-research.mp4"><img src="./assets/example6-research.webp" alt="Global biodiversity research demo" width="420"></a>
-      <br>
-      <strong>Research - Global biodiversity research</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example7-app.mp4"><img src="./assets/example7-app.webp" alt="Nutrition health app demo" width="420"></a>
-      <br>
-      <strong>App - Nutrition health app</strong>
-    </td>
-  </tr>
-</table>
-
 ## From Demo to Delivery
 
 Vibe Coding and AI Coding are making software creation accessible to more builders than ever. More people can now turn an idea into a demo, prototype a product, or build a tool for themselves with the help of coding agents.
@@ -127,6 +80,36 @@ Backend readiness | Track databases, auth, storage, functions, environment varia
 UIX guidance | Preserve visual direction, interaction flows, responsive states, accessibility expectations, and product-specific interface details as delivery requirements.
 Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
 Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode and other agents.
+
+## Token-Saving Context
+
+High-level context path:
+
+```text
+Your coding agent / app
+(Codex, Claude Code, OpenCode, future adapters...)
+        |
+        | delivery goal . repo context . logs . tests . preview evidence
+        v
++----------------------------------------------------------------------------+
+| Loom  (project-local delivery state; full artifacts stay in .loom/)         |
+|----------------------------------------------------------------------------|
+| Dynamic workflow router -> Request manifest -> Agent read plan              |
+|                              |                                             |
+|                              |- .refs/*.json        full authority          |
+|                              |- fieldGroups         grouped required reads  |
+|                              |- inspect selectors   targeted retrieval      |
+|                              `- compact envelope    next action + refs      |
+|                                                                            |
+| Task contracts . evidence windows . fullLogRef . review/repair/resume state |
++----------------------------------------------------------------------------+
+        |
+        | compact instruction + selected refs + retrieval path
+        v
+Agent turn / LLM context
+```
+
+In the latest 11-case agent-run benchmark, Codex + Loom used 15.8% fewer tokens than Codex alone while preserving 100% completion. See the [latest benchmark results](./benchmarks/agent-run/results/latest.md) and the [run guide](./benchmarks/agent-run/README.md).
 
 ## Prerequisites
 
@@ -240,52 +223,11 @@ Loom creates project-local delivery state under `.loom/` and uses it as the sour
 6. Review, repair, and re-check.
 7. Report the final delivery state.
 
-## Token-Saving Context
-
-Loom saves tokens at the delivery-protocol layer. It does not ask the agent to keep every artifact in chat, and it does not lossy-compress delivery contracts. The complete source of truth stays in `.loom/`; the chat-visible surface carries the current projection, refs, selectors, and recovery commands.
-
-```text
-Your coding agent / app
-(Codex, Claude Code, OpenCode, future adapters...)
-        |
-        | delivery goal . repo context . logs . tests . preview evidence
-        v
-+----------------------------------------------------------------------------+
-| Loom  (project-local delivery state; full artifacts stay in .loom/)         |
-|----------------------------------------------------------------------------|
-| Dynamic workflow router -> Request manifest -> Agent read plan              |
-|                              |                                             |
-|                              |- .refs/*.json        full authority          |
-|                              |- fieldGroups         grouped required reads  |
-|                              |- inspect selectors   targeted retrieval      |
-|                              `- compact envelope    next action + refs      |
-|                                                                            |
-| Task contracts . evidence windows . fullLogRef . review/repair/resume state |
-+----------------------------------------------------------------------------+
-        |
-        | compact instruction + selected refs + retrieval path
-        v
-Agent turn / LLM context
-```
-
-Mechanism | What enters context | What stays out of context
---- | --- | ---
-Ref-first request manifests | Current request path, required field groups, selector hints | Large request fields stored under `.refs/*.json`
-Compact read plans | `agentAction.read.fieldGroups` and `inspect` commands | Whole request artifacts unless a field group requires them
-Evidence windows | Error windows, diagnostics, summaries, `fullLogRef` | Full build, test, and deploy logs
-Task contracts | Bounded task scope, acceptance refs, result path, submit command | Historical task plans, results, and reviews unless selected
-Resume state | Next action, active operation refs, continuation rules | Repeated whole-repository or whole-delivery rereads
-
-The pattern is similar in spirit to compress-cache-retrieve: show a compact projection first, keep the full artifact retrievable, and expand only when correctness requires it. For Loom, the important constraint is that contracts stay exact. Token savings come from structured refs and targeted retrieval, not from summarizing away the authority the agent must obey.
-
-Loom records local aggregate telemetry for this path in `.loom/metrics/token-saving.json` and surfaces totals through `status`; use `loom metrics token-saving` for the detailed local report. The telemetry covers compact envelopes, ref-first request manifests, and targeted `inspect` selector reads. It stores byte counts, estimated tokens saved, event sources, and refs only; it does not store prompts, artifact bodies, logs, or user content.
-
 ## Learn More
 
 Need | Command or file
 --- | ---
 See available commands | `"$HOME/.loom/bin/loom-cli" --help`
-Inspect token-saving telemetry | `"$HOME/.loom/bin/loom-cli" metrics token-saving --project-root /path/to/project`
 Install or refresh all adapters | `npm run plugin:install-adapters`
 Install or refresh Codex adapter | `npm run plugin:install-codex`
 Install or refresh Claude Code adapter | `npm run plugin:install-claude`

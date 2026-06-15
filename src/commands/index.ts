@@ -75,10 +75,12 @@ export async function runCli(argv: string[]): Promise<void> {
     .addOption(compactOption())
     .option("--request <path>", "Request artifact path")
     .option("--field <field>", "Comma-separated field path(s) to read, for example task,outputContract.schemaShape")
+    .option("--values-only", "Return only inspected field values in compact agent-facing output")
     .action(async (options) => {
       await runCommand("inspect", options, createInspectHandler({
         request: options.request,
         field: options.field,
+        valuesOnly: options.valuesOnly,
       }));
     });
 

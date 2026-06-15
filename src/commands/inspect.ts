@@ -11,6 +11,7 @@ import type { CliEnvelope, CommandContext } from "./types";
 export function createInspectHandler(options: {
   request?: string;
   field?: string;
+  valuesOnly?: boolean;
 }) {
   return async function handleInspect(ctx: CommandContext): Promise<CliEnvelope> {
     if (!options.request || options.request.trim().length === 0) {
@@ -66,8 +67,22 @@ export function createInspectHandler(options: {
       requestedFields: fields,
       fields: resolvedFields,
     };
-    await recordInspectTelemetry(ctx.projectRoot, requestFile, requestRef, data, resolvedFields);
-    return ok("inspect", ctx.projectRoot, data, fields.length === 1 ? "Field inspected." : "Fields inspected.");
+    const outputData = options.valuesOnly ? valuesOnlyInspectData(resolvedFields) : data;
+    await recordInspectTelemetry(ctx.projectRoot, requestFile, requestRef, outputData, resolvedFields);
+    return ok("inspect", ctx.projectRoot, outputData, fields.length === 1 ? "Field inspected." : "Fields inspected.");
+  };
+}
+
+function valuesOnlyInspectData(
+  resolvedFields: Record<string, {
+    status: "resolved" | "not_available";
+    value: unknown;
+  }>,
+): { fields: Record<string, unknown> } {
+  return {
+    fields: Object.fromEntries(
+      Object.entries(resolvedFields).map(([field, result]) => [field, result.value]),
+    ),
   };
 }
 
@@ -159,7 +174,9 @@ async function resolveRequestField(
       ? normalizeAgentActionForRequest(refValue, request)
       : refValue;
     const selectorParts = parts.slice(1);
-    const value = selectorParts.length === 0 ? normalizedRefValue : selectValue(normalizedRefValue, selectorParts);
+    const value = rootKey === "rules" && selectorParts.join(".") === "requirementSemanticGrounding.compactRules"
+      ? selectCompactRequirementSemanticRules(normalizedRefValue)
+      : selectorParts.length === 0 ? normalizedRefValue : selectValue(normalizedRefValue, selectorParts);
     return {
       status: "resolved",
       value,
@@ -176,7 +193,9 @@ async function resolveRequestField(
       agentAction: normalizeAgentActionForRequest(request.agentAction, request),
     }
     : request;
-  const rootValue = selectValue(normalizedRequest, parts);
+  const rootValue = parts.join(".") === "rules.requirementSemanticGrounding.compactRules"
+    ? selectCompactRequirementSemanticRules(normalizedRequest.rules)
+    : selectValue(normalizedRequest, parts);
   return {
     status: "resolved",
     value: rootValue,
@@ -294,7 +313,9 @@ async function resolveRequestContextRefField(
   const refValue = exactSpec?.text
     ? await fs.readFile(refFile, "utf8")
     : await readJsonFile(refFile);
-  const value = selectorParts.length === 0 ? refValue : selectValue(refValue, selectorParts);
+  const value = alias === "keywordHints" && selectorParts[0] === "compact"
+    ? selectCompactKeywordHints(refValue, selectorParts.slice(1))
+    : selectorParts.length === 0 ? refValue : selectValue(refValue, selectorParts);
   return {
     status: "resolved",
     value,
@@ -303,6 +324,82 @@ async function resolveRequestContextRefField(
     selector: selectorParts.length === 0 ? "$" : `.${selectorParts.join(".")}`,
     source: "request_root",
   };
+}
+
+function selectCompactKeywordHints(value: unknown, selectorParts: string[]): unknown {
+  const compact = compactKeywordHints(value);
+  return selectorParts.length === 0 ? compact : selectValue(compact, selectorParts);
+}
+
+function compactKeywordHints(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    return {
+      usage: "advisory_only",
+      status: "empty",
+      languageHints: [],
+      topKeywords: [],
+      sectionKeywords: [],
+      rules: keywordHintCompactRules(),
+    };
+  }
+  if (isRecord(value.compact)) {
+    return value.compact;
+  }
+  return {
+    usage: value.usage === "advisory_only" ? "advisory_only" : "advisory_only",
+    status: value.status === "completed" ? "completed" : "empty",
+    languageHints: Array.isArray(value.languageHints)
+      ? value.languageHints.filter((item): item is string => typeof item === "string").slice(0, 5)
+      : [],
+    topKeywords: Array.isArray(value.globalKeywords)
+      ? value.globalKeywords.filter(isRecord).slice(0, 16).map((hint) => ({
+        keyword: typeof hint.keyword === "string" ? hint.keyword : "",
+        occurrences: typeof hint.occurrences === "number" ? hint.occurrences : 0,
+        sourceItemIds: Array.isArray(hint.sourceItemIds)
+          ? hint.sourceItemIds.filter((item): item is string => typeof item === "string").slice(0, 3)
+          : [],
+      })).filter((hint) => hint.keyword.length > 0)
+      : [],
+    sectionKeywords: Array.isArray(value.sectionKeywords)
+      ? value.sectionKeywords.filter(isRecord).slice(0, 6).map((section) => ({
+        sectionId: typeof section.sectionId === "string" ? section.sectionId : "",
+        sourceItemId: typeof section.sourceItemId === "string" ? section.sourceItemId : "",
+        ...(typeof section.title === "string" ? { title: section.title } : {}),
+        keywords: Array.isArray(section.keywords)
+          ? section.keywords.filter(isRecord).slice(0, 6).map((hint) => typeof hint.keyword === "string" ? hint.keyword : "").filter(Boolean)
+          : [],
+      })).filter((section) => section.sectionId.length > 0 || section.keywords.length > 0)
+      : [],
+    rules: keywordHintCompactRules(),
+  };
+}
+
+function keywordHintCompactRules(): Record<string, true> {
+  return {
+    advisoryOnly: true,
+    mustNotTreatAsScope: true,
+    mustNotTreatAsAcceptance: true,
+    ignoreWhenIrrelevant: true,
+  };
+}
+
+function selectCompactRequirementSemanticRules(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const requirementSemanticGrounding = value.requirementSemanticGrounding;
+  if (!isRecord(requirementSemanticGrounding)) {
+    return [];
+  }
+  if (Array.isArray(requirementSemanticGrounding.compactRules)) {
+    return requirementSemanticGrounding.compactRules.filter((item): item is string => typeof item === "string");
+  }
+  if (!Array.isArray(requirementSemanticGrounding.rules)) {
+    return [];
+  }
+  return requirementSemanticGrounding.rules
+    .filter((item): item is string => typeof item === "string")
+    .slice(0, 7);
 }
 
 function requestManifestRefs(request: Record<string, unknown>): Record<string, { ref?: string }> {
