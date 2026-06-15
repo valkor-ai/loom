@@ -1,4 +1,9 @@
+import path from "node:path";
 import type { ArchitectureArtifactContract } from "../contracts";
+import { architectureArtifactContractSchema } from "../contracts";
+import { getActiveLocator, loadDeliveryIndex } from "../state/delivery";
+import { readJsonFile } from "../state/fs";
+import { architectureContractPath, architectureLatestPath, toProjectRelative } from "../state/paths";
 import type { DependencyService, DeploymentRuntimeContract, DetectedStack } from "./types";
 import {
   dedupeDependencyServices,
@@ -69,6 +74,52 @@ export function heuristicRuntimeContract(stack: DetectedStack, ref: string | nul
     },
     dependencyServices: [],
   };
+}
+
+export async function loadDeploymentRuntimeContract(projectRoot: string, stack: DetectedStack): Promise<DeploymentRuntimeContract> {
+  try {
+    const locator = await getActiveLocator(projectRoot);
+    const current = await loadDeploymentRuntimeContractForLocator(projectRoot, stack, locator);
+    if (current.source !== "heuristic") {
+      return current;
+    }
+
+    const index = await loadDeliveryIndex(projectRoot, locator.deliveryId);
+    const activeIndex = index.phases.findIndex((phase) => phase.phaseId === locator.phaseId);
+    const previousCompleted = index.phases
+      .slice(0, activeIndex < 0 ? undefined : activeIndex)
+      .reverse()
+      .find((phase) => phase.status === "completed" && typeof phase.latestRefs.architectureArtifact === "string");
+    const architectureArtifactRef = previousCompleted?.latestRefs.architectureArtifact;
+    if (!previousCompleted || !architectureArtifactRef) {
+      return current;
+    }
+    const aac = architectureArtifactContractSchema.parse(await readJsonFile(path.resolve(projectRoot, architectureArtifactRef)));
+    return deploymentRuntimeContractFromAac(aac, stack, `${architectureArtifactRef}#/runtimeDelivery`);
+  } catch {
+    return deploymentRuntimeContractFromAac(null, stack, null);
+  }
+}
+
+async function loadDeploymentRuntimeContractForLocator(
+  projectRoot: string,
+  stack: DetectedStack,
+  locator: { deliveryId: string; phaseId: string },
+): Promise<DeploymentRuntimeContract> {
+  try {
+    const latest = await readJsonFile(architectureLatestPath(projectRoot, locator));
+    const architectureArtifactContractId = typeof latest === "object" && latest !== null
+      ? (latest as { architectureArtifactContractId?: unknown }).architectureArtifactContractId
+      : null;
+    if (typeof architectureArtifactContractId !== "string") {
+      return deploymentRuntimeContractFromAac(null, stack, null);
+    }
+    const aacPath = architectureContractPath(projectRoot, architectureArtifactContractId, locator);
+    const aac = architectureArtifactContractSchema.parse(await readJsonFile(aacPath));
+    return deploymentRuntimeContractFromAac(aac, stack, `${toProjectRelative(projectRoot, aacPath)}#/runtimeDelivery`);
+  } catch {
+    return deploymentRuntimeContractFromAac(null, stack, null);
+  }
 }
 
 export function applyRuntimeContractToStack(

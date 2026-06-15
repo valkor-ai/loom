@@ -1,10 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { deployConflict, deployNotRunning, deploySourceInsufficient, deployValidationFailed, dockerUnavailable, LoomError } from "../errors";
-import { ensureDir, pathExists, readJsonFile } from "../state/fs";
-import { architectureContractPath, architectureLatestPath, toProjectRelative } from "../state/paths";
-import { getActiveLocator, loadDeliveryIndex } from "../state/delivery";
-import { architectureArtifactContractSchema } from "../contracts";
+import { ensureDir, pathExists } from "../state/fs";
+import { toProjectRelative } from "../state/paths";
 import { analyzeDeploymentBootstrap } from "./bootstrap";
 import {
   assertNoActiveDeploymentOperation,
@@ -50,7 +48,7 @@ import {
   resolveComposePath,
 } from "./runtime";
 import { writeDeploymentRepairRequest } from "./repair";
-import { applyRuntimeContractToStack, deploymentRuntimeContractFromAac } from "./runtime-contract";
+import { applyRuntimeContractToStack, loadDeploymentRuntimeContract } from "./runtime-contract";
 import { resolveDeploymentStrategy } from "./strategy";
 import { validateStartupLogs } from "./validate";
 import { discoverNodeWorkspacePackageJsonPaths, resolveDeploymentWorkspaceForApp } from "./workspace";
@@ -355,10 +353,13 @@ async function deployPrepareInternal(input: {
       ? toProjectRelative(input.projectRoot, existing.dockerfilePath)
       : null;
     spec.files.dockerignorePath = null;
-    await writeDeploymentSpec(input.projectRoot, spec);
-    await clearDeploymentFailureArtifacts(input.projectRoot);
-    await appendDeploymentLog(input.projectRoot, logLine("prepare", `Prepared ${spec.serviceName} deployment by reusing ${spec.files.composePath}.`));
-    return toPrepareResult(input.projectRoot, paths.specFile, spec, spec.detectedStack);
+    return finalizeDeployPrepare({
+      projectRoot: input.projectRoot,
+      specFile: paths.specFile,
+      spec,
+      detectedStack: spec.detectedStack,
+      logMessage: `Prepared ${spec.serviceName} deployment by reusing ${spec.files.composePath}.`,
+    });
   }
 
   if (strategy.provider === "dockerfile-existing" && existing.dockerfilePath) {
@@ -389,10 +390,13 @@ async function deployPrepareInternal(input: {
     applyRuntimeContractHealthDefaults(spec, runtimeContract, input.healthcheck);
 
     await fs.writeFile(paths.composeFile, generateComposeForDockerfile(spec), "utf8");
-    await writeDeploymentSpec(input.projectRoot, spec);
-    await clearDeploymentFailureArtifacts(input.projectRoot);
-    await appendDeploymentLog(input.projectRoot, logLine("prepare", `Prepared ${spec.serviceName} deployment by reusing ${spec.files.dockerfilePath}.`));
-    return toPrepareResult(input.projectRoot, paths.specFile, spec, spec.detectedStack);
+    return finalizeDeployPrepare({
+      projectRoot: input.projectRoot,
+      specFile: paths.specFile,
+      spec,
+      detectedStack: spec.detectedStack,
+      logMessage: `Prepared ${spec.serviceName} deployment by reusing ${spec.files.dockerfilePath}.`,
+    });
   }
 
   const spec = applyHealthcheckInput(createDeploymentSpec({
@@ -421,11 +425,13 @@ async function deployPrepareInternal(input: {
   await fs.writeFile(paths.dockerfileFile, generated.dockerfile, "utf8");
   await fs.writeFile(paths.composeFile, generated.compose, "utf8");
   await fs.writeFile(paths.dockerignoreFile, generated.dockerignore, "utf8");
-  await writeDeploymentSpec(input.projectRoot, spec);
-  await clearDeploymentFailureArtifacts(input.projectRoot);
-  await appendDeploymentLog(input.projectRoot, logLine("prepare", `Prepared ${spec.serviceName} deployment with ${spec.detectedStack.kind} stack from ${spec.workspace.appPath}.`));
-
-  return toPrepareResult(input.projectRoot, paths.specFile, spec, spec.detectedStack);
+  return finalizeDeployPrepare({
+    projectRoot: input.projectRoot,
+    specFile: paths.specFile,
+    spec,
+    detectedStack: spec.detectedStack,
+    logMessage: `Prepared ${spec.serviceName} deployment with ${spec.detectedStack.kind} stack from ${spec.workspace.appPath}.`,
+  });
 }
 
 export async function deployRun(input: {
@@ -1724,6 +1730,19 @@ function toPrepareResult(
   };
 }
 
+async function finalizeDeployPrepare(input: {
+  projectRoot: string;
+  specFile: string;
+  spec: DeploymentSpec;
+  detectedStack: DeploymentSpec["detectedStack"];
+  logMessage: string;
+}): Promise<DeployPrepareResult> {
+  await writeDeploymentSpec(input.projectRoot, input.spec);
+  await clearDeploymentFailureArtifacts(input.projectRoot);
+  await appendDeploymentLog(input.projectRoot, logLine("prepare", input.logMessage));
+  return toPrepareResult(input.projectRoot, input.specFile, input.spec, input.detectedStack);
+}
+
 function assertDeploymentCodeEvidenceReady(
   projectRoot: string,
   evidence: DeploymentCodeEvidence,
@@ -1855,52 +1874,6 @@ function deploymentCodeEvidenceReadGuide(evidenceRef: string | null): Record<str
       ],
     },
   };
-}
-
-async function loadDeploymentRuntimeContract(projectRoot: string, stack: DeploymentSpec["detectedStack"]): Promise<DeploymentSpec["runtimeContract"]> {
-  try {
-    const locator = await getActiveLocator(projectRoot);
-    const current = await loadDeploymentRuntimeContractForLocator(projectRoot, stack, locator);
-    if (current.source !== "heuristic") {
-      return current;
-    }
-
-    const index = await loadDeliveryIndex(projectRoot, locator.deliveryId);
-    const activeIndex = index.phases.findIndex((phase) => phase.phaseId === locator.phaseId);
-    const previousCompleted = index.phases
-      .slice(0, activeIndex < 0 ? undefined : activeIndex)
-      .reverse()
-      .find((phase) => phase.status === "completed" && typeof phase.latestRefs.architectureArtifact === "string");
-    const architectureArtifactRef = previousCompleted?.latestRefs.architectureArtifact;
-    if (!previousCompleted || !architectureArtifactRef) {
-      return current;
-    }
-    const aac = architectureArtifactContractSchema.parse(await readJsonFile(path.resolve(projectRoot, architectureArtifactRef)));
-    return deploymentRuntimeContractFromAac(aac, stack, `${architectureArtifactRef}#/runtimeDelivery`);
-  } catch {
-    return deploymentRuntimeContractFromAac(null, stack, null);
-  }
-}
-
-async function loadDeploymentRuntimeContractForLocator(
-  projectRoot: string,
-  stack: DeploymentSpec["detectedStack"],
-  locator: { deliveryId: string; phaseId: string },
-): Promise<DeploymentSpec["runtimeContract"]> {
-  try {
-    const latest = await readJsonFile(architectureLatestPath(projectRoot, locator));
-    const architectureArtifactContractId = typeof latest === "object" && latest !== null
-      ? (latest as { architectureArtifactContractId?: unknown }).architectureArtifactContractId
-      : null;
-    if (typeof architectureArtifactContractId !== "string") {
-      return deploymentRuntimeContractFromAac(null, stack, null);
-    }
-    const aacPath = architectureContractPath(projectRoot, architectureArtifactContractId, locator);
-    const aac = architectureArtifactContractSchema.parse(await readJsonFile(aacPath));
-    return deploymentRuntimeContractFromAac(aac, stack, `${toProjectRelative(projectRoot, aacPath)}#/runtimeDelivery`);
-  } catch {
-    return deploymentRuntimeContractFromAac(null, stack, null);
-  }
 }
 
 function applyRuntimeContractHealthDefaults(
