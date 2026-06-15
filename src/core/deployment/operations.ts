@@ -488,54 +488,40 @@ async function deployRunInternal(input: {
     await updateDeploymentOperationPhase(input.projectRoot, operation, "validating");
     validate = await deployValidate({ projectRoot: input.projectRoot });
     if (!validate.valid) {
-      const repair = await safeDeployRepair(input.projectRoot);
-      return {
-        completed: false,
+      return deployRunFailureResult({
+        projectRoot: input.projectRoot,
         prepared,
         failedPhase,
         prepare,
         up,
         validate,
         status,
-        repair,
-        nextAction: deployRunNextAction(null, repair),
-        failureOwner: repair?.failureOwner ?? null,
-        repairRoute: repair?.repairRoute ?? null,
-        failureRef: repair?.failureRef ?? null,
-        instruction: deployRunInstruction(repair),
         error: {
           code: "DEPLOY_VALIDATION_FAILED",
           message: "Deployment validation failed.",
           details: validate,
         },
-      };
+      });
     }
 
     failedPhase = "status";
     await updateDeploymentOperationPhase(input.projectRoot, operation, "checking_status");
     status = await deployStatus({ projectRoot: input.projectRoot });
     if (!status.running) {
-      const repair = await safeDeployRepair(input.projectRoot);
-      return {
-        completed: false,
+      return deployRunFailureResult({
+        projectRoot: input.projectRoot,
         prepared,
         failedPhase,
         prepare,
         up,
         validate,
         status,
-        repair,
-        nextAction: deployRunNextAction(null, repair),
-        failureOwner: repair?.failureOwner ?? null,
-        repairRoute: repair?.repairRoute ?? null,
-        failureRef: repair?.failureRef ?? null,
-        instruction: deployRunInstruction(repair),
         error: {
           code: "DEPLOY_NOT_RUNNING",
           message: "Deployment completed but no running container was found.",
           details: status,
         },
-      };
+      });
     }
 
     return {
@@ -552,24 +538,48 @@ async function deployRunInternal(input: {
       error: null,
     };
   } catch (error) {
-    const repair = await safeDeployRepair(input.projectRoot);
-    return {
-      completed: false,
+    return deployRunFailureResult({
+      projectRoot: input.projectRoot,
       prepared,
       failedPhase,
       prepare,
       up,
       validate,
       status,
-      repair,
-      nextAction: deployRunNextAction(error, repair),
-      failureOwner: repair?.failureOwner ?? null,
-      repairRoute: repair?.repairRoute ?? null,
-      failureRef: repair?.failureRef ?? null,
-      instruction: deployRunInstruction(repair),
       error: serializeDeployRunError(error),
-    };
+      nextActionError: error,
+    });
   }
+}
+
+async function deployRunFailureResult(input: {
+  projectRoot: string;
+  prepared: boolean;
+  failedPhase: DeployRunResult["failedPhase"];
+  prepare: DeployPrepareResult | null;
+  up: DeployUpResult | null;
+  validate: DeployValidateResult | null;
+  status: DeployStatusResult | null;
+  error: NonNullable<DeployRunResult["error"]>;
+  nextActionError?: unknown;
+}): Promise<DeployRunResult> {
+  const repair = await safeDeployRepair(input.projectRoot);
+  return {
+    completed: false,
+    prepared: input.prepared,
+    failedPhase: input.failedPhase,
+    prepare: input.prepare,
+    up: input.up,
+    validate: input.validate,
+    status: input.status,
+    repair,
+    nextAction: deployRunNextAction(input.nextActionError ?? null, repair),
+    failureOwner: repair?.failureOwner ?? null,
+    repairRoute: repair?.repairRoute ?? null,
+    failureRef: repair?.failureRef ?? null,
+    instruction: deployRunInstruction(repair),
+    error: input.error,
+  };
 }
 
 export async function deployUp(input: {
@@ -2068,7 +2078,7 @@ function deploySuccessInstruction(commandName: string, url: string | null): Reco
   };
 }
 
-function serializeDeployRunError(error: unknown): DeployRunResult["error"] {
+function serializeDeployRunError(error: unknown): NonNullable<DeployRunResult["error"]> {
   if (error instanceof LoomError) {
     const details = sanitizeDeployRunDetails(error.details);
     return {
