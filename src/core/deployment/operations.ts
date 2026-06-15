@@ -1730,6 +1730,9 @@ function assertDeploymentCodeEvidenceReady(
   const retryCommand = {
     name: "deploy prepare",
     argv: ["deploy", "prepare"],
+    autoContinue: false,
+    mustRunImmediately: false,
+    usage: "Retry only after the missing facts or conflicts named in this blocker have been resolved.",
   };
   if (evidence.conflicts.length > 0) {
     throw deployConflict("Deployment prepare found conflicting technology and repository evidence.", {
@@ -1740,6 +1743,11 @@ function assertDeploymentCodeEvidenceReady(
       warnings: evidence.warnings,
       nextAction: "ask_user",
       retryCommand,
+      agentFacingBlocker: deploySourceBlockerProtocol({
+        code: "DEPLOY_CONFLICT",
+        evidenceRef,
+        reason: "TechnicalBaseline, repository evidence, or existing deployment assets conflict.",
+      }),
       projectRoot,
     });
   }
@@ -1756,9 +1764,43 @@ function assertDeploymentCodeEvidenceReady(
       warnings: evidence.warnings,
       nextAction,
       retryCommand,
+      agentFacingBlocker: deploySourceBlockerProtocol({
+        code: "DEPLOY_SOURCE_INSUFFICIENT",
+        evidenceRef,
+        reason: "Deploy prepare cannot derive enough source facts to safely generate deployment assets.",
+      }),
       projectRoot,
     });
   }
+}
+
+function deploySourceBlockerProtocol(input: {
+  code: "DEPLOY_CONFLICT" | "DEPLOY_SOURCE_INSUFFICIENT";
+  evidenceRef: string;
+  reason: string;
+}): Record<string, unknown> {
+  return {
+    mode: "report_blocker",
+    source: "deploy.prepare",
+    code: input.code,
+    evidenceRef: input.evidenceRef,
+    reason: input.reason,
+    allowedActions: [
+      "report the blocker and its missing facts or conflicts",
+      "read the referenced deploy evidence only when more detail is needed",
+      "ask the user for the requested decision when nextAction is ask_user",
+    ],
+    forbiddenActions: [
+      "do not retry deploy prepare unchanged",
+      "do not run deploy repair for this blocker",
+      "do not generate or edit Dockerfile or Compose files from memory",
+      "do not run raw Docker or Docker Compose commands",
+    ],
+    retryPolicy: {
+      autoRetry: false,
+      retryOnlyAfter: "the missing facts, ambiguity, or conflicts in this blocker have been resolved",
+    },
+  };
 }
 
 async function loadDeploymentRuntimeContract(projectRoot: string, stack: DeploymentSpec["detectedStack"]): Promise<DeploymentSpec["runtimeContract"]> {

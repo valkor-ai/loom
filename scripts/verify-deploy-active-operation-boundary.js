@@ -56,6 +56,20 @@ function verifyActiveOperationBlocksMutations(projectRoot) {
       "raw docker compose",
       "kill process",
     ]);
+    assert.equal(details.agentFacingBlocker?.mode, "observe_active_operation");
+    assert.equal(details.agentFacingBlocker?.retryPolicy?.autoRetry, false);
+    assert.ok(
+      details.agentFacingBlocker?.allowedActions?.some((action) => /deploy status, deploy inspect, or deploy logs/i.test(action)),
+      "active operation blocker must allow only observation commands.",
+    );
+    assert.ok(
+      details.agentFacingBlocker?.forbiddenActions?.some((action) => /raw Docker/i.test(action)),
+      "active operation blocker must forbid raw Docker.",
+    );
+    assert.ok(
+      details.agentFacingBlocker?.forbiddenActions?.some((action) => /kill/i.test(action)),
+      "active operation blocker must forbid killing processes.",
+    );
   }
 }
 
