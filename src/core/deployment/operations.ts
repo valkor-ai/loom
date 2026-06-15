@@ -100,6 +100,7 @@ export type DeployPrepareResult = {
 type DeployOperationAwareResult = {
   operationActive?: boolean;
   activeOperation?: DeploymentActiveOperationView | null;
+  instruction?: Record<string, unknown>;
 };
 
 export type DeployUpResult = {
@@ -843,6 +844,7 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
       health: state?.health ?? null,
       operationActive: true,
       activeOperation,
+      instruction: deployActiveOperationInstruction("deploy.status", activeOperation),
     };
   }
   if (!state?.containerName) {
@@ -971,6 +973,7 @@ export async function deployLogs(input: { projectRoot: string }): Promise<Deploy
       fullLogRef: toProjectRelative(input.projectRoot, paths.logFile),
       operationActive: true,
       activeOperation,
+      instruction: deployActiveOperationInstruction("deploy.logs", activeOperation),
     };
   }
 
@@ -1178,7 +1181,13 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
       bootstrapTaskCount: spec?.bootstrap.tasks.length ?? 0,
       hasRepairRequest: repair?.hasRepairRequest ?? false,
     },
-    ...(activeOperation ? { operationActive: true, activeOperation } : {}),
+    ...(activeOperation
+      ? {
+          operationActive: true,
+          activeOperation,
+          instruction: deployActiveOperationInstruction("deploy.inspect", activeOperation),
+        }
+      : {}),
   };
 }
 
@@ -2075,6 +2084,56 @@ function deploySuccessInstruction(commandName: string, url: string | null): Reco
         sourceCommand: commandName,
       },
     ],
+  };
+}
+
+function deployActiveOperationInstruction(
+  commandName: string,
+  activeOperation: DeploymentActiveOperationView,
+): Record<string, unknown> {
+  return {
+    mode: "observe_active_deploy_operation",
+    autoContinue: false,
+    nextAction: {
+      type: "observe",
+      reason: "DEPLOY_OPERATION_ACTIVE",
+      targetNode: "deploy",
+      refs: {
+        operationId: activeOperation.operationId,
+        command: activeOperation.command,
+        phase: activeOperation.phase,
+        status: activeOperation.status,
+        elapsedMs: activeOperation.elapsedMs,
+        logRef: activeOperation.logRef,
+        activeOperationRef: activeOperation.activeOperationRef,
+        allowedCommands: activeOperation.allowedCommands,
+        forbiddenActions: activeOperation.forbiddenActions,
+      },
+    },
+    primaryAction: "Wait for the active Loom deploy operation to finish; observe only with deploy status, deploy inspect, or deploy logs.",
+    routingRule: "A Loom deploy operation is still running. Do not infer failure from an unchanged log tail during Docker builds, package installs, Maven/Gradle builds, npm/pnpm/yarn builds, image pulls, or container startup. Do not start another deploy command, change app selection, run raw Docker, kill processes, or report deploy failure while operationActive is true.",
+    completionCondition: "operationActive is false and the next deploy envelope reports either a verified running deployment or a concrete failure/repair request.",
+    finalResponseGuard: {
+      rule: "Do not send a final failed/stuck/wedged deploy response while operationActive is true.",
+      invalidFinalResponseWhen: "The active deploy operation is still running and no explicit failed deploy envelope or repair request has been returned.",
+      requiredActionBeforeFinalResponse: "After a short wait, observe again with deploy status, deploy inspect, or deploy logs. Continue until operationActive is false, then report the verified URL/status or follow the returned repair instruction.",
+    },
+    instructions: [
+      "Treat operationActive=true as authoritative evidence that Loom still owns the deploy run.",
+      "Unchanged logs during a build are not failure evidence by themselves because Docker and language build tools may flush output only after a command step completes.",
+      "Use only deploy status, deploy inspect, or deploy logs for observation while this operation is active.",
+      "Do not run deploy run, deploy up, deploy down, raw docker compose/docker build/docker run, pkill, kill, or manual container takeover while this operation is active.",
+      "Do not change app-path, provider, stack, or generated deploy files based only on a still-running active operation.",
+    ],
+    advisories: [
+      {
+        code: "DEPLOY_ACTIVE_OPERATION_OBSERVATION",
+        severity: "info",
+        message: "The deploy operation is active; keep observing until the CLI reports a terminal deploy result.",
+        sourceCommand: commandName,
+      },
+    ],
+    userMessage: `${activeOperation.command} is still ${activeOperation.phase}. Wait and observe with deploy status, deploy inspect, or deploy logs until Loom reports a terminal result.`,
   };
 }
 

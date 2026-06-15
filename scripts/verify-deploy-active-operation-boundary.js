@@ -84,6 +84,7 @@ function verifyReadOnlyCommandsObserveActiveOperation(projectRoot) {
 
   const status = runCli(["deploy", "status"], projectRoot, false);
   assert.equal(status.ok, true);
+  assertActiveObservationInstruction(status, "deploy.status");
   assert.equal(status.data.operationActive, true);
   assert.equal(status.data.activeOperation.operationId, "deploy-op-live-observe");
   assert.equal(status.data.activeOperation.command, "deploy.up");
@@ -91,15 +92,51 @@ function verifyReadOnlyCommandsObserveActiveOperation(projectRoot) {
 
   const inspect = runCli(["deploy", "inspect", "--refresh"], projectRoot, false);
   assert.equal(inspect.ok, true);
+  assertActiveObservationInstruction(inspect, "deploy.inspect");
   assert.equal(inspect.data.operationActive, true);
   assert.equal(inspect.data.refreshed, false);
   assert.equal(inspect.data.activeOperation.operationId, "deploy-op-live-observe");
 
   const logs = runCli(["deploy", "logs"], projectRoot, false);
   assert.equal(logs.ok, true);
+  assertActiveObservationInstruction(logs, "deploy.logs");
   assert.equal(logs.data.operationActive, true);
   assert.deepEqual(logs.data.lines, ["first line", "second line"]);
   assert.equal(logs.data.fullLogRef, ".loom/deployment/logs/local.log");
+}
+
+function assertActiveObservationInstruction(envelope, sourceCommand) {
+  assert.equal(envelope.instruction?.mode, "observe_active_deploy_operation");
+  assert.equal(envelope.instruction?.autoContinue, false);
+  assert.equal(envelope.actionRequired, undefined, "active observation must not create an infinite auto-poll action.");
+  assert.equal(envelope.instruction?.nextAction?.reason, "DEPLOY_OPERATION_ACTIVE");
+  assert.equal(envelope.instruction?.nextAction?.refs?.operationId, "deploy-op-live-observe");
+  assert.equal(envelope.instruction?.nextAction?.refs?.command, "deploy.up");
+  assert.equal(envelope.instruction?.nextAction?.refs?.phase, "starting");
+  assert.match(
+    envelope.instruction?.routingRule ?? "",
+    /Do not infer failure from an unchanged log tail/i,
+    "active observation instruction must prevent log-stall failure inference.",
+  );
+  assert.match(
+    envelope.instruction?.routingRule ?? "",
+    /Do not start another deploy command/i,
+    "active observation instruction must forbid competing deploy commands.",
+  );
+  assert.ok(
+    envelope.instruction?.instructions?.some((item) => /deploy status, deploy inspect, or deploy logs/i.test(item)),
+    "active observation instruction must restrict allowed observation commands.",
+  );
+  assert.ok(
+    envelope.instruction?.instructions?.some((item) => /Do not run deploy run, deploy up, deploy down, raw docker/i.test(item)),
+    "active observation instruction must forbid mutating/raw docker actions.",
+  );
+  assert.match(
+    envelope.instruction?.finalResponseGuard?.invalidFinalResponseWhen ?? "",
+    /still running/i,
+    "active observation instruction must guard against premature final responses.",
+  );
+  assert.equal(envelope.instruction?.advisories?.[0]?.sourceCommand, sourceCommand);
 }
 
 function verifyStaleOperationIsArchived(projectRoot) {
