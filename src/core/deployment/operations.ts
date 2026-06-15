@@ -47,7 +47,7 @@ import {
   inspectContainer,
   resolveComposePath,
 } from "./runtime";
-import { writeDeploymentRepairRequest } from "./repair";
+import { classifyDeploymentRepair, writeDeploymentRepairRequest } from "./repair";
 import { applyRuntimeContractToStack, loadDeploymentRuntimeContract } from "./runtime-contract";
 import { resolveDeploymentStrategy } from "./strategy";
 import { validateStartupLogs } from "./validate";
@@ -71,7 +71,6 @@ import type {
   DeploymentHealth,
   DeploymentHealthcheckInput,
   DeploymentProviderPolicy,
-  DeploymentRepairRequest,
   DeploymentRepairRoute,
   DeploymentSpec,
   DeploymentState,
@@ -1051,8 +1050,13 @@ export async function deployRepair(input: { projectRoot: string }): Promise<Depl
     return emptyDeployRepairResult();
   }
 
-  const failureOwner = request.failureOwner ?? inferredRepairFailureOwner(request);
-  const repairRoute = request.repairRoute ?? inferredRepairRoute(request, failureOwner);
+  const repairClassification = classifyDeploymentRepair({
+    failureKind: request.failureKind,
+    editableFileCount: request.editableFiles.length,
+    failureOwner: request.failureOwner ?? null,
+  });
+  const failureOwner = repairClassification.failureOwner;
+  const repairRoute = request.repairRoute ?? repairClassification.repairRoute;
   const result = {
     hasRepairRequest: true,
     repairId: request.repairId,
@@ -1111,50 +1115,6 @@ function emptyDeployRepairResult(): DeployRepairResult {
     attempts: 0,
     nextAction: "none",
   };
-}
-
-function inferredRepairFailureOwner(request: {
-  failureKind: DeploymentRepairRequest["failureKind"];
-  editableFiles: string[];
-}): DeployRepairResult["failureOwner"] {
-  if (request.failureKind === "docker_unavailable") {
-    return "environment";
-  }
-  if (request.failureKind === "registry_network") {
-    return "external_system";
-  }
-  if (
-    request.failureKind === "build_command_failed" ||
-    request.failureKind === "start_command_failed" ||
-    request.failureKind === "application_startup_failed" ||
-    request.failureKind === "http_probe_failed" ||
-    request.failureKind === "preview_not_verified"
-  ) {
-    return "application_code";
-  }
-  if (request.editableFiles.length > 0) {
-    return "deployment_assets";
-  }
-  return null;
-}
-
-function inferredRepairRoute(
-  request: {
-    failureKind: DeploymentRepairRequest["failureKind"];
-    editableFiles: string[];
-  },
-  failureOwner: DeployRepairResult["failureOwner"],
-): DeployRepairResult["repairRoute"] {
-  if (failureOwner === "deployment_assets" && request.editableFiles.length > 0) {
-    return "deploy_repair";
-  }
-  if (failureOwner === "application_code") {
-    return "execution_repair";
-  }
-  if (failureOwner === "environment" || failureOwner === "external_system") {
-    return "none";
-  }
-  return null;
 }
 
 export async function deployInspect(input: { projectRoot: string; refresh?: boolean }): Promise<DeployInspectResult> {
