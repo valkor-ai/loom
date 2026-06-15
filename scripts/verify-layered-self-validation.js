@@ -1398,6 +1398,25 @@ function writeArchitectureSections(root, request, pgc) {
         ],
         verificationHints: [{ kind: "static", description: "Verify validationName handling, VALIDATION_NAME_REQUIRED blocking, and status=ready output in source file and TaskResult." }],
       }],
+      detailCoverage: (pgc.requirementDetails?.items ?? [])
+        .filter((item) => item.requiredForCurrentPhase)
+        .map((item) => ({
+          detailId: item.detailId,
+          coverageStatus: "covered",
+          artifactRefs: {
+            modules: ["module-core"],
+            entities: ["entity-validation-result"],
+            fields: ["field-validation-name", "field-normalized-name", "field-status"],
+            constraints: ["constraint-validation-name-required", "constraint-validation-success-status"],
+            interfaces: ["interface-run-validation"],
+            userFlows: ["flow-run-validation"],
+            stateMachines: [],
+            frontendDataViews: [],
+            frontendActions: [],
+            frontendOperationPaths: [],
+            acceptanceMatrix: ["AC-001"],
+          },
+        })),
       risksAndDecisions: { decisions: [], risks: [], assumptions: [], deferredNotes: [] },
       handoff: { readyForTaskPlan: true, blockingReasons: [], nextNode: "task_plan" },
     },

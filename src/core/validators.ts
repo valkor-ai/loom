@@ -3,6 +3,7 @@ import { ZodError, type ZodSchema } from "zod";
 import {
   type ArchitectureArtifactContract,
   type ContractIssue,
+  type FieldShape,
   type PlanningGenerationContract,
   type ReviewRequest,
   type ReviewResult,
@@ -148,6 +149,14 @@ const ISSUE_TEMPLATES: Record<string, IssueTemplate> = {
   AAC_COVERAGE_TYPE_MISMATCH: {
     message: "AAC acceptance coverage type does not match the referenced artifact kind.",
     repairHint: "Use the coverage type that matches the artifact id: state machine rules use state_rule, data constraints use data_constraint, modules use module, and so on.",
+  },
+  DETAIL_REF_INVALID: {
+    message: "Requirement detail reference is not part of the PlanningGenerationContract requirementDetails index.",
+    repairHint: "Use only detailId values from PGC requirementDetails.items.",
+  },
+  DETAIL_COVERAGE_INVALID: {
+    message: "Requirement detail coverage is missing required artifact refs or reason.",
+    repairHint: "Repair detailCoverage so covered items reference current AAC artifacts and non-covered items include a reason.",
   },
   REVIEW_RESULT_STATUS_INCONSISTENT: {
     message: "ReviewResult decision or routing is inconsistent with findings.",
@@ -1154,6 +1163,17 @@ export function validateArchitectureArtifactCandidate(candidate: unknown, pgc: P
   const stateRuleIds = new Set(aac.stateMachines.flatMap((machine) => machine.rules.map((rule) => rule.ruleId)));
   const decisionIds = new Set(aac.risksAndDecisions.decisions.map((item) => item.decisionId));
   const riskIds = new Set(aac.risksAndDecisions.risks.map((item) => item.riskId));
+  const fieldIds = new Set([
+    ...aac.dataModel.entities.flatMap((entity) => entity.fields.flatMap((field) => collectFieldShapeIds(field))),
+    ...aac.interfaces.flatMap((item) => [
+      ...(item.requestSchema ?? []).flatMap((field) => collectFieldShapeIds(field)),
+      ...(item.responseSchema ?? []).flatMap((field) => collectFieldShapeIds(field)),
+      ...(item.errorSchema ?? []).flatMap((field) => collectFieldShapeIds(field)),
+    ]),
+  ]);
+  const frontendDataViewIds = new Set(aac.frontendExperience?.dataViews?.map((item) => item.viewId) ?? []);
+  const frontendActionIds = new Set(aac.frontendExperience?.actions?.map((item) => item.actionId) ?? []);
+  const frontendOperationPathIds = new Set(aac.frontendExperience?.operationPaths?.map((item) => item.pathId) ?? []);
 
   if (aac.source.planningGenerationContractId !== pgc.planningContractId) {
     issues.push(issue("SOURCE_NOT_READY", "/source/planningGenerationContractId", "blocked"));
@@ -1331,6 +1351,40 @@ export function validateArchitectureArtifactCandidate(candidate: unknown, pgc: P
     const entry = aac.acceptanceMatrix.find((item) => item.acceptanceId === acceptance.id);
     if (!entry) {
       issues.push(issue("MUST_ACCEPTANCE_NOT_COVERED", `/acceptanceMatrix/${acceptance.id}`));
+    }
+  }
+
+  const requirementDetailIds = new Set(pgc.requirementDetails?.items.map((item) => item.detailId) ?? []);
+  if (pgc.requirementDetails && requirementDetailIds.size > 0) {
+    for (const detail of pgc.requirementDetails.items.filter((item) => item.requiredForCurrentPhase)) {
+      if (!(aac.detailCoverage ?? []).some((entry) => entry.detailId === detail.detailId)) {
+        issues.push(issue("DETAIL_COVERAGE_INVALID", `/detailCoverage/${detail.detailId}`));
+      }
+    }
+    for (const entry of aac.detailCoverage ?? []) {
+      if (!requirementDetailIds.has(entry.detailId)) {
+        issues.push(issue("DETAIL_REF_INVALID", `/detailCoverage/${entry.detailId}`));
+      }
+      const allRefs = Object.values(entry.artifactRefs).flat();
+      if (entry.coverageStatus === "covered" && allRefs.length === 0) {
+        issues.push(issue("DETAIL_COVERAGE_INVALID", `/detailCoverage/${entry.detailId}/artifactRefs`));
+      }
+      if (entry.coverageStatus !== "covered" && !entry.reason) {
+        issues.push(issue("DETAIL_COVERAGE_INVALID", `/detailCoverage/${entry.detailId}/reason`));
+      }
+      validateDetailCoverageRefs(entry, {
+        moduleIds,
+        entityIds,
+        fieldIds,
+        dataConstraintIds,
+        interfaceIds,
+        userFlowIds,
+        stateMachineIds,
+        frontendDataViewIds,
+        frontendActionIds,
+        frontendOperationPathIds,
+        acceptanceIds: new Set(aac.acceptanceMatrix.map((item) => item.acceptanceId)),
+      }, issues);
     }
   }
 
@@ -1915,6 +1969,53 @@ function coverageRefActualType(
   if (ids.decisionIds.has(ref)) return "decision";
   if (ids.riskIds.has(ref)) return "risk";
   return null;
+}
+
+function validateDetailCoverageRefs(
+  entry: NonNullable<ArchitectureArtifactContract["detailCoverage"]>[number],
+  ids: {
+    moduleIds: Set<string>;
+    entityIds: Set<string>;
+    fieldIds: Set<string>;
+    dataConstraintIds: Set<string>;
+    interfaceIds: Set<string>;
+    userFlowIds: Set<string>;
+    stateMachineIds: Set<string>;
+    frontendDataViewIds: Set<string>;
+    frontendActionIds: Set<string>;
+    frontendOperationPathIds: Set<string>;
+    acceptanceIds: Set<string>;
+  },
+  issues: ContractIssue[],
+): void {
+  const checks: Array<[keyof typeof entry.artifactRefs, Set<string>]> = [
+    ["modules", ids.moduleIds],
+    ["entities", ids.entityIds],
+    ["fields", ids.fieldIds],
+    ["constraints", ids.dataConstraintIds],
+    ["interfaces", ids.interfaceIds],
+    ["userFlows", ids.userFlowIds],
+    ["stateMachines", ids.stateMachineIds],
+    ["frontendDataViews", ids.frontendDataViewIds],
+    ["frontendActions", ids.frontendActionIds],
+    ["frontendOperationPaths", ids.frontendOperationPathIds],
+    ["acceptanceMatrix", ids.acceptanceIds],
+  ];
+  for (const [key, validIds] of checks) {
+    for (const ref of entry.artifactRefs[key]) {
+      if (!validIds.has(ref)) {
+        issues.push(issue("UNKNOWN_ARTIFACT_REF", `/detailCoverage/${entry.detailId}/artifactRefs/${key}/${ref}`));
+      }
+    }
+  }
+}
+
+function collectFieldShapeIds(field: FieldShape): string[] {
+  return [
+    field.fieldId,
+    ...(field.items ? collectFieldShapeIds(field.items) : []),
+    ...(field.fields?.flatMap((nested) => collectFieldShapeIds(nested)) ?? []),
+  ];
 }
 
 function computeArchitectureStatus(

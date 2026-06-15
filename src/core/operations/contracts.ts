@@ -1457,6 +1457,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "Every deferredRef must be selected exactly from allowedRefs.deferredScopeRefs and every excludedRef must be selected exactly from allowedRefs.excludedScopeRefs.",
           "Do not probe guessed jq paths. Use fieldAccessHints and agentAction.read/write when locating request fields.",
           "Use contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef as the current phase requirement-detail authority. Do not drop phaseScope.*.items, acceptance sourceRefs/capabilityRefs, planningInputs.businessFlows summaries, concept refs, frontend refs, or frontendExperienceDetails while generating AAC sections.",
+          "Use contextProjection.requirementDetailTransfer.requirementDetails.items as the canonical detail index when generating AAC artifact responsibilities and coverage.detailCoverage. Do not copy full detail summaries into detailCoverage.",
           "For frontend_experience, read contextProjection.requirementDetailTransfer.frontendExperienceDetails and frontendExperienceSource, then write frontendExperience.sourceRefs.brainstormFrontendExperienceRef from confirmedFrontendExperienceRef or currentFrontendExperienceRef when present.",
           "For runtime_delivery with runtimeDelivery.status=unchanged, set basis.previousRuntimeDeliveryRef exactly to sourceRefs.previousRuntimeDeliveryRef. If that source ref is absent, do not write status=unchanged; write status=modified or blocked based on the current phase facts.",
           "Do not assemble or write final aac.json.",
@@ -1545,7 +1546,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
       frontendExperienceAuthority: "When frontendExperienceSource has confirmedFrontendExperienceRef or currentFrontendExperienceRef, the frontend_experience section must consume it and must not omit, downgrade, or override the user-confirmed frontend target without a user decision ref.",
       requirementDetailTransfer: {
         authority: "PlanningGenerationContract is the current phase requirement-detail authority for AAC generation.",
-        rule: "Consume contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef selectors while writing domain_contract, behavior, frontend_experience, and coverage. Preserve details instead of rediscovering them from raw requirements.",
+        rule: "Consume contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef selectors while writing domain_contract, behavior, frontend_experience, and coverage. Preserve details instead of rediscovering them from raw requirements. Use requirementDetails.items as the canonical detail index and coverage.detailCoverage as detailId-to-artifact coverage.",
         selectors: [
           "planningContractRef.phaseScope.included[].items",
           "planningContractRef.phaseScope.acceptanceCandidates[].statement/sourceRefs/capabilityRefs",
@@ -2761,6 +2762,8 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
   return {
     authority: "planning_generation_contract",
     purpose: "Mechanically carry Brainstorm-confirmed current phase requirement details into AAC generation without adding a parallel requirement model.",
+    requirementDetails: pgc.requirementDetails ?? null,
+    requirementDetailsUsageRule: "When requirementDetails exists, treat requirementDetails.items as the canonical detail index after Brainstorm. Generate AAC artifacts that carry those details, then write coverage.detailCoverage using detailId plus artifact refs only; do not duplicate full detail summaries in coverage.",
     currentPhaseScope: {
       included: pgc.phaseScope.included.map((item) => ({
         scopeId: item.scopeId,
@@ -2833,6 +2836,7 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       behavior: "Represent object operations, flow steps, preconditions, validation/blocking rules, blocking reasons, outcomes, state changes, guards, effects, and visible feedback from PGC business flow and acceptance details.",
       frontend_experience: "Represent required input, display, feedback, navigation, target discovery/selection, action entry, refresh policy, and operation path expectations from PGC frontendExperienceDetails and frontend refs.",
       coverage: "Map each acceptance detail and confirmed scope item to current AAC artifacts and verification hints without dropping rule, field, state, unresolved-note, or source-ref context.",
+      detailCoverage: "Map each requirementDetails.items[].detailId to the AAC artifacts that carry it, using coverage.content.detailCoverage.",
     },
   };
 }
@@ -3507,6 +3511,30 @@ function coverageSectionContentShape(): Record<string, unknown> {
         description: "How later TaskPlan/Review can verify this acceptance.",
       }],
     }],
+    detailCoverage: [{
+      detailId: "detail-id-from-request.contextProjection.requirementDetailTransfer.requirementDetails.items",
+      coverageStatus: "covered | partial | not_applicable | uncovered",
+      artifactRefs: {
+        modules: ["module-id"],
+        entities: ["entity-id"],
+        fields: ["field-id"],
+        constraints: ["constraint-id"],
+        interfaces: ["interface-id"],
+        userFlows: ["flow-id"],
+        stateMachines: ["state-machine-id"],
+        frontendDataViews: ["view-id"],
+        frontendActions: ["action-id"],
+        frontendOperationPaths: ["path-id"],
+        acceptanceMatrix: ["AC-ref-from-allowedRefs.acceptanceRefs"],
+      },
+      reason: "Required when coverageStatus is partial, not_applicable, or uncovered. Omit for fully covered entries.",
+    }],
+    detailCoverageRules: [
+      "detailCoverage[].detailId must come from request.contextProjection.requirementDetailTransfer.requirementDetails.items[].detailId.",
+      "detailCoverage stores only detailId, coverageStatus, artifactRefs, and reason; do not copy full requirement detail summary into coverage.",
+      "covered detailCoverage entries must reference at least one real AAC artifact or acceptanceMatrix entry.",
+      "partial, not_applicable, and uncovered detailCoverage entries require a non-empty reason.",
+    ],
     risksAndDecisions: {
       decisions: [{
         decisionId: "decision-id",
@@ -3571,6 +3599,9 @@ function coverageSectionContentShape(): Record<string, unknown> {
 function coverageSectionGenerationRules(): string[] {
   return [
     "Use request.contextProjection.requirementDetailTransfer.acceptanceDetails as the acceptance detail source for coverage.",
+    "Use request.contextProjection.requirementDetailTransfer.requirementDetails.items as the canonical detail index for detailCoverage when present.",
+    "For every current-phase requirementDetails item, write one detailCoverage entry that references the AAC artifacts carrying the detail or explains why the detail is partial, not_applicable, or uncovered.",
+    "Do not copy full requirement detail text into detailCoverage; detailCoverage must use detailId plus artifactRefs only.",
     "For every acceptanceMatrix entry, preserve the PGC acceptance statement exactly and describe how current AAC artifacts cover the concrete rule, field, flow, state, blocking reason, or source-ref detail behind that acceptance.",
     "Verification hints should reflect the concrete requirement details carried from PGC, not only the high-level module label.",
     "Coverage refs must point to artifact ids declared in this current phase AAC, not directly to old phase AAC ids.",
@@ -3699,6 +3730,7 @@ async function assembleArchitectureCandidateFromSections(
     frontendExperience: frontend.frontendExperience,
     runtimeDelivery: runtime.runtimeDelivery,
     acceptanceMatrix: coverage.acceptanceMatrix,
+    detailCoverage: coverage.detailCoverage ?? [],
     risksAndDecisions: coverage.risksAndDecisions,
     handoff: coverage.handoff,
     createdAt: now,

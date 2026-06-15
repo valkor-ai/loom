@@ -838,6 +838,24 @@ export const architectureArtifactContractSchema = z.object({
       description: z.string().min(1),
     })),
   })),
+  detailCoverage: z.array(z.object({
+    detailId: z.string().min(1),
+    coverageStatus: z.enum(["covered", "partial", "not_applicable", "uncovered"]),
+    artifactRefs: z.object({
+      modules: refsSchema,
+      entities: refsSchema,
+      fields: refsSchema,
+      constraints: refsSchema,
+      interfaces: refsSchema,
+      userFlows: refsSchema,
+      stateMachines: refsSchema,
+      frontendDataViews: refsSchema,
+      frontendActions: refsSchema,
+      frontendOperationPaths: refsSchema,
+      acceptanceMatrix: refsSchema,
+    }),
+    reason: z.string().min(1).optional(),
+  })).optional(),
   risksAndDecisions: z.object({
     decisions: z.array(z.object({
       decisionId: z.string().min(1),
