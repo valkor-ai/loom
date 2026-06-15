@@ -174,6 +174,7 @@ function planningGenerationContractGuide(): Omit<ReferencedArtifactReadGuideEntr
       ".technicalBaseline",
       ".planningInputs",
       ".planningInputs.businessFlows[].summary",
+      ".requirementDetails",
       ".planningRules",
       ".qualityGates",
       ".handoff",

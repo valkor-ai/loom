@@ -26,6 +26,7 @@
     "verify:brainstorm-frontend-operation-path": "node scripts/verify-brainstorm-frontend-operation-path.js",
     "verify:requirement-detail-index": "node scripts/verify-requirement-detail-index.js",
     "verify:aac-detail-coverage": "node scripts/verify-aac-detail-coverage.js",
+    "verify:taskplan-requirement-detail-refs": "node scripts/verify-taskplan-requirement-detail-refs.js",
     "verify:next-task-execute-instruction": "node scripts/verify-layered-self-validation.js && node scripts/verify-auto-runnable-transition-contract.js",
     "verify:auto-runnable-transition-contract": "node scripts/verify-auto-runnable-transition-contract.js",
     "verify:aac-coverage-stale-architecture": "node scripts/verify-aac-coverage-and-stale-architecture.js",

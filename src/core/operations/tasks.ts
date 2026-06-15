@@ -512,6 +512,7 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
           "Use contextProjection.requirementDetailTransfer as the current phase requirement-detail authority for TaskPlan. Do not reduce detailed scope items, acceptance statements/sourceRefs/capabilityRefs, business flow details, AAC coverage, or AAC artifact refs to generic task labels.",
           "When contextProjection.requirementDetailTransfer.workflowClosureRequirements is non-empty, assign every closure requirement to TaskPlan tasks using generationRules.workflowClosureRules. These requirements are already derived from AAC user flows and interfaces; do not route them to AAC_INSUFFICIENT.",
           "Every task objective and verificationIntents[].behavior should carry the concrete rule, field, flow, state, UI, API, or blocking detail that the task is responsible for when such detail exists in contextProjection.requirementDetailTransfer.",
+          "Assign covered current-phase requirement details using task.requirementDetailRefs and verificationIntents[].requirementDetailRefs. Use detailId values only from contextProjection.requirementDetailTransfer.requirementDetailAssignment.items[].detailId.",
           "Every task writeBoundary.artifactRefs should point to the AAC artifacts that carry those details. If a required current-phase detail has no AAC artifact to reference, write a blocked output with blockedReasonCode AAC_INSUFFICIENT instead of generating a vague task.",
           "Do not write final taskplan.json.",
           "Use only this request's outputContract.outlineFile and outputContract.groupFilePattern as current candidate output paths.",
@@ -580,6 +581,7 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
         ".contextProjection.requirementDetailTransfer.businessFlowDetails[]",
         ".contextProjection.requirementDetailTransfer.objectOperationDetailRules",
         ".contextProjection.requirementDetailTransfer.workflowClosureRequirements[]",
+        ".contextProjection.requirementDetailTransfer.requirementDetailAssignment",
         ".contextProjection.requirementDetailTransfer.architectureDetails",
         ".contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails",
         ".contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
@@ -589,6 +591,7 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
         ".contextProjection.requirementDetailTransfer.acceptanceDetails[] | {id,statement,sourceRefs,capabilityRefs,aacCoverage}",
         ".contextProjection.requirementDetailTransfer.objectOperationDetailRules | {scopeCoverageRule,taskAssignmentRule,conceptBindingRule,evidenceRule}",
         ".contextProjection.requirementDetailTransfer.architectureDetails | {modules,interfaces,userFlows}",
+        ".contextProjection.requirementDetailTransfer.requirementDetailAssignment | {items,assignmentRule,verificationRule}",
         ".contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails | {dataViews,actions,operationPaths}",
         ".contextProjection.requirementDetailTransfer.workflowClosureRequirements[] | {closureId,workflowRef,interfaceRefs,acceptanceRefs,requiredDataBindingMode,requiredEvidence}",
         ".sourceRefs.phaseConceptGroundingRef",
@@ -2119,6 +2122,53 @@ function buildTaskAcceptanceSnapshot(
   });
 }
 
+function buildTaskRequirementDetailSnapshot(
+  pgc: PlanningGenerationContract,
+  aac: ArchitectureArtifactContract,
+  task: Task,
+): Record<string, unknown>[] {
+  if (!pgc.requirementDetails) {
+    return [];
+  }
+  const detailIds = uniqueRefs([
+    ...(task.requirementDetailRefs ?? []),
+    ...task.verificationIntents.flatMap((intent) => intent.requirementDetailRefs ?? []),
+  ]);
+  if (detailIds.length === 0) {
+    return [];
+  }
+  const detailById = new Map(pgc.requirementDetails.items.map((item) => [item.detailId, item]));
+  const coverageById = new Map((aac.detailCoverage ?? []).map((entry) => [entry.detailId, entry]));
+  return detailIds.map((detailId) => {
+    const detail = detailById.get(detailId);
+    const coverage = coverageById.get(detailId);
+    return {
+      detailId,
+      foundInPgc: Boolean(detail),
+      kind: detail?.kind ?? null,
+      title: detail?.title ?? null,
+      summary: detail?.summary ?? null,
+      priority: detail?.priority ?? null,
+      sourceRefs: detail?.sourceRefs ?? [],
+      scopeRefs: detail?.scopeRefs ?? [],
+      acceptanceRefs: detail?.acceptanceRefs ?? [],
+      impactTags: detail?.impactTags ?? [],
+      lifecycleStage: detail?.lifecycleStage ?? null,
+      quality: detail?.quality ?? null,
+      unresolvedNote: detail?.unresolvedNote ?? null,
+      aacCoverage: coverage ? {
+        coverageStatus: coverage.coverageStatus,
+        artifactRefs: coverage.artifactRefs,
+        reason: coverage.reason ?? null,
+      } : null,
+      verificationIntentRefs: task.verificationIntents
+        .filter((intent) => (intent.requirementDetailRefs ?? []).includes(detailId))
+        .map((intent) => intent.verificationId),
+      taskResponsibilityRule: "Implement and verify this task-scoped requirement detail using the referenced AAC artifacts. Do not treat this snapshot as an allowlist; if project code reveals a necessary supporting change inside task scope, implement it and record evidence.",
+    };
+  });
+}
+
 type FrontendExperienceContract = NonNullable<ArchitectureArtifactContract["frontendExperience"]>;
 
 function uniqueRefs(refs: string[]): string[] {
@@ -2602,6 +2652,7 @@ async function buildTaskExecutionRequest(
   const aac = await loadArchitectureArtifact(projectRoot, taskPlan.source.architectureArtifactContractId, locator);
   const pgc = await loadPlanningContract(projectRoot, taskPlan.source.planningGenerationContractId, locator);
   const requestTask = withFrontendExecutionGuidance(task, aac);
+  const requirementDetailSnapshot = buildTaskRequirementDetailSnapshot(pgc, aac, requestTask);
   const workflowClosureRequirements = workflowClosureRequirementsFromTaskGuidance(requestTask);
   const phaseConceptGroundingAbs = phaseConceptGroundingPath(projectRoot, locator.deliveryId, locator.phaseId);
   const phaseConceptGroundingRef = await pathExists(phaseConceptGroundingAbs)
@@ -2712,7 +2763,7 @@ async function buildTaskExecutionRequest(
       }),
       finalResponseGuard,
       read: {
-        required: uniqueRefs(["this request", "referencedArtifactReadGuide", "task", ...frontendGuidanceReadFields, "sourceContext.architectureArtifactProjection", "sourceContext.acceptanceSnapshot", "executionRules", ...taskResultContractReadFields, "taskConceptGrounding when mode=concepts_present"]),
+        required: uniqueRefs(["this request", "referencedArtifactReadGuide", "task", ...frontendGuidanceReadFields, "sourceContext.architectureArtifactProjection", "sourceContext.acceptanceSnapshot", ...(requirementDetailSnapshot.length > 0 ? ["sourceContext.requirementDetailSnapshot"] : []), "executionRules", ...taskResultContractReadFields, "taskConceptGrounding when mode=concepts_present"]),
         optional: uniqueRefs([
           "sourceRefs",
           ...(requestTask.frontendExperienceRequirement ? [
@@ -2750,6 +2801,7 @@ async function buildTaskExecutionRequest(
           "When task.frontendExperienceRequirement.executionGuidance is present, use it to decide the surfaces, workflows, operation paths, interaction states, and data-binding evidence for this task.",
           "When task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings is present, use it as the first coding guide for wiring user actions to AAC-declared interfaces, including method/path/schemas and success/error UI states.",
           "When operationPathsInScope/dataViewsInScope/actionsInScope are present, implement or verify the declared target discovery, selection, action entry, refresh policy, and visible feedback; record matching evidence in frontendExperienceSelfCheck.",
+          "When sourceContext.requirementDetailSnapshot is non-empty, use it as the task-scoped requirement detail authority. Implement and verify those detailIds through task.requirementDetailRefs and verificationIntents[].requirementDetailRefs.",
           "When task objective, acceptanceSnapshot, taskConceptGrounding, or sourceContext.architectureArtifactProjection names key fields, object operations, operation inputs, preconditions, blocking reasons, state changes, or feedback, implement and verify those details explicitly. Do not replace them with a generic completed feature summary.",
           ...(requestTask.frontendExperienceRequirement ? frontendImplementationOrganizationRules : []),
           "frontendBackendBindings is not an API allowlist. If a needed interface is missing from the projection, read sourceRefs.architectureArtifactContractRef, sourceRefs.taskPlanRef, and project source before deciding; do not invent an undeclared API.",
@@ -2821,6 +2873,7 @@ async function buildTaskExecutionRequest(
     },
     sourceRefs: {
       technicalBaselineRef: toProjectRelative(projectRoot, technicalBaselinePath(projectRoot, locator.deliveryId)),
+      planningGenerationContractRef: toProjectRelative(projectRoot, planningContractPath(projectRoot, pgc.planningContractId, locator)),
       architectureArtifactContractRef: toProjectRelative(projectRoot, architectureContractPath(projectRoot, aac.architectureArtifactContractId, locator)),
       taskPlanRef: toProjectRelative(projectRoot, resolveTaskPlanPath(projectRoot, taskPlan.taskPlanId, locator)),
       taskPlanRunRef: toProjectRelative(projectRoot, taskPlanRunPath(projectRoot, run.runId, locator)),
@@ -2828,6 +2881,7 @@ async function buildTaskExecutionRequest(
     },
     referencedArtifactReadGuide: referencedArtifactReadGuide({
       technicalBaselineRef: toProjectRelative(projectRoot, technicalBaselinePath(projectRoot, locator.deliveryId)),
+      planningGenerationContractRef: toProjectRelative(projectRoot, planningContractPath(projectRoot, pgc.planningContractId, locator)),
       architectureArtifactContractRef: toProjectRelative(projectRoot, architectureContractPath(projectRoot, aac.architectureArtifactContractId, locator)),
       taskPlanRef: toProjectRelative(projectRoot, resolveTaskPlanPath(projectRoot, taskPlan.taskPlanId, locator)),
       taskPlanRunRef: toProjectRelative(projectRoot, taskPlanRunPath(projectRoot, run.runId, locator)),
@@ -2838,6 +2892,7 @@ async function buildTaskExecutionRequest(
       technicalBaseline: buildTechnicalBaselineSummary(baseline),
       architectureArtifactProjection: buildArchitectureProjection(aac, requestTask),
       acceptanceSnapshot: buildTaskAcceptanceSnapshot(pgc, aac, requestTask),
+      requirementDetailSnapshot,
       dependencyResults: run.taskStates
         .filter((state) => requestTask.dependsOn.includes(state.taskId) && state.resultId)
         .map((state) => ({
@@ -2876,6 +2931,7 @@ async function buildTaskExecutionRequest(
         "If dependency installation succeeds, rerun the relevant verification before writing TaskResult.",
         "Only record verification status not_run for missing dependencies after attempting the allowed package-manager install or when installation is impossible; explain the attempted command and failure in notes.",
         "Do not implement full lifecycle for reference_only entities.",
+        "Preserve task-scoped requirement details from sourceContext.requirementDetailSnapshot. When present, each listed detailId must be addressed by implementation or verification within the current task boundary.",
         "Preserve task-scoped object-operation details from acceptanceSnapshot, taskConceptGrounding, and architectureArtifactProjection: key fields, operation inputs, preconditions, validation/blocking reasons, success states, state transitions, and visible feedback.",
         "Use project structure and framework conventions discovered in the workspace.",
         compactContextReadStep,
@@ -3010,6 +3066,7 @@ async function buildTaskExecutionRequest(
         "For frontend tasks, use task.frontendExperienceRequirement.executionGuidance when present and fill frontendExperienceSelfCheck with surfaces, workflows, user actions, states, data binding mode, and known gaps.",
         "For frontend tasks, use frontendBackendBindings as coding guidance for user-action-to-interface wiring. If a needed binding is absent, read AAC/TaskPlan/source and continue; do not treat projection absence as a validator failure.",
         "When task acceptance or concept grounding names concrete object fields, object operations, blocking reasons, state changes, or visible feedback, verificationResults and conceptEvidence must mention the matching implemented or verified behavior instead of only reporting that the module exists.",
+        "When sourceContext.requirementDetailSnapshot is non-empty, verificationResults should identify the relevant detailId or detail title in the summary for each verificationIntents[].requirementDetailRefs item.",
         ...(workflowClosureRequirements.length > 0 ? [
           "For tasks with closureRequirementRefs, frontendExperienceSelfCheck.status=satisfied is valid only when frontendExperienceSelfCheck.dataBinding.mode=wired and frontendExperienceSelfCheck.knownGaps is empty.",
           "If the task remains static_only_with_reason, mocked_with_reason, or has knownGaps for required closure, use partially_satisfied/not_satisfied in frontendExperienceSelfCheck and completed_with_notes/failed/blocked according to the actual implementation and verification outcome.",
@@ -3636,6 +3693,35 @@ function taskPlanRequirementDetailProjection(
   aac: ArchitectureArtifactContract,
 ): Record<string, unknown> {
   const acceptanceMatrixById = new Map(aac.acceptanceMatrix.map((entry) => [entry.acceptanceId, entry]));
+  const detailCoverageById = new Map((aac.detailCoverage ?? []).map((entry) => [entry.detailId, entry]));
+  const requirementDetailAssignment = pgc.requirementDetails ? {
+    authority: "PGC.requirementDetails.items + AAC.detailCoverage",
+    items: pgc.requirementDetails.items
+      .filter((item) => item.requiredForCurrentPhase)
+      .map((item) => {
+        const coverage = detailCoverageById.get(item.detailId);
+        return {
+          detailId: item.detailId,
+          kind: item.kind,
+          title: item.title,
+          summary: item.summary,
+          priority: item.priority,
+          impactTags: item.impactTags,
+          lifecycleStage: item.lifecycleStage,
+          quality: item.quality,
+          scopeRefs: item.scopeRefs,
+          acceptanceRefs: item.acceptanceRefs,
+          conceptRefs: item.conceptRefs,
+          frontendRefs: item.frontendRefs,
+          coverageStatus: coverage?.coverageStatus ?? "uncovered",
+          artifactRefs: coverage?.artifactRefs ?? null,
+          coverageReason: coverage?.reason ?? null,
+        };
+      }),
+    assignmentRule: "Every item with coverageStatus=covered must be assigned to at least one task.requirementDetailRefs entry using its detailId.",
+    verificationRule: "Every assigned covered detail should be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+    insufficientAacRule: "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks.",
+  } : null;
   const frontendOperationPathDetails = {
     dataViews: aac.frontendExperience?.dataViews ?? [],
     actions: aac.frontendExperience?.actions ?? [],
@@ -3645,6 +3731,7 @@ function taskPlanRequirementDetailProjection(
   return {
     authority: "planning_generation_contract_plus_architecture_artifact_contract",
     purpose: "Mechanically carry Brainstorm-confirmed current phase details and AAC taskable artifacts into TaskPlan generation.",
+    requirementDetailAssignment,
     currentPhaseScope: {
       included: pgc.phaseScope.included.map((item) => ({
         scopeId: item.scopeId,
@@ -3717,9 +3804,11 @@ function taskPlanRequirementDetailProjection(
     taskPlanningFieldMapping: {
       groupsObjective: "Summarize the engineering capability slice using currentPhaseScope items plus acceptanceDetails.",
       taskObjective: "Name the concrete business object, field set, operation, input, rule, flow, state, UI, API, blocking detail, or feedback detail the task owns.",
+      taskRequirementDetailRefs: "When requirementDetailAssignment.items contains covered current-phase details owned by the task, list their detailId values in task.requirementDetailRefs.",
       implementationActions: "Choose enum actions that match the AAC artifact kind and concrete detail.",
       writeBoundaryArtifactRefs: "Reference AAC modules/entities/interfaces/userFlows/stateMachines/decisions/risks that carry the detail.",
       verificationIntentsBehavior: "Describe the specific acceptance rule, object operation, input, field, state, flow, blocking reason, operation path, readback, or feedback this task must verify.",
+      verificationIntentRequirementDetailRefs: "When a verification intent proves a requirement detail, list that detailId in verificationIntents[].requirementDetailRefs.",
       frontendExperienceRequirement: "Use when frontendExperience is required or a task owns UI surfaces/workflows/states/bindings.",
       workflowClosureRequirement: "When workflowClosureRequirements exists, assign each closureId to at least one task whose artifact refs include the workflowRef and interfaceRefs, whose implementationActions include wire_reference_in_api_or_ui, and whose verificationIntents can prove the wired user action through automated_test or runtime_api_check evidence.",
       runtimeDeliveryRequirement: "Use when the task touches build/start/runtime entry/serving/configuration/generated artifacts/runtime surface.",
@@ -4193,6 +4282,7 @@ function taskPlanGroupSchemaShape(locator: DeliveryPhaseLocator, requestId: stri
       dependsOn: [],
       scopeRefs: ["scope-id"],
       acceptanceRefs: workflowClosureRequirement?.acceptanceRefs ?? ["AC-001"],
+      requirementDetailRefs: ["detail-id-from-contextProjection.requirementDetailTransfer.requirementDetailAssignment.items"],
       writeBoundary: {
         forbiddenPaths: [".loom"],
         artifactRefs: {
@@ -4208,6 +4298,7 @@ function taskPlanGroupSchemaShape(locator: DeliveryPhaseLocator, requestId: stri
       verificationIntents: [{
         verificationId: "verify-core-001",
         acceptanceRefs: workflowClosureRequirement?.acceptanceRefs ?? ["AC-001"],
+        requirementDetailRefs: ["detail-id-from-parent-task.requirementDetailRefs"],
         behavior: workflowClosureRequirement
           ? "Verify the user action invokes the declared interface and produces the expected state or feedback."
           : "Verify the implemented increment satisfies AC-001.",
@@ -4289,6 +4380,7 @@ function taskPlanGroupSchemaShape(locator: DeliveryPhaseLocator, requestId: stri
       dependsOn: [],
       scopeRefs: ["scope-id"],
       acceptanceRefs: ["AC-001"],
+      requirementDetailRefs: ["detail-id-from-contextProjection.requirementDetailTransfer.requirementDetailAssignment.items"],
       writeBoundary: {
         forbiddenPaths: [".loom"],
         artifactRefs: {
@@ -4304,6 +4396,7 @@ function taskPlanGroupSchemaShape(locator: DeliveryPhaseLocator, requestId: stri
       verificationIntents: [{
         verificationId: "verify-runtime-delivery-closure",
         acceptanceRefs: ["AC-001"],
+        requirementDetailRefs: ["detail-id-from-parent-task.requirementDetailRefs"],
         behavior: "Verify RuntimeDeliveryContract code-level closure without Docker, registry, clean install, browser proof, or full deploy.",
         preferredEvidence: ["static_check"],
         acceptableEvidence: ["static_check", "manual_command_output", "runtime_api_check"],
@@ -4325,6 +4418,8 @@ function buildTaskGenerationRules(aac?: ArchitectureArtifactContract): Record<st
         "Use contextProjection.requirementDetailTransfer before writing the outline or any group file.",
         "Carry concrete current phase details from acceptanceDetails, currentPhaseScope.included[].items, businessFlowDetails, objectOperationDetailRules, and architectureDetails into TaskPlan groups and tasks.",
         "Task objective must identify the concrete business object, key field set, operation, operation input, rule, workflow, state, UI surface, operation path, API/interface, blocking reason, visible feedback, or runtime contract detail the task owns when such detail exists.",
+        "For every requirementDetailAssignment.items entry with coverageStatus=covered, assign its detailId to at least one task.requirementDetailRefs and at least one verificationIntents[].requirementDetailRefs.",
+        "verificationIntents[].requirementDetailRefs must be a subset of the parent task.requirementDetailRefs.",
         "verificationIntents[].behavior must describe the concrete behavior to verify, not only repeat an acceptance id or module label.",
         "writeBoundary.artifactRefs must point to the AAC artifacts that carry the task detail; do not leave artifactRefs empty for implementation tasks when matching AAC artifacts exist.",
         "When objectOperationDetailRules names scope coverage, operation inputs, field sets, blocking reasons, state changes, or feedback, assign them through task objectives, conceptResponsibilities, writeBoundary artifactRefs, and verificationIntents so TaskExecution can implement and prove them.",

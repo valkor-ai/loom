@@ -158,6 +158,10 @@ const ISSUE_TEMPLATES: Record<string, IssueTemplate> = {
     message: "Requirement detail coverage is missing required artifact refs or reason.",
     repairHint: "Repair detailCoverage so covered items reference current AAC artifacts and non-covered items include a reason.",
   },
+  DETAIL_TASK_ASSIGNMENT_MISSING: {
+    message: "A covered current-phase requirement detail is not assigned to TaskPlan tasks and verification intents.",
+    repairHint: "Assign the detailId through task.requirementDetailRefs and verificationIntents[].requirementDetailRefs, or repair AAC if the detail is not actually covered by architecture artifacts.",
+  },
   REVIEW_RESULT_STATUS_INCONSISTENT: {
     message: "ReviewResult decision or routing is inconsistent with findings.",
     repairHint: "Repair only ReviewResult contract fields and return a complete replacement ReviewResult.",
@@ -246,6 +250,9 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
   const acceptanceById = new Map(pgc.phaseScope.acceptanceCandidates.map((item) => [item.id, item]));
   const taskIds = new Set(taskPlan.tasks.map((task) => task.taskId));
   const groupIds = new Set(taskPlan.groups.map((group) => group.groupId));
+  const requirementDetailIds = new Set(pgc.requirementDetails?.items.map((item) => item.detailId) ?? []);
+  const taskAssignedDetailIds = new Set<string>();
+  const verificationAssignedDetailIds = new Set<string>();
 
   if (pgc.status !== "ready" || aac.status !== "ready" || !aac.handoff.readyForTaskPlan || !["auto_accepted", "confirmed"].includes(baseline.status)) {
     issues.push(issue("SOURCE_NOT_READY", "/source", "blocked"));
@@ -305,6 +312,13 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
     for (const ref of task.acceptanceRefs) {
       if (!acceptanceById.has(ref)) issues.push(issue("INVALID_ACCEPTANCE_REF", `/tasks/${task.taskId}/acceptanceRefs/${ref}`));
     }
+    for (const ref of task.requirementDetailRefs ?? []) {
+      if (!requirementDetailIds.has(ref)) {
+        issues.push(issue("DETAIL_REF_INVALID", `/tasks/${task.taskId}/requirementDetailRefs/${ref}`));
+      } else {
+        taskAssignedDetailIds.add(ref);
+      }
+    }
     for (const pathValue of task.writeBoundary.forbiddenPaths) {
       if (!isSafeProjectRelativePath(pathValue) && pathValue !== ".loom") {
         issues.push(issue("INVALID_FORBIDDEN_PATH", `/tasks/${task.taskId}/writeBoundary/forbiddenPaths/${pathValue}`));
@@ -326,6 +340,16 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
       }
       if (intent.acceptableEvidence.length === 0) {
         issues.push(issue("INVALID_VERIFICATION_INTENT", `/tasks/${task.taskId}/verificationIntents/${intent.verificationId}/acceptableEvidence`));
+      }
+      for (const ref of intent.requirementDetailRefs ?? []) {
+        if (!requirementDetailIds.has(ref)) {
+          issues.push(issue("DETAIL_REF_INVALID", `/tasks/${task.taskId}/verificationIntents/${intent.verificationId}/requirementDetailRefs/${ref}`));
+        } else {
+          verificationAssignedDetailIds.add(ref);
+        }
+        if (!(task.requirementDetailRefs ?? []).includes(ref)) {
+          issues.push(issue("INVALID_VERIFICATION_INTENT", `/tasks/${task.taskId}/verificationIntents/${intent.verificationId}/requirementDetailRefs/${ref}`));
+        }
       }
     }
 
@@ -390,6 +414,7 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
       issues.push(issue("MUST_ACCEPTANCE_NOT_COVERED", "/tasks/frontendExperienceRequirement", "blocked"));
     }
   }
+  validateTaskPlanRequirementDetailAssignments(taskPlan, pgc, aac, taskAssignedDetailIds, verificationAssignedDetailIds, issues);
   validateWorkflowClosureTaskAssignments(taskPlan, aac, issues);
 
   if (aac.runtimeDelivery?.status === "modified") {
@@ -406,6 +431,32 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
       ? "needs_candidate_repair"
       : "ready";
   return { value: taskPlan, issues, status };
+}
+
+function validateTaskPlanRequirementDetailAssignments(
+  taskPlan: TaskPlan,
+  pgc: PlanningGenerationContract,
+  aac: ArchitectureArtifactContract,
+  taskAssignedDetailIds: Set<string>,
+  verificationAssignedDetailIds: Set<string>,
+  issues: ContractIssue[],
+): void {
+  if (taskPlan.status !== "ready" || !pgc.requirementDetails) {
+    return;
+  }
+  const detailCoverageById = new Map((aac.detailCoverage ?? []).map((entry) => [entry.detailId, entry]));
+  for (const detail of pgc.requirementDetails.items.filter((item) => item.requiredForCurrentPhase)) {
+    const coverage = detailCoverageById.get(detail.detailId);
+    if (coverage?.coverageStatus !== "covered") {
+      continue;
+    }
+    if (!taskAssignedDetailIds.has(detail.detailId)) {
+      issues.push(issue("DETAIL_TASK_ASSIGNMENT_MISSING", `/tasks/requirementDetailRefs/${detail.detailId}`));
+    }
+    if (!verificationAssignedDetailIds.has(detail.detailId)) {
+      issues.push(issue("DETAIL_TASK_ASSIGNMENT_MISSING", `/tasks/verificationIntents/requirementDetailRefs/${detail.detailId}`));
+    }
+  }
 }
 
 function validateWorkflowClosureTaskAssignments(

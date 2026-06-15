@@ -1432,6 +1432,9 @@ function writeArchitectureSections(root, request, pgc) {
 }
 
 function writeTaskPlanGroupedOutputs(root, request) {
+  const requirementDetailRefs = (request.contextProjection?.requirementDetailTransfer?.requirementDetailAssignment?.items ?? [])
+    .filter((item) => item.coverageStatus === "covered")
+    .map((item) => item.detailId);
   const outline = {
     schemaVersion: "1.0",
     requestId: request.requestId,
@@ -1467,6 +1470,7 @@ function writeTaskPlanGroupedOutputs(root, request) {
       dependsOn: [],
       scopeRefs: ["scope-core"],
       acceptanceRefs: ["AC-001"],
+      requirementDetailRefs,
       writeBoundary: {
         forbiddenPaths: [".loom"],
         artifactRefs: {
@@ -1482,6 +1486,7 @@ function writeTaskPlanGroupedOutputs(root, request) {
       verificationIntents: [{
         verificationId: "VI-core",
         acceptanceRefs: ["AC-001"],
+        requirementDetailRefs,
         behavior: "Given validationName, verify empty input is blocked with VALIDATION_NAME_REQUIRED and valid input returns status=ready with normalizedName.",
         preferredEvidence: ["static_check"],
         acceptableEvidence: ["static_check", "agent_review_explanation"],
@@ -2064,6 +2069,14 @@ function main() {
       "TaskPlan requirementDetailTransfer must carry AAC user flow details.",
     );
     assert.ok(
+      taskPlanRequestBody.contextProjection.requirementDetailTransfer.requirementDetailAssignment.items.some((item) =>
+        item.detailId &&
+        item.coverageStatus === "covered" &&
+        item.artifactRefs.interfaces.includes("interface-run-validation")
+      ),
+      "TaskPlan requirementDetailTransfer must carry detailId assignment with AAC artifact refs.",
+    );
+    assert.ok(
       taskPlanRequestBody.generationRules.requirementDetailTransferRules.rules.some((rule) => rule.includes("verificationIntents[].behavior")),
       "TaskPlan generation rules must tell Agent to carry concrete details into verification intents.",
     );
@@ -2155,6 +2168,18 @@ function main() {
     assertSourceEditPreparationContract(executionRequest, "TaskExecutionRequest");
     assert.ok(executionRequest.agentAction.read.required.some((item) => item.includes("taskConceptGrounding")));
     assert.ok(executionRequest.agentAction.write.rules.some((rule) => rule.includes("conceptEvidence")));
+    assert.ok(
+      executionRequest.agentAction.read.required.includes("sourceContext.requirementDetailSnapshot"),
+      "TaskExecutionRequest must require reading task-scoped requirement detail snapshot when TaskPlan assigned detail refs.",
+    );
+    assert.ok(
+      executionRequest.sourceContext.requirementDetailSnapshot.some((item) =>
+        item.detailId &&
+        item.aacCoverage?.artifactRefs?.interfaces?.includes("interface-run-validation") &&
+        item.verificationIntentRefs.includes("VI-core")
+      ),
+      "TaskExecutionRequest must carry task-scoped detail snapshot with AAC refs and verification linkage.",
+    );
     assertSourceChangeOutputPolicy(nextTask.instruction, executionRequest, "TaskExecutionRequest");
     assertTaskExecutionEnvironmentPreparation(executionRequest, "TaskExecutionRequest");
     assertTaskExecutionCompletionBarrierProtocol(executionRequest, "TaskExecutionRequest");

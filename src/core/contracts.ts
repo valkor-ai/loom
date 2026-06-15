@@ -1164,6 +1164,7 @@ export const taskArtifactRefsSchema = z.object({
 export const verificationIntentSchema = z.object({
   verificationId: z.string().min(1),
   acceptanceRefs: refsSchema,
+  requirementDetailRefs: refsSchema.optional(),
   behavior: z.string().min(1),
   preferredEvidence: z.array(verificationEvidenceSchema),
   acceptableEvidence: z.array(verificationEvidenceSchema),
@@ -1199,6 +1200,7 @@ export const taskSchema = z.object({
   dependsOn: refsSchema,
   scopeRefs: refsSchema,
   acceptanceRefs: refsSchema,
+  requirementDetailRefs: refsSchema.optional(),
   writeBoundary: z.object({
     forbiddenPaths: refsSchema,
     artifactRefs: taskArtifactRefsSchema,
@@ -1464,6 +1466,7 @@ export const taskExecutionRequestSchema = z.object({
     technicalBaseline: z.record(z.unknown()),
     architectureArtifactProjection: z.record(z.unknown()),
     acceptanceSnapshot: z.array(z.record(z.unknown())),
+    requirementDetailSnapshot: z.array(z.record(z.unknown())).optional(),
     dependencyResults: z.array(z.record(z.unknown())),
   }),
   executionRules: z.record(z.unknown()),
