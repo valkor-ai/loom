@@ -186,6 +186,7 @@ export function databaseRuntimeSignalLabel(lower: string): string | null {
   if (/spring[_\.]datasource/.test(lower)) return "SPRING_DATASOURCE";
   if (/database_url/.test(lower)) return "DATABASE_URL";
   if (/database_uri/.test(lower)) return "DATABASE_URI";
+  if (/datasource_url/.test(lower)) return "DATASOURCE_URL";
   if (/db_url/.test(lower)) return "DB_URL";
   if (/sqlalchemy_database_uri/.test(lower)) return "SQLALCHEMY_DATABASE_URI";
   if (/connectionstrings/.test(lower)) return "ConnectionStrings";
@@ -194,7 +195,7 @@ export function databaseRuntimeSignalLabel(lower: string): string | null {
 }
 
 export function hasDatabaseRuntimeSignal(lower: string): boolean {
-  return /database_url|database_uri|db_url|spring[_\.]datasource|datasource\.url|sqlalchemy_database_uri|connectionstrings|jdbc:/.test(lower);
+  return /database_url|database_uri|db_url|spring[_\.]datasource|datasource[_\.]url|sqlalchemy_database_uri|connectionstrings|jdbc:/.test(lower);
 }
 
 export function persistenceKindFromSelection(input: {

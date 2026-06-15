@@ -8,6 +8,7 @@ const { ensureLoomUserInstall } = require("./lib/loom-user-install");
 
 const repoRoot = path.resolve(__dirname, "..");
 const codexPluginRoot = path.join(repoRoot, "plugins", "codex");
+const sharedDeployReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom-deploy", "references");
 const manifestPath = path.join(codexPluginRoot, ".codex-plugin", "plugin.json");
 const sourceManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const pluginName = sourceManifest.name;
@@ -78,6 +79,7 @@ console.log(JSON.stringify(stamp, null, 2));
 function installCodexSource() {
   prepareInstallRoot(personalPluginRoot);
   copyDirectory(codexPluginRoot, personalPluginRoot);
+  installSharedDeployReferences(path.join(personalPluginRoot, "skills", "loom-deploy", "references"));
 
   const installedManifestPath = path.join(personalPluginRoot, ".codex-plugin", "plugin.json");
   const installedManifest = JSON.parse(fs.readFileSync(installedManifestPath, "utf8"));
@@ -88,6 +90,14 @@ function installCodexSource() {
   assertExists(path.join(personalPluginRoot, "skills", "loom", "SKILL.md"));
   assertExists(path.join(personalPluginRoot, "skills", "loom-deploy", "SKILL.md"));
   assertExists(path.join(personalPluginRoot, "skills", "loom-deploy", "references", "node.md"));
+}
+
+function installSharedDeployReferences(targetRoot) {
+  if (!fs.existsSync(sharedDeployReferenceSourceRoot)) {
+    throw new Error(`Shared deploy references source does not exist: ${sharedDeployReferenceSourceRoot}`);
+  }
+  fs.rmSync(targetRoot, { recursive: true, force: true });
+  copyDirectory(sharedDeployReferenceSourceRoot, targetRoot);
 }
 
 function prepareInstallRoot(target) {

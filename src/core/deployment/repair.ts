@@ -47,8 +47,11 @@ export async function writeDeploymentRepairRequest(input: {
   previousAttempts?: number;
 }): Promise<DeploymentRepairRequest> {
   const paths = getDeploymentPaths(input.projectRoot);
-  const failureOwner = failureOwnerFor(input.spec, input.failureKind);
-  const repairRoute = repairRouteFor(failureOwner, input.failureKind);
+  const editableFileCount = editableFilesFor(input.spec, input.failureKind).length;
+  const { failureOwner, repairRoute } = classifyDeploymentRepair({
+    failureKind: input.failureKind,
+    editableFileCount,
+  });
   const failureRef = repairRoute === "execution_repair"
     ? toProjectRelative(input.projectRoot, paths.failureFile)
     : null;
@@ -226,15 +229,26 @@ async function deploymentSourceRefs(
   }
 }
 
-function failureOwnerFor(
-  spec: DeploymentSpec,
-  failureKind: DeploymentFailureKind,
-): DeploymentFailureOwner {
+export function classifyDeploymentRepair(input: {
+  failureKind: DeploymentFailureKind;
+  editableFileCount: number;
+  failureOwner?: DeploymentFailureOwner | null;
+}): {
+  failureOwner: DeploymentFailureOwner;
+  repairRoute: DeploymentRepairRoute;
+} {
+  const { failureKind, editableFileCount } = input;
+  if (input.failureOwner) {
+    return {
+      failureOwner: input.failureOwner,
+      repairRoute: repairRouteForFailureOwner(input.failureOwner, failureKind),
+    };
+  }
   if (failureKind === "docker_unavailable") {
-    return "environment";
+    return { failureOwner: "environment", repairRoute: "none" };
   }
   if (failureKind === "registry_network") {
-    return "external_system";
+    return { failureOwner: "external_system", repairRoute: "none" };
   }
   if (
     failureKind === "build_command_failed" ||
@@ -242,17 +256,20 @@ function failureOwnerFor(
     failureKind === "application_startup_failed" ||
     failureKind === "http_probe_failed" ||
     failureKind === "preview_not_verified" ||
-    (failureKind === "healthcheck" && editableFilesFor(spec, failureKind).length === 0)
+    (failureKind === "healthcheck" && editableFileCount === 0)
   ) {
-    return "application_code";
+    return {
+      failureOwner: "application_code",
+      repairRoute: failureKind === "healthcheck" ? "manual_review" : "execution_repair",
+    };
   }
-  if (editableFilesFor(spec, failureKind).length > 0) {
-    return "deployment_assets";
+  if (editableFileCount > 0) {
+    return { failureOwner: "deployment_assets", repairRoute: "deploy_repair" };
   }
-  return "unknown";
+  return { failureOwner: "unknown", repairRoute: "manual_review" };
 }
 
-function repairRouteFor(
+function repairRouteForFailureOwner(
   failureOwner: DeploymentFailureOwner,
   failureKind: DeploymentFailureKind,
 ): DeploymentRepairRoute {
@@ -288,14 +305,18 @@ function suggestedActionsFor(
 
   if (failureKind === "docker_unavailable") {
     return [
-      "Docker is unavailable or the Docker daemon cannot be reached.",
-      "Start Docker, fix Docker permissions/context, or retry after Docker is healthy.",
+      "Docker is unavailable from the current Loom agent session.",
+      "Start Docker Desktop or the Docker daemon and verify `docker version` works from the same terminal/session.",
+      "If Docker works in a normal terminal but not in this agent chat, reopen or reconfigure the agent session with full local access / Docker command permission.",
       "Do not edit Dockerfile, Compose, or application code for this failure.",
       ...diagnosticActions(diagnostics),
     ];
   }
 
-  if (repairRouteFor(failureOwnerFor(spec, failureKind), failureKind) === "execution_repair") {
+  if (classifyDeploymentRepair({
+    failureKind,
+    editableFileCount: editableFilesFor(spec, failureKind).length,
+  }).repairRoute === "execution_repair") {
     return [
       "Deploy classified this as an application code/runtime delivery failure.",
       "Create deploy-sourced execution repair from .loom/deployment/state/latest-failure.json.",
@@ -386,7 +407,7 @@ function instructionFor(spec: DeploymentSpec, failureKind: DeploymentFailureKind
     case "logs":
       return `${base} Focus on whether the Compose project and service still exist before attempting file edits.`;
     case "docker_unavailable":
-      return "Docker is unavailable; do not edit deployment files. Ask the user to start Docker or fix Docker permissions.";
+      return "Docker is unavailable from the current Loom agent session; do not edit deployment files. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works in the same terminal/session, and enable full local access or Docker command permission if this agent chat is sandboxed.";
     case "unknown":
       return `${base} Use the command output to classify the failure before editing files.`;
   }

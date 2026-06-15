@@ -21,11 +21,14 @@ export async function ensureDockerAvailable(projectRoot: string): Promise<void> 
       timeoutMs: 10_000,
     });
     if (result.exitCode !== 0) {
-      throw dockerUnavailable("Docker is unavailable.", commandDetails(result));
+      throw dockerUnavailable("Docker is unavailable.", dockerUnavailableDetails(result));
     }
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      throw dockerUnavailable("Docker CLI was not found.", { command: "docker" });
+      throw dockerUnavailable("Docker CLI was not found.", {
+        command: "docker",
+        ...dockerAccessGuidance(),
+      });
     }
     throw error;
   }
@@ -141,11 +144,33 @@ export function resolveComposePath(projectRoot: string, spec: DeploymentSpec): s
   return path.resolve(projectRoot, spec.files.composePath);
 }
 
-function commandDetails(result: ExecResult): unknown {
+function commandDetails(result: ExecResult): Record<string, unknown> {
   return {
     exitCode: result.exitCode,
     stdout: result.stdout.trim(),
     stderr: result.stderr.trim(),
+  };
+}
+
+function dockerUnavailableDetails(result: ExecResult): Record<string, unknown> {
+  return {
+    ...commandDetails(result),
+    ...dockerAccessGuidance(),
+  };
+}
+
+function dockerAccessGuidance(): Record<string, unknown> {
+  return {
+    possibleCauses: [
+      "Docker Desktop or the Docker daemon is not running.",
+      "The current OS user or shell cannot access the Docker daemon.",
+      "The current agent session is sandboxed or lacks full local shell/Docker access.",
+    ],
+    userActions: [
+      "Start Docker Desktop or the Docker daemon and wait until `docker version` works.",
+      "If Docker works in a normal terminal but not in this agent chat, reopen or reconfigure the agent session with full local access / Docker command permission.",
+      "Retry the same loom deploy command after Docker is reachable from the agent session.",
+    ],
   };
 }
 

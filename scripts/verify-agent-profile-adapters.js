@@ -47,6 +47,11 @@ function assertNotIncludes(file, needle, message) {
   assert.equal(read(file).includes(needle), false, `${file}: ${message}`);
 }
 
+function assertMaxLines(file, maxLines, message) {
+  const lineCount = read(file).split(/\r?\n/).length;
+  assert.ok(lineCount <= maxLines, `${file}: ${message}; found ${lineCount}, max ${maxLines}`);
+}
+
 function runClaudeWorkflowGuard(input, fixture) {
   const guardPath = path.join(repoRoot, "plugins/claude-code/hooks/loom-workflow-guard.js");
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-claude-hook-"));
@@ -139,19 +144,20 @@ function assertDeployReferencesAligned() {
     "static.md",
     "workspaces.md",
   ];
-  const roots = {
-    codex: "plugins/codex/skills/loom-deploy/references",
-    claude: "plugins/claude-code/skills/loom-deploy/references",
-    opencode: "plugins/opencode/.opencode/loom-deploy/references",
-  };
+  const sharedRoot = "plugins/shared/loom-deploy/references";
   for (const fileName of referenceFiles) {
-    const codexPath = `${roots.codex}/${fileName}`;
-    const codexContent = read(codexPath);
-    for (const [adapter, root] of Object.entries(roots)) {
-      const adapterPath = `${root}/${fileName}`;
-      assertExists(adapterPath, `${adapter} deploy adapter must package ${fileName}`);
-      assert.equal(read(adapterPath), codexContent, `${adapter} deploy reference ${fileName} must match Codex source`);
-    }
+    assertExists(`${sharedRoot}/${fileName}`, `shared deploy references must include ${fileName}`);
+  }
+  for (const adapterRoot of [
+    "plugins/codex/skills/loom-deploy/references",
+    "plugins/claude-code/skills/loom-deploy/references",
+    "plugins/opencode/.opencode/loom-deploy/references",
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(repoRoot, adapterRoot)),
+      false,
+      `${adapterRoot}: deploy references must be installed from the shared source, not maintained as adapter-local copies`,
+    );
   }
 }
 
@@ -1105,6 +1111,21 @@ assertIncludes(
   "deployReferenceInstallRoot",
   "opencode refresh must install deploy stack references outside the commands directory",
 );
+assertIncludes(
+  "scripts/refresh-local-codex-plugin.js",
+  "sharedDeployReferenceSourceRoot",
+  "Codex refresh must install deploy references from the shared source",
+);
+assertIncludes(
+  "scripts/refresh-local-claude-plugin.js",
+  "sharedDeployReferenceSourceRoot",
+  "Claude refresh must install deploy references from the shared source",
+);
+assertIncludes(
+  "scripts/refresh-local-opencode-plugin.js",
+  "plugins\", \"shared\", \"loom-deploy\", \"references",
+  "OpenCode refresh must install deploy references from the shared source",
+);
 assertNotIncludes(
   "scripts/refresh-local-opencode-plugin.js",
   "const commandInstallRoot = path.join(opencodeConfigRoot, \"command\")",
@@ -1978,6 +1999,66 @@ for (const file of [
 ]) {
   assertIncludes(
     file,
+    "$HOME/.loom/bin/loom-cli",
+    `${file}: deploy adapter must use the shared loom launcher`,
+  );
+  assertIncludes(
+    file,
+    "LOOM_COMPACT_OUTPUT=1",
+    `${file}: deploy adapter must request compact CLI envelopes`,
+  );
+  assertIncludes(
+    file,
+    "agentAction.read.fieldGroups",
+    `${file}: deploy adapter must use request inspect read groups before artifact fallbacks`,
+  );
+  assertIncludes(
+    file,
+    "DEPLOY_OPERATION_ACTIVE",
+    `${file}: deploy adapter must preserve active deploy operation blocker handling`,
+  );
+  assertIncludes(
+    file,
+    "observe_active_deploy_operation",
+    `${file}: deploy adapter must preserve active deploy observation instruction handling`,
+  );
+  assertIncludes(
+    file,
+    "instruction.observationPolicy",
+    `${file}: deploy adapter must obey CLI-provided active deploy observation policy`,
+  );
+  assertIncludes(
+    file,
+    "first 120 seconds",
+    `${file}: deploy adapter must keep an initial quiet window for long deploy runs`,
+  );
+  assertIncludes(
+    file,
+    "once every 60 seconds",
+    `${file}: deploy adapter must limit active deploy observation cadence`,
+  );
+  assertIncludes(
+    file,
+    "operationActive=true",
+    `${file}: deploy adapter must not stop while deploy is still active`,
+  );
+  assertIncludes(
+    file,
+    "DEPLOY_SOURCE_INSUFFICIENT",
+    `${file}: deploy adapter must preserve structured source blocker handling`,
+  );
+  assertIncludes(
+    file,
+    "DEPLOY_CONFLICT",
+    `${file}: deploy adapter must preserve structured conflict blocker handling`,
+  );
+  assertIncludes(
+    file,
+    "Do not run raw `docker compose`",
+    `${file}: deploy adapter must forbid raw Docker takeover`,
+  );
+  assertIncludes(
+    file,
     "providers.md",
     `${file}: deploy adapter must expose provider reference guidance`,
   );
@@ -1990,6 +2071,64 @@ for (const file of [
     file,
     "malformed",
     `${file}: deploy adapter must recover through the source edit contract after malformed write calls`,
+  );
+}
+assertMaxLines(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  170,
+  "Codex deploy skill must stay adapter-facing and not grow back into deploy engine documentation",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "## Target Architecture",
+  "Codex deploy skill must not contain deploy engine architecture documentation",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "## References",
+  "Codex deploy skill must use Knowledge Layout instead of a second references catalog",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "Strategy resolver chooses",
+  "Codex deploy skill must not duplicate deploy provider selection logic",
+);
+assertNotIncludes(
+  "plugins/codex/skills/loom-deploy/SKILL.md",
+  "Validator should run",
+  "Codex deploy skill must not duplicate deploy validation internals",
+);
+for (const file of [
+  "plugins/codex/skills/loom/SKILL.md",
+  "plugins/claude-code/skills/loom/SKILL.md",
+  "plugins/claude-code/commands/loom.md",
+  "plugins/claude-code/commands/loom-deploy.md",
+  "plugins/opencode/.opencode/commands/loom.md",
+]) {
+  assertIncludes(
+    file,
+    "observe_active_deploy_operation",
+    `${file}: main deploy entrypoint must recognize active deploy observation instructions`,
+  );
+  assertIncludes(
+    file,
+    "instruction.observationPolicy",
+    `${file}: main deploy entrypoint must obey active deploy observation policy`,
+  );
+  assertIncludes(
+    file,
+    "first 120 seconds",
+    `${file}: main deploy entrypoint must preserve the initial quiet deploy window`,
+  );
+  assertIncludes(
+    file,
+    "once every 60 seconds",
+    `${file}: main deploy entrypoint must limit deploy observation cadence`,
+  );
+  assertIncludes(
+    file,
+    "operationActive=true",
+    `${file}: main deploy entrypoint must forbid final responses while deploy is active`,
   );
 }
 assertIncludes(

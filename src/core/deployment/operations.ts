@@ -1,10 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { deployConflict, deployNotRunning, deploySourceInsufficient, deployValidationFailed, dockerUnavailable, LoomError } from "../errors";
-import { ensureDir, pathExists, readJsonFile } from "../state/fs";
-import { architectureContractPath, architectureLatestPath, toProjectRelative } from "../state/paths";
-import { getActiveLocator, loadDeliveryIndex } from "../state/delivery";
-import { architectureArtifactContractSchema } from "../contracts";
+import { ensureDir, pathExists } from "../state/fs";
+import { toProjectRelative } from "../state/paths";
 import { analyzeDeploymentBootstrap } from "./bootstrap";
 import {
   assertNoActiveDeploymentOperation,
@@ -49,8 +47,8 @@ import {
   inspectContainer,
   resolveComposePath,
 } from "./runtime";
-import { writeDeploymentRepairRequest } from "./repair";
-import { deploymentRuntimeContractFromAac } from "./runtime-contract";
+import { classifyDeploymentRepair, writeDeploymentRepairRequest } from "./repair";
+import { applyRuntimeContractToStack, loadDeploymentRuntimeContract } from "./runtime-contract";
 import { resolveDeploymentStrategy } from "./strategy";
 import { validateStartupLogs } from "./validate";
 import { discoverNodeWorkspacePackageJsonPaths, resolveDeploymentWorkspaceForApp } from "./workspace";
@@ -73,7 +71,6 @@ import type {
   DeploymentHealth,
   DeploymentHealthcheckInput,
   DeploymentProviderPolicy,
-  DeploymentRepairRequest,
   DeploymentRepairRoute,
   DeploymentSpec,
   DeploymentState,
@@ -103,6 +100,7 @@ export type DeployPrepareResult = {
 type DeployOperationAwareResult = {
   operationActive?: boolean;
   activeOperation?: DeploymentActiveOperationView | null;
+  instruction?: Record<string, unknown>;
 };
 
 export type DeployUpResult = {
@@ -196,6 +194,7 @@ export type DeployInspectResult = {
   providerCandidates: DeploymentSpec["providerCandidates"];
   workspace: DeploymentSpec["workspace"] | null;
   codeEvidence: DeploymentSpec["codeEvidence"] | null;
+  codeEvidenceReadGuide: Record<string, unknown> | null;
   detectedStack: DeploymentSpec["detectedStack"] | null;
   files: DeploymentSpec["files"] | null;
   compose: DeploymentSpec["compose"] | null;
@@ -354,10 +353,13 @@ async function deployPrepareInternal(input: {
       ? toProjectRelative(input.projectRoot, existing.dockerfilePath)
       : null;
     spec.files.dockerignorePath = null;
-    await writeDeploymentSpec(input.projectRoot, spec);
-    await clearDeploymentFailureArtifacts(input.projectRoot);
-    await appendDeploymentLog(input.projectRoot, logLine("prepare", `Prepared ${spec.serviceName} deployment by reusing ${spec.files.composePath}.`));
-    return toPrepareResult(input.projectRoot, paths.specFile, spec, spec.detectedStack);
+    return finalizeDeployPrepare({
+      projectRoot: input.projectRoot,
+      specFile: paths.specFile,
+      spec,
+      detectedStack: spec.detectedStack,
+      logMessage: `Prepared ${spec.serviceName} deployment by reusing ${spec.files.composePath}.`,
+    });
   }
 
   if (strategy.provider === "dockerfile-existing" && existing.dockerfilePath) {
@@ -388,10 +390,13 @@ async function deployPrepareInternal(input: {
     applyRuntimeContractHealthDefaults(spec, runtimeContract, input.healthcheck);
 
     await fs.writeFile(paths.composeFile, generateComposeForDockerfile(spec), "utf8");
-    await writeDeploymentSpec(input.projectRoot, spec);
-    await clearDeploymentFailureArtifacts(input.projectRoot);
-    await appendDeploymentLog(input.projectRoot, logLine("prepare", `Prepared ${spec.serviceName} deployment by reusing ${spec.files.dockerfilePath}.`));
-    return toPrepareResult(input.projectRoot, paths.specFile, spec, spec.detectedStack);
+    return finalizeDeployPrepare({
+      projectRoot: input.projectRoot,
+      specFile: paths.specFile,
+      spec,
+      detectedStack: spec.detectedStack,
+      logMessage: `Prepared ${spec.serviceName} deployment by reusing ${spec.files.dockerfilePath}.`,
+    });
   }
 
   const spec = applyHealthcheckInput(createDeploymentSpec({
@@ -420,11 +425,13 @@ async function deployPrepareInternal(input: {
   await fs.writeFile(paths.dockerfileFile, generated.dockerfile, "utf8");
   await fs.writeFile(paths.composeFile, generated.compose, "utf8");
   await fs.writeFile(paths.dockerignoreFile, generated.dockerignore, "utf8");
-  await writeDeploymentSpec(input.projectRoot, spec);
-  await clearDeploymentFailureArtifacts(input.projectRoot);
-  await appendDeploymentLog(input.projectRoot, logLine("prepare", `Prepared ${spec.serviceName} deployment with ${spec.detectedStack.kind} stack from ${spec.workspace.appPath}.`));
-
-  return toPrepareResult(input.projectRoot, paths.specFile, spec, spec.detectedStack);
+  return finalizeDeployPrepare({
+    projectRoot: input.projectRoot,
+    specFile: paths.specFile,
+    spec,
+    detectedStack: spec.detectedStack,
+    logMessage: `Prepared ${spec.serviceName} deployment with ${spec.detectedStack.kind} stack from ${spec.workspace.appPath}.`,
+  });
 }
 
 export async function deployRun(input: {
@@ -482,54 +489,40 @@ async function deployRunInternal(input: {
     await updateDeploymentOperationPhase(input.projectRoot, operation, "validating");
     validate = await deployValidate({ projectRoot: input.projectRoot });
     if (!validate.valid) {
-      const repair = await safeDeployRepair(input.projectRoot);
-      return {
-        completed: false,
+      return deployRunFailureResult({
+        projectRoot: input.projectRoot,
         prepared,
         failedPhase,
         prepare,
         up,
         validate,
         status,
-        repair,
-        nextAction: deployRunNextAction(null, repair),
-        failureOwner: repair?.failureOwner ?? null,
-        repairRoute: repair?.repairRoute ?? null,
-        failureRef: repair?.failureRef ?? null,
-        instruction: deployRunInstruction(repair),
         error: {
           code: "DEPLOY_VALIDATION_FAILED",
           message: "Deployment validation failed.",
           details: validate,
         },
-      };
+      });
     }
 
     failedPhase = "status";
     await updateDeploymentOperationPhase(input.projectRoot, operation, "checking_status");
     status = await deployStatus({ projectRoot: input.projectRoot });
     if (!status.running) {
-      const repair = await safeDeployRepair(input.projectRoot);
-      return {
-        completed: false,
+      return deployRunFailureResult({
+        projectRoot: input.projectRoot,
         prepared,
         failedPhase,
         prepare,
         up,
         validate,
         status,
-        repair,
-        nextAction: deployRunNextAction(null, repair),
-        failureOwner: repair?.failureOwner ?? null,
-        repairRoute: repair?.repairRoute ?? null,
-        failureRef: repair?.failureRef ?? null,
-        instruction: deployRunInstruction(repair),
         error: {
           code: "DEPLOY_NOT_RUNNING",
           message: "Deployment completed but no running container was found.",
           details: status,
         },
-      };
+      });
     }
 
     return {
@@ -546,24 +539,48 @@ async function deployRunInternal(input: {
       error: null,
     };
   } catch (error) {
-    const repair = await safeDeployRepair(input.projectRoot);
-    return {
-      completed: false,
+    return deployRunFailureResult({
+      projectRoot: input.projectRoot,
       prepared,
       failedPhase,
       prepare,
       up,
       validate,
       status,
-      repair,
-      nextAction: deployRunNextAction(error, repair),
-      failureOwner: repair?.failureOwner ?? null,
-      repairRoute: repair?.repairRoute ?? null,
-      failureRef: repair?.failureRef ?? null,
-      instruction: deployRunInstruction(repair),
       error: serializeDeployRunError(error),
-    };
+      nextActionError: error,
+    });
   }
+}
+
+async function deployRunFailureResult(input: {
+  projectRoot: string;
+  prepared: boolean;
+  failedPhase: DeployRunResult["failedPhase"];
+  prepare: DeployPrepareResult | null;
+  up: DeployUpResult | null;
+  validate: DeployValidateResult | null;
+  status: DeployStatusResult | null;
+  error: NonNullable<DeployRunResult["error"]>;
+  nextActionError?: unknown;
+}): Promise<DeployRunResult> {
+  const repair = await safeDeployRepair(input.projectRoot);
+  return {
+    completed: false,
+    prepared: input.prepared,
+    failedPhase: input.failedPhase,
+    prepare: input.prepare,
+    up: input.up,
+    validate: input.validate,
+    status: input.status,
+    repair,
+    nextAction: deployRunNextAction(input.nextActionError ?? null, repair),
+    failureOwner: repair?.failureOwner ?? null,
+    repairRoute: repair?.repairRoute ?? null,
+    failureRef: repair?.failureRef ?? null,
+    instruction: deployRunInstruction(repair),
+    error: input.error,
+  };
 }
 
 export async function deployUp(input: {
@@ -827,6 +844,7 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
       health: state?.health ?? null,
       operationActive: true,
       activeOperation,
+      instruction: deployActiveOperationInstruction("deploy.status", activeOperation),
     };
   }
   if (!state?.containerName) {
@@ -955,6 +973,7 @@ export async function deployLogs(input: { projectRoot: string }): Promise<Deploy
       fullLogRef: toProjectRelative(input.projectRoot, paths.logFile),
       operationActive: true,
       activeOperation,
+      instruction: deployActiveOperationInstruction("deploy.logs", activeOperation),
     };
   }
 
@@ -1044,8 +1063,13 @@ export async function deployRepair(input: { projectRoot: string }): Promise<Depl
     return emptyDeployRepairResult();
   }
 
-  const failureOwner = request.failureOwner ?? inferredRepairFailureOwner(request);
-  const repairRoute = request.repairRoute ?? inferredRepairRoute(request, failureOwner);
+  const repairClassification = classifyDeploymentRepair({
+    failureKind: request.failureKind,
+    editableFileCount: request.editableFiles.length,
+    failureOwner: request.failureOwner ?? null,
+  });
+  const failureOwner = repairClassification.failureOwner;
+  const repairRoute = request.repairRoute ?? repairClassification.repairRoute;
   const result = {
     hasRepairRequest: true,
     repairId: request.repairId,
@@ -1106,50 +1130,6 @@ function emptyDeployRepairResult(): DeployRepairResult {
   };
 }
 
-function inferredRepairFailureOwner(request: {
-  failureKind: DeploymentRepairRequest["failureKind"];
-  editableFiles: string[];
-}): DeployRepairResult["failureOwner"] {
-  if (request.failureKind === "docker_unavailable") {
-    return "environment";
-  }
-  if (request.failureKind === "registry_network") {
-    return "external_system";
-  }
-  if (
-    request.failureKind === "build_command_failed" ||
-    request.failureKind === "start_command_failed" ||
-    request.failureKind === "application_startup_failed" ||
-    request.failureKind === "http_probe_failed" ||
-    request.failureKind === "preview_not_verified"
-  ) {
-    return "application_code";
-  }
-  if (request.editableFiles.length > 0) {
-    return "deployment_assets";
-  }
-  return null;
-}
-
-function inferredRepairRoute(
-  request: {
-    failureKind: DeploymentRepairRequest["failureKind"];
-    editableFiles: string[];
-  },
-  failureOwner: DeployRepairResult["failureOwner"],
-): DeployRepairResult["repairRoute"] {
-  if (failureOwner === "deployment_assets" && request.editableFiles.length > 0) {
-    return "deploy_repair";
-  }
-  if (failureOwner === "application_code") {
-    return "execution_repair";
-  }
-  if (failureOwner === "environment" || failureOwner === "external_system") {
-    return "none";
-  }
-  return null;
-}
-
 export async function deployInspect(input: { projectRoot: string; refresh?: boolean }): Promise<DeployInspectResult> {
   const activeOperation = await readDeploymentOperationView(input.projectRoot);
   let spec: DeploymentSpec | null = null;
@@ -1176,6 +1156,7 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
     providerCandidates: spec?.providerCandidates ?? [],
     workspace: spec?.workspace ?? null,
     codeEvidence: spec?.codeEvidence ?? null,
+    codeEvidenceReadGuide: deploymentCodeEvidenceReadGuide(spec?.codeEvidence?.ref ?? null),
     detectedStack: spec?.detectedStack ?? null,
     files: spec?.files ?? null,
     compose: spec?.compose ?? null,
@@ -1200,7 +1181,13 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
       bootstrapTaskCount: spec?.bootstrap.tasks.length ?? 0,
       hasRepairRequest: repair?.hasRepairRequest ?? false,
     },
-    ...(activeOperation ? { operationActive: true, activeOperation } : {}),
+    ...(activeOperation
+      ? {
+          operationActive: true,
+          activeOperation,
+          instruction: deployActiveOperationInstruction("deploy.inspect", activeOperation),
+        }
+      : {}),
   };
 }
 
@@ -1722,6 +1709,19 @@ function toPrepareResult(
   };
 }
 
+async function finalizeDeployPrepare(input: {
+  projectRoot: string;
+  specFile: string;
+  spec: DeploymentSpec;
+  detectedStack: DeploymentSpec["detectedStack"];
+  logMessage: string;
+}): Promise<DeployPrepareResult> {
+  await writeDeploymentSpec(input.projectRoot, input.spec);
+  await clearDeploymentFailureArtifacts(input.projectRoot);
+  await appendDeploymentLog(input.projectRoot, logLine("prepare", input.logMessage));
+  return toPrepareResult(input.projectRoot, input.specFile, input.spec, input.detectedStack);
+}
+
 function assertDeploymentCodeEvidenceReady(
   projectRoot: string,
   evidence: DeploymentCodeEvidence,
@@ -1730,6 +1730,9 @@ function assertDeploymentCodeEvidenceReady(
   const retryCommand = {
     name: "deploy prepare",
     argv: ["deploy", "prepare"],
+    autoContinue: false,
+    mustRunImmediately: false,
+    usage: "Retry only after the missing facts or conflicts named in this blocker have been resolved.",
   };
   if (evidence.conflicts.length > 0) {
     throw deployConflict("Deployment prepare found conflicting technology and repository evidence.", {
@@ -1740,6 +1743,11 @@ function assertDeploymentCodeEvidenceReady(
       warnings: evidence.warnings,
       nextAction: "ask_user",
       retryCommand,
+      agentFacingBlocker: deploySourceBlockerProtocol({
+        code: "DEPLOY_CONFLICT",
+        evidenceRef,
+        reason: "TechnicalBaseline, repository evidence, or existing deployment assets conflict.",
+      }),
       projectRoot,
     });
   }
@@ -1756,322 +1764,95 @@ function assertDeploymentCodeEvidenceReady(
       warnings: evidence.warnings,
       nextAction,
       retryCommand,
+      agentFacingBlocker: deploySourceBlockerProtocol({
+        code: "DEPLOY_SOURCE_INSUFFICIENT",
+        evidenceRef,
+        reason: "Deploy prepare cannot derive enough source facts to safely generate deployment assets.",
+      }),
       projectRoot,
     });
   }
 }
 
-async function loadDeploymentRuntimeContract(projectRoot: string, stack: DeploymentSpec["detectedStack"]): Promise<DeploymentSpec["runtimeContract"]> {
-  try {
-    const locator = await getActiveLocator(projectRoot);
-    const current = await loadDeploymentRuntimeContractForLocator(projectRoot, stack, locator);
-    if (current.source !== "heuristic") {
-      return current;
-    }
-
-    const index = await loadDeliveryIndex(projectRoot, locator.deliveryId);
-    const activeIndex = index.phases.findIndex((phase) => phase.phaseId === locator.phaseId);
-    const previousCompleted = index.phases
-      .slice(0, activeIndex < 0 ? undefined : activeIndex)
-      .reverse()
-      .find((phase) => phase.status === "completed" && typeof phase.latestRefs.architectureArtifact === "string");
-    const architectureArtifactRef = previousCompleted?.latestRefs.architectureArtifact;
-    if (!previousCompleted || !architectureArtifactRef) {
-      return current;
-    }
-    const aac = architectureArtifactContractSchema.parse(await readJsonFile(path.resolve(projectRoot, architectureArtifactRef)));
-    return deploymentRuntimeContractFromAac(aac, stack, `${architectureArtifactRef}#/runtimeDelivery`);
-  } catch {
-    return deploymentRuntimeContractFromAac(null, stack, null);
-  }
-}
-
-async function loadDeploymentRuntimeContractForLocator(
-  projectRoot: string,
-  stack: DeploymentSpec["detectedStack"],
-  locator: { deliveryId: string; phaseId: string },
-): Promise<DeploymentSpec["runtimeContract"]> {
-  try {
-    const latest = await readJsonFile(architectureLatestPath(projectRoot, locator));
-    const architectureArtifactContractId = typeof latest === "object" && latest !== null
-      ? (latest as { architectureArtifactContractId?: unknown }).architectureArtifactContractId
-      : null;
-    if (typeof architectureArtifactContractId !== "string") {
-      return deploymentRuntimeContractFromAac(null, stack, null);
-    }
-    const aacPath = architectureContractPath(projectRoot, architectureArtifactContractId, locator);
-    const aac = architectureArtifactContractSchema.parse(await readJsonFile(aacPath));
-    return deploymentRuntimeContractFromAac(aac, stack, `${toProjectRelative(projectRoot, aacPath)}#/runtimeDelivery`);
-  } catch {
-    return deploymentRuntimeContractFromAac(null, stack, null);
-  }
-}
-
-function applyRuntimeContractToStack(
-  stack: DeploymentSpec["detectedStack"],
-  runtimeContract: DeploymentSpec["runtimeContract"],
-): DeploymentSpec["detectedStack"] {
-  const inferredKind = inferRuntimeContractStackKind(stack, runtimeContract);
-  const inferredPackageManager = inferRuntimeContractPackageManager(stack, runtimeContract, inferredKind);
+function deploySourceBlockerProtocol(input: {
+  code: "DEPLOY_CONFLICT" | "DEPLOY_SOURCE_INSUFFICIENT";
+  evidenceRef: string;
+  reason: string;
+}): Record<string, unknown> {
   return {
-    ...stack,
-    kind: inferredKind,
-    packageManager: inferredPackageManager,
-    framework: stack.framework ?? inferRuntimeContractFramework(runtimeContract, inferredKind),
-    buildCommand: runtimeContract.buildCommand ?? stack.buildCommand,
-    startCommand: deploymentStartCommand(stack, runtimeContract),
-    healthcheckPath: runtimeContract.healthPath ?? runtimeContract.previewPath ?? stack.healthcheckPath,
-    outputDirectory: runtimeContract.frontendOutputDir ?? stack.outputDirectory,
-    port: runtimeContract.port ?? stack.port,
-    services: runtimeContract.dependencyServicePolicy === "contract_only"
-      ? contractOnlyDependencyServices(runtimeContract, stack.services)
-      : mergeDependencyServices(stack.services, runtimeContract.dependencyServices),
+    mode: "report_blocker",
+    source: "deploy.prepare",
+    code: input.code,
+    evidenceRef: input.evidenceRef,
+    reason: input.reason,
+    allowedActions: [
+      "report the blocker and its missing facts or conflicts",
+      "read the referenced deploy evidence only when more detail is needed",
+      "ask the user for the requested decision when nextAction is ask_user",
+    ],
+    evidenceReadGuide: deploymentCodeEvidenceReadGuide(input.evidenceRef),
+    forbiddenActions: [
+      "do not retry deploy prepare unchanged",
+      "do not run deploy repair for this blocker",
+      "do not generate or edit Dockerfile or Compose files from memory",
+      "do not run raw Docker or Docker Compose commands",
+    ],
+    retryPolicy: {
+      autoRetry: false,
+      retryOnlyAfter: "the missing facts, ambiguity, or conflicts in this blocker have been resolved",
+    },
   };
 }
 
-function inferRuntimeContractStackKind(
-  stack: DeploymentSpec["detectedStack"],
-  runtimeContract: DeploymentSpec["runtimeContract"],
-): DeploymentSpec["detectedStack"]["kind"] {
-  if (stack.kind !== "unknown" || runtimeContract.source === "heuristic") {
-    return stack.kind;
-  }
-
-  const signals = runtimeContractSignals(runtimeContract);
-  if (/\b(node|npm|pnpm|yarn|bun|vite|next|react|express|fastify|hono|koa)\b/.test(signals)) {
-    return "node";
-  }
-  if (/\b(python|pip|poetry|uv|uvicorn|gunicorn|fastapi|flask|django)\b/.test(signals)) {
-    return "python";
-  }
-  if (/\b(go|golang)\b/.test(signals)) {
-    return "go";
-  }
-  if (/\b(java|maven|gradle|spring)\b/.test(signals)) {
-    return "java";
-  }
-  if (/\b(dotnet|aspnet|csharp|c#)\b/.test(signals)) {
-    return "dotnet";
-  }
-  if (/\b(php|composer|laravel|symfony)\b/.test(signals)) {
-    return "php";
-  }
-  if (/\b(ruby|bundler|bundle|rails|sinatra)\b/.test(signals)) {
-    return "ruby";
-  }
-  if (runtimeContract.frontendOutputDir && !runtimeContract.startCommand) {
-    return "static";
-  }
-  return stack.kind;
-}
-
-function inferRuntimeContractPackageManager(
-  stack: DeploymentSpec["detectedStack"],
-  runtimeContract: DeploymentSpec["runtimeContract"],
-  kind: DeploymentSpec["detectedStack"]["kind"],
-): DeploymentSpec["detectedStack"]["packageManager"] {
-  if (stack.packageManager || runtimeContract.source === "heuristic") {
-    return stack.packageManager;
-  }
-
-  const signals = runtimeContractSignals(runtimeContract);
-  if (kind === "node") {
-    if (/\bpnpm\b/.test(signals)) {
-      return "pnpm";
-    }
-    if (/\byarn\b/.test(signals)) {
-      return "yarn";
-    }
-    if (/\bbun\b/.test(signals)) {
-      return "bun";
-    }
-    return "npm";
-  }
-  if (kind === "python") {
-    if (/\bpoetry\b/.test(signals)) {
-      return "poetry";
-    }
-    if (/\buv\b/.test(signals)) {
-      return "uv";
-    }
-    return "pip";
-  }
-  if (kind === "java") {
-    return /\bgradle\b/.test(signals) ? "gradle" : "maven";
-  }
-  if (kind === "dotnet") {
-    return "dotnet";
-  }
-  if (kind === "go") {
-    return "go";
-  }
-  if (kind === "php") {
-    return "composer";
-  }
-  if (kind === "ruby") {
-    return "bundler";
-  }
-  return stack.packageManager;
-}
-
-function inferRuntimeContractFramework(
-  runtimeContract: DeploymentSpec["runtimeContract"],
-  kind: DeploymentSpec["detectedStack"]["kind"],
-): string | null {
-  if (runtimeContract.source === "heuristic") {
+function deploymentCodeEvidenceReadGuide(evidenceRef: string | null): Record<string, unknown> | null {
+  if (!evidenceRef) {
     return null;
   }
-  const signals = runtimeContractSignals(runtimeContract);
-  if (kind === "node") {
-    if (/\bvite\b/.test(signals)) {
-      return "vite";
-    }
-    if (/\bnext\b/.test(signals)) {
-      return "next";
-    }
-    if (/\b(express|fastify|hono|koa)\b/.test(signals)) {
-      return "node-server";
-    }
-    return "node";
-  }
-  return null;
-}
-
-function runtimeContractSignals(runtimeContract: DeploymentSpec["runtimeContract"]): string {
-  return [
-    runtimeContract.runtimeKind,
-    runtimeContract.buildCommand,
-    runtimeContract.startCommand,
-    runtimeContract.frontendOutputDir,
-    ...runtimeContract.environment.required,
-    ...runtimeContract.environment.optional,
-    ...runtimeContract.dependencyServices.flatMap((service) => [
-      service.kind,
-      service.serviceName,
-      service.image,
-      ...Object.keys(service.connectionEnv),
-      ...Object.values(service.connectionEnv),
-    ]),
-    ...runtimeContract.apiPaths,
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .join("\n")
-    .toLowerCase();
-}
-
-function mergeDependencyServices(
-  detected: DeploymentSpec["detectedStack"]["services"],
-  declared: DeploymentSpec["detectedStack"]["services"],
-): DeploymentSpec["detectedStack"]["services"] {
-  const byKind = new Map<string, DeploymentSpec["detectedStack"]["services"][number]>();
-  for (const service of detected) {
-    byKind.set(service.kind, service);
-  }
-  for (const service of declared) {
-    byKind.set(service.kind, service);
-  }
-  return [...byKind.values()];
-}
-
-function contractOnlyDependencyServices(
-  runtimeContract: DeploymentSpec["runtimeContract"],
-  detected: DeploymentSpec["detectedStack"]["services"],
-): DeploymentSpec["detectedStack"]["services"] {
-  if (runtimeContract.dependencyServices.length > 0) {
-    return runtimeContract.dependencyServices;
-  }
-  if (!runtimeContractRequestsSqlDatabase(runtimeContract)) {
-    return [];
-  }
-  return detected
-    .filter((service) => ["postgres", "mysql"].includes(service.kind))
-    .map((service) => serviceWithRuntimeContractConnectionEnv(service, runtimeContract));
-}
-
-function runtimeContractRequestsSqlDatabase(runtimeContract: DeploymentSpec["runtimeContract"]): boolean {
-  const signals = [
-    runtimeContract.runtimeKind,
-    runtimeContract.buildCommand,
-    runtimeContract.startCommand,
-    ...runtimeContract.environment.required,
-    ...runtimeContract.environment.optional,
-    ...runtimeContract.apiPaths,
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .join("\n")
-    .toLowerCase();
-  return /database_url|database_uri|spring_datasource|spring\.datasource|datasource_url|db_url|jdbc/.test(signals);
-}
-
-function serviceWithRuntimeContractConnectionEnv(
-  service: DeploymentSpec["detectedStack"]["services"][number],
-  runtimeContract: DeploymentSpec["runtimeContract"],
-): DeploymentSpec["detectedStack"]["services"][number] {
-  const requested = new Set([
-    ...runtimeContract.environment.required,
-    ...runtimeContract.environment.optional,
-  ]);
-  if (
-    !requested.has("SPRING_DATASOURCE_URL") &&
-    !requested.has("SPRING_DATASOURCE_USERNAME") &&
-    !requested.has("SPRING_DATASOURCE_PASSWORD")
-  ) {
-    return service;
-  }
-
-  if (service.kind === "postgres") {
-    return {
-      ...service,
-      connectionEnv: {
-        ...service.connectionEnv,
-        SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/loom",
-        SPRING_DATASOURCE_USERNAME: "loom",
-        SPRING_DATASOURCE_PASSWORD: "loom",
+  return {
+    ref: evidenceRef,
+    purpose: "Read only targeted deploy code evidence fields needed to explain or resolve a blocker; do not print the full evidence JSON into chat.",
+    targetedFields: [
+      {
+        field: "missingFacts",
+        useWhen: "DEPLOY_SOURCE_INSUFFICIENT or missing deployment source facts",
       },
-    };
-  }
-  if (service.kind === "mysql") {
-    return {
-      ...service,
-      connectionEnv: {
-        ...service.connectionEnv,
-        SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/loom",
-        SPRING_DATASOURCE_USERNAME: "loom",
-        SPRING_DATASOURCE_PASSWORD: "loom",
+      {
+        field: "conflicts",
+        useWhen: "DEPLOY_CONFLICT or conflicting baseline/code/deploy asset facts",
       },
-    };
-  }
-  return service;
-}
-
-function deploymentStartCommand(
-  stack: DeploymentSpec["detectedStack"],
-  runtimeContract: DeploymentSpec["runtimeContract"],
-): string | null {
-  const contractCommand = runtimeContract.startCommand;
-  const detectedCommand = stack.startCommand;
-  const targetPort = runtimeContract.port ?? stack.port;
-
-  if (contractCommand && detectedCommand && isLongLivedDevCommand(contractCommand) && !isLongLivedDevCommand(detectedCommand)) {
-    return ensureStartCommandPort(detectedCommand, stack, targetPort);
-  }
-
-  return ensureStartCommandPort(contractCommand ?? detectedCommand, stack, targetPort);
-}
-
-function isLongLivedDevCommand(command: string): boolean {
-  return /\b(dev|watch)\b/i.test(command);
-}
-
-function ensureStartCommandPort(
-  command: string | null,
-  stack: DeploymentSpec["detectedStack"],
-  port: number,
-): string | null {
-  if (!command || stack.framework !== "vite" || !/\bpreview\b/i.test(command) || /\s--port(?:=|\s)/.test(command)) {
-    return command;
-  }
-  return `${command} --port ${port}`;
+      {
+        field: "runtimeFacts",
+        useWhen: "build/start/runtime entrypoint detection is unclear",
+      },
+      {
+        field: "dependencyFacts.services",
+        useWhen: "dependency service detection does not match project runtime needs",
+      },
+      {
+        field: "dependencyFacts.ambiguous",
+        useWhen: "dependency service candidates are ambiguous",
+      },
+      {
+        field: "baselineExpectation",
+        useWhen: "TechnicalBaseline expectations need to be compared with code evidence",
+      },
+      {
+        field: "existingDeployAssets",
+        useWhen: "existing Dockerfile or Compose assets may affect deploy behavior",
+      },
+      {
+        field: "warnings",
+        useWhen: "deploy prepared but reported code evidence warnings",
+      },
+    ],
+    readPolicy: {
+      default: "Start with codeEvidence summary from deploy inspect. Read this evidence ref only for the listed targeted fields.",
+      avoid: [
+        "do not read or paste the full evidence JSON unless targeted fields are insufficient",
+        "do not discover evidence by scanning unrelated .loom directories",
+      ],
+    },
+  };
 }
 
 function applyRuntimeContractHealthDefaults(
@@ -2157,6 +1938,12 @@ function deployRunInstruction(repair: DeployRepairResult | null): Record<string,
   if (!repair) {
     return undefined;
   }
+  if (repair.failureKind === "docker_unavailable") {
+    return deployDockerUnavailableInstruction(repair);
+  }
+  if (repair.failureKind === "registry_network") {
+    return deployRegistryNetworkInstruction(repair);
+  }
   if (repair.nextAction === "edit-and-rerun") {
     return deployRepairInstruction(repair, "deploy run");
   }
@@ -2189,6 +1976,62 @@ function deployRunInstruction(repair: DeployRepairResult | null): Record<string,
     sourceSummary: "Deploy classified the failure as application code/runtime delivery repairable through execution repair.",
     primaryAction: "create_deploy_sourced_execution_repair",
   });
+}
+
+function deployDockerUnavailableInstruction(repair: DeployRepairResult): Record<string, unknown> {
+  return {
+    mode: "report_blocked",
+    autoContinue: false,
+    nextAction: {
+      type: "blocked",
+      reason: "DOCKER_UNAVAILABLE",
+      targetNode: "deploy",
+      refs: {
+        failureKind: repair.failureKind,
+        failureOwner: repair.failureOwner,
+        repairRoute: repair.repairRoute,
+        failureRef: repair.failureRef,
+        fullLogRef: repair.fullLogRef,
+      },
+    },
+    routingRule: "This is an environment/session access blocker, not a deploy asset repair. Do not edit Dockerfile, Compose, application code, package scripts, tests, or RuntimeDeliveryContract. Report the blocker and the exact user actions.",
+    userMessage: [
+      "Loom could not reach Docker from the current agent session.",
+      "Check these in order: start Docker Desktop or the Docker daemon; verify `docker version` works from the same terminal/session; if Docker works normally but not in this agent chat, reopen or reconfigure the agent session with full local access / Docker command permission, then rerun the same loom deploy command.",
+    ].join(" "),
+    instructions: [
+      "Report failureKind=docker_unavailable and nextAction=fix-docker as an environment/session access blocker.",
+      "Mention that a common cause is the agent chat/session not having full local shell or Docker access, even when Docker works elsewhere on the machine.",
+      "Do not suggest deploy repair or file edits for Docker unavailability.",
+      "After the user fixes Docker or agent permissions, rerun the same deploy run command.",
+    ],
+  };
+}
+
+function deployRegistryNetworkInstruction(repair: DeployRepairResult): Record<string, unknown> {
+  return {
+    mode: "report_blocked",
+    autoContinue: false,
+    nextAction: {
+      type: "blocked",
+      reason: "DOCKER_REGISTRY_NETWORK",
+      targetNode: "deploy",
+      refs: {
+        failureKind: repair.failureKind,
+        failureOwner: repair.failureOwner,
+        repairRoute: repair.repairRoute,
+        failureRef: repair.failureRef,
+        fullLogRef: repair.fullLogRef,
+      },
+    },
+    routingRule: "This is an external Docker registry/network blocker, not a deploy asset repair. Do not edit Dockerfile, Compose, application code, package scripts, tests, or RuntimeDeliveryContract unless a later deploy attempt returns a different repairable failure.",
+    userMessage: "Docker could not fetch required image metadata or layers. Fix Docker registry/network/proxy access, pre-pull the blocked image, or retry after registry access is healthy; then rerun the same loom deploy command.",
+    instructions: [
+      "Report failureKind=registry_network and nextAction=fix-docker as an external Docker registry/network blocker.",
+      "Do not suggest deploy repair or file edits for registry/network access failures.",
+      "After registry access is fixed, rerun the same deploy run command.",
+    ],
+  };
 }
 
 function deployRepairInstruction(
@@ -2306,7 +2149,78 @@ function deploySuccessInstruction(commandName: string, url: string | null): Reco
   };
 }
 
-function serializeDeployRunError(error: unknown): DeployRunResult["error"] {
+function deployActiveOperationInstruction(
+  commandName: string,
+  activeOperation: DeploymentActiveOperationView,
+): Record<string, unknown> {
+  return {
+    mode: "observe_active_deploy_operation",
+    autoContinue: false,
+    nextAction: {
+      type: "observe",
+      reason: "DEPLOY_OPERATION_ACTIVE",
+      targetNode: "deploy",
+      refs: {
+        operationId: activeOperation.operationId,
+        command: activeOperation.command,
+        phase: activeOperation.phase,
+        status: activeOperation.status,
+        elapsedMs: activeOperation.elapsedMs,
+        logRef: activeOperation.logRef,
+        activeOperationRef: activeOperation.activeOperationRef,
+        allowedCommands: activeOperation.allowedCommands,
+        forbiddenActions: activeOperation.forbiddenActions,
+      },
+    },
+    primaryAction: "Wait for the active Loom deploy operation to finish; observe only with deploy status, deploy inspect, or deploy logs.",
+    observationPolicy: {
+      quietMode: true,
+      preferOriginalCommandWait: true,
+      initialQuietWindowMs: 120_000,
+      minNextObservationIntervalMs: 60_000,
+      logsPolicy: "read_only_after_repeated_unchanged_status_or_user_request",
+      userVisibleUpdatePolicy: "terminal_result_or_phase_change_or_long_threshold_only",
+      longRunningUpdateThresholdMs: 300_000,
+      finalResponsePolicy: "forbidden_while_operationActive_true",
+      allowedObservationCommands: activeOperation.allowedCommands,
+      forbiddenDuringActiveOperation: activeOperation.forbiddenActions,
+      terminalConditions: [
+        "the original deploy command returns completed=true",
+        "deploy status or deploy inspect returns instruction.mode=report_done",
+        "a deploy command returns a concrete failure, blocker, or repair instruction",
+        "the user explicitly asks for a current status-only update",
+      ],
+    },
+    routingRule: "A Loom deploy operation is still running. Do not infer failure from an unchanged log tail during Docker builds, package installs, Maven/Gradle builds, npm/pnpm/yarn builds, image pulls, or container startup. Do not start another deploy command, change app selection, run raw Docker, kill processes, or report deploy failure while operationActive is true.",
+    completionCondition: "operationActive is false and the next deploy envelope reports either a verified running deployment or a concrete failure/repair request.",
+    finalResponseGuard: {
+      rule: "Do not send a final failed/stuck/wedged deploy response while operationActive is true.",
+      invalidFinalResponseWhen: "The active deploy operation is still running and no explicit failed deploy envelope or repair request has been returned.",
+      requiredActionBeforeFinalResponse: "Prefer waiting on the original deploy command. If an observation is needed, wait at least observationPolicy.minNextObservationIntervalMs, then observe with deploy status, deploy inspect, or deploy logs according to observationPolicy. Continue until operationActive is false, then report the verified URL/status or follow the returned repair instruction.",
+    },
+    instructions: [
+      "Treat operationActive=true as authoritative evidence that Loom still owns the deploy run.",
+      "Prefer waiting on the original deploy command session while it is still alive; observation commands are a fallback, not the main loop.",
+      "After entering active observation, keep user-visible updates quiet unless the operation reaches a terminal result, the phase changes, a blocker/repair request appears, the user asks for status, or the long-running threshold is reached.",
+      "Respect observationPolicy.minNextObservationIntervalMs before issuing another observation command.",
+      "Unchanged logs during a build are not failure evidence by themselves because Docker and language build tools may flush output only after a command step completes.",
+      "Use only deploy status, deploy inspect, or deploy logs for observation while this operation is active; do not read logs immediately after every status check.",
+      "Do not run deploy run, deploy up, deploy down, raw docker compose/docker build/docker run, pkill, kill, or manual container takeover while this operation is active.",
+      "Do not change app-path, provider, stack, or generated deploy files based only on a still-running active operation.",
+    ],
+    advisories: [
+      {
+        code: "DEPLOY_ACTIVE_OPERATION_OBSERVATION",
+        severity: "info",
+        message: "The deploy operation is active; keep observing until the CLI reports a terminal deploy result.",
+        sourceCommand: commandName,
+      },
+    ],
+    userMessage: `${activeOperation.command} is still ${activeOperation.phase}. Wait and observe with deploy status, deploy inspect, or deploy logs until Loom reports a terminal result.`,
+  };
+}
+
+function serializeDeployRunError(error: unknown): NonNullable<DeployRunResult["error"]> {
   if (error instanceof LoomError) {
     const details = sanitizeDeployRunDetails(error.details);
     return {

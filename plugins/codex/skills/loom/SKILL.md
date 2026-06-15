@@ -34,6 +34,8 @@ For explicit `@loom continue`, `@loom status`, `@loom deploy`, or `@loom deploy 
 - `@loom deploy`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`
 - `@loom deploy <subcommand>`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <subcommand> --project-root /abs/project`
 
+For deploy commands, if the first CLI tool call remains active, keep waiting on that same tool session. After one short "deploy is running" update, stay quiet while polling the original session. Do not run extra `deploy status`, `deploy inspect`, or `deploy logs` during the first 120 seconds unless the original command returns, the user asks for status, or a blocker appears. After 120 seconds, use read-only observation no more often than once every 60 seconds; prefer `deploy status`, and use `deploy logs` only after repeated unchanged status or explicit user request. If any envelope returns `mode: observe_active_deploy_operation`, obey `instruction.observationPolicy`. Do not send a final done/stuck/failed deploy response while `operationActive=true`.
+
 Do not run manual `init` before `status`, `continue`, or `plan`. `status` is read-only and may report `STATE_NOT_INITIALIZED`; `plan` initializes `.loom/` when needed for new delivery requests. Do not hijack ordinary non-loom work: treat natural-language "continue" as loom only when the current project root has initialized and recoverable loom state.
 
 ## New Requests
@@ -72,6 +74,7 @@ Supported instruction modes:
 - `repair_candidate`: repair the same candidate file or grouped candidate files described by `instruction.issues`, then run `instruction.submitCommand`. Do not run `loom continue` before the repaired submit succeeds.
 - `repair_result_contract`: repair the same result file described by `instruction.issues`, then run `instruction.submitCommand`. Do not run `loom continue` before the repaired submit succeeds.
 - `deploy_repair_assets`: read `instruction.errorWindow` and diagnostics, edit only `instruction.editableFiles`, do not edit application code/package scripts/tests/RuntimeDeliveryContract, then run `instruction.retryCommand`. If the retry fails, run `loom deploy repair` and follow the returned instruction immediately.
+- `observe_active_deploy_operation`: obey `instruction.observationPolicy`; prefer waiting on the original deploy command session, observe no more often than its interval, keep user-visible updates quiet, and do not send a final done/stuck/failed deploy response while `operationActive=true`.
 - `ask_user`: ask only when the current user message does not already contain a usable answer. For Brainstorm gates, asking means presenting the next required block; a path-only "request is ready" summary is invalid.
 - `manual_review`: show the short choices from `instruction.acceptedShortReplies`, then write and submit the manual review resolution after the user answers.
 - `report_done`: surface `instruction.userMessage` when present, summarize completion using returned refs, and make clear that there is no active next step to continue.

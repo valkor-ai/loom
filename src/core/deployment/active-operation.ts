@@ -231,6 +231,37 @@ function activeOperationDetails(projectRoot: string, active: DeploymentActiveOpe
     allowedCommands,
     forbiddenActions,
     nextAction: "wait_or_inspect",
+    agentFacingBlocker: {
+      mode: "observe_active_operation",
+      source: "deploy.activeOperation",
+      code: "DEPLOY_OPERATION_ACTIVE",
+      reason: "A Loom-managed deploy operation is already running for this project.",
+      allowedActions: [
+        "report the active operation command, phase, elapsedMs, and logRef",
+        "observe with deploy status, deploy inspect, or deploy logs",
+        "wait for the active operation to finish before running another mutating deploy command",
+      ],
+      forbiddenActions: [
+        "do not start deploy run, deploy up, deploy down, or deploy bootstrap --confirm",
+        "do not run raw Docker or Docker Compose commands",
+        "do not kill Loom, Docker, Docker Compose, or deployment processes",
+      ],
+      observationPolicy: {
+        quietMode: true,
+        preferOriginalCommandWait: false,
+        initialQuietWindowMs: 120_000,
+        minNextObservationIntervalMs: 60_000,
+        logsPolicy: "read_only_after_repeated_unchanged_status_or_user_request",
+        userVisibleUpdatePolicy: "terminal_result_or_phase_change_or_long_threshold_only",
+        finalResponsePolicy: "do_not_report_mutating_command_failure_as_deploy_failure",
+        allowedObservationCommands: allowedCommands,
+        forbiddenDuringActiveOperation: forbiddenActions,
+      },
+      retryPolicy: {
+        autoRetry: false,
+        retryOnlyAfter: "the active operation has completed or is no longer present",
+      },
+    },
     projectRoot,
   };
 }
