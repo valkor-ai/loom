@@ -8,6 +8,7 @@ const { ensureLoomUserInstall } = require("./lib/loom-user-install");
 
 const repoRoot = path.resolve(__dirname, "..");
 const claudePluginRoot = path.join(repoRoot, "plugins", "claude-code");
+const sharedDeployReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom-deploy", "references");
 const manifestPath = path.join(claudePluginRoot, ".claude-plugin", "plugin.json");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const pluginName = manifest.name;
@@ -35,6 +36,7 @@ const removedLegacyArtifacts = removeLegacyClaudeArtifacts();
 fs.rmSync(installRoot, { recursive: true, force: true });
 fs.mkdirSync(installRoot, { recursive: true });
 copyDirectory(claudePluginRoot, installRoot, claudePluginRoot);
+installSharedDeployReferences(path.join(installRoot, "skills", "loom-deploy", "references"));
 installGlobalCommands();
 
 assertExists(path.join(installRoot, ".claude-plugin", "plugin.json"));
@@ -79,6 +81,14 @@ function installGlobalCommands() {
   for (const name of ["loom.md", "loom-deploy.md"]) {
     fs.copyFileSync(path.join(sourceCommandsRoot, name), path.join(commandsRoot, name));
   }
+}
+
+function installSharedDeployReferences(targetRoot) {
+  if (!fs.existsSync(sharedDeployReferenceSourceRoot)) {
+    throw new Error(`Shared deploy references source does not exist: ${sharedDeployReferenceSourceRoot}`);
+  }
+  fs.rmSync(targetRoot, { recursive: true, force: true });
+  copyDirectory(sharedDeployReferenceSourceRoot, targetRoot, sharedDeployReferenceSourceRoot);
 }
 
 function removeLegacyClaudeArtifacts() {

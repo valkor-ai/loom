@@ -11,7 +11,7 @@ const opencodeSourceRoot = path.join(opencodePluginRoot, ".opencode");
 const commandSourceRoot = path.join(opencodeSourceRoot, "commands");
 const pluginSourceRoot = path.join(opencodeSourceRoot, "plugins");
 const referenceSourceRoot = path.join(opencodeSourceRoot, "references");
-const deployReferenceSourceRoot = path.join(opencodeSourceRoot, "loom-deploy", "references");
+const deployReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom-deploy", "references");
 const opencodeConfigRoot = process.env.OPENCODE_CONFIG_HOME || path.join(process.env.HOME || "", ".config", "opencode");
 const commandInstallRoot = path.join(opencodeConfigRoot, "commands");
 const pluginInstallRoot = path.join(opencodeConfigRoot, "plugins");
@@ -31,7 +31,7 @@ if (!fs.existsSync(pluginSourceRoot)) {
   throw new Error("plugins/opencode/.opencode/plugins does not exist.");
 }
 if (!fs.existsSync(deployReferenceSourceRoot)) {
-  throw new Error("plugins/opencode/.opencode/loom-deploy/references does not exist.");
+  throw new Error("plugins/shared/loom-deploy/references does not exist.");
 }
 
 const removedLegacyArtifacts = removeLegacyOpencodeArtifacts();
