@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const { access, chmod, mkdir, mkdtemp, readFile, writeFile } = require("node:fs/promises");
-const { join } = require("node:path");
+const { dirname, join } = require("node:path");
 const { tmpdir } = require("node:os");
 const { spawn, spawnSync } = require("node:child_process");
 
@@ -2453,16 +2453,25 @@ async function verifyBootstrapCommandPreviewAndConfirm(projectRoot) {
 }
 
 async function writePackage(projectRoot, pkg) {
-  await mkdir(projectRoot, { recursive: true });
-  await writeFile(join(projectRoot, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`, "utf8");
+  await writeJson(join(projectRoot, "package.json"), pkg);
+}
+
+async function writeJson(filePath, value) {
+  await mkdir(dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 async function writeTechnicalBaseline(projectRoot, input = {}) {
   const deliveryId = "delivery-runtime";
   const now = new Date().toISOString();
-  const contractsDir = join(projectRoot, ".loom/deliveries", deliveryId, "contracts");
-  await mkdir(contractsDir, { recursive: true });
-  await writeFile(join(contractsDir, "technical-baseline.json"), `${JSON.stringify({
+  await writeJson(
+    join(projectRoot, ".loom/deliveries", deliveryId, "contracts", "technical-baseline.json"),
+    technicalBaselineFixture(input, now),
+  );
+}
+
+function technicalBaselineFixture(input, now) {
+  return {
     schemaVersion: "1.0",
     technicalBaselineId: "tb-runtime",
     status: "confirmed",
@@ -2492,7 +2501,7 @@ async function writeTechnicalBaseline(projectRoot, input = {}) {
     alternatives: [],
     createdAt: now,
     updatedAt: now,
-  }, null, 2)}\n`, "utf8");
+  };
 }
 
 function track(selection) {
@@ -2511,8 +2520,24 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
   const phaseId = "phase-1";
   const activePhaseId = input.activePhaseId ?? phaseId;
   const now = new Date().toISOString();
-  await mkdir(join(projectRoot, ".loom/deliveries", deliveryId, "artifacts/architecture", phaseId), { recursive: true });
-  await writeFile(join(projectRoot, ".loom/status.json"), `${JSON.stringify({
+  const fixture = acceptedRuntimeDeliveryFixture({ deliveryId, phaseId, activePhaseId, input, now });
+  await writeJson(join(projectRoot, ".loom/status.json"), fixture.status);
+  await writeJson(join(projectRoot, ".loom/deliveries", deliveryId, "index.json"), fixture.deliveryIndex);
+  await writeJson(join(projectRoot, ".loom/deliveries", deliveryId, "artifacts/architecture", phaseId, "latest.json"), fixture.architectureLatest);
+  await writeJson(join(projectRoot, ".loom/deliveries", deliveryId, "artifacts/architecture", phaseId, "aac.json"), fixture.architectureArtifact);
+}
+
+function acceptedRuntimeDeliveryFixture({ deliveryId, phaseId, activePhaseId, input, now }) {
+  return {
+    status: projectStatusFixture({ deliveryId, activePhaseId, now }),
+    deliveryIndex: deliveryIndexFixture({ deliveryId, phaseId, activePhaseId, input, now }),
+    architectureLatest: architectureLatestFixture({ deliveryId, phaseId, now }),
+    architectureArtifact: architectureArtifactFixture({ phaseId, input, now }),
+  };
+}
+
+function projectStatusFixture({ deliveryId, activePhaseId, now }) {
+  return {
     schemaVersion: 1,
     activeDeliveryId: deliveryId,
     lastCompletedDeliveryId: null,
@@ -2529,8 +2554,11 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
     lastAction: null,
     nextAction: "plan",
     updatedAt: now,
-  }, null, 2)}\n`, "utf8");
-  await writeFile(join(projectRoot, ".loom/deliveries", deliveryId, "index.json"), `${JSON.stringify({
+  };
+}
+
+function deliveryIndexFixture({ deliveryId, phaseId, activePhaseId, input, now }) {
+  return {
     schemaVersion: "1.0",
     deliveryId,
     status: "planning",
@@ -2557,14 +2585,20 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
     ],
     createdAt: now,
     updatedAt: now,
-  }, null, 2)}\n`, "utf8");
-  await writeFile(join(projectRoot, ".loom/deliveries", deliveryId, "artifacts/architecture", phaseId, "latest.json"), `${JSON.stringify({
+  };
+}
+
+function architectureLatestFixture({ deliveryId, phaseId, now }) {
+  return {
     schemaVersion: "1.0",
     architectureArtifactContractId: "aac-runtime",
     artifactRef: `.loom/deliveries/${deliveryId}/artifacts/architecture/${phaseId}/aac.json`,
     updatedAt: now,
-  }, null, 2)}\n`, "utf8");
-  await writeFile(join(projectRoot, ".loom/deliveries", deliveryId, "artifacts/architecture", phaseId, "aac.json"), `${JSON.stringify({
+  };
+}
+
+function architectureArtifactFixture({ phaseId, input, now }) {
+  return {
     schemaVersion: "1.0",
     architectureArtifactContractId: "aac-runtime",
     status: "ready",
@@ -2617,7 +2651,7 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
     handoff: { readyForTaskPlan: true, blockingReasons: [], nextNode: "task_plan" },
     createdAt: now,
     updatedAt: now,
-  }, null, 2)}\n`, "utf8");
+  };
 }
 
 function runDeployPrepare(projectRoot, extraArgs = [], expectedStatuses = [0]) {
