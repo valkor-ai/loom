@@ -2762,7 +2762,7 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
   return {
     authority: "planning_generation_contract",
     purpose: "Mechanically carry Brainstorm-confirmed current phase requirement details into AAC generation without adding a parallel requirement model.",
-    requirementDetails: pgc.requirementDetails ?? null,
+    requirementDetails: compactRequirementDetailsIndex(pgc),
     requirementDetailsUsageRule: "When requirementDetails exists, treat requirementDetails.items as the canonical detail index after Brainstorm. Generate AAC artifacts that carry those details, then write coverage.detailCoverage using detailId plus artifact refs only; do not duplicate full detail summaries in coverage.",
     currentPhaseScope: {
       included: pgc.phaseScope.included.map((item) => ({
@@ -2838,6 +2838,36 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       coverage: "Map each acceptance detail and confirmed scope item to current AAC artifacts and verification hints without dropping rule, field, state, unresolved-note, or source-ref context.",
       detailCoverage: "Map each requirementDetails.items[].detailId to the AAC artifacts that carry it, using coverage.content.detailCoverage.",
     },
+  };
+}
+
+function compactRequirementDetailsIndex(pgc: PlanningGenerationContract): Record<string, unknown> | null {
+  if (!pgc.requirementDetails) {
+    return null;
+  }
+  return {
+    schemaVersion: pgc.requirementDetails.schemaVersion,
+    authority: pgc.requirementDetails.authority,
+    sourceBrainstormContractRef: pgc.requirementDetails.sourceBrainstormContractRef,
+    items: pgc.requirementDetails.items.map((item) => ({
+      detailId: item.detailId,
+      kind: item.kind,
+      title: item.title,
+      summary: item.summary,
+      requiredForCurrentPhase: item.requiredForCurrentPhase,
+      priority: item.priority,
+      sourceRefs: item.sourceRefs,
+      scopeRefs: item.scopeRefs,
+      acceptanceRefs: item.acceptanceRefs,
+      conceptRefs: item.conceptRefs,
+      frontendRefs: item.frontendRefs,
+      impactTags: item.impactTags,
+      lifecycleStage: item.lifecycleStage,
+      quality: item.quality,
+      unresolvedNote: item.unresolvedNote,
+    })),
+    extractionWarningCount: pgc.requirementDetails.extractionWarnings.length,
+    fullDetailSource: "sourceRefs.planningContractRef#/requirementDetails",
   };
 }
 

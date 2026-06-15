@@ -3799,16 +3799,7 @@ function taskPlanRequirementDetailProjection(
       conceptBindingRule: "If a task owns an operation invariant, state transition rule, blocking reason, or field meaning from phaseConceptGroundingRef, include conceptRefs, conceptResponsibilities, and conceptVerificationIntents for that task.",
       evidenceRule: "TaskResult must be able to show which fields, rules, state changes, blocking feedback, interface roles, or page operation paths were implemented or verified.",
     },
-    architectureDetails: {
-      modules: aac.modules,
-      entities: aac.dataModel.entities,
-      interfaces: aac.interfaces,
-      userFlows: aac.userFlows,
-      stateMachines: aac.stateMachines,
-      frontendExperience: aac.frontendExperience ?? null,
-      frontendOperationPathDetails,
-      runtimeDelivery: aac.runtimeDelivery ?? null,
-    },
+    architectureDetails: compactArchitectureDetailsForTaskPlan(aac, frontendOperationPathDetails),
     workflowClosureRequirements: buildWorkflowClosureRequirements(aac),
     conceptRefs: {
       deliveryConceptGlossaryRef: pgc.contextRefs?.deliveryConceptGlossaryRef ?? null,
@@ -3830,6 +3821,114 @@ function taskPlanRequirementDetailProjection(
       rule: "If a PGC detail is required for the current phase but AAC lacks any taskable artifact ref for it, write blocked output with blockedReasonCode AAC_INSUFFICIENT.",
       doNotUseFor: "Do not use AAC_INSUFFICIENT when AAC contains the detail but TaskPlan needs to assign it correctly; generate or repair the TaskPlan instead.",
     },
+  };
+}
+
+function compactArchitectureDetailsForTaskPlan(
+  aac: ArchitectureArtifactContract,
+  frontendOperationPathDetails: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    compaction: {
+      mode: "artifact_summary",
+      rule: "This projection is intentionally compact. Use sourceRefs.architectureArtifactContractRef with targeted selectors when full AAC artifact detail is needed.",
+    },
+    modules: aac.modules.map((item) => ({
+      moduleId: item.moduleId,
+      name: item.name,
+      responsibility: item.responsibility,
+      dependsOn: item.dependsOn,
+      scopeRefs: item.scopeRefs,
+      acceptanceRefs: item.acceptanceRefs,
+    })),
+    entities: aac.dataModel.entities.map((entity) => ({
+      entityId: entity.entityId,
+      name: entity.name,
+      type: entity.type,
+      implementationIntent: entity.implementationIntent,
+      moduleRefs: entity.moduleRefs,
+      scopeRefs: entity.scopeRefs,
+      acceptanceRefs: entity.acceptanceRefs,
+      fields: entity.fields.map((field) => compactFieldShape(field)),
+      constraints: entity.constraints.map((constraint) => ({
+        constraintId: constraint.constraintId,
+        type: constraint.type,
+        description: constraint.description,
+      })),
+    })),
+    interfaces: aac.interfaces.map((item) => ({
+      interfaceId: item.interfaceId,
+      name: item.name,
+      type: item.type,
+      role: item.role ?? null,
+      moduleRefs: item.moduleRefs,
+      entityRefs: item.entityRefs,
+      scopeRefs: item.scopeRefs,
+      acceptanceRefs: item.acceptanceRefs,
+      method: item.method ?? null,
+      path: item.path ?? null,
+      requestSchema: (item.requestSchema ?? []).map((field) => compactFieldShape(field)),
+      responseSchema: (item.responseSchema ?? []).map((field) => compactFieldShape(field)),
+      errorSchema: (item.errorSchema ?? []).map((field) => compactFieldShape(field)),
+    })),
+    userFlows: aac.userFlows.map((flow) => ({
+      flowId: flow.flowId,
+      name: flow.name,
+      kind: flow.kind,
+      moduleRefs: flow.moduleRefs,
+      interfaceRefs: flow.interfaceRefs,
+      entityRefs: flow.entityRefs,
+      scopeRefs: flow.scopeRefs,
+      acceptanceRefs: flow.acceptanceRefs,
+      entry: flow.entry,
+      steps: flow.steps.map((step) => ({
+        stepId: step.stepId,
+        actor: step.actor ?? null,
+        action: step.action,
+        interfaceRefs: step.interfaceRefs,
+        stateMachineRefs: step.stateMachineRefs,
+      })),
+      outcomes: flow.outcomes.map((outcome) => ({
+        type: outcome.type,
+        description: outcome.description,
+        errorCode: outcome.errorCode ?? null,
+      })),
+    })),
+    stateMachines: aac.stateMachines.map((machine) => ({
+      stateMachineId: machine.stateMachineId,
+      name: machine.name,
+      entityRef: machine.entityRef,
+      entityRefs: machine.entityRefs,
+      moduleRefs: machine.moduleRefs,
+      scopeRefs: machine.scopeRefs,
+      acceptanceRefs: machine.acceptanceRefs,
+      states: machine.states.map((state) => ({ stateId: state.stateId, name: state.name, terminal: state.terminal })),
+      transitionRefs: machine.transitions.map((transition) => transition.transitionId),
+      rules: machine.rules,
+    })),
+    frontendExperience: aac.frontendExperience ? {
+      required: aac.frontendExperience.required,
+      kind: aac.frontendExperience.kind,
+      experienceLevel: aac.frontendExperience.experienceLevel,
+      surfaceRefs: aac.frontendExperience.surfaces.map((surface) => surface.surfaceId),
+      interactionStates: aac.frontendExperience.interactionStates,
+      navigationRequired: aac.frontendExperience.navigation.required,
+    } : null,
+    frontendOperationPathDetails,
+    runtimeDelivery: aac.runtimeDelivery ? runtimeDeliveryProjection(aac) : null,
+  };
+}
+
+function compactFieldShape(field: NonNullable<ArchitectureArtifactContract["interfaces"][number]["requestSchema"]>[number]): Record<string, unknown> {
+  return {
+    fieldId: field.fieldId,
+    name: field.name,
+    type: field.type,
+    semanticType: field.semanticType ?? null,
+    required: field.required,
+    enumValues: field.enumValues ?? [],
+    itemFieldId: field.items?.fieldId ?? null,
+    nestedFieldIds: field.fields?.map((nested) => nested.fieldId) ?? [],
   };
 }
 
