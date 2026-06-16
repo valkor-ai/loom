@@ -108,6 +108,19 @@ assertIncludes(
 );
 
 const semanticContract = request.rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract;
+assert.equal(
+  semanticContract.confirmedBlockDetailRetentionContract.sourceOfTruth,
+  "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+  "candidate writing must use every confirmed Brainstorm block, not final_summary alone",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.candidateFields.includes("frontendExperience.dataViews/actions/operationPaths"),
+  "confirmed frontend details must map to structured frontendExperience fields",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.rules.some((rule) => rule.includes("not from final_summary alone")),
+  "confirmed block retention rules must forbid final_summary-only candidate writing",
+);
 assert.ok(
   semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("how users find/select target objects, trigger actions, and observe results"),
   "business-detail contract must include page operation path topics",
@@ -137,6 +150,16 @@ assertIncludes(
   request.outputContract.schemaShape.candidateRules.join("\n"),
   "Write page operation path details into frontendExperience.dataViews/actions/operationPaths",
   "candidateRules must require operation-path details in structured frontend fields",
+);
+assertIncludes(
+  request.outputContract.schemaShape.candidateRules.join("\n"),
+  "A concise final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional",
+  "candidateRules must keep earlier confirmed block details even when final_summary is concise",
+);
+assertIncludes(
+  request.outputContract.schemaShape.candidateRules.join("\n"),
+  "when the user confirmed query criteria in frontend_experience, preserve them in dataViews[].searchCriteria",
+  "candidateRules must require confirmed query criteria to land in structured searchCriteria fields",
 );
 assertIncludes(
   request.outputContract.schemaShape.candidateRules.join("\n"),

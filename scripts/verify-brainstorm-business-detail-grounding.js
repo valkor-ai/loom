@@ -80,6 +80,23 @@ includes(conceptRule, "actions or behaviors", "concept confirmation must include
 includes(conceptRule, "visible feedback", "concept confirmation must include visible feedback.");
 
 const semanticContract = request.rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract;
+assert.equal(
+  semanticContract.confirmedBlockDetailRetentionContract.sourceOfTruth,
+  "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+  "confirmed block detail retention must use all confirmed Brainstorm blocks as source.",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.candidateFields.includes("scope.included[].items"),
+  "retention contract must preserve phase_scope details in existing scope fields.",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.candidateFields.includes("conceptGrounding.phaseConceptGrounding.concepts[].explanation"),
+  "retention contract must preserve concept_grounding details in existing concept fields.",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.rules.some((rule) => rule.includes("For concept_grounding, preserve confirmed business scenario")),
+  "retention rules must preserve concept_grounding business details.",
+);
 assert.equal(semanticContract.scopeItemCoverageContract.owningBlock, "concept_grounding");
 assert.ok(
   semanticContract.scopeItemCoverageContract.candidateFields.includes("scope.included[].items"),
@@ -108,6 +125,9 @@ assert.ok(
 );
 
 const candidateRules = request.outputContract.schemaShape.candidateRules.join("\n");
+includes(candidateRules, "The accepted BrainstormCandidate must be built from all user-confirmed Brainstorm blocks", "candidate rules must not use final_summary as the only source.");
+includes(candidateRules, "For phase_scope, preserve the confirmed option's included scope", "candidate rules must preserve phase_scope details.");
+includes(candidateRules, "For concept_grounding, preserve confirmed business scenario", "candidate rules must preserve concept_grounding details.");
 includes(candidateRules, "Every scope.included item should be represented", "candidate rules must require each included scope item to be represented.");
 includes(candidateRules, "confirmed scope.included item has been considered", "candidate self-review must check scope item coverage.");
 includes(candidateRules, "Store confirmed object-operation details in existing BrainstormCandidate fields", "candidate rules must store details in existing fields.");

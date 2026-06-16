@@ -804,6 +804,19 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormSessionRequest: final_summary business detail contract must include blocking reasons",
   );
   assert.equal(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.sourceOfTruth,
+    "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+    "BrainstormSessionRequest: candidate writing must retain all confirmed block details, not final_summary alone",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.rules?.some((rule) => rule.includes("For phase_scope, preserve")),
+    "BrainstormSessionRequest: retention contract must preserve phase_scope details",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.rules?.some((rule) => rule.includes("For frontend_experience, preserve")),
+    "BrainstormSessionRequest: retention contract must preserve frontend_experience details",
+  );
+  assert.equal(
     request.rules?.requirementSemanticGrounding?.validationMode,
     "generation_guidance_only",
     "BrainstormSessionRequest: requirement semantic grounding must remain generation guidance, not accept validation",
@@ -887,6 +900,14 @@ function assertBrainstormCandidateRules(request) {
   assert.ok(
     shape?.candidateRules?.some((rule) => rule.includes("using existing fields")),
     "BrainstormCandidate schemaShape: missing requirement semantic preservation in existing fields",
+  );
+  assert.ok(
+    shape?.candidateRules?.some((rule) => rule.includes("all user-confirmed Brainstorm blocks")),
+    "BrainstormCandidate schemaShape: missing all-confirmed-block retention rule",
+  );
+  assert.ok(
+    shape?.candidateRules?.some((rule) => rule.includes("A concise final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional")),
+    "BrainstormCandidate schemaShape: missing concise-final-summary retention rule",
   );
   mark("L2", "BrainstormCandidate request documents Phase N roadmap/ref rules");
 }

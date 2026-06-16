@@ -68,6 +68,7 @@ import {
   businessObjectOperationClarificationRules,
   brainstormCandidateSelfReviewRules,
   brainstormRequirementSemanticRules,
+  confirmedBlockDetailRetentionRules,
   conceptGroundingSelfCheckRules,
   decisionImpactOrderingRules,
   finalSummaryReviewRules,
@@ -1591,6 +1592,22 @@ function buildBrainstormSessionRequest(input: {
             businessFlowSummary: "business scenario, lifecycle actions, flow steps, preconditions, validation/blocking, success state",
             conceptGrounding: "high-risk concepts, business scenario meaning, decision impact, lifecycle semantics, applicable objects or subjects, actions or behaviors, inputs or fields, hard rules, state changes, blocking reasons, visible or returned feedback, unresolved notes, misunderstanding boundaries",
             frontendExperience: "target discovery, selection, input, display, action entry, refresh, and feedback expectations",
+          },
+          confirmedBlockDetailRetentionContract: {
+            sourceOfTruth: "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+            finalSummaryRole: "review_gate_and_delta_confirmation_not_the_only_candidate_source",
+            candidateFields: [
+              "scope.included[].items",
+              "scope.excluded",
+              "scope.deferred",
+              "acceptance[].statement",
+              "domainModel.businessFlows[].summary",
+              "conceptGrounding.phaseConceptGrounding.concepts[].explanation",
+              "frontendExperience.dataViews/actions/operationPaths",
+              "frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
+              "phasePlan.nextPhasePreview",
+            ],
+            rules: confirmedBlockDetailRetentionRules(),
           },
           blockSelfCheckContract: {
             phase_scope: {
