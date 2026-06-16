@@ -716,7 +716,12 @@ async function auditBrainstorm() {
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.finalSummaryReviewContract",
     ], "candidate_final_summary_rules must hold narrow final summary rule fields");
+    assert.ok(
+      candidateFinalSummaryRules.whenToRead.includes("before presenting the final_summary block"),
+      "candidate_final_summary_rules must be readable before final_summary is presented",
+    );
     assert.deepEqual(candidateRequirementSemanticRules.fields, ["rules.requirementSemanticGrounding.compactRules"], "candidate_requirement_semantic_rules must hold compact requirement semantic rule list");
     assert.deepEqual(candidateSelfReviewRules.fields, ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"], "candidate_self_review_rules must hold narrow self-review rule fields");
     const brainstormFields = request.agentAction.read.fieldGroups.flatMap((group) => group.fields);

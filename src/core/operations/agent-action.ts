@@ -747,6 +747,7 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.finalSummaryReviewContract",
   ], hasField);
   const candidateRequirementSemanticRuleFields = filterAvailable([
     "rules.requirementSemanticGrounding.compactRules",
@@ -1001,7 +1002,7 @@ function purposeForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_candidate_schema_concepts") return "BrainstormCandidate domain/concept schema.";
   if (groupId === "brainstorm_session_candidate_schema_frontend") return "BrainstormCandidate frontend schema.";
   if (groupId === "brainstorm_session_candidate_schema_handoff") return "BrainstormCandidate handoff schema.";
-  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Final summary rule selectors.";
+  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Final summary review and business-detail rule selectors.";
   if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Requirement semantic grounding rule list.";
   if (groupId === "brainstorm_session_candidate_self_review_rules") return "Candidate self-review and next-phase rules.";
   if (groupId === "execute_task_task_core") return "Task identity, objective, write boundary, acceptance refs, concept refs, and verification intents needed before editing project files.";
@@ -1039,7 +1040,7 @@ function whenToReadForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_candidate_schema_concepts") return "Only after final_summary confirmation, when writing concept or clarification progress fields.";
   if (groupId === "brainstorm_session_candidate_schema_frontend") return "Only after final_summary confirmation, when frontendExperience/frontendExperienceDelta applies.";
   if (groupId === "brainstorm_session_candidate_schema_handoff") return "Only after final_summary confirmation, before setting handoff routing fields.";
-  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Only after final_summary confirmation, before writing final_summary or business-detail candidate fields.";
+  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Read before presenting the final_summary block; read again after final_summary confirmation before writing business-detail candidate fields.";
   if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Only after final_summary confirmation, when detailed requirement semantic grounding rules are needed.";
   if (groupId === "brainstorm_session_candidate_self_review_rules") return "Only after final_summary confirmation, before final self-review or submitCommand.";
   if (groupId === "execute_task_task_core") return "First TaskExecution read, before deciding source edits or verification approach.";

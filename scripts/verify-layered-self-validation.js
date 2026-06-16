@@ -2419,6 +2419,22 @@ function main() {
     assertRequestOutputParentDirsExist(root, phase2BrainstormRequest, "Phase continuation BrainstormSessionRequest");
     assertBrainstormRequestReadPlan(phase2BrainstormRequest, "Phase continuation BrainstormSessionRequest");
     assertBrainstormConceptGroundingRequest(phase2BrainstormRequest);
+    assert.ok(
+      phase2BrainstormRequest.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("business scenario confirmation")),
+      "Phase continuation Brainstorm request must keep business scenario clarification rules.",
+    );
+    assert.ok(
+      phase2BrainstormRequest.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("key field/data elements")),
+      "Phase continuation Brainstorm request must keep key field final_summary rules.",
+    );
+    assert.ok(
+      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("key field/data elements grouped by identity, input, display, relationship, state, and result or feedback fields when applicable"),
+      "Phase continuation Brainstorm request must include key field/data elements in final_summary topics.",
+    );
+    assert.ok(
+      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("key field/data elements")),
+      "Phase continuation Brainstorm request must include the final_summary key field review contract.",
+    );
     assert.equal(phase2Index.latestRefs.requirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must inherit requirementContextRef");
     assert.equal(phase2Index.latestRefs.originalRequirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must expose originalRequirementContextRef alias");
     assert.equal(phase2Index.latestRefs.normalizedRequirementTextRef, phase1Index.latestRefs.normalizedRequirementTextRef, "Phase continuation latestRefs must inherit normalizedRequirementTextRef");

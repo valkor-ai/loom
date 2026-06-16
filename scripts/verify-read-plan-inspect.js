@@ -419,8 +419,13 @@ assert.deepEqual(
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.finalSummaryReviewContract",
   ],
   "Brainstorm final summary rules must be narrow rule sections instead of the full rules object.",
+);
+assert.ok(
+  brainstormCandidateFinalSummaryRulesGroup.whenToRead.includes("before presenting the final_summary block"),
+  "Brainstorm final summary review rules must be read before presenting final_summary.",
 );
 assert.deepEqual(
   brainstormCandidateRequirementSemanticRulesGroup.fields,
