@@ -360,6 +360,14 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
     `${label}: phase_scope rules must generate recommended option from required items`,
   );
   assert.ok(
+    generation?.rules?.some((rule) => rule.includes("alternate option includes a support-like item")),
+    `${label}: phase_scope rules must compare support items across options`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("compare the included-scope line of every alternate option against the recommended option")),
+    `${label}: phase_scope rules must reconcile alternate included scope with recommended scope`,
+  );
+  assert.ok(
     generation?.rules?.some((rule) => rule.includes("broader option by adding real experience/management extension items")),
     `${label}: phase_scope rules must keep broad option to true extensions`,
   );
@@ -394,6 +402,14 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("Do not rewrite source-grounded or previously confirmed object relationships")),
     `${label}: phase_scope rules must protect confirmed object semantics`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("defer detailed relationship semantics to concept_grounding")),
+    `${label}: phase_scope rules must defer uncertain relationship semantics to concept grounding`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("Avoid implying that one object is replaced, relinked, inherited, transferred, frozen, or restored")),
+    `${label}: phase_scope rules must avoid inventing relationship effects`,
   );
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("atomic phase") && rule.includes("single phase_scope")),

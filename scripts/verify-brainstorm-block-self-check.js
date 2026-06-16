@@ -179,6 +179,7 @@ includes(blockRules, "phase_scope self-check", "phase_scope must have a block-le
 includes(blockRules, "decompose the source-grounded current-phase candidate work into scope items", "phase_scope must classify scope items before options.");
 includes(blockRules, "goal-essential item", "phase_scope must classify goal-essential items.");
 includes(blockRules, "flow-support item", "phase_scope must classify flow-support items.");
+includes(blockRules, "If any alternate option includes a support-like item", "phase_scope must compare alternate support items against the recommended option.");
 includes(blockRules, "current-object lifecycle item", "phase_scope must classify lifecycle items.");
 includes(blockRules, "cross-phase item", "phase_scope must classify cross-phase items.");
 includes(blockRules, "Do not expose these internal category names to the user", "phase_scope item categories must stay internal.");
@@ -195,7 +196,10 @@ includes(blockRules, "scope reduction", "phase_scope must mark seed-item reducti
 includes(blockRules, "recommended option includes every goal-essential item and flow-support item", "phase_scope self-check must validate recommended option completeness.");
 includes(blockRules, "narrower options do not silently remove goal-essential or flow-support items", "phase_scope self-check must validate narrow option integrity.");
 includes(blockRules, "broader options add only real experience/management extension items", "phase_scope self-check must validate broad option integrity.");
+includes(blockRules, "appears only in an alternate option", "phase_scope self-check must reject support items that only appear in alternate options.");
 includes(blockRules, "no option rewrites source-grounded or previously confirmed object relationships", "phase_scope self-check must protect high-risk object semantics.");
+includes(blockRules, "defer detailed relationship semantics to concept_grounding", "phase_scope must not over-specify high-risk relationship semantics.");
+includes(blockRules, "Avoid implying that one object is replaced, relinked, inherited, transferred, frozen, or restored", "phase_scope must not invent relationship effects.");
 includes(blockRules, "atomic single-scope exception", "phase_scope must restrict single-scope confirmation to atomic scope.");
 includes(blockRules, "single preselected phase_scope", "phase_scope self-check must reject preselected single-scope output when the phase is not atomic.");
 includes(blockRules, "concept_grounding self-check", "concept_grounding must have a block-level self-check before confirmation.");
@@ -253,7 +257,9 @@ assert.ok(
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("phase_scope self-check")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("internally classified before options were written")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("recommended option includes every goal-essential item and flow-support item")));
+assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("appears only in an alternate option")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("no option rewrites source-grounded or previously confirmed object relationships")));
+assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("does not imply replacement, relinking, inheritance, transfer, freezing, or restoration semantics")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("2-3 source-grounded phase scope options")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("single preselected phase_scope")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("business scenario confirmation")));
