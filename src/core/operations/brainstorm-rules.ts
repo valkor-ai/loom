@@ -91,14 +91,14 @@ export function frontendExperienceSelfCheckRules(): string[] {
 
 export function finalSummaryReviewRules(): string[] {
   return [
-    "The final_summary block is a review gate, not the first place to discover business details.",
+    "The final_summary block is a concise review gate, not the source of detailed requirements.",
     "Before presenting final_summary for user confirmation, verify that phase_scope, concept_grounding, and frontend_experience were already confirmed or explicitly skipped with reasons.",
-    "The final_summary must summarize confirmed scope, business scenario, decision impacts, lifecycle actions, key field/data elements, concept or rule boundaries, frontend target or skip reason, nextPhasePreview, and explicit not-done or deferred details when applicable.",
-    "When concept_grounding confirmed key field sets, final_summary must include a concise user-visible key field/data elements paragraph covering the fields the phase depends on: identity fields, input fields, display fields, relationship fields, state fields, and result or feedback fields when applicable.",
-    "The final_summary may be concise, but it must not narrow, omit, or override already confirmed phase_scope, concept_grounding, or frontend_experience details unless the user explicitly corrects them.",
-    "When final_summary condenses earlier details, state that the previously confirmed block details remain part of the BrainstormCandidate contract instead of asking the user to restate them.",
+    "The final_summary should summarize the chosen phase scope, concept/business-rule outcome, frontend target or skip reason, nextPhasePreview, and explicit not-done or deferred boundaries at a high level.",
+    "The final_summary must not be required to repeat every confirmed object, field, operation, rule, state change, blocking reason, feedback path, or frontend operation path from earlier blocks.",
+    "A concise final_summary does not narrow, omit, override, or compress already confirmed phase_scope, concept_grounding, or frontend_experience details.",
+    "Previously confirmed block details remain part of the BrainstormCandidate contract through structured fields, not through final_summary text.",
     "If the user corrects final_summary, do not submit BrainstormCandidate from the stale summary. Incorporate the correction into the affected existing fields and present an updated final_summary before setting finalSummaryConfirmed=true.",
-    "Do not use final_summary to hide missing block-level details; return to the relevant Brainstorm block in the same agent-managed conversation when detail is missing.",
+    "Do not fix missing structured detail by expanding final_summary. Return to the relevant Brainstorm block or repair the corresponding structured candidate fields before submit.",
   ];
 }
 
@@ -115,7 +115,7 @@ export function confirmedBlockDetailRetentionRules(): string[] {
 
 export function brainstormCandidateSelfReviewRules(): string[] {
   return [
-    "Before writing or submitting BrainstormCandidate, perform a self-review against the final_summary and each confirmed Brainstorm block.",
+    "Before writing or submitting BrainstormCandidate, perform a self-review against each confirmed Brainstorm block; final_summary is only the last confirmation surface and correction source.",
     "Self-review must verify that confirmed requirement details are stored in existing BrainstormCandidate fields rather than only in chat: scope.included[].items, acceptance[].statement, domainModel.businessFlows[].summary, conceptGrounding, frontendExperience/frontendExperienceDelta, and phasePlan.nextPhasePreview.",
     "Self-review must verify that the candidate preserves confirmed details from every confirmed block. A concise final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional.",
     "Self-review must verify that every confirmed scope.included item has been considered in the concept_grounding scope-item coverage summary. If a scope item has no applicable detail, the candidate must preserve the concrete reason or unresolved note instead of silently dropping it.",
@@ -125,6 +125,7 @@ export function brainstormCandidateSelfReviewRules(): string[] {
     "Self-review must check that domain phases preserve a natural-language object-operation summary: key business objects, key field sets, supported operations, operation inputs, preconditions, validation or blocking reasons, success state changes, and user-visible feedback.",
     "Self-review must check that user-facing workflow phases store page operation paths in frontendExperience/frontendExperienceDelta: how users find or receive the target object, pagination and query criteria when confirmed, which view/action starts the operation, input fields, refresh/readback policy, and how success, empty, loading, error, or business-blocking results are observed.",
     "If self-review finds that a required detail is unclear or missing from the existing fields, return to the relevant Brainstorm block and ask the user before submitting; do not let PGC, AAC, TaskPlan, or TaskExecution rediscover that detail later.",
+    "If the final_summary is shorter than previous confirmed blocks, keep the shorter summary and preserve the detail in structured fields; do not ask the user to reconfirm all details just to make final_summary exhaustive.",
     "Do not create a separate Markdown spec, commit, or parallel requirement artifact for this self-review; the accepted BrainstormCandidate remains the requirement contract.",
   ];
 }
@@ -196,9 +197,9 @@ export function brainstormRequirementSemanticRules(): string[] {
   return [
     "Brainstorm must read the original requirement refs and any confirmed requirement decision refs before presenting a final_summary or writing BrainstormCandidate.",
     "For the user-confirmed current phase, preserve requirement semantics in existing BrainstormCandidate fields; do not reduce the phase to a vague label such as implement feature, fix bug, continue expansion, or optimize page.",
-    "The Agent, not the CLI, decides whether the current phase involves business flows, user operations, state changes, forms/fields, validation/blocking rules, frontend/backend interaction, or user-facing operation paths. If it does, the final_summary block must show a business-detail confirmation covering current-phase flows, preconditions, validation rules, blocking rules and reasons, success conditions and state changes, fields to input/display/pass through, user operation path, deferred or not-done details, and source refs.",
+    "The Agent, not the CLI, decides whether the current phase involves business flows, user operations, state changes, forms/fields, validation/blocking rules, frontend/backend interaction, or user-facing operation paths. If it does, those details must be confirmed in the owning blocks and written into structured BrainstormCandidate fields; final_summary should only summarize the confirmed outcome and any corrections.",
     "If those business-detail categories do not apply to the current phase, the final_summary block must state the concrete not-applicable reason, such as this phase only changing build configuration, test harnesses, deployment files, or other non-domain technical work.",
-    "When business-detail confirmation applies, write the confirmed details into existing BrainstormCandidate fields: scope.included[].items for modules/actions/rules/fields/boundaries; acceptance[].statement for verifiable business outcomes; domainModel.businessFlows[].summary for flow steps, preconditions, validation/blocking, and success state; conceptGrounding for high-risk concepts, object operations, hard rules, state changes, and misunderstanding boundaries; frontendExperience/frontendExperienceDelta for target discovery, selection, input, display, action entry, refresh, and feedback expectations.",
+    "When business detail applies, write the confirmed details into existing BrainstormCandidate fields: scope.included[].items for modules/actions/rules/fields/boundaries; acceptance[].statement for verifiable business outcomes; domainModel.businessFlows[].summary for flow steps, preconditions, validation/blocking, and success state; conceptGrounding for high-risk concepts, object operations, hard rules, state changes, and misunderstanding boundaries; frontendExperience/frontendExperienceDelta for target discovery, selection, input, display, action entry, refresh, and feedback expectations.",
     "For correction, completion, or optimization phases, describe the expected behavior from original/confirmed requirements, the current implemented behavior from latestRepositoryContext, the confirmed delta for this phase, and the target behavior after correction using the same existing fields.",
     "For technical or non-domain phases, do not fabricate domain rules; instead express technical workflow, constraints, boundaries, expected behavior, and verification responsibilities in scope, acceptance, domainModel.businessFlows when useful, and conceptGrounding only when there are real high-risk concepts.",
     "Every current-phase acceptance statement must be source-grounded: cite sourceRefs from original requirements, confirmed decisions, user confirmation, or repository facts as appropriate; keywordHints are never acceptance authority.",
@@ -226,9 +227,9 @@ export function brainstormRequirementSemanticCompactRules(): string[] {
   return [
     "Read original requirement refs and confirmed decision refs before final_summary or BrainstormCandidate submit.",
     "Preserve the confirmed current-phase semantics in existing BrainstormCandidate fields; avoid vague labels.",
-    "When business detail applies, confirm flows, objects, operations, fields, preconditions, validation/blocking, success states, frontend operation paths, deferred details, and source refs.",
+    "When business detail applies, confirm flows, objects, operations, fields, preconditions, validation/blocking, success states, frontend operation paths, deferred details, and source refs in the owning blocks.",
     "When business detail does not apply, state the concrete technical/non-domain reason instead of fabricating domain rules.",
-    "Write confirmed details into scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience/frontendExperienceDelta when applicable.",
+    "Write confirmed details into scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience/frontendExperienceDelta when applicable; final_summary is not a detail source.",
     "Acceptance statements must be source-grounded; keyword hints are advisory and never authority.",
     "If a required semantic detail is unclear after reading refs, ask the user before accepting.",
   ];

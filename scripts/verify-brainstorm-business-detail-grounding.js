@@ -71,7 +71,7 @@ includes(blockRules, "applicable objects or subjects, actions or behaviors, inpu
 includes(blockRules, "identity fields, input fields, display fields, relationship fields, state fields", "field-set categories must be explicit and generic.");
 includes(blockRules, "operation input, preconditions, validation rules, blocking conditions, blocking reasons", "operation rule details must be explicit.");
 includes(blockRules, "Do not present only noun definitions", "concept grounding must not degrade to noun glossary.");
-includes(blockRules, "key field/data elements", "final_summary must carry key field/data elements from concept grounding.");
+includes(blockRules, "structured BrainstormCandidate fields", "confirmed details must be preserved in structured fields instead of final_summary.");
 
 const conceptRule = request.clarificationConversationProtocol.blockConfirmationRules.concept_grounding;
 includes(conceptRule, "covers every confirmed scope.included item", "concept confirmation must require every included scope item to be covered.");
@@ -99,8 +99,8 @@ assert.ok(
   "retention rules must preserve concept_grounding business details.",
 );
 assert.ok(
-  semanticContract.finalSummaryReviewContract.rules.some((rule) => rule.includes("key field/data elements")),
-  "final summary review rules must require key field/data elements.",
+  semanticContract.finalSummaryReviewContract.rules.some((rule) => rule.includes("not be required to repeat every confirmed object")),
+  "final summary review rules must not require exhaustive detail repetition.",
 );
 assert.equal(semanticContract.scopeItemCoverageContract.owningBlock, "concept_grounding");
 assert.ok(
@@ -121,12 +121,12 @@ assert.ok(
   "object-operation details must map to existing business flow summaries.",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("current phase scope-item coverage"),
-  "final summary contract must preserve scope-item coverage after concept confirmation.",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("confirmed current phase scope summary"),
+  "final summary contract must stay at summary level for confirmed scope.",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("applicable inputs or fields"),
-  "final summary contract must preserve applicable inputs or fields after concept confirmation.",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("explicit final_summary corrections that must be written back to structured fields"),
+  "final summary contract must route corrections back to structured fields.",
 );
 
 const candidateRules = request.outputContract.schemaShape.candidateRules.join("\n");

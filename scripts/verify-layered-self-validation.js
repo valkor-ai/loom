@@ -808,20 +808,20 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormSessionRequest: missing requirement semantic grounding rules",
   );
   assert.ok(
-    request.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("business-detail confirmation")),
-    "BrainstormSessionRequest: final_summary must require business-detail confirmation when applicable",
+    request.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("structured BrainstormCandidate fields")),
+    "BrainstormSessionRequest: confirmed details must be written into structured fields",
   );
   assert.ok(
-    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("applicable blocking rules and blocking reasons"),
-    "BrainstormSessionRequest: final_summary business detail contract must include blocking reasons",
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("confirmed current phase scope summary"),
+    "BrainstormSessionRequest: final_summary must include a concise scope summary topic",
   );
   assert.ok(
-    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("key field/data elements grouped by identity, input, display, relationship, state, and result or feedback fields when applicable"),
-    "BrainstormSessionRequest: final_summary business detail contract must include key field/data elements",
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("explicit final_summary corrections that must be written back to structured fields"),
+    "BrainstormSessionRequest: final_summary corrections must write back to structured fields",
   );
   assert.ok(
-    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("key field/data elements")),
-    "BrainstormSessionRequest: final_summary review contract must require key field/data elements",
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("not the source of detailed requirements")),
+    "BrainstormSessionRequest: final_summary review contract must not be the detail source",
   );
   assert.equal(
     request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.sourceOfTruth,
@@ -914,12 +914,12 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormCandidate schemaShape: missing dedicated frontend confirmation rule",
   );
   assert.ok(
-    shape?.candidateRules?.some((rule) => rule.includes("business-detail confirmation")),
-    "BrainstormCandidate schemaShape: missing final_summary business-detail rule",
+    shape?.candidateRules?.some((rule) => rule.includes("concisely summarized scope")),
+    "BrainstormCandidate schemaShape: missing concise final_summary rule",
   );
   assert.ok(
-    shape?.candidateRules?.some((rule) => rule.includes("key field/data elements")),
-    "BrainstormCandidate schemaShape: missing final_summary key field/data elements rule",
+    shape?.candidateRules?.some((rule) => rule.includes("do not rely on final_summary text")),
+    "BrainstormCandidate schemaShape: missing no-final-summary-detail-source rule",
   );
   assert.ok(
     shape?.candidateRules?.some((rule) => rule.includes("using existing fields")),
@@ -2424,16 +2424,16 @@ function main() {
       "Phase continuation Brainstorm request must keep business scenario clarification rules.",
     );
     assert.ok(
-      phase2BrainstormRequest.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("key field/data elements")),
-      "Phase continuation Brainstorm request must keep key field final_summary rules.",
+      phase2BrainstormRequest.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("structured BrainstormCandidate fields")),
+      "Phase continuation Brainstorm request must keep structured detail retention rules.",
     );
     assert.ok(
-      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("key field/data elements grouped by identity, input, display, relationship, state, and result or feedback fields when applicable"),
-      "Phase continuation Brainstorm request must include key field/data elements in final_summary topics.",
+      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("explicit final_summary corrections that must be written back to structured fields"),
+      "Phase continuation Brainstorm request must route final_summary corrections to structured fields.",
     );
     assert.ok(
-      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("key field/data elements")),
-      "Phase continuation Brainstorm request must include the final_summary key field review contract.",
+      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("not the source of detailed requirements")),
+      "Phase continuation Brainstorm request must keep final_summary as a concise review gate.",
     );
     assert.equal(phase2Index.latestRefs.requirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must inherit requirementContextRef");
     assert.equal(phase2Index.latestRefs.originalRequirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must expose originalRequirementContextRef alias");

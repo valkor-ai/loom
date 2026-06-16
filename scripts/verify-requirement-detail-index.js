@@ -135,7 +135,7 @@ function createCandidate(request) {
     userConfirmation: {
       confirmed: true,
       confirmedAt: now,
-      confirmationSummary: "User confirmed scope, business scenario, decision impact, lifecycle, frontend path, and final summary.",
+      confirmationSummary: "User confirmed the concise final summary.",
       confirmationBasis: {
         initialRequestOnly: false,
         summaryPresentedToUser: true,
@@ -304,6 +304,10 @@ assert.ok(details.sourceBrainstormContractRef.endsWith("/brainstorms/contract.js
 assert.ok(details.items.length >= 8, "PGC must extract multiple requirement detail items from Brainstorm fields.");
 assert.ok(details.items.every((item) => item.detailId.startsWith("detail-")), "Every detail item must have a stable detailId.");
 assert.ok(details.items.every((item) => item.sourceFieldRefs.length > 0), "Every detail item must point back to Brainstorm source fields.");
+assert.ok(
+  details.items.every((item) => item.sourceFieldRefs.every((ref) => !ref.includes("userConfirmation"))),
+  "PGC requirement details must come from structured Brainstorm fields, not final_summary/userConfirmation text.",
+);
 
 assert.ok(
   details.items.some((item) => item.summary.includes("Business scenario") && item.impactTags.includes("business_flow")),
@@ -316,6 +320,10 @@ assert.ok(
 assert.ok(
   details.items.some((item) => item.summary.includes("Lifecycle scan") && item.lifecycleStage !== "not_applicable"),
   "Detail index must preserve lifecycle scan details.",
+);
+assert.ok(
+  details.items.some((item) => item.summary.includes("Key fields") && item.sourceFieldRefs.some((ref) => ref.includes("brainstorm.scope.included"))),
+  "Detail index must preserve key fields from structured scope/concept details even when final_summary is concise.",
 );
 assert.ok(
   details.items.some((item) => item.kind === "frontend_operation_path" && item.frontendRefs.includes("path-review-application")),

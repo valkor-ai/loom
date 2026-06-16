@@ -122,8 +122,8 @@ assert.ok(
   "confirmed block retention rules must forbid final_summary-only candidate writing",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("how users find/select target objects, trigger actions, and observe results"),
-  "business-detail contract must include page operation path topics",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("frontend_experience block confirmed or skipped reason"),
+  "final_summary contract must only summarize frontend_experience status",
 );
 assert.ok(
   semanticContract.frontendOperationPathContract.candidateFields.includes("frontendExperience.dataViews"),
@@ -134,8 +134,8 @@ assert.ok(
   "operation-path contract must map to frontendExperience.operationPaths",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("applicable inputs or fields"),
-  "business-detail contract must require applicable input or field confirmation",
+  semanticContract.frontendOperationPathContract.rules.some((rule) => rule.includes("input fields")),
+  "frontend operation-path contract must preserve applicable input fields",
 );
 assert.ok(
   semanticContract.objectOperationContract.candidateFields.includes("domainModel.businessFlows[].summary"),
