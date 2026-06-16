@@ -29,6 +29,17 @@ function readJson(projectRoot, relativePath) {
   return JSON.parse(fs.readFileSync(projectFile(projectRoot, relativePath), "utf8"));
 }
 
+function hydrateRequest(projectRoot, request) {
+  const hydrated = { ...request };
+  for (const [key, value] of Object.entries(request)) {
+    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
+    const targetKey = key.slice(0, -"Ref".length);
+    if (targetKey in hydrated) continue;
+    hydrated[targetKey] = readJson(projectRoot, value);
+  }
+  return hydrated;
+}
+
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
@@ -267,14 +278,11 @@ run(["init"], projectRoot);
 
 const started = run(["brainstorm", "start", "--request", "Build an account application operations console."], projectRoot);
 const request = {
-  ...readJson(projectRoot, started.requestPath ?? started.requestRef),
+  ...hydrateRequest(projectRoot, readJson(projectRoot, started.requestPath ?? started.requestRef)),
   deliveryId: started.deliveryId,
   phaseId: started.phaseId,
   brainstormRunId: started.brainstormRunId,
   requestId: started.requestId,
-  outputContract: {
-    candidateFile: started.instruction.candidateFile,
-  },
 };
 writeJson(projectFile(projectRoot, request.outputContract.candidateFile), createCandidate(request));
 run([
