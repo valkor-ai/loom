@@ -323,6 +323,9 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
   assert.equal(guidance?.requiredByDefault, true, `${label}: phase_scope option comparison must be required by default`);
   assert.equal(guidance?.nextPhaseSeedIsPreselectedAnswer, false, `${label}: nextPhaseSeed must not be treated as a preselected user answer`);
   assert.deepEqual(guidance?.optionCount, { min: 2, max: 3 }, `${label}: phase_scope guidance must request 2-3 options`);
+  assert.equal(guidance?.recommendationMustPreserveCoreCurrentPhaseOutcome, true, `${label}: recommended phase_scope option must preserve the current phase core outcome`);
+  assert.equal(guidance?.narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems, true, `${label}: narrower options must not be recommended when they defer explicit seed items`);
+  assert.equal(guidance?.scopeReductionRequiresExplicitUserConfirmation, true, `${label}: scope reductions must require explicit user confirmation`);
   assert.equal(
     guidance?.atomicSingleScopeException?.disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist,
     true,
@@ -348,6 +351,18 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("nextPhaseSeed") && rule.includes("not as a preselected user answer")),
     `${label}: phase_scope rules must keep nextPhaseSeed from becoming a preselected answer`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("must preserve the current phase's source-grounded core outcome")),
+    `${label}: phase_scope rules must keep recommendations from shrinking the current phase core outcome`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("do not recommend it when it defers explicit nextPhaseSeed.scopePreview items")),
+    `${label}: phase_scope rules must prevent narrower alternatives from becoming the default recommendation`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("scope reduction") && rule.includes("ask the user to confirm")),
+    `${label}: phase_scope rules must require explicit confirmation for seed-item reductions`,
   );
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("atomic phase") && rule.includes("single phase_scope")),

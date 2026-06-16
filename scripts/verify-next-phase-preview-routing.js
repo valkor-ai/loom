@@ -610,6 +610,21 @@ function main() {
       "Phase continuation Brainstorm must not treat nextPhaseSeed as a preselected answer.",
     );
     assert.equal(
+      brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.recommendationMustPreserveCoreCurrentPhaseOutcome,
+      true,
+      "Phase continuation Brainstorm must require the recommended option to preserve the core current-phase outcome.",
+    );
+    assert.equal(
+      brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems,
+      true,
+      "Phase continuation Brainstorm must not recommend a narrower option that defers explicit seed items.",
+    );
+    assert.equal(
+      brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.scopeReductionRequiresExplicitUserConfirmation,
+      true,
+      "Phase continuation Brainstorm must require explicit user confirmation for seed-item scope reductions.",
+    );
+    assert.equal(
       brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.atomicSingleScopeException.disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist,
       true,
       "Phase continuation Brainstorm must not use single-scope confirmation for multi-item nextPhaseSeed.",
@@ -619,6 +634,12 @@ function main() {
         rule.includes("multiple nextPhaseSeed.scopePreview items") && rule.includes("not atomic"),
       ),
       "Phase continuation Brainstorm rules must force multi-item nextPhaseSeed into option comparison.",
+    );
+    assert.ok(
+      brainstormRequest.rules.phaseScopeOptionComparison.rules.some((rule) =>
+        rule.includes("do not recommend it when it defers explicit nextPhaseSeed.scopePreview items"),
+      ),
+      "Phase continuation Brainstorm rules must keep narrower alternatives from becoming the recommendation.",
     );
     const compactBrainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.requestRef)));
     writeJson(projectFile(candidateRoot, compactBrainstormRequest.outputContract.candidateFile), createDeferredScopeCandidatePreviewCandidate(compactBrainstormRequest));

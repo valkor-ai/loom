@@ -1404,6 +1404,9 @@ function buildBrainstormSessionRequest(input: {
         nextPhaseSeedIsPreselectedAnswer: false,
         optionCount: { min: 2, max: 3 },
         recommendationRequired: true,
+        recommendationMustPreserveCoreCurrentPhaseOutcome: true,
+        narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems: true,
+        scopeReductionRequiresExplicitUserConfirmation: true,
         atomicSingleScopeException: {
           allowedOnlyWhenNoSourceGroundedAlternativeCutExists: true,
           mustExplainMissingAlternativeCuts: [
@@ -1545,6 +1548,9 @@ function buildBrainstormSessionRequest(input: {
         requiredByDefault: true,
         nextPhaseSeedIsPreselectedAnswer: false,
         optionCount: { min: 2, max: 3 },
+        recommendationMustPreserveCoreCurrentPhaseOutcome: true,
+        narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems: true,
+        scopeReductionRequiresExplicitUserConfirmation: true,
         atomicSingleScopeExceptionAllowedOnlyForAtomicScope: true,
         rules: phaseScopeOptionComparisonRules(),
       },
