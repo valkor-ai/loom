@@ -9,10 +9,26 @@ export function nextPhasePreviewCandidateRules(): string[] {
   ];
 }
 
+export function phaseScopeItemClassificationRules(): string[] {
+  return [
+    "Before writing phase_scope options, internally decompose the source-grounded current-phase candidate work into scope items and classify each item before composing options.",
+    "Use only these internal scope item categories: goal-essential item, flow-support item, current-object lifecycle item, experience or management extension item, cross-phase item, explicitly excluded item, and unresolved classification item.",
+    "A goal-essential item is required for the current phase goal to be true; do not omit it from the recommended option.",
+    "A flow-support item is not the headline goal but is required for in-scope operations to be usable, selectable, submitted, validated, read back, or verified; do not move it only to the broad option.",
+    "A current-object lifecycle item belongs to the lifecycle of the current phase's core object or subject. If the phase goal is a closed loop or lifecycle closure, the recommended option must include the applicable current-object lifecycle items unless there is a source-grounded reason to ask the user to reduce scope.",
+    "An experience or management extension item improves experience, administration, observability, approval depth, reporting, or adjacent convenience, but is not required for the current phase goal or flow support.",
+    "A cross-phase item depends on a later module, another product surface, another subsystem, or a different core object lifecycle; keep it out of the recommended option unless the user explicitly asks to cross phase boundaries.",
+    "An explicitly excluded item must not appear in any option's included scope.",
+    "If classification is uncertain, mark the item as unresolved in natural language and ask a focused scope question instead of silently placing it into A/B/C.",
+    "Do not expose these internal category names to the user. Use them only to make the options coherent.",
+  ];
+}
+
 export function phaseScopeOptionComparisonRules(): string[] {
   return [
     "During the phase_scope block, present 2-3 source-grounded phase scope options before asking for confirmation by default. Treat nextPhaseSeed as a non-binding seed for option design, not as a preselected user answer.",
     "Use a user-facing title such as phase scope confirmation, 阶段范围确认, or 当前阶段范围确认. Do not show internal names such as phase_scope, scope.included, scope.excluded, scope.deferred, nextPhaseSeed, or nextPhasePreview to the user.",
+    ...phaseScopeItemClassificationRules(),
     "Each phase_scope option must identify included scope, excluded/deferred boundary, the reason for that cut, and the tradeoff for delivery speed, completeness, and implementation risk.",
     "Present phase_scope options in the user's language with a consistent compact structure for every option: included scope, excluded/deferred boundary, reason, and tradeoff.",
     "Use one separate visual block per phase_scope option. Do not write an option as a single run-on paragraph containing included/deferred/reason/tradeoff labels.",
@@ -22,6 +38,10 @@ export function phaseScopeOptionComparisonRules(): string[] {
     "After the options, provide one short recommendation sentence and one short user reply instruction. Do not repeat the full option details again in a prose paragraph.",
     "For product, domain, UI, workflow, or multi-step phases, derive options from source-grounded cuts such as a balanced current-phase cut, a narrower dependency-first or lower-risk cut, and a broader adjacent-workflow cut when those cuts exist in the requirement context.",
     "For phase continuation, use nextPhaseSeed.goal, nextPhaseSeed.scopePreview, previous deferred scope, and latest confirmed user decisions as the source-grounded current-phase candidate set. They are not a preselected user answer, but they are also not optional content to drop from the recommended option without a source-grounded reason.",
+    "Generate the recommended option from all goal-essential items plus all flow-support items, and include current-object lifecycle items when the current phase goal is a closed loop or lifecycle closure.",
+    "Generate the narrower option by reducing current-object lifecycle items or experience/management extension items only; do not remove goal-essential or flow-support items from the narrow option unless you label it as a deliberate scope reduction and ask the user to confirm that reduction.",
+    "Generate the broader option by adding real experience/management extension items or a clearly labeled adjacent capability; do not make the broad option the only place where goal-essential or flow-support items appear.",
+    "Do not rewrite source-grounded or previously confirmed object relationships, operations, ownership, or state transitions while composing options. Do not turn one object's operation into another object's operation just to create an option.",
     "Recommend exactly one phase_scope option and explain why it is the best current-phase cut. The recommended option must preserve the current phase's source-grounded core outcome, module closure, lifecycle coverage, and dependency purpose.",
     "A narrower option may be offered as an alternative, but do not recommend it when it defers explicit nextPhaseSeed.scopePreview items, previously deferred current-phase work, or confirmed lifecycle actions that define the module closure, unless the user has asked to reduce scope or the source/repository evidence shows the full closure is impossible for this phase.",
     "If the recommended option excludes or defers any explicit current-phase seed item, label that as a scope reduction, explain the source-grounded reason, and ask the user to confirm the reduction instead of presenting it as the default recommendation.",
@@ -77,6 +97,12 @@ export function businessLifecycleScanRules(): string[] {
 export function phaseScopeSelfCheckRules(): string[] {
   return [
     "Before presenting phase_scope for user confirmation, run a phase_scope self-check inside the block.",
+    "The self-check must verify that source-grounded candidate work was decomposed into scope items and internally classified before options were written.",
+    "The self-check must verify that the recommended option includes every goal-essential item and flow-support item, and includes current-object lifecycle items when the current phase goal is a closed loop or lifecycle closure.",
+    "The self-check must verify that narrower options do not silently remove goal-essential or flow-support items; if they do, the option must be labeled as a deliberate scope reduction requiring user confirmation.",
+    "The self-check must verify that broader options add only real experience/management extension items, adjacent capabilities, or clearly labeled cross-phase items; broader options must not be the only place where goal-essential or flow-support items appear.",
+    "The self-check must verify that no option rewrites source-grounded or previously confirmed object relationships, object ownership, operation ownership, or state transitions.",
+    "The self-check must verify that explicitly excluded items do not appear in any option's included scope, and unresolved classification items are surfaced as focused questions instead of being silently included.",
     "The self-check must verify that included, deferred, and excluded scope are explicit and that included scope names concrete objects, actions, workflows, deliverables, or boundaries when present in the source.",
     "The self-check must verify that 2-3 source-grounded phase scope options were considered and shown before confirmation unless the atomic single-scope exception is explicitly justified.",
     "If fewer than 2 options are shown, the self-check must document why there is no narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary.",

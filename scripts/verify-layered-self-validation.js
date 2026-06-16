@@ -342,6 +342,28 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
     `${label}: phase_scope rules must require 2-3 options by default`,
   );
   assert.ok(
+    generation?.rules?.some((rule) => rule.includes("decompose the source-grounded current-phase candidate work into scope items")),
+    `${label}: phase_scope rules must classify scope items before composing options`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("goal-essential item")) &&
+      generation?.rules?.some((rule) => rule.includes("flow-support item")) &&
+      generation?.rules?.some((rule) => rule.includes("current-object lifecycle item")),
+    `${label}: phase_scope rules must define goal, support, and lifecycle scope categories`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("Do not expose these internal category names to the user")),
+    `${label}: phase_scope category names must stay internal`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("recommended option from all goal-essential items plus all flow-support items")),
+    `${label}: phase_scope rules must generate recommended option from required items`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("broader option by adding real experience/management extension items")),
+    `${label}: phase_scope rules must keep broad option to true extensions`,
+  );
+  assert.ok(
     generation?.rules?.some((rule) => rule.includes("Recommend exactly one")),
     `${label}: phase_scope rules must require one recommended option`,
   );
@@ -368,6 +390,10 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("scope reduction") && rule.includes("ask the user to confirm")),
     `${label}: phase_scope rules must require explicit confirmation for seed-item reductions`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("Do not rewrite source-grounded or previously confirmed object relationships")),
+    `${label}: phase_scope rules must protect confirmed object semantics`,
   );
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("atomic phase") && rule.includes("single phase_scope")),
