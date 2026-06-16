@@ -561,15 +561,15 @@ function main() {
     ], candidateRoot);
     assert.equal(accepted.instruction.mode, "ask_user");
     assert.equal(accepted.instruction.nextAction.type, "brainstorm_confirmation");
-    const brainstormRequest = readJson(projectFile(candidateRoot, accepted.instruction.expectedResponse.requestRef));
-    writeJson(projectFile(candidateRoot, accepted.instruction.expectedResponse.candidateFile), createDeferredScopeNonePreviewCandidate(brainstormRequest));
+    const brainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, accepted.instruction.expectedResponse.requestRef)));
+    writeJson(projectFile(candidateRoot, brainstormRequest.outputContract.candidateFile), createDeferredScopeNonePreviewCandidate(brainstormRequest));
     const rejectedBrainstorm = run([
       "brainstorm", "accept",
       "--delivery-id", "delivery-preview-candidate",
       "--phase-id", "phase-2",
       "--run-id", brainstormRequest.brainstormRunId,
       "--request-id", brainstormRequest.requestId,
-      "--candidate-file", accepted.instruction.expectedResponse.candidateFile,
+      "--candidate-file", brainstormRequest.outputContract.candidateFile,
     ], candidateRoot);
     assert.equal(rejectedBrainstorm.accepted, false);
     assert.equal(
@@ -594,20 +594,20 @@ function main() {
     assert.equal(compactAccepted.instruction.mode, "ask_user");
     assert.equal(compactAccepted.actionRequired, undefined);
     assert.ok(compactAccepted.instruction.expectedResponse.requestRef);
-    assert.ok(compactAccepted.instruction.expectedResponse.candidateFile);
-    assert.ok(compactAccepted.instruction.expectedResponse.submitCommand);
+    assert.equal(compactAccepted.instruction.expectedResponse.candidateFile, undefined);
+    assert.equal(compactAccepted.instruction.expectedResponse.submitCommand, undefined);
     assert.equal(brainstormRequest.contextRefs.latestRepositoryContextRef, ".loom/deliveries/delivery-preview-candidate/workspace/phase-2/repository-context.json");
     assert.equal(brainstormRequest.phaseContinuationContext.nextPhaseSeed.kind, "candidate");
     assert.equal(Object.hasOwn(brainstormRequest.phaseContinuationContext, "completedPhases"), false);
-    const compactBrainstormRequest = readJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.requestRef));
-    writeJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.candidateFile), createDeferredScopeCandidatePreviewCandidate(compactBrainstormRequest));
+    const compactBrainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.requestRef)));
+    writeJson(projectFile(candidateRoot, compactBrainstormRequest.outputContract.candidateFile), createDeferredScopeCandidatePreviewCandidate(compactBrainstormRequest));
     const acceptedBrainstorm = run([
       "brainstorm", "accept",
       "--delivery-id", "delivery-preview-candidate",
       "--phase-id", "phase-2",
       "--run-id", compactBrainstormRequest.brainstormRunId,
       "--request-id", compactBrainstormRequest.requestId,
-      "--candidate-file", compactAccepted.instruction.expectedResponse.candidateFile,
+      "--candidate-file", compactBrainstormRequest.outputContract.candidateFile,
     ], candidateRoot);
     assert.equal(acceptedBrainstorm.accepted, true, JSON.stringify(acceptedBrainstorm, null, 2));
     const acceptedContract = readJson(projectFile(candidateRoot, acceptedBrainstorm.contractPath));

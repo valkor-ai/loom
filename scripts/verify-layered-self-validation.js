@@ -210,10 +210,13 @@ function assertInstructionOutputPolicy(instruction, label) {
 function assertPlanCompactBrainstormInstruction(envelope) {
   assert.equal(envelope.instruction?.mode, "ask_user", "plan --compact must return a Brainstorm ask_user instruction");
   assert.equal(envelope.instruction?.requestRef, envelope.data?.requestPath, "plan --compact instruction requestRef must point to requestPath");
-  assert.equal(typeof envelope.instruction?.candidateFile, "string", "plan --compact instruction must expose candidateFile");
-  assert.equal(envelope.instruction?.submitCommand?.name, "brainstorm accept", "plan --compact instruction must expose brainstorm submitCommand");
+  assert.equal(envelope.instruction?.candidateFile, undefined, "plan --compact ask_user must not expose candidateFile before final_summary confirmation");
+  assert.equal(envelope.instruction?.submitCommand, undefined, "plan --compact ask_user must not expose brainstorm submitCommand before final_summary confirmation");
   assert.equal(envelope.instruction?.requestReadProtocol?.authority, "request_manifest_refs", "plan --compact must expose ref-first request read protocol");
   assert.equal(envelope.instruction?.expectedResponse?.requestRef, envelope.instruction?.requestRef, "plan expectedResponse must repeat requestRef");
+  assert.equal(envelope.instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification", "plan expectedResponse must describe progressive clarification, not immediate accept");
+  assert.equal(envelope.instruction?.expectedResponse?.candidateFile, undefined, "plan expectedResponse must not expose candidateFile before final_summary confirmation");
+  assert.equal(envelope.instruction?.expectedResponse?.submitCommand, undefined, "plan expectedResponse must not expose submitCommand before final_summary confirmation");
   assert.equal(envelope.actionRequired, undefined, "plan ask_user instruction must not be auto-runnable");
   assert.equal(Object.prototype.hasOwnProperty.call(envelope.instruction ?? {}, "agentAction"), false, "plan instruction must not echo full agentAction");
   assert.equal(Object.prototype.hasOwnProperty.call(envelope.instruction ?? {}, "outputContract"), false, "plan instruction must not echo full outputContract");
@@ -222,8 +225,8 @@ function assertPlanCompactBrainstormInstruction(envelope) {
 function assertBrainstormStartInstruction(instruction, requestPath, label) {
   assert.equal(instruction?.mode, "ask_user", `${label}: must return a Brainstorm ask_user instruction`);
   assert.equal(instruction?.requestRef, requestPath, `${label}: instruction requestRef must point to requestPath`);
-  assert.equal(typeof instruction?.candidateFile, "string", `${label}: instruction must expose candidateFile`);
-  assert.equal(instruction?.submitCommand?.name, "brainstorm accept", `${label}: instruction must expose brainstorm submitCommand`);
+  assert.equal(instruction?.candidateFile, undefined, `${label}: ask_user instruction must not expose candidateFile before final_summary confirmation`);
+  assert.equal(instruction?.submitCommand, undefined, `${label}: ask_user instruction must not expose brainstorm submitCommand before final_summary confirmation`);
   assert.equal(instruction?.requestReadProtocol?.authority, "request_manifest_refs", `${label}: instruction must expose ref-first request read protocol`);
   assert.ok(
     instruction?.requestReadProtocol?.readRule?.includes("agentAction.read.fieldGroups"),
@@ -238,6 +241,9 @@ function assertBrainstormStartInstruction(instruction, requestPath, label) {
     instruction?.expectedResponse?.requestReadRule?.includes("request-ready/path-only"),
     `${label}: expectedResponse must prevent path-only Brainstorm ask_user stops`,
   );
+  assert.equal(instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification", `${label}: expectedResponse must not imply immediate Brainstorm accept`);
+  assert.equal(instruction?.expectedResponse?.candidateFile, undefined, `${label}: expectedResponse must not expose candidateFile before final_summary confirmation`);
+  assert.equal(instruction?.expectedResponse?.submitCommand, undefined, `${label}: expectedResponse must not expose submitCommand before final_summary confirmation`);
   assert.equal(instruction?.expectedResponse?.requestRef, instruction?.requestRef, `${label}: expectedResponse must repeat requestRef`);
 }
 
@@ -2402,10 +2408,16 @@ function main() {
     assertBrainstormStartInstruction(phase2BrainstormGate.instruction, phase2Index.latestRefs.brainstormRequest, "brainstorm waiting_user continue");
     assertNoMechanicalMaintenanceFields(phase2BrainstormGate, "brainstorm waiting_user continue");
     assert.equal(phase2BrainstormGate.instruction.expectedResponse.requestRef, phase2Index.latestRefs.brainstormRequest);
-    assert.equal(phase2BrainstormGate.instruction.expectedResponse.candidateFile, phase2BrainstormRequest.outputContract.candidateFile);
-    assert.equal(phase2BrainstormGate.instruction.expectedResponse.candidateFile, expectedCandidateFile);
-    assert.ok(phase2BrainstormGate.instruction.expectedResponse.submitCommand, "continue must recover brainstorm submitCommand from request artifact");
-    mark("L3", "brainstorm waiting_user continue recovers candidate path from request artifact");
+    assert.equal(phase2BrainstormGate.instruction.expectedResponse.candidateFile, undefined);
+    assert.equal(phase2BrainstormGate.instruction.expectedResponse.submitCommand, undefined);
+    assert.equal(phase2BrainstormRequest.outputContract.candidateFile, expectedCandidateFile);
+    assert.ok(
+      phase2BrainstormRequest.agentAction.read.fieldGroups
+        .find((group) => group.groupId === "brainstorm_session_candidate_write_contract")
+        ?.whenToRead.includes("final_summary"),
+      "Brainstorm request must keep candidate path in delayed final_summary write contract",
+    );
+    mark("L3", "brainstorm waiting_user continue hides submit command until final_summary confirmation");
 
     const phase2Candidate = brainstormCandidate(phase2BrainstormRequest);
     phase2Candidate.phaseId = "phase-2";

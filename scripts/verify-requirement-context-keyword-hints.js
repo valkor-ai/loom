@@ -109,6 +109,11 @@ assert.ok(
 );
 assert.ok(candidateWriteGroup, "BrainstormRequest must include delayed candidate write contract group");
 assert.deepEqual(candidateWriteGroup.fields, ["outputContract", "generationProtocol", "enumRefs"]);
+assert.ok(
+  candidateWriteGroup.whenToRead.includes("final_summary") &&
+    candidateWriteGroup.whenToRead.includes("Do not read this group after phase_scope"),
+  "BrainstormRequest candidate write contract must be readable only after final_summary confirmation",
+);
 assert.equal(phaseScopeCoreGroup.fields.includes("outputContract"), false, "phase_scope core must not read outputContract");
 assert.equal(phaseScopeCoreGroup.fields.includes("generationProtocol"), false, "phase_scope core must not read generationProtocol");
 assert.equal(phaseScopeCoreGroup.fields.includes("enumRefs"), false, "phase_scope core must not read enumRefs");

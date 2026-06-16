@@ -369,7 +369,9 @@ function main() {
       "--candidate-file", repoRequest.candidateFile,
     ], root);
     assert.equal(repoAccepted.instruction.mode, "ask_user");
-    assert.equal(repoAccepted.instruction.expectedResponse.kind, "brainstorm_candidate_accept");
+    assert.equal(repoAccepted.instruction.expectedResponse.kind, "brainstorm_progressive_clarification");
+    assert.equal(repoAccepted.instruction.expectedResponse.candidateFile, undefined);
+    assert.equal(repoAccepted.instruction.expectedResponse.submitCommand, undefined);
 
     const advisory = gitCheckpointAdvisory(repoAccepted);
     assert.ok(advisory, "phase handoff ask_user should include git checkpoint advisory in git repo");

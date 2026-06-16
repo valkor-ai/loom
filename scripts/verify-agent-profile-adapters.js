@@ -169,15 +169,12 @@ function assertCoreInstructionShape(envelope) {
       envelope.agentProfile?.id === "opencode",
   );
   assert.equal(envelope.instruction.mode, "ask_user");
-  assert.equal(envelope.instruction.expectedResponse.kind, "brainstorm_candidate_accept");
+  assert.equal(envelope.instruction.expectedResponse.kind, "brainstorm_progressive_clarification");
   assert.ok(envelope.instruction.expectedResponse.requestRef);
-  assert.ok(envelope.instruction.expectedResponse.candidateFile);
-  assert.ok(envelope.instruction.expectedResponse.submitCommand);
-  assertCommandInvocation(
-    envelope.instruction.expectedResponse.submitCommand.commandInvocation,
-    envelope.agentProfile.id,
-    envelope.instruction.expectedResponse.submitCommand.argv,
-  );
+  assert.equal(envelope.instruction.candidateFile, undefined, "Brainstorm ask_user must not expose candidateFile before final_summary confirmation");
+  assert.equal(envelope.instruction.submitCommand, undefined, "Brainstorm ask_user must not expose submitCommand before final_summary confirmation");
+  assert.equal(envelope.instruction.expectedResponse.candidateFile, undefined, "Brainstorm expectedResponse must not expose candidateFile before final_summary confirmation");
+  assert.equal(envelope.instruction.expectedResponse.submitCommand, undefined, "Brainstorm expectedResponse must not expose submitCommand before final_summary confirmation");
   assert.equal(envelope.actionRequired, undefined, "Brainstorm start should remain user-gated");
 }
 
@@ -202,8 +199,8 @@ function comparableInstruction(envelope) {
     autoContinue: envelope.instruction.autoContinue,
     expectedResponseKind: envelope.instruction.expectedResponse.kind,
     hasRequestRef: typeof envelope.instruction.expectedResponse.requestRef === "string",
-    hasCandidateFile: typeof envelope.instruction.expectedResponse.candidateFile === "string",
-    hasSubmitCommand: typeof envelope.instruction.expectedResponse.submitCommand === "object",
+    hasCandidateFile: Object.prototype.hasOwnProperty.call(envelope.instruction.expectedResponse, "candidateFile"),
+    hasSubmitCommand: Object.prototype.hasOwnProperty.call(envelope.instruction.expectedResponse, "submitCommand"),
     hasSubmitCommandInvocation: envelope.instruction.expectedResponse.submitCommand?.commandInvocation?.kind === "loom_user_launcher",
     nextActionType: envelope.instruction.nextAction?.type,
   };

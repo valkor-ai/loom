@@ -54,7 +54,13 @@ import { brainstormSessionAgentActionContract, type AgentActionContract } from "
 import { referencedArtifactReadGuide, type ReferencedArtifactReadGuideEntry } from "./artifact-read-guide";
 import { repairSubmitRouting } from "./repair-routing";
 import { autoRunInstruction } from "./routing-instructions";
-import { artifactGenerationProtocolPolicy, artifactRepairPolicy, compactContextReadStep } from "./output-policy";
+import {
+  artifactGenerationProtocolPolicy,
+  artifactRepairPolicy,
+  brainstormAskUserInstructionPolicy,
+  brainstormAskUserReadStep,
+  compactContextReadStep,
+} from "./output-policy";
 import {
   businessLifecycleScanRules,
   businessScenarioConfirmationRules,
@@ -617,6 +623,14 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
     ...validateBrainstormCandidate(candidate, locator.deliveryId, locator.phaseId),
   ];
   if (issues.length > 0) {
+    const instruction = brainstormAcceptFailureInstruction(root, {
+      deliveryId: locator.deliveryId,
+      phaseId: locator.phaseId,
+      brainstormRunId: candidate.brainstormRunId,
+      requestId: input.requestId,
+      candidateFile: input.candidateFile,
+      issues,
+    });
     return {
       accepted: false,
       deliveryId: locator.deliveryId,
@@ -630,18 +644,33 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
         type: candidate.status === "blocked" ? "blocked" : "brainstorm_clarification",
         reason: "BRAINSTORM_CANDIDATE_INVALID",
       },
-      repairInstruction: brainstormRepairInstruction(root, {
-        deliveryId: locator.deliveryId,
-        phaseId: locator.phaseId,
-        brainstormRunId: candidate.brainstormRunId,
-        requestId: input.requestId,
-        candidateFile: input.candidateFile,
-        issues,
-      }),
+      ...(instruction.mode === "repair_candidate" ? { repairInstruction: instruction } : { instruction }),
     };
   }
 
   if (candidate.status !== "confirmed") {
+    const issues = [{
+      code: "CANDIDATE_NOT_CONFIRMED",
+      path: "status",
+      message: "Only confirmed BrainstormCandidate can be accepted.",
+    }];
+    const instruction = candidate.status === "blocked"
+      ? brainstormRepairInstruction(root, {
+          deliveryId: locator.deliveryId,
+          phaseId: locator.phaseId,
+          brainstormRunId: candidate.brainstormRunId,
+          requestId: input.requestId,
+          candidateFile: input.candidateFile,
+          issues,
+        })
+      : brainstormMissingClarificationInstruction(root, {
+          deliveryId: locator.deliveryId,
+          phaseId: locator.phaseId,
+          brainstormRunId: candidate.brainstormRunId,
+          requestId: input.requestId,
+          candidateFile: input.candidateFile,
+          issues,
+        });
     return {
       accepted: false,
       deliveryId: locator.deliveryId,
@@ -649,28 +678,13 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
       brainstormRunId: candidate.brainstormRunId,
       contractId: null,
       status: candidate.status,
-      issues: [{
-        code: "CANDIDATE_NOT_CONFIRMED",
-        path: "status",
-        message: "Only confirmed BrainstormCandidate can be accepted.",
-      }],
+      issues,
       contractPath: null,
       routeDecision: {
         type: candidate.status === "blocked" ? "blocked" : "brainstorm_clarification",
         reason: candidate.status === "blocked" ? "BRAINSTORM_BLOCKED" : "BRAINSTORM_NEEDS_CLARIFICATION",
       },
-      repairInstruction: brainstormRepairInstruction(root, {
-        deliveryId: locator.deliveryId,
-        phaseId: locator.phaseId,
-        brainstormRunId: candidate.brainstormRunId,
-        requestId: input.requestId,
-        candidateFile: input.candidateFile,
-        issues: [{
-          code: "CANDIDATE_NOT_CONFIRMED",
-          path: "status",
-          message: "Only confirmed BrainstormCandidate can be accepted.",
-        }],
-      }),
+      ...(instruction.mode === "repair_candidate" ? { repairInstruction: instruction } : { instruction }),
     };
   }
 
@@ -713,6 +727,79 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
       argv: ["technical-baseline", "request", "--delivery-id", locator.deliveryId, "--phase-id", locator.phaseId],
       userMessage: "BrainstormCandidate accepted. Continue immediately by creating TechnicalBaselineRequest.",
     }),
+  };
+}
+
+function brainstormAcceptFailureInstruction(
+  root: string,
+  input: {
+    deliveryId: string;
+    phaseId: string;
+    brainstormRunId: string;
+    requestId?: string;
+    candidateFile: string;
+    issues: Array<{ code: string; path: string; message: string }>;
+  },
+): Record<string, unknown> {
+  if (requiresBrainstormUserClarification(input.issues)) {
+    return brainstormMissingClarificationInstruction(root, input);
+  }
+  return brainstormRepairInstruction(root, input);
+}
+
+function requiresBrainstormUserClarification(issues: Array<{ code: string; path: string; message: string }>): boolean {
+  const userConfirmationIssueCodes = new Set([
+    "USER_CONFIRMATION_MISSING",
+    "CONFIRMATION_BASIS_MISSING",
+    "INITIAL_REQUEST_CANNOT_CONFIRM",
+    "SUMMARY_NOT_PRESENTED",
+    "CONFIRMATION_NOT_AFTER_SUMMARY",
+    "CONFIRMATION_PRESENTED_ITEM_MISSING",
+    "CLARIFICATION_PROGRESS_MISSING",
+    "FINAL_SUMMARY_NOT_CONFIRMED",
+    "CLARIFICATION_BLOCK_MISSING",
+    "CLARIFICATION_BLOCK_NOT_CONFIRMED",
+    "CONCEPT_GROUNDING_MISSING",
+    "CONCEPT_CONFIRMATION_MISSING",
+    "CONCEPTS_NOT_SHOWN_TO_USER",
+    "FRONTEND_BLOCK_UNRESOLVED",
+    "FRONTEND_TARGET_MISSING",
+  ]);
+  return issues.some((issue) => userConfirmationIssueCodes.has(issue.code));
+}
+
+function brainstormMissingClarificationInstruction(
+  root: string,
+  input: {
+    deliveryId: string;
+    phaseId: string;
+    brainstormRunId: string;
+    requestId?: string;
+    candidateFile: string;
+    issues: Array<{ code: string; path: string; message: string }>;
+  },
+): Record<string, unknown> {
+  const requestRef = input.requestId
+    ? toProjectRelative(root, brainstormSessionRequestPath(root, input.deliveryId, input.requestId))
+    : null;
+  return {
+    mode: "ask_user",
+    ...brainstormAskUserInstructionPolicy(),
+    requestRef,
+    issues: input.issues,
+    userMessage: "BrainstormCandidate is incomplete because one or more progressive clarification blocks have not been confirmed. Continue the Brainstorm conversation with the next missing block; do not repair JSON or rerun brainstorm accept until final_summary is explicitly confirmed.",
+    expectedResponse: {
+      kind: "brainstorm_progressive_clarification",
+      rule: "Treat the failed accept as an early-submit signal, not a JSON repair task. Read requestRef through agentAction.read.fieldGroups, present the next missing Brainstorm block to the user, and continue the progressive conversation. Only after final_summary is explicitly confirmed should you read candidate_write_contract, write BrainstormCandidate, and run brainstorm accept.",
+      requestReadRule: brainstormAskUserReadStep,
+      requestRef,
+      currentTurnAnswerRule: {
+        consumeCurrentUserMessage: false,
+        meaning: "The previous user confirmation was already consumed for an earlier Brainstorm block. Ask or present the next missing block instead of treating the earlier confirmation as final_summary confirmation.",
+        doNotAskAgainWhenCurrentMessageIsExplicit: false,
+        ifAmbiguousAskUser: true,
+      },
+    },
   };
 }
 

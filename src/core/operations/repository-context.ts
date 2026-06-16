@@ -511,22 +511,18 @@ export async function acceptRepositoryContext(input: AcceptRepositoryContextInpu
       autoContinue: false,
       ...brainstormAskUserInstructionPolicy(),
       requestRef: brainstormPlan.refs.brainstormRequest,
-      candidateFile: brainstormPlan.refs.brainstormCandidateFile,
-      submitCommand: brainstormPlan.request.submitCommand,
       nextAction: {
         type: "brainstorm_confirmation",
         targetNode: "brainstorm",
         reason: "REPOSITORY_CONTEXT_READY_FOR_PHASE_BRAINSTORM",
         ref: brainstormPlan.refs.brainstormRequest,
       },
-      userMessage: "RepositoryContext accepted. Use the generated BrainstormSessionRequest to confirm this phase scope with the user before planning.",
+      userMessage: "RepositoryContext accepted. Use the generated BrainstormSessionRequest to continue the progressive Brainstorm conversation for this phase. Do not write or submit BrainstormCandidate until the dedicated final_summary block is confirmed.",
       expectedResponse: {
-        kind: "brainstorm_candidate_accept",
-        rule: "Read requestRef through agentAction.read.fieldGroups before presenting Brainstorm confirmation. Agent manages the conversation. After explicit user confirmation, write BrainstormCandidate to outputContract.candidateFile and run submitCommand.",
+        kind: "brainstorm_progressive_clarification",
+        rule: "Read requestRef through agentAction.read.fieldGroups before presenting Brainstorm confirmation. Agent manages the conversation. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read outputContract/generationProtocol/enumRefs, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
         requestReadRule: brainstormAskUserReadStep,
         requestRef: brainstormPlan.refs.brainstormRequest,
-        candidateFile: brainstormPlan.refs.brainstormCandidateFile,
-        submitCommand: brainstormPlan.request.submitCommand,
       },
     });
     return {

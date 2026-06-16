@@ -20,6 +20,17 @@ function run(args, projectRoot) {
   return envelope.data;
 }
 
+function runEnvelope(args, projectRoot) {
+  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, LOOM_AGENT_PROFILE: "codex", LOOM_COMPACT_OUTPUT: "1" },
+  });
+  const envelope = JSON.parse(output);
+  assert.equal(envelope.ok, true, output);
+  return envelope;
+}
+
 function readJson(projectRoot, relativePath) {
   return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
 }
@@ -37,6 +48,117 @@ function hydrateRequest(projectRoot, request) {
 
 function includes(text, needle, message) {
   assert.ok(String(text).includes(needle), message);
+}
+
+function writeJson(projectRoot, relativePath, value) {
+  const target = path.join(projectRoot, relativePath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function phaseScopeOnlyCandidate(request) {
+  return {
+    schemaVersion: "1.0",
+    candidateId: "brainstorm-candidate-phase-scope-only",
+    brainstormRunId: request.brainstormRunId,
+    deliveryId: request.deliveryId,
+    phaseId: request.phaseId,
+    status: "confirmed",
+    requestSummary: {
+      title: "Operations console",
+      oneLine: "Confirm only the current phase scope.",
+      businessGoal: "Only the phase_scope block has been confirmed so far.",
+      complexity: "medium",
+    },
+    sources: [{ sourceId: "req-001", type: "user_text", title: "test request", extracted: true }],
+    scope: {
+      included: [{
+        id: "scope-001",
+        label: "Operations console scope",
+        items: ["Create applications and review them."],
+        source: "user_confirmed",
+      }],
+      excluded: [],
+      deferred: [],
+      assumptions: [],
+    },
+    roadmap: {
+      required: false,
+      currentPhaseId: request.phaseId,
+      phases: [{
+        phaseId: request.phaseId,
+        title: "Operations console scope",
+        status: "scope_confirmed",
+        goal: "Confirm the scope only.",
+        scopeRefs: ["scope-001"],
+        acceptanceRefs: ["AC-001"],
+        dependsOn: [],
+      }],
+    },
+    phasePlan: {
+      current: {
+        phaseId: request.phaseId,
+        title: "Operations console scope",
+        goal: "Confirm the scope only.",
+        scopeRefs: ["scope-001"],
+        acceptanceRefs: ["AC-001"],
+        status: "scope_confirmed",
+      },
+      nextPhasePreview: { kind: "none", reason: "No next phase has been confirmed in this fixture." },
+    },
+    domainModel: {
+      actors: [{ id: "actor-staff", name: "Staff", description: "Uses the operations console." }],
+      capabilityGroups: [{ id: "cap-applications", name: "Applications", description: "Application handling." }],
+      businessFlows: [],
+    },
+    acceptance: [{
+      id: "AC-001",
+      statement: "Scope has been confirmed, but later Brainstorm blocks have not been confirmed yet.",
+      capabilityRefs: ["cap-applications"],
+      sourceRefs: ["req-001"],
+      priority: "must",
+    }],
+    userConfirmation: {
+      confirmed: true,
+      confirmedAt: "2026-06-16T00:00:00.000Z",
+      confirmationSummary: "The user confirmed the phase_scope option only.",
+      confirmationBasis: {
+        initialRequestOnly: false,
+        summaryPresentedToUser: true,
+        confirmedAfterSummary: true,
+        presentedItems: [
+          "currentPhaseScopeSummary",
+          "includedDeferredExcludedBoundary",
+          "nextPhasePreview",
+        ],
+      },
+    },
+    conceptGrounding: {
+      phaseConceptGrounding: {
+        mode: "concepts_present",
+        concepts: [],
+      },
+      glossaryUpdates: [],
+    },
+    conceptConfirmation: {
+      shownToUser: false,
+      confirmedConceptRefs: [],
+      confirmationSummary: "Concept grounding has not been confirmed.",
+    },
+    clarificationProgress: {
+      mode: "progressive_blocks",
+      confirmedBlocks: [
+        { block: "phase_scope", summary: "The user confirmed phase_scope only.", confirmedByUser: true },
+      ],
+      skippedBlocks: [],
+      finalSummaryConfirmed: false,
+    },
+    handoff: {
+      ready: false,
+      nextNode: "brainstorm_clarification",
+      blockingReasons: ["Later Brainstorm blocks are not confirmed."],
+    },
+  };
 }
 
 const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-brainstorm-block-self-check-"));
@@ -121,5 +243,27 @@ includes(
   "lifecycle semantics",
   "concept explanation shape must carry lifecycle semantics.",
 );
+
+writeJson(projectRoot, request.outputContract.candidateFile, phaseScopeOnlyCandidate(request));
+const earlyAccept = runEnvelope([
+  "brainstorm",
+  "accept",
+  "--delivery-id",
+  request.deliveryId,
+  "--phase-id",
+  request.phaseId,
+  "--request-id",
+  request.requestId,
+  "--run-id",
+  request.brainstormRunId,
+  "--candidate-file",
+  request.outputContract.candidateFile,
+], projectRoot);
+assert.equal(earlyAccept.data.accepted, false, "phase_scope-only candidate must not be accepted.");
+assert.equal(earlyAccept.instruction?.mode, "ask_user", "phase_scope-only accept must route back to Brainstorm clarification.");
+assert.equal(earlyAccept.instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification");
+assert.equal(earlyAccept.actionRequired, undefined, "phase_scope-only accept must not become auto-runnable repair_candidate.");
+assert.equal(earlyAccept.instruction?.submitCommand, undefined, "phase_scope-only clarification must not expose submitCommand.");
+assert.equal(earlyAccept.instruction?.candidateFile, undefined, "phase_scope-only clarification must not expose candidateFile.");
 
 console.log("Brainstorm block self-check protocol verification passed.");

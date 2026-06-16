@@ -340,6 +340,11 @@ assert.deepEqual(
   ["outputContract", "generationProtocol", "enumRefs"],
   "Brainstorm write contract fields must be delayed until candidate writing.",
 );
+assert.ok(
+  brainstormCandidateWriteGroup.whenToRead.includes("final_summary") &&
+    brainstormCandidateWriteGroup.whenToRead.includes("Do not read this group after phase_scope"),
+  "Brainstorm write contract must only be read after final_summary confirmation.",
+);
 assert.equal(
   brainstormScopeCoreGroup.fields.includes("outputContract") || brainstormScopeCoreGroup.fields.includes("generationProtocol") || brainstormScopeCoreGroup.fields.includes("enumRefs"),
   false,

@@ -51,7 +51,7 @@ Clarify progressively in this block order:
 3. `frontend_experience`
 4. `final_summary`
 
-Do not merge required blocks. For `concept_grounding`, present delivery-wide and current-phase high-risk concepts with plain-language meanings and "must not be mistaken for" guards. For `frontend_experience`, ask in product language and preserve the confirmed target or skip reason. Do not call `brainstorm accept` until the user explicitly confirms scope, concept understanding, next phase preview, and frontend target or skip reason.
+Do not merge required blocks. For `concept_grounding`, present delivery-wide and current-phase high-risk concepts with plain-language meanings and "must not be mistaken for" guards. For `frontend_experience`, ask in product language and preserve the confirmed target or skip reason. Confirming `phase_scope`, `concept_grounding`, or `frontend_experience` only advances the conversation to the next block; it is not permission to write `BrainstormCandidate` or run `brainstorm accept`. Do not read the candidate write contract, write `BrainstormCandidate`, or call `brainstorm accept` until the user explicitly confirms the dedicated `final_summary` block.
 
 For Brainstorm `ask_user` gates, read `requestRef` and follow `agentAction.read.fieldGroups` inspect commands before presenting phase_scope, concept_grounding, frontend_experience, or final_summary. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block as a concrete user-facing question or confirmation summary. Do not infer Brainstorm scope, sources, concepts, frontend target, candidateFile, output schema, or submit command from guessed legacy root fields such as `.objective`, `.scope`, or `.outputContract`.
 

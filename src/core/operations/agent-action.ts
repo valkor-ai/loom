@@ -123,7 +123,7 @@ export function brainstormSessionAgentActionContract(input: {
     : [];
   return agentActionContract({
     actionKind: "brainstorm_session",
-    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary or writing a BrainstormCandidate, read the request through agentAction.read.fieldGroups inspect commands. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
+    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary, read the request through agentAction.read.fieldGroups inspect commands. Continue through phase_scope, concept_grounding, frontend_experience, and final_summary in chat. Write and submit BrainstormCandidate only after the user explicitly confirms the dedicated final_summary block. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
     read: {
       required: [
         "this request",
@@ -150,7 +150,8 @@ export function brainstormSessionAgentActionContract(input: {
       candidateFile: input.candidateFile,
       blockedFile: input.blockedFile ?? undefined,
       rules: [
-        "Write only outputContract.candidateFile for a confirmed BrainstormCandidate.",
+        "Do not write outputContract.candidateFile during phase_scope, concept_grounding, or frontend_experience confirmation.",
+        "Write only outputContract.candidateFile for a confirmed BrainstormCandidate after final_summary has been presented and explicitly confirmed by the user.",
         "If blocked, write only blockedOutput.candidateFile when present.",
         "Do not write accepted Brainstorm contract files directly.",
         "Do not base BrainstormCandidate fields on null values returned from guessed selectors; return to agentAction.read.fieldGroups and sourceFieldAccessHints.",
@@ -160,7 +161,7 @@ export function brainstormSessionAgentActionContract(input: {
       command: input.submitCommand,
       requiredArgs: ["--delivery-id", "--phase-id", "--request-id", "--run-id", "--candidate-file"],
       placeholders: { "{candidateFile}": input.candidateFile },
-      runAfter: "candidateFile exists and validates against outputContract.schemaShape",
+      runAfter: "the dedicated final_summary block has been explicitly confirmed, candidateFile exists, and the candidate validates against outputContract.schemaShape",
     },
     schema: {
       primary: "BrainstormCandidate",
@@ -923,7 +924,7 @@ function purposeForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_concept_grounding_context") return "Brainstorm concept-grounding context to read only when presenting or writing the concept confirmation block.";
   if (groupId === "brainstorm_session_frontend_experience_context") return "Brainstorm frontend-experience context to read only when presenting or writing the frontend experience block.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Advisory keyword hints for Brainstorm concept discovery and clarification only; never use this group as scope or acceptance authority.";
-  if (groupId === "brainstorm_session_candidate_write_contract") return "Brainstorm candidate writing contract, schema, enum, and generation protocol. Read after user confirmation before writing or submitting the candidate.";
+  if (groupId === "brainstorm_session_candidate_write_contract") return "Brainstorm candidate writing contract, schema, enum, and generation protocol. Read only after the dedicated final_summary block is explicitly confirmed, immediately before writing or submitting the candidate.";
   if (groupId === "execute_task_task_core") return "Task identity, objective, write boundary, acceptance refs, concept refs, and verification intents needed before editing project files.";
   if (groupId === "execute_task_acceptance_and_concepts") return "Task-scoped acceptance and concept grounding authority for implementation coverage.";
   if (groupId === "execute_task_architecture_context") return "Task-scoped AAC projection fields needed for source edits without reading the entire architecture projection at once.";
@@ -953,7 +954,7 @@ function whenToReadForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_concept_grounding_context") return "Only when the next Brainstorm gate is concept_grounding or when writing conceptGrounding fields into the candidate.";
   if (groupId === "brainstorm_session_frontend_experience_context") return "Only when the next Brainstorm gate is frontend_experience or when writing frontendExperience/frontendExperienceDelta fields into the candidate.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Only when concept extraction, terminology ambiguity, or candidate discovery needs advisory hints. Do not read this group by default for phase_scope, and never use keywordHints as scope or acceptance authority.";
-  if (groupId === "brainstorm_session_candidate_write_contract") return "After the user has confirmed the current Brainstorm block and before writing BrainstormCandidate or running submitCommand.";
+  if (groupId === "brainstorm_session_candidate_write_contract") return "Only after the user has explicitly confirmed the dedicated final_summary block, immediately before writing BrainstormCandidate or running submitCommand. Do not read this group after phase_scope, concept_grounding, or frontend_experience confirmations.";
   if (groupId === "execute_task_task_core") return "First TaskExecution read, before deciding source edits or verification approach.";
   if (groupId === "execute_task_acceptance_and_concepts") return "Read before editing to preserve acceptance and concept coverage.";
   if (groupId === "execute_task_architecture_context") return "Read before editing project files; use sourceRefs.architectureArtifactContractRef as targeted fallback only when this projection lacks a required detail.";
