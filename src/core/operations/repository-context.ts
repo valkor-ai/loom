@@ -46,6 +46,7 @@ import {
   businessObjectOperationCandidateRules,
   businessObjectOperationClarificationRules,
   brainstormCandidateSelfReviewRules,
+  brainstormRequirementSemanticCompactRules,
   brainstormRequirementSemanticRules,
   confirmedBlockDetailRetentionRules,
   frontendOperationPathCandidateRules,
@@ -1370,6 +1371,7 @@ function createPhaseBrainstormSessionRequest(input: {
       },
       requirementSemanticGrounding: {
         validationMode: "generation_guidance_only",
+        compactRules: brainstormRequirementSemanticCompactRules(),
         finalSummaryBusinessDetailContract: {
           appliesWhenAgentFinds: [
             "business flows",

@@ -1,0 +1,20 @@
+{
+  "id": "incident-review-continuation",
+  "title": "Incident Review Continuation",
+  "seedDir": "incident-review-continuation/seed",
+  "request": "Continue the existing incident tracker from the prior phase. Add post-incident review readiness without replacing the in-memory API: incidents may have action items with owners and due dates, open and overdue action items must be listed deterministically, and summarizeIncidents must surface action-item counts, overdue counts, reviewStatus, and nextAction.",
+  "context": [
+    "Phase 1 already delivered incident creation, assignment, resolution, listing, and a basic summary. The prior handoff is in docs/phase-1-incidents.md.",
+    "Action items belong to incidents and have id, title, owner, dueAt, and status. dueAt should be an ISO timestamp and should use the injectable now() clock for overdue checks.",
+    "Overdue action items are unresolved action items with dueAt before now(). Resolved incidents can still have open action items.",
+    "Do not add paging, external alert providers, persistence, or dependencies. Keep structured validation errors."
+  ],
+  "successCriteria": [
+    "Existing incident tests continue to pass.",
+    "addActionItem accepts owner and dueAt and returns cloned action item data.",
+    "completeActionItem marks action items done without resolving the whole incident.",
+    "listOpenActionItems and listOverdueActionItems return deterministic action item lists.",
+    "summarizeIncidents adds openActionItemCount, overdueActionItemCount, reviewStatus, and nextAction."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}

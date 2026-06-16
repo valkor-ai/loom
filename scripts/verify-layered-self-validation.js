@@ -259,18 +259,15 @@ function assertBrainstormRequestReadPlan(request, label) {
   );
   const fields = new Set(groups.flatMap((group) => group.fields ?? []));
   for (const field of [
-    "agentAction",
-    "requestManifest",
+    "agentAction.instruction",
+    "agentAction.stopConditions",
     "originalRequest",
     "contextRefs",
     "sourceFieldAccessHints",
     "firstClarificationGate",
-    "clarificationConversationProtocol",
+    "clarificationConversationProtocol.requiredBlocks",
     "conceptGroundingRequest",
-    "outputContract",
-    "rules",
-    "generationProtocol",
-    "enumRefs",
+    "rules.phaseScopeOptionComparison",
   ]) {
     assert.ok(fields.has(field), `${label}: Brainstorm read plan must include ${field}`);
   }
@@ -2473,7 +2470,7 @@ function main() {
     assert.equal(phase2BrainstormRequest.outputContract.candidateFile, expectedCandidateFile);
     assert.ok(
       phase2BrainstormRequest.agentAction.read.fieldGroups
-        .find((group) => group.groupId === "brainstorm_session_candidate_write_contract")
+        .find((group) => group.groupId === "brainstorm_session_candidate_write_controls")
         ?.whenToRead.includes("final_summary"),
       "Brainstorm request must keep candidate path in delayed final_summary write contract",
     );

@@ -1,0 +1,61 @@
+name: PR Conventions
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate branch and commits
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          pattern='^(feature|features|fix|hotfix|docs|chore|refactor|perf|test|build|ci|release|dependabot)/[a-z0-9][a-z0-9._/-]*$'
+          if [[ ! "$HEAD_REF" =~ $pattern ]]; then
+            echo "Invalid branch name: $HEAD_REF"
+            echo "Use a branch name like feature/my-change, fix/my-bug, docs/readme-update, or chore/tooling-update."
+            exit 1
+          fi
+
+      - name: Check commit messages
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const allowed = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .{1,200}$/;
+            const pull_number = context.payload.pull_request.number;
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              ...context.repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            const failures = [];
+            for (const item of commits) {
+              const subject = item.commit.message.split("\n")[0].trim();
+              if (subject.startsWith("Merge ") || subject.startsWith("Revert \"")) {
+                continue;
+              }
+              if (!allowed.test(subject)) {
+                failures.push(`${item.sha.slice(0, 7)} ${subject}`);
+              }
+            }
+
+            if (failures.length > 0) {
+              core.setFailed([
+                "Commit messages must use Conventional Commit format:",
+                "  feat: add new capability",
+                "  fix: correct broken behavior",
+                "  docs: update README",
+                "",
+                "Invalid commits:",
+                ...failures.map((line) => `  - ${line}`),
+              ].join("\n"));
+            }

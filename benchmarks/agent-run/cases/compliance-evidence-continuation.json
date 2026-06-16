@@ -1,0 +1,21 @@
+{
+  "id": "compliance-evidence-continuation",
+  "title": "Compliance Evidence Continuation",
+  "seedDir": "compliance-evidence-continuation/seed",
+  "request": "Continue the existing compliance evidence store from the prior phase. Add control-readiness evaluation without replacing the in-memory API: controls may declare required evidence types, evidence may include evidenceType, status, and expiresAt, ready controls must have accepted non-expired evidence for every required type, and summarizeCompliance must surface ready, blocked, missing, expired, pending, complianceStatus, and nextAction fields.",
+  "context": [
+    "Phase 1 already delivered evidence creation, status updates, listing, and a basic evidence summary. The prior handoff is in docs/phase-1-compliance.md.",
+    "Compliance notes in docs/auditor-notes.md mention future exports and external GRC sync, but this phase is only control-readiness evaluation inside the local store.",
+    "Accepted evidence is usable only when status is accepted and expiresAt is absent or today/future according to the injectable now() clock.",
+    "A control is ready only when every required evidence type has at least one usable evidence item.",
+    "Do not add persistence, file uploads, external integrations, or dependencies. Keep structured validation errors and clone returned objects."
+  ],
+  "successCriteria": [
+    "Existing compliance evidence tests continue to pass.",
+    "registerControl accepts requiredEvidenceTypes and validates duplicates or blank fields.",
+    "addEvidence accepts evidenceType, status, and expiresAt with structured validation.",
+    "listReadyControls returns only controls with accepted non-expired evidence for every requirement.",
+    "summarizeCompliance adds readyControlCount, blockedControlCount, missingEvidenceCount, expiredEvidenceCount, pendingEvidenceCount, complianceStatus, and nextAction."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}

@@ -7,16 +7,19 @@
     ·
     <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">Technical Report</a>
     ·
-    <a href="#use-cases">Use Cases</a>
+    <a href="./docs/use-cases.md">Use Cases</a>
     ·
     <a href="#quick-start">Quick Start</a>
     ·
     <a href="#how-to-use">How to Use</a>
     ·
+    <a href="#token-saving-context">Token Saving</a>
+    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
+    <a href="https://discord.gg/4VgM2wEFGB"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white"></a>
     <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
@@ -52,54 +55,6 @@ The hard part is the harness around the model: durable state, scoped work, routi
 
 That is where Loom is different from prompt files, one-off workflows, and single-agent scripts: it stores delivery state in `.loom/`, exposes an agent-neutral CLI, and makes verification, repair, preview, and handoff first-class protocol steps.
 
-## Use Cases
-
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example3-web.mp4"><img src="./assets/example3-web.webp" alt="AI product launch site demo" width="420"></a>
-      <br>
-      <strong>Web - AI product launch site</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example4-web.mp4"><img src="./assets/example4-web.webp" alt="Creator analytics workspace demo" width="420"></a>
-      <br>
-      <strong>Web - Creator analytics workspace</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example5-web.mp4"><img src="./assets/example5-web.webp" alt="Interactive campaign microsite demo" width="420"></a>
-      <br>
-      <strong>Web - Interactive campaign microsite</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example1-game.mp4"><img src="./assets/example-game1.webp" alt="Flight simulator demo" width="420"></a>
-      <br>
-      <strong>Game - Flight simulator</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example2-finance.mp4"><img src="./assets/example2-finance.webp" alt="Quant trading workbench demo" width="420"></a>
-      <br>
-      <strong>Finance - Quant trading workbench</strong>
-    </td>
-    <td align="center" width="50%">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example6-research.mp4"><img src="./assets/example6-research.webp" alt="Global biodiversity research demo" width="420"></a>
-      <br>
-      <strong>Research - Global biodiversity research</strong>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" colspan="2">
-      <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/example7-app.mp4"><img src="./assets/example7-app.webp" alt="Nutrition health app demo" width="420"></a>
-      <br>
-      <strong>App - Nutrition health app</strong>
-    </td>
-  </tr>
-</table>
-
 ## From Demo to Delivery
 
 Vibe Coding and AI Coding are making software creation accessible to more builders than ever. More people can now turn an idea into a demo, prototype a product, or build a tool for themselves with the help of coding agents.
@@ -125,6 +80,36 @@ Backend readiness | Track databases, auth, storage, functions, environment varia
 UIX guidance | Preserve visual direction, interaction flows, responsive states, accessibility expectations, and product-specific interface details as delivery requirements.
 Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
 Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode and other agents.
+
+## Token-Saving Context
+
+High-level context path:
+
+```text
+Your coding agent / app
+(Codex, Claude Code, OpenCode, future adapters...)
+        |
+        | delivery goal . repo context . logs . tests . preview evidence
+        v
++----------------------------------------------------------------------------+
+| Loom  (project-local delivery state; full artifacts stay in .loom/)         |
+|----------------------------------------------------------------------------|
+| Dynamic workflow router -> Request manifest -> Agent read plan              |
+|                              |                                             |
+|                              |- .refs/*.json        full authority          |
+|                              |- fieldGroups         grouped required reads  |
+|                              |- inspect selectors   targeted retrieval      |
+|                              `- compact envelope    next action + refs      |
+|                                                                            |
+| Task contracts . evidence windows . fullLogRef . review/repair/resume state |
++----------------------------------------------------------------------------+
+        |
+        | compact instruction + selected refs + retrieval path
+        v
+Agent turn / LLM context
+```
+
+In the latest 11-case agent-run benchmark, Codex + Loom used 15.8% fewer tokens than Codex alone while preserving 100% completion. See the [latest benchmark results](./benchmarks/agent-run/results/latest.md) and the [run guide](./benchmarks/agent-run/README.md).
 
 ## Prerequisites
 

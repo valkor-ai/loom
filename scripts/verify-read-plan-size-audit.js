@@ -655,21 +655,84 @@ async function auditBrainstorm() {
     const started = run(["brainstorm", "start", "--request", "Build a compact status workflow."], root);
     const request = await requestFromCommand(started, root);
     auditReadPlan("BrainstormSessionRequest", request, {
-      requiredFields: ["originalRequest", "outputContract", "enumRefs"],
+      requiredFields: ["originalRequest", "outputContract.candidateFile", "outputContract.schemaShape.scope", "enumRefs"],
+      forbiddenFields: ["agentAction", "clarificationConversationProtocol", "requestManifest", "rules", "outputContract", "outputContract.schemaShape", "outputContract.schemaShape.candidateRules"],
     });
     const scopeCore = readGroup(request, "brainstorm_session_phase_scope_core");
     const scopeAuthority = readGroup(request, "brainstorm_session_phase_scope_authority");
     const conceptContext = readGroup(request, "brainstorm_session_concept_grounding_context");
-    const candidateWrite = readGroup(request, "brainstorm_session_candidate_write_contract");
+    const candidateWriteControls = readGroup(request, "brainstorm_session_candidate_write_controls");
+    const candidateSchemaIdentity = readGroup(request, "brainstorm_session_candidate_schema_identity");
+    const candidateSchemaScope = readGroup(request, "brainstorm_session_candidate_schema_scope");
+    const candidateSchemaConcepts = readGroup(request, "brainstorm_session_candidate_schema_concepts");
+    const candidateSchemaFrontend = readGroup(request, "brainstorm_session_candidate_schema_frontend");
+    const candidateSchemaHandoff = readGroup(request, "brainstorm_session_candidate_schema_handoff");
+    const candidateFinalSummaryRules = readGroup(request, "brainstorm_session_candidate_final_summary_rules");
+    const candidateRequirementSemanticRules = readGroup(request, "brainstorm_session_candidate_requirement_semantic_rules");
+    const candidateSelfReviewRules = readGroup(request, "brainstorm_session_candidate_self_review_rules");
     assert.ok(scopeCore, "BrainstormSessionRequest must expose phase_scope_core group");
     assert.ok(scopeAuthority, "BrainstormSessionRequest must expose phase_scope_authority group");
     assert.ok(conceptContext, "BrainstormSessionRequest must expose concept_grounding_context group");
-    assert.ok(candidateWrite, "BrainstormSessionRequest must expose candidate_write_contract group");
-    for (const field of ["outputContract", "generationProtocol", "enumRefs", "conceptGroundingRequest"]) {
+    assert.ok(candidateWriteControls, "BrainstormSessionRequest must expose candidate_write_controls group");
+    assert.ok(candidateSchemaIdentity, "BrainstormSessionRequest must expose candidate_schema_identity group");
+    assert.ok(candidateSchemaScope, "BrainstormSessionRequest must expose candidate_schema_scope group");
+    assert.ok(candidateSchemaConcepts, "BrainstormSessionRequest must expose candidate_schema_concepts group");
+    assert.ok(candidateSchemaFrontend, "BrainstormSessionRequest must expose candidate_schema_frontend group");
+    assert.ok(candidateSchemaHandoff, "BrainstormSessionRequest must expose candidate_schema_handoff group");
+    assert.ok(candidateFinalSummaryRules, "BrainstormSessionRequest must expose candidate_final_summary_rules group");
+    assert.ok(candidateRequirementSemanticRules, "BrainstormSessionRequest must expose candidate_requirement_semantic_rules group");
+    assert.ok(candidateSelfReviewRules, "BrainstormSessionRequest must expose candidate_self_review_rules group");
+    for (const field of ["agentAction", "clarificationConversationProtocol", "requestManifest", "outputContract", "rules", "generationProtocol", "enumRefs", "conceptGroundingRequest"]) {
       assert.equal(scopeCore.fields.includes(field), false, `phase_scope_core must not read ${field}`);
     }
-    assert.deepEqual(candidateWrite.fields, ["outputContract", "generationProtocol", "enumRefs"], "candidate_write_contract must hold delayed write-only fields");
-    assert.deepEqual(conceptContext.fields, ["conceptGroundingRequest"], "concept_grounding_context must hold concept-only fields");
+    assert.deepEqual(candidateWriteControls.fields, ["agentAction.write", "agentAction.submit", "agentAction.schema", "outputContract.candidateFile", "outputContract.schemaRef", "generationProtocol", "enumRefs"], "candidate_write_controls must hold delayed write control fields");
+    assert.deepEqual(candidateSchemaIdentity.fields, [
+      "outputContract.schemaShape.schemaVersion",
+      "outputContract.schemaShape.candidateId",
+      "outputContract.schemaShape.brainstormRunId",
+      "outputContract.schemaShape.deliveryId",
+      "outputContract.schemaShape.phaseId",
+      "outputContract.schemaShape.status",
+      "outputContract.schemaShape.requestSummary",
+      "outputContract.schemaShape.sources",
+    ], "candidate_schema_identity must hold identity schema fields");
+    assert.deepEqual(candidateSchemaScope.fields, [
+      "outputContract.schemaShape.scope",
+      "outputContract.schemaShape.roadmap",
+      "outputContract.schemaShape.phasePlan",
+      "outputContract.schemaShape.acceptance",
+    ], "candidate_schema_scope must hold scope schema fields");
+    assert.deepEqual(candidateSchemaConcepts.fields, [
+      "outputContract.schemaShape.domainModel",
+      "outputContract.schemaShape.conceptGrounding",
+      "outputContract.schemaShape.conceptConfirmation",
+      "outputContract.schemaShape.clarificationProgress",
+    ], "candidate_schema_concepts must hold concept schema fields");
+    assert.deepEqual(candidateSchemaFrontend.fields, ["outputContract.schemaShape.frontendExperience"], "candidate_schema_frontend must hold frontend schema fields");
+    assert.deepEqual(candidateSchemaHandoff.fields, ["outputContract.schemaShape.handoff"], "candidate_schema_handoff must hold delayed handoff fields");
+    assert.deepEqual(candidateFinalSummaryRules.fields, [
+      "clarificationConversationProtocol.blockConfirmationRules.final_summary",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.appliesWhenAgentFinds",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+    ], "candidate_final_summary_rules must hold narrow final summary rule fields");
+    assert.deepEqual(candidateRequirementSemanticRules.fields, ["rules.requirementSemanticGrounding.compactRules"], "candidate_requirement_semantic_rules must hold compact requirement semantic rule list");
+    assert.deepEqual(candidateSelfReviewRules.fields, ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"], "candidate_self_review_rules must hold narrow self-review rule fields");
+    const brainstormFields = request.agentAction.read.fieldGroups.flatMap((group) => group.fields);
+    assert.equal(brainstormFields.includes("outputContract"), false, "BrainstormSessionRequest must not read full outputContract in fieldGroups");
+    assert.equal(brainstormFields.includes("outputContract.schemaShape"), false, "BrainstormSessionRequest must not read full outputContract.schemaShape in fieldGroups");
+    assert.equal(brainstormFields.includes("outputContract.schemaShape.candidateRules"), false, "BrainstormSessionRequest must not read full candidateRules in fieldGroups");
+    assert.equal(brainstormFields.includes("agentAction"), false, "BrainstormSessionRequest must not read full agentAction in fieldGroups");
+    assert.equal(brainstormFields.includes("clarificationConversationProtocol"), false, "BrainstormSessionRequest must not read full clarificationConversationProtocol in fieldGroups");
+    assert.equal(brainstormFields.includes("requestManifest"), false, "BrainstormSessionRequest must not read full requestManifest in fieldGroups");
+    assert.equal(brainstormFields.includes("rules"), false, "BrainstormSessionRequest must not read full rules in fieldGroups");
+    assert.deepEqual(conceptContext.fields, [
+      "conceptGroundingRequest",
+      "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
+    ], "concept_grounding_context must hold concept-only fields and narrow concept rules");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -1,0 +1,20 @@
+{
+  "id": "feature-flags-continuation",
+  "title": "Feature Flags Continuation",
+  "seedDir": "feature-flags-continuation/seed",
+  "request": "Continue the existing feature flag registry from the prior phase. Add release-readiness evaluation without replacing the in-memory API: flags may define allowedSegments and prerequisite flag keys, evaluateFlag should consider enabled state, segment targeting, and prerequisite readiness, blocked flags must be listed, and summarizeFlags must surface targeted, blocked, and release status fields.",
+  "context": [
+    "Phase 1 already delivered flag creation, enable/disable, listing, and basic summary behavior. The prior handoff is in docs/phase-1-flags.md.",
+    "allowedSegments is optional. When present, evaluateFlag should return true only if context.segment is included.",
+    "prerequisites are other flag keys. A flag with a disabled prerequisite is blocked; unknown prerequisites should fail validation when the flag is created.",
+    "Do not add remote config, hashing rollouts, persistence, or dependencies. Keep structured validation errors."
+  ],
+  "successCriteria": [
+    "Existing feature flag tests continue to pass.",
+    "createFlag accepts optional allowedSegments and prerequisites while preserving existing fields.",
+    "evaluateFlag returns deterministic results from enabled state, segment targeting, and prerequisites.",
+    "listBlockedFlags returns enabled flags blocked by disabled prerequisites.",
+    "summarizeFlags adds targetedCount, blockedCount, releaseStatus, and nextAction."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}

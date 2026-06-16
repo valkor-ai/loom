@@ -25,6 +25,7 @@ import {
 } from "./deploy";
 import { handleInit } from "./init";
 import { createInspectHandler } from "./inspect";
+import { handleTokenSavingMetrics } from "./metrics";
 import { createNextTaskHandler } from "./next-task";
 import { createPlanHandler } from "./plan";
 import { createPlanningContractCreateHandler } from "./planning-contract";
@@ -63,6 +64,9 @@ export async function runCli(argv: string[]): Promise<void> {
   registerSimpleCommand(program, "init", "Initialize loom state", handleInit);
   registerSimpleCommand(program, "status", "Show loom project status", handleStatus);
 
+  const metrics = program.command("metrics").description("Show local loom metrics");
+  registerSimpleCommand(metrics, "token-saving", "Show token-saving telemetry", handleTokenSavingMetrics);
+
   program
     .command("inspect")
     .description("Read complete field value(s) from a loom request through its manifest refs")
@@ -71,10 +75,12 @@ export async function runCli(argv: string[]): Promise<void> {
     .addOption(compactOption())
     .option("--request <path>", "Request artifact path")
     .option("--field <field>", "Comma-separated field path(s) to read, for example task,outputContract.schemaShape")
+    .option("--values-only", "Return only inspected field values in compact agent-facing output")
     .action(async (options) => {
       await runCommand("inspect", options, createInspectHandler({
         request: options.request,
         field: options.field,
+        valuesOnly: options.valuesOnly,
       }));
     });
 

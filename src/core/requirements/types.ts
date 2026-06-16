@@ -46,11 +46,36 @@ export type RequirementKeywordHint = {
   sampleContexts: string[];
 };
 
+export type RequirementKeywordHintCompact = {
+  keyword: string;
+  occurrences: number;
+  sourceItemIds: string[];
+};
+
 export type RequirementSectionKeywordHints = {
   sectionId: string;
   sourceItemId: string;
   title?: string;
   keywords: RequirementKeywordHint[];
+};
+
+export type RequirementKeywordHintsCompact = {
+  usage: "advisory_only";
+  status: "completed" | "empty";
+  languageHints: string[];
+  topKeywords: RequirementKeywordHintCompact[];
+  sectionKeywords: Array<{
+    sectionId: string;
+    sourceItemId: string;
+    title?: string;
+    keywords: string[];
+  }>;
+  rules: {
+    advisoryOnly: true;
+    mustNotTreatAsScope: true;
+    mustNotTreatAsAcceptance: true;
+    ignoreWhenIrrelevant: true;
+  };
 };
 
 export type RequirementKeywordHints = {
@@ -70,6 +95,7 @@ export type RequirementKeywordHints = {
   };
   globalKeywords: RequirementKeywordHint[];
   sectionKeywords: RequirementSectionKeywordHints[];
+  compact: RequirementKeywordHintsCompact;
   rules: {
     advisoryOnly: true;
     mustNotTreatAsScope: true;

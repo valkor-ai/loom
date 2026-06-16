@@ -458,6 +458,12 @@ function keywordHintsGuide(): Omit<ReferencedArtifactReadGuideEntry, "refKey" | 
     artifactType: "RequirementKeywordHints",
     purpose: "Advisory-only local TF-IDF keyword hints that may help formulate clarification and concept-grounding questions.",
     requiredSelectors: [
+      ".compact",
+      ".compact.topKeywords[].keyword",
+      ".compact.sectionKeywords[].keywords[]",
+      ".compact.rules",
+    ],
+    optionalSelectors: [
       ".usage",
       ".status",
       ".globalKeywords[].keyword",
@@ -467,8 +473,6 @@ function keywordHintsGuide(): Omit<ReferencedArtifactReadGuideEntry, "refKey" | 
       ".sectionKeywords[].keywords[].score",
       ".sectionKeywords[].keywords[].sampleContexts",
       ".rules",
-    ],
-    optionalSelectors: [
       ".languageHints",
       ".extraction",
       ".globalKeywords[]",

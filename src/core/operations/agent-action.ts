@@ -641,23 +641,32 @@ function buildRepairCandidateFieldGroups(actionKind: string, requiredFields: str
 
 function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[], optionalFields: string[], rawOptionalFields: string[]): AgentActionReadGroup[] {
   const availableFields = uniqueFieldNames([...requiredFields, ...optionalFields, ...rawOptionalFields]);
-  const hasField = (field: string): boolean => availableFields.includes(field);
-  const hasLatestRepositoryContext = hasField("latestRepositoryContext") || hasField("contextRefs.latestRepositoryContextRef");
-  const hasKeywordHintsRef = hasField("contextRefs.keywordHintsRef");
-  const hasKeywordHintsField = hasField("keywordHints");
+  const hasField = (field: string): boolean => fieldAvailable(field, availableFields);
+  const hasExactField = (field: string): boolean => availableFields.includes(field);
+  const hasFieldOrDescendant = (field: string): boolean => availableFields.some((available) =>
+    field === available || fieldIsDescendantOf(available, field)
+  );
+  const hasLatestRepositoryContext = hasFieldOrDescendant("latestRepositoryContext") || hasExactField("contextRefs.latestRepositoryContextRef");
+  const hasKeywordHintsRef = hasExactField("contextRefs.keywordHintsRef");
+  const hasKeywordHintsField = hasFieldOrDescendant("keywordHints");
 
   const phaseScopeCoreFields = filterAvailable([
-    "agentAction",
-    "requestManifest",
+    "agentAction.instruction",
+    "agentAction.stopConditions",
     "originalRequest",
     "contextRefs",
     "sourceFieldAccessHints",
     "firstClarificationGate",
-    "clarificationConversationProtocol",
+    "clarificationConversationProtocol.mode",
+    "clarificationConversationProtocol.oneTopicPerTurn",
+    "clarificationConversationProtocol.maxOptionsPerQuestion",
+    "clarificationConversationProtocol.avoidSchemaLanguageToUser",
+    "clarificationConversationProtocol.requiredBlocks",
+    "clarificationConversationProtocol.blockConfirmationRules.phase_scope",
+    "rules.phaseScopeOptionComparison",
     "clarificationGuidance",
     "riskGuidance",
     "confirmationRules",
-    "rules",
   ], hasField);
   const phaseScopeAuthorityFields = [
     ...filterAvailable([
@@ -681,17 +690,69 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
   ];
   const conceptGroundingFields = filterAvailable([
     "conceptGroundingRequest",
+    "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
     "deliveryConceptGlossary",
     "phaseConceptGrounding",
   ], hasField);
   const frontendExperienceFields = filterAvailable([
+    "clarificationConversationProtocol.blockConfirmationRules.frontend_experience",
+    "clarificationConversationProtocol.frontendBlockRequiredWhen",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.frontendOperationPathContract",
     "currentFrontendExperience",
   ], hasField);
-  const keywordHintFields = hasKeywordHintsRef || hasKeywordHintsField ? ["keywordHints"] : [];
-  const candidateWriteFields = filterAvailable([
-    "outputContract",
+  const keywordHintFields = hasKeywordHintsRef || hasKeywordHintsField ? ["keywordHints.compact"] : [];
+  const candidateWriteControlFields = filterAvailable([
+    "agentAction.write",
+    "agentAction.submit",
+    "agentAction.schema",
+    "outputContract.candidateFile",
+    "outputContract.schemaRef",
     "generationProtocol",
     "enumRefs",
+  ], hasField);
+  const candidateSchemaIdentityFields = filterAvailable([
+    "outputContract.schemaShape.schemaVersion",
+    "outputContract.schemaShape.candidateId",
+    "outputContract.schemaShape.brainstormRunId",
+    "outputContract.schemaShape.deliveryId",
+    "outputContract.schemaShape.phaseId",
+    "outputContract.schemaShape.status",
+    "outputContract.schemaShape.requestSummary",
+    "outputContract.schemaShape.sources",
+  ], hasField);
+  const candidateSchemaScopeFields = filterAvailable([
+    "outputContract.schemaShape.scope",
+    "outputContract.schemaShape.roadmap",
+    "outputContract.schemaShape.phasePlan",
+    "outputContract.schemaShape.acceptance",
+  ], hasField);
+  const candidateSchemaConceptFields = filterAvailable([
+    "outputContract.schemaShape.domainModel",
+    "outputContract.schemaShape.conceptGrounding",
+    "outputContract.schemaShape.conceptConfirmation",
+    "outputContract.schemaShape.clarificationProgress",
+  ], hasField);
+  const candidateSchemaFrontendFields = filterAvailable([
+    "outputContract.schemaShape.frontendExperience",
+  ], hasField);
+  const candidateSchemaHandoffFields = filterAvailable([
+    "outputContract.schemaShape.handoff",
+  ], hasField);
+  const candidateFinalSummaryRuleFields = filterAvailable([
+    "clarificationConversationProtocol.blockConfirmationRules.final_summary",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.appliesWhenAgentFinds",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+  ], hasField);
+  const candidateRequirementSemanticRuleFields = filterAvailable([
+    "rules.requirementSemanticGrounding.compactRules",
+  ], hasField);
+  const candidateSelfReviewRuleFields = filterAvailable([
+    "rules.candidateSelfReview",
+    "rules.nextPhasePreviewGeneration",
   ], hasField);
 
   const groups: AgentActionReadGroup[] = [];
@@ -700,12 +761,21 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
   pushGroup(groups, actionKind, "concept_grounding_context", false, conceptGroundingFields);
   pushGroup(groups, actionKind, "frontend_experience_context", false, frontendExperienceFields);
   pushGroup(groups, actionKind, "keyword_hints_advisory", false, keywordHintFields);
-  pushGroup(groups, actionKind, "candidate_write_contract", false, candidateWriteFields);
+  pushGroup(groups, actionKind, "candidate_write_controls", false, candidateWriteControlFields);
+  pushGroup(groups, actionKind, "candidate_schema_identity", false, candidateSchemaIdentityFields);
+  pushGroup(groups, actionKind, "candidate_schema_scope", false, candidateSchemaScopeFields);
+  pushGroup(groups, actionKind, "candidate_schema_concepts", false, candidateSchemaConceptFields);
+  pushGroup(groups, actionKind, "candidate_schema_frontend", false, candidateSchemaFrontendFields);
+  pushGroup(groups, actionKind, "candidate_schema_handoff", false, candidateSchemaHandoffFields);
+  pushGroup(groups, actionKind, "candidate_final_summary_rules", false, candidateFinalSummaryRuleFields);
+  pushGroup(groups, actionKind, "candidate_requirement_semantic_rules", false, candidateRequirementSemanticRuleFields);
+  pushGroup(groups, actionKind, "candidate_self_review_rules", false, candidateSelfReviewRuleFields);
 
   const groupedFields = new Set(groups.flatMap((group) => group.fields));
   const remainingFields = availableFields.filter((field) =>
-    !groupedFields.has(field) &&
+    !fieldCoveredByUsed(field, groupedFields) &&
     !field.startsWith("contextRefs.") &&
+    field !== "requestManifest" &&
     field !== "latestRepositoryContext" &&
     field !== "keywordHints"
   );
@@ -802,7 +872,7 @@ function fieldGroupFor(actionKind: string, suffix: string, required: boolean, fi
     whenToRead: whenToReadForFieldGroup(groupId, fields),
     fields,
     readCommand: inspectReadCommand(fields),
-    fallbackRule: "If this grouped inspect read fails, read each listed field through requestManifest refs as a targeted fallback. Do not print full .loom artifacts.",
+    fallbackRule: "Fallback: requestManifest refs; compact output.",
   };
 }
 
@@ -924,7 +994,15 @@ function purposeForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_concept_grounding_context") return "Brainstorm concept-grounding context to read only when presenting or writing the concept confirmation block.";
   if (groupId === "brainstorm_session_frontend_experience_context") return "Brainstorm frontend-experience context to read only when presenting or writing the frontend experience block.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Advisory keyword hints for Brainstorm concept discovery and clarification only; never use this group as scope or acceptance authority.";
-  if (groupId === "brainstorm_session_candidate_write_contract") return "Brainstorm candidate writing contract, schema, enum, and generation protocol. Read only after the dedicated final_summary block is explicitly confirmed, immediately before writing or submitting the candidate.";
+  if (groupId === "brainstorm_session_candidate_write_controls") return "Candidate write, submit, schema, enum controls.";
+  if (groupId === "brainstorm_session_candidate_schema_identity") return "BrainstormCandidate identity/source schema selectors.";
+  if (groupId === "brainstorm_session_candidate_schema_scope") return "BrainstormCandidate scope/roadmap/acceptance schema.";
+  if (groupId === "brainstorm_session_candidate_schema_concepts") return "BrainstormCandidate domain/concept schema.";
+  if (groupId === "brainstorm_session_candidate_schema_frontend") return "BrainstormCandidate frontend schema.";
+  if (groupId === "brainstorm_session_candidate_schema_handoff") return "BrainstormCandidate handoff schema.";
+  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Final summary rule selectors.";
+  if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Requirement semantic grounding rule list.";
+  if (groupId === "brainstorm_session_candidate_self_review_rules") return "Candidate self-review and next-phase rules.";
   if (groupId === "execute_task_task_core") return "Task identity, objective, write boundary, acceptance refs, concept refs, and verification intents needed before editing project files.";
   if (groupId === "execute_task_acceptance_and_concepts") return "Task-scoped acceptance and concept grounding authority for implementation coverage.";
   if (groupId === "execute_task_architecture_context") return "Task-scoped AAC projection fields needed for source edits without reading the entire architecture projection at once.";
@@ -949,12 +1027,20 @@ function purposeForFieldGroup(groupId: string, fields: string[]): string {
 }
 
 function whenToReadForFieldGroup(groupId: string, fields: string[]): string {
-  if (groupId === "brainstorm_session_phase_scope_core") return "First Brainstorm read for the phase_scope gate, before asking the user to confirm current phase scope.";
-  if (groupId === "brainstorm_session_phase_scope_authority") return "Read with phase_scope_core before presenting phase_scope options; use these fields as source-grounded authority for the current phase question.";
-  if (groupId === "brainstorm_session_concept_grounding_context") return "Only when the next Brainstorm gate is concept_grounding or when writing conceptGrounding fields into the candidate.";
-  if (groupId === "brainstorm_session_frontend_experience_context") return "Only when the next Brainstorm gate is frontend_experience or when writing frontendExperience/frontendExperienceDelta fields into the candidate.";
+  if (groupId === "brainstorm_session_phase_scope_core") return "First read before asking the phase_scope question.";
+  if (groupId === "brainstorm_session_phase_scope_authority") return "Read with phase_scope_core for source-grounded scope options.";
+  if (groupId === "brainstorm_session_concept_grounding_context") return "Only for concept_grounding or candidate concept fields.";
+  if (groupId === "brainstorm_session_frontend_experience_context") return "Only for frontend_experience or frontend candidate fields.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Only when concept extraction, terminology ambiguity, or candidate discovery needs advisory hints. Do not read this group by default for phase_scope, and never use keywordHints as scope or acceptance authority.";
-  if (groupId === "brainstorm_session_candidate_write_contract") return "Only after the user has explicitly confirmed the dedicated final_summary block, immediately before writing BrainstormCandidate or running submitCommand. Do not read this group after phase_scope, concept_grounding, or frontend_experience confirmations.";
+  if (groupId === "brainstorm_session_candidate_write_controls") return "Only after the user has explicitly confirmed the dedicated final_summary block, immediately before writing BrainstormCandidate or running submitCommand. Do not read this group after phase_scope, concept_grounding, or frontend_experience confirmations.";
+  if (groupId === "brainstorm_session_candidate_schema_identity") return "Only after final_summary confirmation, before writing identity, summary, or source metadata.";
+  if (groupId === "brainstorm_session_candidate_schema_scope") return "Only after final_summary confirmation, before writing scope, roadmap, phasePlan, or acceptance.";
+  if (groupId === "brainstorm_session_candidate_schema_concepts") return "Only after final_summary confirmation, when writing concept or clarification progress fields.";
+  if (groupId === "brainstorm_session_candidate_schema_frontend") return "Only after final_summary confirmation, when frontendExperience/frontendExperienceDelta applies.";
+  if (groupId === "brainstorm_session_candidate_schema_handoff") return "Only after final_summary confirmation, before setting handoff routing fields.";
+  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Only after final_summary confirmation, before writing final_summary or business-detail candidate fields.";
+  if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Only after final_summary confirmation, when detailed requirement semantic grounding rules are needed.";
+  if (groupId === "brainstorm_session_candidate_self_review_rules") return "Only after final_summary confirmation, before final self-review or submitCommand.";
   if (groupId === "execute_task_task_core") return "First TaskExecution read, before deciding source edits or verification approach.";
   if (groupId === "execute_task_acceptance_and_concepts") return "Read before editing to preserve acceptance and concept coverage.";
   if (groupId === "execute_task_architecture_context") return "Read before editing project files; use sourceRefs.architectureArtifactContractRef as targeted fallback only when this projection lacks a required detail.";
@@ -1033,7 +1119,8 @@ function purposeForField(field: string): string {
   if (field === "clarificationGuidance" || field === "riskGuidance" || field === "confirmationRules") return "Brainstorm conversation and confirmation rules.";
   if (field === "requirementContext.sourceItems") return "Normalized requirement source records for initial-delivery Brainstorm.";
   if (field === "requirementContext.normalizedText") return "Normalized full requirement text for Brainstorm when root originalRequest text is insufficient.";
-  if (field === "keywordHints") return "Advisory keyword hints for concept grounding and clarification questions; never a scope or acceptance authority.";
+  if (field === "keywordHints.compact") return "Compact advisory keyword hints for concept grounding and clarification questions; never a scope or acceptance authority.";
+  if (field === "keywordHints") return "Full advisory keyword hints for concept grounding and clarification questions; never a scope or acceptance authority.";
   if (field === "deliveryContext.sources") return "Existing delivery source facts for phase-continuation Brainstorm.";
   if (field.startsWith("latestRepositoryContext.")) return "Narrow current repository fact selector for phase-continuation Brainstorm; never current phase scope authority by itself.";
   if (field === "latestRepositoryContext") return "Latest repository fact snapshot for phase-continuation Brainstorm.";
@@ -1075,6 +1162,7 @@ function whenToReadForField(field: string): string {
     field === "latestConfirmedRequirementDecision" ||
     field === "confirmedRequirementDecisionsIndex" ||
     field === "keywordHints" ||
+    field.startsWith("keywordHints.") ||
     field === "deliveryConceptGlossary" ||
     field === "phaseConceptGrounding" ||
     field === "currentFrontendExperience"

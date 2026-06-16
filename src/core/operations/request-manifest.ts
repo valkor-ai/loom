@@ -2,6 +2,7 @@ import path from "node:path";
 import { ensureDir, readJsonFile, writeJsonAtomic } from "../state/fs";
 import { toProjectRelative } from "../state/paths";
 import { normalizeAgentActionForRequest } from "./agent-action";
+import { prettyJsonByteLength, recordTokenSavingEvent } from "./token-saving-telemetry";
 
 const DEFAULT_REF_KEYS = [
   "agentAction",
@@ -82,6 +83,7 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
   if (isRecord(manifest.agentAction)) {
     manifest.agentAction = normalizeAgentActionForRequest(manifest.agentAction, manifest);
   }
+  const fullRequestBytes = prettyJsonByteLength(manifest);
   const refKeys = options.refKeys ?? DEFAULT_REF_KEYS;
   const refsDir = requestRefsDir(requestFile);
   const refs: Record<string, {
@@ -118,6 +120,17 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
     refs,
     rule: "Read this request manifest first, then use agentAction.read.fieldGroups inspect readCommands for complete grouped request field values. If inspect fails, use the matching group fields against these refs with targeted selectors. Do not invent or probe unlisted sidecar files under the .refs directory.",
   };
+  await recordTokenSavingEvent({
+    projectRoot,
+    source: "request_manifest_refs",
+    artifactRef: toProjectRelative(projectRoot, requestFile),
+    fullBytes: fullRequestBytes,
+    compactBytes: prettyJsonByteLength(manifest),
+    metadata: {
+      refCount: Object.keys(refs).length,
+      refKeys: Object.keys(refs),
+    },
+  });
   return manifest as T;
 }
 

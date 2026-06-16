@@ -1,0 +1,20 @@
+{
+  "id": "release-readiness-continuation",
+  "title": "Release Readiness Continuation",
+  "seedDir": "release-readiness-continuation/seed",
+  "request": "Continue the existing release planning tool from the prior phase. Add blocker-aware release readiness without rewriting the planner: items may declare blockers and carry-over provenance, ready items must exclude work blocked by incomplete dependencies, and the release summary must surface ready, blocked, carried-over, and overall readiness status.",
+  "context": [
+    "Phase 1 already delivered a small in-memory release planner with add, list, complete, and summary behavior. Preserve that API unless a narrow extension is required.",
+    "Follow-up customer notes mention many future ideas, but this phase is only about blocker-aware readiness and carry-over provenance.",
+    "Do not replace the store with a framework or persistence layer. Keep tests deterministic with the existing injectable now() clock.",
+    "The prior delivery notes are available in docs/phase-1-delivery.md; use them as orientation, not as a reason to reimplement Phase 1."
+  ],
+  "successCriteria": [
+    "Existing release planner tests continue to pass.",
+    "Items accept optional blockedBy dependency IDs and optional carryOverFrom provenance.",
+    "listReadyItems returns incomplete items whose blockers are all completed or absent.",
+    "summarizeRelease reports readyCount, blockedCount, carriedOverCount, and status.",
+    "The benchmark verification command passes."
+  ],
+  "verificationCommand": "npm test && node benchmark-verify.js"
+}
