@@ -93,7 +93,8 @@ export function finalSummaryReviewRules(): string[] {
   return [
     "The final_summary block is a review gate, not the first place to discover business details.",
     "Before presenting final_summary for user confirmation, verify that phase_scope, concept_grounding, and frontend_experience were already confirmed or explicitly skipped with reasons.",
-    "The final_summary must summarize confirmed scope, business scenario, decision impacts, lifecycle actions, concept or rule boundaries, frontend target or skip reason, nextPhasePreview, and explicit not-done or deferred details when applicable.",
+    "The final_summary must summarize confirmed scope, business scenario, decision impacts, lifecycle actions, key field/data elements, concept or rule boundaries, frontend target or skip reason, nextPhasePreview, and explicit not-done or deferred details when applicable.",
+    "When concept_grounding confirmed key field sets, final_summary must include a concise user-visible key field/data elements paragraph covering the fields the phase depends on: identity fields, input fields, display fields, relationship fields, state fields, and result or feedback fields when applicable.",
     "The final_summary may be concise, but it must not narrow, omit, or override already confirmed phase_scope, concept_grounding, or frontend_experience details unless the user explicitly corrects them.",
     "When final_summary condenses earlier details, state that the previously confirmed block details remain part of the BrainstormCandidate contract instead of asking the user to restate them.",
     "If the user corrects final_summary, do not submit BrainstormCandidate from the stale summary. Incorporate the correction into the affected existing fields and present an updated final_summary before setting finalSummaryConfirmed=true.",

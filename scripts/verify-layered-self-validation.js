@@ -815,6 +815,14 @@ function assertBrainstormCandidateRules(request) {
     request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("applicable blocking rules and blocking reasons"),
     "BrainstormSessionRequest: final_summary business detail contract must include blocking reasons",
   );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("key field/data elements grouped by identity, input, display, relationship, state, and result or feedback fields when applicable"),
+    "BrainstormSessionRequest: final_summary business detail contract must include key field/data elements",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("key field/data elements")),
+    "BrainstormSessionRequest: final_summary review contract must require key field/data elements",
+  );
   assert.equal(
     request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.sourceOfTruth,
     "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
@@ -908,6 +916,10 @@ function assertBrainstormCandidateRules(request) {
   assert.ok(
     shape?.candidateRules?.some((rule) => rule.includes("business-detail confirmation")),
     "BrainstormCandidate schemaShape: missing final_summary business-detail rule",
+  );
+  assert.ok(
+    shape?.candidateRules?.some((rule) => rule.includes("key field/data elements")),
+    "BrainstormCandidate schemaShape: missing final_summary key field/data elements rule",
   );
   assert.ok(
     shape?.candidateRules?.some((rule) => rule.includes("using existing fields")),

@@ -190,6 +190,7 @@ includes(blockRules, "business scenario confirmation", "concept_grounding must i
 includes(blockRules, "decision impact ordering", "concept_grounding must include decision impact ordering.");
 includes(blockRules, "lifecycle scan", "concept_grounding must include lifecycle scan.");
 includes(blockRules, "final_summary block is a review gate", "final_summary must be a review gate, not first-detail discovery.");
+includes(blockRules, "key field/data elements", "final_summary must require key field/data elements.");
 includes(blockRules, "Do not use the Chinese word 反讲", "user-facing scenario confirmation must avoid obscure wording.");
 
 const confirmationRules = request.clarificationConversationProtocol.blockConfirmationRules;
@@ -200,6 +201,7 @@ includes(confirmationRules.concept_grounding, "decision impact ordering", "conce
 includes(confirmationRules.concept_grounding, "lifecycle scan", "concept confirmation must mention lifecycle scan.");
 includes(confirmationRules.frontend_experience, "frontend_experience self-check", "frontend confirmation must depend on self-check.");
 includes(confirmationRules.final_summary, "already-confirmed business scenario", "final summary must review already-confirmed details.");
+includes(confirmationRules.final_summary, "key field/data elements", "final summary confirmation must require key field/data elements.");
 
 const semantic = request.rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract;
 assert.ok(
@@ -214,6 +216,10 @@ assert.ok(
   semantic.requiredUserVisibleTopicsWhenApplicable.includes("business object lifecycle scan"),
   "semantic contract must list lifecycle scan as a required visible topic.",
 );
+assert.ok(
+  semantic.requiredUserVisibleTopicsWhenApplicable.includes("key field/data elements grouped by identity, input, display, relationship, state, and result or feedback fields when applicable"),
+  "semantic contract must list key field/data elements as a required visible topic.",
+);
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("phase_scope self-check")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("2-3 source-grounded phase scope options")));
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("single preselected phase_scope")));
@@ -222,6 +228,7 @@ assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) =>
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("Lifecycle actions")));
 assert.ok(semantic.blockSelfCheckContract.frontend_experience.rules.some((rule) => rule.includes("frontend_experience self-check")));
 assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("review gate")));
+assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("key field/data elements")));
 
 const candidateShape = request.outputContract.schemaShape;
 includes(

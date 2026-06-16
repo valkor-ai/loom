@@ -71,6 +71,7 @@ includes(blockRules, "applicable objects or subjects, actions or behaviors, inpu
 includes(blockRules, "identity fields, input fields, display fields, relationship fields, state fields", "field-set categories must be explicit and generic.");
 includes(blockRules, "operation input, preconditions, validation rules, blocking conditions, blocking reasons", "operation rule details must be explicit.");
 includes(blockRules, "Do not present only noun definitions", "concept grounding must not degrade to noun glossary.");
+includes(blockRules, "key field/data elements", "final_summary must carry key field/data elements from concept grounding.");
 
 const conceptRule = request.clarificationConversationProtocol.blockConfirmationRules.concept_grounding;
 includes(conceptRule, "covers every confirmed scope.included item", "concept confirmation must require every included scope item to be covered.");
@@ -96,6 +97,10 @@ assert.ok(
 assert.ok(
   semanticContract.confirmedBlockDetailRetentionContract.rules.some((rule) => rule.includes("For concept_grounding, preserve confirmed business scenario")),
   "retention rules must preserve concept_grounding business details.",
+);
+assert.ok(
+  semanticContract.finalSummaryReviewContract.rules.some((rule) => rule.includes("key field/data elements")),
+  "final summary review rules must require key field/data elements.",
 );
 assert.equal(semanticContract.scopeItemCoverageContract.owningBlock, "concept_grounding");
 assert.ok(
