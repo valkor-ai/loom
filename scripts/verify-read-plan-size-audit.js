@@ -729,6 +729,7 @@ async function auditBrainstorm() {
     assert.equal(brainstormFields.includes("rules"), false, "BrainstormSessionRequest must not read full rules in fieldGroups");
     assert.deepEqual(conceptContext.fields, [
       "conceptGroundingRequest",
+      "clarificationConversationProtocol.blockExecutionRules",
       "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",

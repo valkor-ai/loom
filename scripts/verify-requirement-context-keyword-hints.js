@@ -122,6 +122,7 @@ assert.deepEqual(candidateRequirementSemanticRulesGroup.fields, ["rules.requirem
 assert.deepEqual(candidateSelfReviewRulesGroup.fields, ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"]);
 assert.deepEqual(conceptGroundingGroup.fields, [
   "conceptGroundingRequest",
+  "clarificationConversationProtocol.blockExecutionRules",
   "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
   "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
   "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",

@@ -355,6 +355,7 @@ assert.deepEqual(
   brainstormConceptGroup.fields,
   [
     "conceptGroundingRequest",
+    "clarificationConversationProtocol.blockExecutionRules",
     "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
