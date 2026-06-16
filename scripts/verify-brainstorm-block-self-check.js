@@ -193,6 +193,14 @@ includes(blockRules, "frontend_experience self-check", "frontend_experience must
 includes(blockRules, "business scenario confirmation", "concept_grounding must include business scenario confirmation.");
 includes(blockRules, "decision impact ordering", "concept_grounding must include decision impact ordering.");
 includes(blockRules, "lifecycle scan", "concept_grounding must include lifecycle scan.");
+includes(blockRules, "业务理解与规则确认", "concept_grounding must use a user-facing title.");
+includes(blockRules, "scope-by-scope coverage", "concept_grounding must use a stable scope coverage section.");
+includes(blockRules, "one separate bullet or mini-block per confirmed current-phase scope item", "concept_grounding must not collapse scope coverage into prose.");
+includes(blockRules, "对象/关系, 关键字段, 操作与前置条件, 校验/阻断, 状态/成功结果", "concept_grounding must expose scannable object-operation labels.");
+includes(blockRules, "页面办理路径确认", "frontend_experience must use a user-facing title.");
+includes(blockRules, "target discovery or query-selection path", "frontend_experience must use a stable operation-path section.");
+includes(blockRules, "查询条件", "frontend_experience must show query criteria as a separate labeled line.");
+includes(blockRules, "one separate bullet or compact mini-block per operation", "frontend_experience must not collapse multiple operations into prose.");
 includes(blockRules, "final_summary block is a pre-submit checklist gate", "final_summary must be a pre-submit checklist gate, not first-detail discovery.");
 includes(blockRules, "Do not show internal names", "final_summary user-facing copy must hide internal block and candidate names.");
 includes(blockRules, "one user-visible coverage checklist", "final_summary must project prior confirmations into one checklist.");
@@ -238,7 +246,13 @@ assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("business scenario confirmation")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("decision impact")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("Lifecycle actions")));
+assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("scope-by-scope coverage")));
+assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("one separate bullet or mini-block per confirmed current-phase scope item")));
 assert.ok(semantic.blockSelfCheckContract.frontend_experience.rules.some((rule) => rule.includes("frontend_experience self-check")));
+assert.ok(semantic.blockSelfCheckContract.frontend_experience.rules.some((rule) => rule.includes("page operation path confirmation")));
+assert.ok(semantic.blockSelfCheckContract.frontend_experience.rules.some((rule) => rule.includes("query criteria as a separate labeled line")));
+assert.ok(semantic.frontendOperationPathContract.presentationRules.some((rule) => rule.includes("Do not show internal names")));
+assert.ok(semantic.frontendOperationPathContract.presentationRules.some((rule) => rule.includes("one separate bullet or compact mini-block per operation")));
 assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("pre-submit checklist gate")));
 assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("one user-visible coverage checklist")));
 assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("not the source of detailed requirements")));

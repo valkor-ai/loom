@@ -776,8 +776,32 @@ function assertBrainstormConceptGroundingRequest(request) {
     "BrainstormSessionRequest: scope coverage must avoid fixed capability taxonomy",
   );
   assert.ok(
+    blockRules.some((rule) => rule.includes("业务理解与规则确认") && rule.includes("Do not show internal names")),
+    "BrainstormSessionRequest: concept_grounding must use user-facing title and hide internal names",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("stable user-visible section order") && rule.includes("scope-by-scope coverage")),
+    "BrainstormSessionRequest: concept_grounding must use a stable readable section order",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("one separate bullet or mini-block per confirmed current-phase scope item")),
+    "BrainstormSessionRequest: concept_grounding must not collapse scope coverage into prose",
+  );
+  assert.ok(
     blockConfirmationRules.frontend_experience?.includes("dedicated frontend target"),
     "BrainstormSessionRequest: frontend_experience must require a dedicated frontend target confirmation",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("页面办理路径确认") && rule.includes("Do not show internal names")),
+    "BrainstormSessionRequest: frontend_experience must use user-facing title and hide internal names",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("query criteria as a separate labeled line")),
+    "BrainstormSessionRequest: frontend_experience must surface query criteria as a separate line",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("one separate bullet or compact mini-block per operation")),
+    "BrainstormSessionRequest: frontend_experience must not collapse operations into prose",
   );
   assert.ok(
     conceptGroundingRequest?.selectionGuidance?.preferConceptsAffecting?.includes("business_invariant"),
@@ -830,6 +854,14 @@ function assertBrainstormCandidateRules(request) {
   assert.ok(
     request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable"),
     "BrainstormSessionRequest: final_summary must include concrete page-operation checklist topic",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.frontendOperationPathContract?.presentationRules?.some((rule) => rule.includes("页面办理路径确认")),
+    "BrainstormSessionRequest: frontend operation-path contract must carry user-facing presentation rules",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.frontendOperationPathContract?.presentationRules?.some((rule) => rule.includes("query criteria as a separate labeled line")),
+    "BrainstormSessionRequest: frontend operation-path contract must require separate query-criteria display",
   );
   assert.ok(
     request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("explicit final_summary corrections that must be written back to structured fields"),

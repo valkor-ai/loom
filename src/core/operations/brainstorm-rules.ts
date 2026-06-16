@@ -12,6 +12,7 @@ export function nextPhasePreviewCandidateRules(): string[] {
 export function phaseScopeOptionComparisonRules(): string[] {
   return [
     "During the phase_scope block, present 2-3 source-grounded phase scope options before asking for confirmation by default. Treat nextPhaseSeed as a non-binding seed for option design, not as a preselected user answer.",
+    "Use a user-facing title such as phase scope confirmation, 阶段范围确认, or 当前阶段范围确认. Do not show internal names such as phase_scope, scope.included, scope.excluded, scope.deferred, nextPhaseSeed, or nextPhasePreview to the user.",
     "Each phase_scope option must identify included scope, excluded/deferred boundary, the reason for that cut, and the tradeoff for delivery speed, completeness, and implementation risk.",
     "Present phase_scope options in the user's language with a consistent compact structure for every option: included scope, excluded/deferred boundary, reason, and tradeoff.",
     "Use one separate visual block per phase_scope option. Do not write an option as a single run-on paragraph containing included/deferred/reason/tradeoff labels.",
@@ -28,6 +29,18 @@ export function phaseScopeOptionComparisonRules(): string[] {
     "When using the atomic single-scope exception, explicitly state why no narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary exists before asking for confirmation.",
     "For phase continuation, multiple nextPhaseSeed.scopePreview items, multiple lifecycle actions, or multiple deferred/excluded items mean the phase is not atomic and must be presented as 2-3 options.",
     "A confirmed phase_scope option must be reflected in scope.included, scope.excluded, scope.deferred, phasePlan.current, and phasePlan.nextPhasePreview using the existing BrainstormCandidate fields.",
+  ];
+}
+
+export function conceptGroundingPresentationRules(): string[] {
+  return [
+    "Use a user-facing title such as business understanding and rules confirmation, 业务理解与规则确认, or 业务规则确认. Do not show internal names such as concept_grounding, conceptGrounding, domainModel, businessFlows, riskFactor, semantic grounding, scope.included, or acceptance to the user.",
+    "The concept_grounding block must use a stable user-visible section order when domain behavior applies: current business scenario, scope-by-scope coverage, key objects and operation rules, unresolved or deferred rules when any exist, and one confirmation instruction.",
+    "Keep the current business scenario as a short plain-language paragraph, then use bullets or compact mini-blocks for details. Do not collapse scenario, concepts, object fields, operations, blocking rules, and state changes into one long paragraph.",
+    "For scope-by-scope coverage, show one separate bullet or mini-block per confirmed current-phase scope item. Each item should name only applicable details: object or subject, action or behavior, key fields or inputs, preconditions, validation or blocking reasons, success state or visible feedback, and unresolved or deferred note.",
+    "For key objects and operation rules, show one separate bullet or mini-block per important object or operation. Use user-facing labels equivalent to 对象/关系, 关键字段, 操作与前置条件, 校验/阻断, 状态/成功结果, and 未决/递延 when those details apply.",
+    "If the phase is technical-only or a detail category is not applicable, state the concrete reason in user language instead of filling a checklist with generic business labels.",
+    "End the concept_grounding block with one concise confirmation instruction. Do not ask the user to separately confirm every section unless a specific unresolved question blocks progress.",
   ];
 }
 
@@ -91,6 +104,17 @@ export function frontendExperienceSelfCheckRules(): string[] {
     "When UI is required, the self-check must verify target discovery or selection, pagination/list behavior when relevant, grounded query criteria, action entry, input fields, success feedback, error feedback, business-blocking feedback, and refresh/readback behavior.",
     "The self-check must verify that query criteria come from confirmed fields, user wording, acceptance details, business flow details, or repository facts; do not use a hardcoded industry field list.",
     "If the frontend_experience self-check finds the operation path unclear, ask a focused frontend operation-path question before marking frontend_experience confirmed.",
+  ];
+}
+
+export function frontendExperiencePresentationRules(): string[] {
+  return [
+    "Use a user-facing title such as page operation path confirmation, 页面办理路径确认, or 页面操作路径确认. Do not show internal names such as frontend_experience, frontendExperience, targetDiscovery, search_then_select, list_browse, query_and_select, direct_id_lookup, preselected_context, not_applicable, dataViews, actions, or operationPaths to the user.",
+    "The frontend_experience block must use a stable user-visible section order when UI applies: page or workspace surface, target discovery or query-selection path, operation entries and inputs, result feedback and refresh/readback, unacceptable page shapes when any apply, and one confirmation instruction.",
+    "If users must query or select an existing object, show pagination/list behavior and query criteria as a separate labeled line such as 查询条件. Do not bury query criteria inside a prose paragraph.",
+    "For multiple operations, show one separate bullet or compact mini-block per operation or operation group. Each operation item should name where it starts, what the user enters, what success looks like, what blocking/error feedback looks like, and what refresh/readback happens.",
+    "If UI is not required, deferred, inherited without change, or driven by login/session/preselected context, state the concrete reason and still avoid internal enum labels.",
+    "End the frontend_experience block with one concise confirmation instruction. Do not ask the user to separately confirm each operation unless a specific unresolved path blocks progress.",
   ];
 }
 
