@@ -178,6 +178,10 @@ const blockRules = request.clarificationConversationProtocol.blockExecutionRules
 includes(blockRules, "phase_scope self-check", "phase_scope must have a block-level self-check before confirmation.");
 includes(blockRules, "present 2-3 source-grounded phase scope options", "phase_scope must present option comparison by default.");
 includes(blockRules, "consistent compact structure", "phase_scope options must use a consistent compact structure.");
+includes(blockRules, "one separate visual block per phase_scope option", "phase_scope options must not be rendered as run-on paragraphs.");
+includes(blockRules, "stable multi-line template", "phase_scope options must use a fixed multi-line template.");
+includes(blockRules, "包含, 本阶段不做或延后, 原因, and 取舍", "phase_scope option labels must be user-facing and scannable.");
+includes(blockRules, "not buried inside the option paragraph", "phase_scope recommendation marker must be visible in the option title.");
 includes(blockRules, "nextPhaseSeed", "phase_scope must treat nextPhaseSeed as non-binding.");
 includes(blockRules, "must preserve the current phase's source-grounded core outcome", "phase_scope recommendation must not shrink the current phase core outcome.");
 includes(blockRules, "do not recommend it when it defers explicit nextPhaseSeed.scopePreview items", "phase_scope must not recommend narrower cuts that defer explicit seed items.");

@@ -346,6 +346,14 @@ function assertPhaseScopeOptionComparisonRules(request, label) {
     `${label}: phase_scope rules must require one recommended option`,
   );
   assert.ok(
+    generation?.rules?.some((rule) => rule.includes("one separate visual block per phase_scope option")),
+    `${label}: phase_scope rules must prevent run-on option paragraphs`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("stable multi-line template")),
+    `${label}: phase_scope rules must require a stable multi-line option template`,
+  );
+  assert.ok(
     generation?.rules?.some((rule) => rule.includes("nextPhaseSeed") && rule.includes("not as a preselected user answer")),
     `${label}: phase_scope rules must keep nextPhaseSeed from becoming a preselected answer`,
   );
