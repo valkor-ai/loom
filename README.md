@@ -73,6 +73,7 @@ Capability | What it changes
 --- | ---
 Dynamic workflows | Turn each delivery goal into an adaptive loop for clarification, planning, execution, verification, repair, and handoff.
 Delivery harness | Route work through requirement clarification, planning, building, checking, previewing, reviewing, repairing, and reporting.
+Requirement intelligence | Turns clarification from a chat step into a delivery-quality gate: confirmed scope, business rules, lifecycle coverage, and UI operation paths become structured context that planning, execution, and review must preserve.
 Token-saving context | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents do not reread the whole repository every turn.
 Task contracts | Turn broad goals into bounded tasks with source refs, acceptance intent, result files, and continuation rules.
 Executable tools | Give agents CLI commands for context collection, task routing, result recording, deployment checks, and delivery evidence.
