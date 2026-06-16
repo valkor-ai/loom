@@ -189,7 +189,10 @@ includes(blockRules, "frontend_experience self-check", "frontend_experience must
 includes(blockRules, "business scenario confirmation", "concept_grounding must include business scenario confirmation.");
 includes(blockRules, "decision impact ordering", "concept_grounding must include decision impact ordering.");
 includes(blockRules, "lifecycle scan", "concept_grounding must include lifecycle scan.");
-includes(blockRules, "final_summary block is a concise review gate", "final_summary must be a concise review gate, not first-detail discovery.");
+includes(blockRules, "final_summary block is a pre-submit checklist gate", "final_summary must be a pre-submit checklist gate, not first-detail discovery.");
+includes(blockRules, "Do not show internal names", "final_summary user-facing copy must hide internal block and candidate names.");
+includes(blockRules, "one user-visible coverage checklist", "final_summary must project prior confirmations into one checklist.");
+includes(blockRules, "current phase to submit, current phase coverage, confirmed business rules, confirmed page operation path", "final_summary must use a stable user-facing checklist section order.");
 includes(blockRules, "structured BrainstormCandidate fields", "final_summary must not be the detailed requirement source.");
 includes(blockRules, "Do not use the Chinese word 反讲", "user-facing scenario confirmation must avoid obscure wording.");
 
@@ -200,21 +203,26 @@ includes(confirmationRules.concept_grounding, "business scenario confirmation", 
 includes(confirmationRules.concept_grounding, "decision impact ordering", "concept confirmation must mention decision impact ordering.");
 includes(confirmationRules.concept_grounding, "lifecycle scan", "concept confirmation must mention lifecycle scan.");
 includes(confirmationRules.frontend_experience, "frontend_experience self-check", "frontend confirmation must depend on self-check.");
-includes(confirmationRules.final_summary, "concise combined final summary review", "final summary confirmation must stay concise.");
+includes(confirmationRules.final_summary, "pre-submit coverage checklist", "final summary confirmation must use a coverage checklist.");
+includes(confirmationRules.final_summary, "user-facing labels", "final summary confirmation must avoid internal labels.");
 includes(confirmationRules.final_summary, "any corrections", "final summary confirmation must support corrections without becoming the detail source.");
 
 const semantic = request.rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract;
 assert.ok(
-  semantic.requiredUserVisibleTopicsWhenApplicable.includes("confirmed current phase scope summary"),
-  "semantic contract must list concise phase scope summary as a required final_summary topic.",
+  semantic.requiredUserVisibleTopicsWhenApplicable.includes("current phase submission goal"),
+  "semantic contract must list current phase submission goal as a required final_summary topic.",
 );
 assert.ok(
-  semantic.requiredUserVisibleTopicsWhenApplicable.includes("concept/business-rule block confirmed or skipped reason"),
-  "semantic contract must list concept block status as a required final_summary topic.",
+  semantic.requiredUserVisibleTopicsWhenApplicable.includes("coverage checklist from confirmed phase scope including concrete included work and deferred or not-done boundaries"),
+  "semantic contract must require concrete scope coverage in final_summary.",
 );
 assert.ok(
-  semantic.requiredUserVisibleTopicsWhenApplicable.includes("frontend_experience block confirmed or skipped reason"),
-  "semantic contract must list frontend block status as a required final_summary topic.",
+  semantic.requiredUserVisibleTopicsWhenApplicable.includes("business-rule checklist from confirmed business understanding including concrete objects, relationships, operations, field-set headlines, state changes, blocking rules, success outcomes, and high-risk misunderstanding guards when applicable"),
+  "semantic contract must require business-rule coverage in final_summary.",
+);
+assert.ok(
+  semantic.requiredUserVisibleTopicsWhenApplicable.includes("page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable"),
+  "semantic contract must require page-operation coverage in final_summary.",
 );
 assert.ok(
   semantic.requiredUserVisibleTopicsWhenApplicable.includes("explicit final_summary corrections that must be written back to structured fields"),
@@ -227,7 +235,8 @@ assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) =>
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("decision impact")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("Lifecycle actions")));
 assert.ok(semantic.blockSelfCheckContract.frontend_experience.rules.some((rule) => rule.includes("frontend_experience self-check")));
-assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("review gate")));
+assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("pre-submit checklist gate")));
+assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("one user-visible coverage checklist")));
 assert.ok(semantic.blockSelfCheckContract.final_summary.rules.some((rule) => rule.includes("not the source of detailed requirements")));
 
 const candidateShape = request.outputContract.schemaShape;

@@ -812,8 +812,16 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormSessionRequest: confirmed details must be written into structured fields",
   );
   assert.ok(
-    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("confirmed current phase scope summary"),
-    "BrainstormSessionRequest: final_summary must include a concise scope summary topic",
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("coverage checklist from confirmed phase scope including concrete included work and deferred or not-done boundaries"),
+    "BrainstormSessionRequest: final_summary must include concrete scope coverage checklist topic",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("business-rule checklist from confirmed business understanding including concrete objects, relationships, operations, field-set headlines, state changes, blocking rules, success outcomes, and high-risk misunderstanding guards when applicable"),
+    "BrainstormSessionRequest: final_summary must include concrete business-rule checklist topic",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable"),
+    "BrainstormSessionRequest: final_summary must include concrete page-operation checklist topic",
   );
   assert.ok(
     request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("explicit final_summary corrections that must be written back to structured fields"),
@@ -914,8 +922,8 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormCandidate schemaShape: missing dedicated frontend confirmation rule",
   );
   assert.ok(
-    shape?.candidateRules?.some((rule) => rule.includes("concisely summarized scope")),
-    "BrainstormCandidate schemaShape: missing concise final_summary rule",
+    shape?.candidateRules?.some((rule) => rule.includes("pre-submit coverage checklist")),
+    "BrainstormCandidate schemaShape: missing pre-submit final_summary checklist rule",
   );
   assert.ok(
     shape?.candidateRules?.some((rule) => rule.includes("do not rely on final_summary text")),
@@ -930,8 +938,8 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormCandidate schemaShape: missing all-confirmed-block retention rule",
   );
   assert.ok(
-    shape?.candidateRules?.some((rule) => rule.includes("A concise final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional")),
-    "BrainstormCandidate schemaShape: missing concise-final-summary retention rule",
+    shape?.candidateRules?.some((rule) => rule.includes("A checklist-style final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional")),
+    "BrainstormCandidate schemaShape: missing checklist-final-summary retention rule",
   );
   mark("L2", "BrainstormCandidate request documents Phase N roadmap/ref rules");
 }
@@ -2433,7 +2441,7 @@ function main() {
     );
     assert.ok(
       phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("not the source of detailed requirements")),
-      "Phase continuation Brainstorm request must keep final_summary as a concise review gate.",
+      "Phase continuation Brainstorm request must keep final_summary as a checklist gate.",
     );
     assert.equal(phase2Index.latestRefs.requirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must inherit requirementContextRef");
     assert.equal(phase2Index.latestRefs.originalRequirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must expose originalRequirementContextRef alias");

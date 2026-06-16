@@ -121,8 +121,8 @@ assert.ok(
   "object-operation details must map to existing business flow summaries.",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("confirmed current phase scope summary"),
-  "final summary contract must stay at summary level for confirmed scope.",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("business-rule checklist from confirmed business understanding including concrete objects, relationships, operations, field-set headlines, state changes, blocking rules, success outcomes, and high-risk misunderstanding guards when applicable"),
+  "final summary contract must surface concrete business-rule checklist coverage.",
 );
 assert.ok(
   semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("explicit final_summary corrections that must be written back to structured fields"),

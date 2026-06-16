@@ -122,8 +122,8 @@ assert.ok(
   "confirmed block retention rules must forbid final_summary-only candidate writing",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("frontend_experience block confirmed or skipped reason"),
-  "final_summary contract must only summarize frontend_experience status",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable"),
+  "final_summary contract must show page-operation coverage without becoming the frontend detail source",
 );
 assert.ok(
   semanticContract.frontendOperationPathContract.candidateFields.includes("frontendExperience.dataViews"),
@@ -153,8 +153,8 @@ assertIncludes(
 );
 assertIncludes(
   request.outputContract.schemaShape.candidateRules.join("\n"),
-  "A concise final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional",
-  "candidateRules must keep earlier confirmed block details even when final_summary is concise",
+  "A checklist-style final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional",
+  "candidateRules must keep earlier confirmed block details even when final_summary is a checklist",
 );
 assertIncludes(
   request.outputContract.schemaShape.candidateRules.join("\n"),
