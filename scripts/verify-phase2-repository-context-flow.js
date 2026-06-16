@@ -258,7 +258,7 @@ function createRepositoryContextCandidate(requestData, root) {
   };
 }
 
-function writeArchitectureSections(root, archRequest) {
+function writeArchitectureSections(root, archRequest, planningContract) {
   const base = {
     schemaVersion: "1.0",
     requestId: archRequest.requestId,
@@ -270,11 +270,11 @@ function writeArchitectureSections(root, archRequest) {
   const bySection = {
     foundation: {
       source: {
-        planningGenerationContractId: "pgc-phase-2",
-        technicalBaselineId: "tb-001",
-        brainstormContractId: "bcand-phase1",
-        roadmapId: "rm-test",
-        phaseId: "phase-2",
+        planningGenerationContractId: planningContract.planningContractId,
+        technicalBaselineId: planningContract.source.technicalBaselineId,
+        brainstormContractId: planningContract.source.brainstormContractId,
+        roadmapId: planningContract.source.roadmapId,
+        phaseId: planningContract.source.phaseId,
       },
       engineeringBoundary: {
         projectKind: "existing_project",
@@ -362,6 +362,25 @@ function writeArchitectureSections(root, archRequest) {
         coverage: [{ type: "module", refs: ["module-capabilities"], description: "Module covers phase 2 expansion." }],
         verificationHints: [{ kind: "unit", description: "Verify phase 2 capability behavior." }],
       }],
+      detailCoverage: (planningContract.requirementDetails?.items ?? [])
+        .filter((item) => item.requiredForCurrentPhase)
+        .map((item) => ({
+          detailId: item.detailId,
+          coverageStatus: "covered",
+          artifactRefs: {
+            modules: ["module-capabilities"],
+            entities: ["capability"],
+            fields: ["id"],
+            constraints: [],
+            interfaces: ["capability-service"],
+            userFlows: ["expand-capability-flow"],
+            stateMachines: [],
+            frontendDataViews: [],
+            frontendActions: [],
+            frontendOperationPaths: [],
+            acceptanceMatrix: ["AC-201"],
+          },
+        })),
       risksAndDecisions: { decisions: [], risks: [], assumptions: [], deferredNotes: [] },
       handoff: { readyForTaskPlan: true, blockingReasons: [], nextNode: "task_plan" },
     },
@@ -441,9 +460,12 @@ function main() {
     const archRequestBody = requestFromCommand(arch, root);
     assert.equal(arch.request, undefined);
     assert.equal(archRequestBody.sourceRefs.repositoryContextRef, pgc.contract.contextRefs.repositoryContextRef);
-    writeArchitectureSections(root, archRequestBody);
-    run(["architecture", "accept", "--delivery-id", deliveryId, "--phase-id", "phase-2", "--request-id", archRequestBody.requestId], root);
+    writeArchitectureSections(root, archRequestBody, pgc.contract);
+    const archAccepted = run(["architecture", "accept", "--delivery-id", deliveryId, "--phase-id", "phase-2", "--request-id", archRequestBody.requestId], root);
+    assert.equal(archAccepted.accepted, true, JSON.stringify(archAccepted.issues ?? [], null, 2));
 
+    const taskPlanGate = run(["continue"], root);
+    assert.equal(taskPlanGate.nextAction.type, "taskplan_generation");
     const taskPlan = run(["task-plan", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
     const taskPlanRequestBody = requestFromCommand(taskPlan, root);
     assert.equal(taskPlan.request, undefined);

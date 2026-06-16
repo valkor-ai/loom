@@ -1038,7 +1038,7 @@ function whenToReadForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_candidate_schema_identity") return "Only after final_summary confirmation, before writing identity, summary, or source metadata.";
   if (groupId === "brainstorm_session_candidate_schema_scope") return "Only after final_summary confirmation, before writing scope, roadmap, phasePlan, or acceptance.";
   if (groupId === "brainstorm_session_candidate_schema_concepts") return "Only after final_summary confirmation, when writing concept or clarification progress fields.";
-  if (groupId === "brainstorm_session_candidate_schema_frontend") return "Only after final_summary confirmation, when frontendExperience/frontendExperienceDelta applies.";
+  if (groupId === "brainstorm_session_candidate_schema_frontend") return "Only after final_summary confirmation, when frontendExperience applies.";
   if (groupId === "brainstorm_session_candidate_schema_handoff") return "Only after final_summary confirmation, before setting handoff routing fields.";
   if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Read before presenting the final_summary block; read again after final_summary confirmation before writing business-detail candidate fields.";
   if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Only after final_summary confirmation, when detailed requirement semantic grounding rules are needed.";

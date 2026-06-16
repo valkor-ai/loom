@@ -175,8 +175,8 @@ assertIncludes(
 );
 assertIncludes(
   repositoryContextSource,
-  "frontendExperienceDelta.*Deltas",
-  "phase-continuation Brainstorm requests must map frontend deltas to structured fields",
+  "frontendExperience.dataViews/actions/operationPaths",
+  "phase-continuation Brainstorm requests must map frontend paths to structured frontendExperience fields",
 );
 
 const architectureSource = readRepo("src/core/operations/contracts.ts");

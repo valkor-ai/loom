@@ -592,6 +592,13 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
   const candidatePath = resolveCliPath(root, input.candidateFile);
   const rawCandidate = await readJsonFileForCandidate(candidatePath);
   const now = new Date().toISOString();
+  if (isRecord(rawCandidate) && "frontendExperienceDelta" in rawCandidate) {
+    return invalidBrainstormAcceptResult(input, [{
+      code: "UNSUPPORTED_FRONTEND_EXPERIENCE_DELTA",
+      path: "frontendExperienceDelta",
+      message: "frontendExperienceDelta is no longer part of BrainstormCandidate. Store the current phase frontend target in frontendExperience.",
+    }]);
+  }
   const parsed = brainstormCandidateSchema.safeParse(normalizeBrainstormCandidateForAccept(rawCandidate, now));
   if (!parsed.success) {
     return invalidBrainstormAcceptResult(input, parsed.error.issues.map((issue) => ({
@@ -701,7 +708,6 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
     clarificationProgress: candidate.clarificationProgress,
     conceptGroundingRefs: derivedRefs.conceptGroundingRefs,
     frontendExperience: candidate.frontendExperience,
-    frontendExperienceDelta: candidate.frontendExperienceDelta,
     frontendExperienceRefs: derivedRefs.frontendExperienceRefs,
   });
   await saveBrainstormContract(root, contract, locator.deliveryId);
@@ -1601,7 +1607,6 @@ function buildBrainstormSessionRequest(input: {
               "domainModel.businessFlows[].summary",
               "conceptGrounding.phaseConceptGrounding.concepts[].explanation",
               "frontendExperience.dataViews/actions/operationPaths",
-              "frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
               "phasePlan.nextPhasePreview",
             ],
             rules: confirmedBlockDetailRetentionRules(),
@@ -1641,20 +1646,20 @@ function buildBrainstormSessionRequest(input: {
           scopeItemCoverageContract: {
             owningBlock: "concept_grounding",
             userLanguageRule: "Use the confirmed scope wording; do not expose internal schema language or force a fixed capability taxonomy.",
-            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience/frontendExperienceDelta when UI applies"],
+            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience when UI applies"],
             rules: scopeItemCoverageCandidateRules(),
           },
           objectOperationContract: {
             owningBlock: "concept_grounding",
             userLanguageRule: "Use natural user-facing wording in the conversation; do not expose internal schema field names as if they were user choices.",
-            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience/frontendExperienceDelta when UI applies"],
+            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience when UI applies"],
             rules: businessObjectOperationCandidateRules(),
           },
           frontendOperationPathContract: {
             owningBlock: "frontend_experience",
             userLanguageRule: "Use natural user-facing wording in the conversation; do not expose internal schema enum values.",
             presentationRules: frontendExperiencePresentationRules(),
-            candidateFields: ["frontendExperience.dataViews", "frontendExperience.actions", "frontendExperience.operationPaths", "frontendExperienceDelta.dataViewDeltas", "frontendExperienceDelta.actionDeltas", "frontendExperienceDelta.operationPathDeltas"],
+            candidateFields: ["frontendExperience.dataViews", "frontendExperience.actions", "frontendExperience.operationPaths"],
             rules: frontendOperationPathCandidateRules(),
           },
         },
@@ -2039,9 +2044,10 @@ function brainstormCandidateSchemaShape(input: {
       "Excluded scope belongs only in scope.excluded and roadmap phase excluded refs when supported; deferred scope belongs only in scope.deferred or nextPhasePreview.",
       "phasePlan.current.acceptanceRefs may reference only acceptance[].id values.",
       "roadmap.required is normalized by Loom on accept from confirmed scope and phasePlan signals. Do not let this boolean override scope.deferred or phasePlan.nextPhasePreview.",
-      "If clarificationProgress confirms frontend_experience, include frontendExperience or frontendExperienceDelta. If the frontend block is skipped, include skippedBlocks with a concrete reason and do not invent frontend work.",
+      "If clarificationProgress confirms frontend_experience, include frontendExperience. If the frontend block is skipped, include skippedBlocks with a concrete reason and do not invent frontend work.",
       "When frontendExperience is present, it is the user-confirmed product target that AAC must consume later; do not use it for implementation details.",
-      "Write page operation path details into frontendExperience.dataViews/actions/operationPaths or frontendExperienceDelta.*Deltas; do not leave them only in confirmationSummary or chat.",
+      "Write page operation path details into frontendExperience.dataViews/actions/operationPaths; do not leave them only in confirmationSummary or chat.",
+      "Use outputContract.schemaShape.frontendExperience as the write template for UI targets. Do not copy prior candidates or currentFrontendExperienceRef as the candidate template; prior refs are context only.",
       "Do not show internal frontend enum values to the user during clarification. Use natural language when asking or summarizing.",
       "For Phase 1, deliveryConceptGlossary should capture delivery-wide high-risk concepts from the whole requirement; do not collapse it to a single generic project label.",
       "For every phase, phaseConceptGrounding should capture current-phase high-risk concepts and must not promote future/deferred/excluded concepts into current scope.",
@@ -2550,8 +2556,8 @@ function validateFrontendExperienceConfirmation(
   }
   const frontendConfirmed = progress.confirmedBlocks.some((block) => block.block === "frontend_experience" && block.confirmedByUser);
   const frontendSkipped = progress.skippedBlocks.some((block) => block.block === "frontend_experience");
-  if (frontendConfirmed && !candidate.frontendExperience && !candidate.frontendExperienceDelta) {
-    issues.push({ code: "FRONTEND_TARGET_MISSING", path: "frontendExperience", message: "A confirmed frontend_experience block requires frontendExperience or frontendExperienceDelta." });
+  if (frontendConfirmed && !candidate.frontendExperience) {
+    issues.push({ code: "FRONTEND_TARGET_MISSING", path: "frontendExperience", message: "A confirmed frontend_experience block requires frontendExperience." });
   }
   if (!frontendConfirmed && !frontendSkipped) {
     issues.push({ code: "FRONTEND_BLOCK_UNRESOLVED", path: "clarificationProgress", message: "frontend_experience block must be confirmed or explicitly skipped." });
@@ -2730,20 +2736,13 @@ async function writeBrainstormDerivedArtifacts(
 
   let confirmedFrontendExperienceRef: string | null = null;
   let currentFrontendExperienceRef: string | null = null;
-  if (candidate.frontendExperience || candidate.frontendExperienceDelta) {
-    const previousCurrentFrontend = await readOptionalRecord(currentFrontendAbs);
-    const inheritedFrontendExperience =
-      candidate.frontendExperience
-        ? null
-        : (previousCurrentFrontend?.frontendExperience ?? previousCurrentFrontend?.inheritedFrontendExperience ?? null);
+  if (candidate.frontendExperience) {
     const target = {
       schemaVersion: "1.0",
       deliveryId: locator.deliveryId,
       phaseId: locator.phaseId,
       updatedAt: now,
-      frontendExperience: candidate.frontendExperience ?? null,
-      frontendExperienceDelta: candidate.frontendExperienceDelta ?? null,
-      ...(inheritedFrontendExperience ? { inheritedFrontendExperience } : {}),
+      frontendExperience: candidate.frontendExperience,
       source: "brainstorm_user_confirmed",
     };
     await writeJsonAtomic(confirmedFrontendAbs, target);
@@ -2916,6 +2915,7 @@ function brainstormContractFromCandidate(
       candidates: candidate.acceptance,
       coverageNotes: ["BrainstormCandidate accepted from Agent-managed conversation."],
     },
+    userConfirmation: candidate.userConfirmation,
     deliveryStrategy: {
       mode: roadmapRequired ? "roadmap" : "single_phase",
       reason: roadmapRequired
@@ -2990,7 +2990,6 @@ async function writeBrainstormDecisionSnapshot(
     conceptConfirmation: contract.conceptConfirmation ?? null,
     clarificationProgress: contract.clarificationProgress ?? null,
     frontendExperience: contract.frontendExperience ?? null,
-    frontendExperienceDelta: contract.frontendExperienceDelta ?? null,
     phasePlan: contract.phasePlan,
     userConfirmation: candidate.userConfirmation,
   };
@@ -3109,25 +3108,32 @@ function brainstormRepairInstruction(
     issues: Array<{ code: string; path: string; message: string }>;
   },
 ): Record<string, unknown> {
+  const schemaShape = brainstormCandidateSchemaShape({
+    deliveryId: input.deliveryId,
+    phaseId: input.phaseId,
+    brainstormRunId: input.brainstormRunId,
+  });
+  const fieldRepairPlan = brainstormFieldRepairPlan(input.issues, schemaShape);
   return {
     mode: "repair_candidate",
     schema: "BrainstormCandidate",
     ...artifactRepairPolicy(),
+    autoContinue: true,
+    mustRunImmediately: true,
+    primaryAction: "Edit candidateFile according to fieldRepairPlan, write a complete replacement BrainstormCandidate JSON, then run submitCommand.",
     candidateFile: toProjectRelative(root, resolveCliPath(root, input.candidateFile)),
     issues: input.issues,
+    fieldRepairPlan,
     repairSubmitRouting: repairSubmitRouting({
       kind: "candidate",
       submitCommandName: "brainstorm accept",
     }),
-    schemaShape: brainstormCandidateSchemaShape({
-      deliveryId: input.deliveryId,
-      phaseId: input.phaseId,
-      brainstormRunId: input.brainstormRunId,
-    }),
+    schemaShape,
     enumRefs: brainstormEnumRefs(),
     instructions: [
       compactContextReadStep,
       "Repair only the BrainstormCandidate JSON contract fields.",
+      "Start from fieldRepairPlan. Each item names the failed path, expected shape, and concrete candidate edit.",
       "Preserve phase-1 in roadmap.phases. For Phase N, roadmap.phases must include prior phases plus the current phase.",
       "phasePlan.current.scopeRefs must contain only ids from scope.included. Remove any scope.excluded or scope.deferred ids from phasePlan.current.scopeRefs.",
       "phasePlan.current.acceptanceRefs must contain only ids from acceptance.",
@@ -3158,6 +3164,101 @@ function brainstormRepairInstruction(
       ],
     },
   };
+}
+
+function brainstormFieldRepairPlan(
+  issues: Array<{ code: string; path: string; message: string }>,
+  schemaShape: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  return issues.map((issue) => {
+    if (issue.code === "UNSUPPORTED_FRONTEND_EXPERIENCE_DELTA" || issue.path === "frontendExperienceDelta") {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "remove_unsupported_field",
+        expectedShape: { frontendExperience: schemaShape.frontendExperience },
+        suggestedAction: "Remove frontendExperienceDelta. If the frontend_experience block was confirmed, put the complete current phase frontend target into frontendExperience.dataViews, frontendExperience.actions, and frontendExperience.operationPaths.",
+      };
+    }
+
+    if (issue.code === "FRONTEND_TARGET_MISSING" || issue.path === "frontendExperience") {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "fill_required_field",
+        expectedShape: schemaShape.frontendExperience,
+        suggestedAction: "Create frontendExperience from the confirmed page-operation block. Do not create frontendExperienceDelta.",
+      };
+    }
+
+    if (issue.code === "SCHEMA_INVALID") {
+      return {
+        path: issue.path || "<root>",
+        code: issue.code,
+        message: issue.message,
+        actionType: "match_schema_shape",
+        expectedShape: schemaShapeAtPath(schemaShape, issue.path),
+        suggestedAction: `Rewrite ${issue.path || "the candidate root"} so it matches schemaShape at the same path. Preserve user-confirmed scope, concepts, frontend target, and final confirmation facts.`,
+      };
+    }
+
+    if (issue.code.endsWith("_REF_INVALID") || issue.code.includes("MISMATCH")) {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "repair_reference",
+        expected: "Use ids that exist in the referenced candidate arrays and keep deliveryId, phaseId, and brainstormRunId equal to the active request.",
+        suggestedAction: "Replace the invalid id or command metadata with a value from the candidate/request authority fields; do not invent new scope or acceptance just to satisfy the ref.",
+      };
+    }
+
+    if (issue.code.includes("NEXT_PHASE") || issue.path.startsWith("phasePlan.nextPhasePreview")) {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "repair_phase_plan",
+        expectedShape: schemaShapeAtPath(schemaShape, "phasePlan.nextPhasePreview"),
+        suggestedAction: "Align nextPhasePreview with confirmed deferred scope: use kind=candidate only when later source-grounded work remains; use kind=none only when nothing remains.",
+      };
+    }
+
+    return {
+      path: issue.path,
+      code: issue.code,
+      message: issue.message,
+      actionType: "repair_candidate_field",
+      expectedShape: schemaShapeAtPath(schemaShape, issue.path),
+      suggestedAction: "Edit only this BrainstormCandidate field to satisfy the issue while preserving user-confirmed content.",
+    };
+  });
+}
+
+function schemaShapeAtPath(schemaShape: Record<string, unknown>, fieldPath: string): unknown {
+  if (!fieldPath) {
+    return schemaShape;
+  }
+  const pathParts = fieldPath
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter(Boolean);
+  let current: unknown = schemaShape;
+  for (const part of pathParts) {
+    if (Array.isArray(current)) {
+      current = current[0];
+      if (/^\d+$/.test(part)) {
+        continue;
+      }
+    }
+    if (!isRecord(current) || !(part in current)) {
+      return null;
+    }
+    current = current[part];
+  }
+  return current;
 }
 
 function resolveCliPath(projectRoot: string, filePath: string): string {

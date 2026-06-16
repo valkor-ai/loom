@@ -252,7 +252,7 @@ function technicalBaselineSelectionGuidance(input: {
         "contextRefs.brainstormContractRef summary and deliveryContext.originalRequest",
         "scope.included, scope.deferred, scope.excluded, and assumptions",
         "domainModel capability groups and business flows",
-        "frontendExperience or frontendExperienceDelta when present",
+        "frontendExperience when present",
         "roadmap phases, deferred scope, and known next-phase previews",
       ],
       currentPhaseLensRole: "currentPhaseLens identifies the first implementation slice only. Do not choose the initial technology baseline from the current phase scope alone when the full requirement or roadmap implies later product surfaces, persistence scale, app clients, services, integrations, or operational needs.",
@@ -1211,7 +1211,6 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
       capabilityGroups: brainstorm.domainModel.capabilityGroups,
       businessFlows: brainstorm.domainModel.businessFlows,
       frontendExperience: brainstorm.frontendExperience ?? null,
-      frontendExperienceDelta: brainstorm.frontendExperienceDelta ?? null,
       sourceRefs: brainstorm.sources.map((source) => source.sourceId),
       contextNotes: ["Brainstorm contract 已确认当前阶段范围。"],
     },
@@ -1511,7 +1510,6 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
         ".phaseScope.acceptanceCandidates[] | {id,statement,priority,sourceRefs,capabilityRefs}",
         ".planningInputs.businessFlows[].summary",
         ".planningInputs.frontendExperience.dataViews/actions/operationPaths",
-        ".planningInputs.frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
         ".contextRefs.phaseConceptGroundingRef",
         ".contextRefs.deliveryConceptGlossaryRef",
         ".contextRefs.confirmedFrontendExperienceRef",
@@ -1552,7 +1550,6 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "planningContractRef.phaseScope.acceptanceCandidates[].statement/sourceRefs/capabilityRefs",
           "planningContractRef.planningInputs.businessFlows[].summary",
           "planningContractRef.planningInputs.frontendExperience.dataViews/actions/operationPaths",
-          "planningContractRef.planningInputs.frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
           "planningContractRef.contextRefs.phaseConceptGroundingRef",
           "planningContractRef.contextRefs.confirmedFrontendExperienceRef/currentFrontendExperienceRef and the referenced frontend experience .dataViews/.actions/.operationPaths when present",
         ],
@@ -2260,44 +2257,6 @@ function buildRequirementDetailsIndex(
     });
   });
 
-  const frontendDelta = brainstorm.frontendExperienceDelta;
-  frontendDelta?.dataViewDeltas?.forEach((view, index) => {
-    addItem({
-      kind: "frontend_operation_path",
-      title: view.name,
-      summary: view.purpose,
-      requiredForCurrentPhase: frontendDelta.newSurfaceRequired || frontendDelta.affectedSurfaceRefs.length > 0,
-      priority: "should",
-      sourceFieldRefs: [`brainstorm.frontendExperienceDelta.dataViewDeltas[${index}]`],
-      sourceRefs: view.sourceRefs,
-      frontendRefs: [view.viewId],
-    });
-  });
-  frontendDelta?.actionDeltas?.forEach((action, index) => {
-    addItem({
-      kind: "frontend_operation_path",
-      title: action.label,
-      summary: `${action.label}. Entry: ${action.entryPoint}. Refresh: ${action.refreshPolicy}.`,
-      requiredForCurrentPhase: frontendDelta.newSurfaceRequired || frontendDelta.affectedSurfaceRefs.length > 0,
-      priority: "should",
-      sourceFieldRefs: [`brainstorm.frontendExperienceDelta.actionDeltas[${index}]`],
-      sourceRefs: action.sourceRefs,
-      frontendRefs: [action.actionId],
-    });
-  });
-  frontendDelta?.operationPathDeltas?.forEach((operationPath, index) => {
-    addItem({
-      kind: "frontend_operation_path",
-      title: operationPath.name,
-      summary: operationPath.selectionSummary,
-      requiredForCurrentPhase: frontendDelta.newSurfaceRequired || frontendDelta.affectedSurfaceRefs.length > 0,
-      priority: "should",
-      sourceFieldRefs: [`brainstorm.frontendExperienceDelta.operationPathDeltas[${index}]`],
-      sourceRefs: operationPath.sourceRefs,
-      frontendRefs: [operationPath.pathId, ...operationPath.dataViewRefs, ...operationPath.actionRefs],
-    });
-  });
-
   brainstorm.scope.assumptions.forEach((assumption, index) => {
     addItem({
       kind: "assumption",
@@ -2812,14 +2771,10 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
     },
     frontendExperienceDetails: {
       frontendExperience: pgc.planningInputs.frontendExperience ?? null,
-      frontendExperienceDelta: pgc.planningInputs.frontendExperienceDelta ?? null,
       operationPathSelectors: [
         "planningContractRef.planningInputs.frontendExperience.dataViews",
         "planningContractRef.planningInputs.frontendExperience.actions",
         "planningContractRef.planningInputs.frontendExperience.operationPaths",
-        "planningContractRef.planningInputs.frontendExperienceDelta.dataViewDeltas",
-        "planningContractRef.planningInputs.frontendExperienceDelta.actionDeltas",
-        "planningContractRef.planningInputs.frontendExperienceDelta.operationPathDeltas",
       ],
       usageRule: "Use these Brainstorm-confirmed frontend operation path details when generating AAC frontend_experience. If null, read frontendExperienceSource refs when present.",
     },

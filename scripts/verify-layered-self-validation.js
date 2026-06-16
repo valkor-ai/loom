@@ -1117,6 +1117,19 @@ function assertBrainstormRepairRules(repairInstruction) {
     repairInstruction?.instructions?.some((rule) => rule.includes("phasePlan.current.scopeRefs must contain only ids from scope.included")),
     "Brainstorm repairInstruction: missing included-only current scopeRefs rule",
   );
+  assert.equal(
+    repairInstruction?.primaryAction,
+    "Edit candidateFile according to fieldRepairPlan, write a complete replacement BrainstormCandidate JSON, then run submitCommand.",
+    "Brainstorm repairInstruction: missing explicit primary repair action",
+  );
+  assert.ok(
+    Array.isArray(repairInstruction?.fieldRepairPlan) && repairInstruction.fieldRepairPlan.length > 0,
+    "Brainstorm repairInstruction: missing field-level repair plan",
+  );
+  assert.ok(
+    repairInstruction.fieldRepairPlan.every((item) => item.path && item.suggestedAction),
+    "Brainstorm repairInstruction: each field repair item must include path and suggestedAction",
+  );
   assert.ok(repairInstruction?.schemaShape?.candidateRules, "Brainstorm repairInstruction: missing schemaShape candidateRules");
   mark("L2", "Brainstorm repairInstruction repeats Phase N roadmap/ref rules");
 }
@@ -1937,7 +1950,8 @@ function main() {
     assertBrainstormCandidateRules(startedRequest);
     assertRequestOutputParentDirsExist(root, startedRequest, "BrainstormSessionRequest");
     assert.equal(startedRequest.contextRefs.originalRequirementContextRef, startedRequest.contextRefs.requirementContextRef, "BrainstormSessionRequest must expose originalRequirementContextRef alias.");
-    writeJson(projectFile(root, startedRequest.outputContract.candidateFile), brainstormCandidate(startedRequest, { includeNextPhase: true }));
+    const acceptedBrainstormCandidate = brainstormCandidate(startedRequest, { includeNextPhase: true });
+    writeJson(projectFile(root, startedRequest.outputContract.candidateFile), acceptedBrainstormCandidate);
     const brainstormAccepted = run([
       "brainstorm", "accept",
       "--delivery-id", started.deliveryId,
@@ -1954,8 +1968,14 @@ function main() {
     assert.ok(phase1AfterBrainstormAccept.latestRefs.brainstormDecisionsIndex, "Brainstorm accept must write decisions index ref.");
     const phase1Decision = readJson(projectFile(root, phase1AfterBrainstormAccept.latestRefs.brainstormDecision));
     assert.equal(phase1Decision.phaseId, started.phaseId);
-    assert.deepEqual(phase1Decision.scope, brainstormCandidate(startedRequest, { includeNextPhase: true }).scope);
+    assert.deepEqual(phase1Decision.scope, acceptedBrainstormCandidate.scope);
     assert.ok(phase1Decision.domainModel.businessFlows.length > 0, "Brainstorm decision snapshot must preserve domainModel business flows.");
+    const phase1Contract = readJson(projectFile(root, brainstormAccepted.contractPath));
+    assert.equal(
+      phase1Contract.userConfirmation.confirmationSummary,
+      acceptedBrainstormCandidate.userConfirmation.confirmationSummary,
+      "Brainstorm contract must preserve userConfirmation for downstream readers.",
+    );
     const decisionIndex = readJson(projectFile(root, phase1AfterBrainstormAccept.latestRefs.brainstormDecisionsIndex));
     assert.equal(decisionIndex.latestConfirmedPhaseId, started.phaseId);
     assert.equal(decisionIndex.decisions[0].decisionRef, phase1AfterBrainstormAccept.latestRefs.brainstormDecision);
@@ -1986,6 +2006,7 @@ function main() {
     assert.equal(offsetDateAccepted.accepted, true);
     const offsetDateContract = readJson(projectFile(offsetDateRoot, offsetDateAccepted.contractPath));
     assert.equal(offsetDateContract.handoff.confirmedAt, "2026-05-25T12:51:00.000Z");
+    assert.equal(offsetDateContract.userConfirmation.confirmedAt, "2026-05-25T12:51:00.000Z");
     mark("L1", "BrainstormCandidate accept normalizes confirmedAt timezone offsets");
 
     const invalidPhase2Candidate = brainstormCandidate({
@@ -2008,16 +2029,22 @@ function main() {
     invalidPhase2Candidate.phasePlan.current.scopeRefs.push("scope-excluded-in-current");
     const invalidPhase2File = startedRequest.outputContract.candidateFile.replace(/candidate\.json$/, "invalid-phase2-candidate.json");
     writeJson(projectFile(root, invalidPhase2File), invalidPhase2Candidate);
-    const invalidBrainstorm = run([
+    const invalidBrainstormEnvelope = run([
       "brainstorm", "accept",
       "--delivery-id", started.deliveryId,
       "--phase-id", "phase-2",
       "--request-id", started.requestId,
       "--run-id", started.brainstormRunId,
       "--candidate-file", invalidPhase2File,
-    ], root);
+    ], root, { returnEnvelope: true });
+    const invalidBrainstorm = invalidBrainstormEnvelope.data;
     assert.equal(invalidBrainstorm.accepted, false);
     assertBrainstormRepairRules(invalidBrainstorm.repairInstruction);
+    assert.equal(invalidBrainstormEnvelope.actionRequired.mode, "repair_candidate");
+    assert.ok(
+      Array.isArray(invalidBrainstormEnvelope.actionRequired.fieldRepairPlan) && invalidBrainstormEnvelope.actionRequired.fieldRepairPlan.length > 0,
+      "Brainstorm repair actionRequired must expose fieldRepairPlan.",
+    );
 
     let decision = run(["continue"], root);
     assert.equal(decision.nextAction.type, "technical_baseline_request");
@@ -2573,8 +2600,11 @@ function main() {
       "Phase continuation Brainstorm request must include correction/optimization semantic grounding rule",
     );
     assert.ok(phase2BrainstormRequest.outputContract.schemaShape.frontendExperience);
-    assert.ok(phase2BrainstormRequest.outputContract.schemaShape.frontendExperienceDelta);
-    assert.ok(phase2BrainstormRequest.outputContract.schemaShape.candidateRules.some((rule) => rule.includes("frontendExperienceDelta")));
+    assert.equal(phase2BrainstormRequest.outputContract.schemaShape.frontendExperienceDelta, undefined);
+    assert.ok(
+      phase2BrainstormRequest.outputContract.schemaShape.candidateRules.some((rule) => rule.includes("frontendExperience.dataViews/actions/operationPaths")),
+      "Phase continuation Brainstorm request must route frontend details into frontendExperience",
+    );
     const expectedCandidateFile = phase2Index.latestRefs.brainstormCandidateFile;
     delete phase2Index.latestRefs.brainstormCandidateFile;
     writeJson(projectFile(root, `.loom/deliveries/${started.deliveryId}/index.json`), indexBeforeBrainstormResume);
@@ -2649,7 +2679,6 @@ function main() {
         mustNot: ["unstyled_browser_default"],
         confirmationSummary: "Existing frontend target.",
       },
-      frontendExperienceDelta: null,
       source: "test_existing_frontend_target",
     });
     phase2Candidate.clarificationProgress.confirmedBlocks = [
@@ -2657,15 +2686,51 @@ function main() {
       { block: "frontend_experience", summary: "User confirmed inherited frontend with phase 2 adjustments.", confirmedByUser: true },
     ];
     phase2Candidate.clarificationProgress.skippedBlocks = [];
-    phase2Candidate.frontendExperienceDelta = {
-      inheritsPrevious: true,
-      currentPhaseImpact: "Phase 2 extends the existing frontend target without redefining it.",
-      newSurfaceRequired: false,
-      affectedSurfaceRefs: ["surface-existing"],
-      affectedViewCandidates: ["Existing workspace"],
-      experienceLevelOverride: null,
-      mustNotDelta: ["Do not downgrade the inherited frontend target."],
-      confirmationSummary: "User confirmed phase 2 frontend delta.",
+    phase2Candidate.frontendExperience = {
+      required: true,
+      kind: "business_application",
+      experienceLevel: "usable_internal_product",
+      audiences: [{ audienceId: "audience-existing", name: "Existing user", primaryJobs: ["Use existing workflow with phase 2 validation."] }],
+      surfaces: [{ surfaceId: "surface-existing", name: "Existing workspace", audienceRefs: ["audience-existing"], primaryJobs: ["Use phase 2 validation workflow."] }],
+      dataViews: [{
+        viewId: "view-phase2-validation",
+        name: "Phase 2 validation list",
+        purpose: "Let users find and select the phase 2 validation target.",
+        targetObject: "Follow-up validation",
+        selectionMode: "query_and_select",
+        paginationRequired: true,
+        defaultLoadsFirstPage: true,
+        searchCriteria: [],
+        sourceRefs: ["src-001"],
+      }],
+      actions: [{
+        actionId: "action-phase2-validation",
+        label: "Run phase 2 validation",
+        targetObject: "Follow-up validation",
+        entryPoint: "result_row_action",
+        inputFields: [],
+        resultObservation: ["list_refresh", "response_message"],
+        refreshPolicy: "refresh_current_query",
+        successFeedback: ["Validation result is visible after refresh."],
+        blockingOrErrorFeedback: ["Validation blocking reason is visible."],
+        sourceRefs: ["src-001"],
+      }],
+      operationPaths: [{
+        pathId: "path-phase2-validation",
+        name: "Phase 2 validation operation path",
+        userGoal: "Complete the follow-up validation workflow.",
+        surfaceRef: "surface-existing",
+        workflowRef: "flow-core",
+        targetObject: "Follow-up validation",
+        selectionMode: "query_and_select",
+        selectionSummary: "Paginated list -> select validation target -> run validation -> see refreshed result.",
+        dataViewRefs: ["view-phase2-validation"],
+        actionRefs: ["action-phase2-validation"],
+        requiredStates: ["loading", "success", "error", "empty", "business_blocking"],
+        sourceRefs: ["src-001"],
+      }],
+      mustNot: ["unstyled_browser_default"],
+      confirmationSummary: "User confirmed phase 2 frontend target.",
     };
     writeJson(projectFile(root, phase2BrainstormRequest.outputContract.candidateFile), phase2Candidate);
     const phase2BrainstormAccepted = run([
@@ -2687,9 +2752,9 @@ function main() {
     const deliveryGlossary = readJson(projectFile(root, `.loom/deliveries/${started.deliveryId}/concepts/delivery-glossary.json`));
     assert.ok(deliveryGlossary.concepts.some((concept) => concept.conceptId === "concept-phase2-added"), "Phase N glossaryUpdates must merge into delivery glossary");
     const currentFrontend = readJson(projectFile(root, currentFrontendPath));
-    assert.equal(currentFrontend.frontendExperience, null);
-    assert.equal(currentFrontend.frontendExperienceDelta.currentPhaseImpact.includes("Phase 2 extends"), true);
-    assert.equal(currentFrontend.inheritedFrontendExperience.experienceLevel, "usable_internal_product");
+    assert.equal(currentFrontend.frontendExperience.confirmationSummary, "User confirmed phase 2 frontend target.");
+    assert.equal(currentFrontend.frontendExperienceDelta, undefined);
+    assert.equal(currentFrontend.inheritedFrontendExperience, undefined);
     mark("L2", "BrainstormCandidate accept normalizes omitted prior roadmap phases");
 
     indexAfterPhase2Activation.status = "completed";

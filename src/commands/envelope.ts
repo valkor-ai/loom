@@ -118,6 +118,8 @@ function summarizeActionRequired(instruction: Record<string, unknown>): {
   commandInvocation?: Record<string, unknown>;
   completionBarrier?: Record<string, unknown>;
   finalResponseGuard?: Record<string, unknown>;
+  primaryAction?: string;
+  fieldRepairPlan?: unknown[];
   requiredSteps?: unknown[];
   forbiddenStops?: unknown[];
   stopOnlyWhen?: unknown[];
@@ -159,6 +161,8 @@ function summarizeActionRequired(instruction: Record<string, unknown>): {
     ...(isRecord(instruction.commandInvocation) ? { commandInvocation: instruction.commandInvocation } : {}),
     ...(completionBarrier ? { completionBarrier: compactActionCompletionBarrier(completionBarrier) } : {}),
     ...(finalResponseGuard ? { finalResponseGuard } : {}),
+    ...(typeof instruction.primaryAction === "string" ? { primaryAction: instruction.primaryAction } : {}),
+    ...(Array.isArray(instruction.fieldRepairPlan) ? { fieldRepairPlan: instruction.fieldRepairPlan } : {}),
     ...(Array.isArray(agentObligation?.requiredSteps) ? { requiredSteps: agentObligation.requiredSteps } : {}),
     ...(Array.isArray(agentObligation?.forbiddenStops) ? { forbiddenStops: agentObligation.forbiddenStops } : {}),
     ...(Array.isArray(agentObligation?.stopOnlyWhen) ? { stopOnlyWhen: agentObligation.stopOnlyWhen } : {}),

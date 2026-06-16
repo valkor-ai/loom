@@ -164,7 +164,6 @@ function seedDelivery(root) {
       mustNot: ["Do not build a naked form stack."],
       confirmationSummary: "User confirmed a usable internal product UI.",
     },
-    frontendExperienceDelta: null,
     source: "brainstorm_user_confirmed",
   };
   writeJson(file(root, confirmedFrontendExperienceRef), frontendTarget);

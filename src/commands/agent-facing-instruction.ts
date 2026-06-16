@@ -168,6 +168,7 @@ const ROUTING_KEYS = [
   "requestReadProtocol",
   "schema",
   "issues",
+  "fieldRepairPlan",
   "schemaShape",
   "repairContractProfile",
   "issueConflicts",

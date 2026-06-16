@@ -665,20 +665,6 @@ export const confirmedFrontendExperienceTargetSchema = z.object({
   confirmationSummary: z.string().min(1).optional(),
 });
 
-export const frontendExperienceDeltaSchema = z.object({
-  inheritsPrevious: z.boolean(),
-  currentPhaseImpact: z.string().min(1),
-  newSurfaceRequired: z.boolean(),
-  affectedSurfaceRefs: stringArraySchema,
-  affectedViewCandidates: stringArraySchema,
-  dataViewDeltas: z.array(frontendDataViewSchema).optional(),
-  actionDeltas: z.array(frontendActionPathSchema).optional(),
-  operationPathDeltas: z.array(frontendOperationPathSchema).optional(),
-  experienceLevelOverride: frontendExperienceLevelSchema.nullable(),
-  mustNotDelta: stringArraySchema,
-  confirmationSummary: z.string().min(1).optional(),
-});
-
 export const conceptGroundingRefsSchema = z.object({
   deliveryConceptGlossaryRef: z.string().min(1).nullable().optional(),
   phaseConceptGroundingRef: z.string().min(1),
@@ -722,7 +708,6 @@ export const brainstormCandidateSchema = z.object({
   conceptConfirmation: conceptConfirmationSchema.optional(),
   clarificationProgress: clarificationProgressSchema.optional(),
   frontendExperience: confirmedFrontendExperienceTargetSchema.optional(),
-  frontendExperienceDelta: frontendExperienceDeltaSchema.optional(),
   handoff: z.object({
     ready: z.boolean(),
     nextNode: z.enum(["technical_baseline_generation", "brainstorm_clarification", "blocked"]),
@@ -834,6 +819,12 @@ export const brainstormContractSchema = z.object({
   domainModel: domainModelSchema,
   scope: brainstormScopeSchema,
   acceptance: brainstormAcceptanceSchema,
+  userConfirmation: z.object({
+    confirmed: z.boolean(),
+    confirmedAt: z.string().datetime().optional(),
+    confirmationSummary: z.string().min(1),
+    confirmationBasis: confirmationBasisSchema.optional(),
+  }).nullable().optional(),
   deliveryStrategy: deliveryStrategySchema,
   deliveryContext: deliveryContextSchema,
   conceptGrounding: conceptGroundingSchema.optional(),
@@ -841,7 +832,6 @@ export const brainstormContractSchema = z.object({
   clarificationProgress: clarificationProgressSchema.optional(),
   conceptGroundingRefs: conceptGroundingRefsSchema.optional(),
   frontendExperience: confirmedFrontendExperienceTargetSchema.optional(),
-  frontendExperienceDelta: frontendExperienceDeltaSchema.optional(),
   frontendExperienceRefs: frontendExperienceRefsSchema.optional(),
   clarification: clarificationStateSchema,
   roadmap: roadmapSchema.nullable(),
