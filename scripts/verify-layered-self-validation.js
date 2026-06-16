@@ -319,22 +319,46 @@ function assertNextPhasePreviewGenerationRules(request, label) {
 }
 
 function assertPhaseScopeOptionComparisonRules(request, label) {
+  const guidance = request?.clarificationGuidance?.phaseScopeOptionComparison;
+  assert.equal(guidance?.requiredByDefault, true, `${label}: phase_scope option comparison must be required by default`);
+  assert.equal(guidance?.nextPhaseSeedIsPreselectedAnswer, false, `${label}: nextPhaseSeed must not be treated as a preselected user answer`);
+  assert.deepEqual(guidance?.optionCount, { min: 2, max: 3 }, `${label}: phase_scope guidance must request 2-3 options`);
+  assert.equal(
+    guidance?.atomicSingleScopeException?.disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist,
+    true,
+    `${label}: multi-item or multi-action phase continuation must not use a single preselected scope`,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(guidance ?? {}, "doNotFabricateAlternativesWhenSingleClearCut"),
+    false,
+    `${label}: phase_scope guidance must not keep the old broad single-clear-cut escape hatch`,
+  );
   const generation = request?.rules?.phaseScopeOptionComparison;
   assert.equal(generation?.validationMode, "generation_guidance_only", `${label}: phase_scope option comparison must be generation guidance, not an accept validator`);
+  assert.equal(generation?.requiredByDefault, true, `${label}: phase_scope rules must require option comparison by default`);
+  assert.equal(generation?.nextPhaseSeedIsPreselectedAnswer, false, `${label}: phase_scope rules must keep nextPhaseSeed non-binding`);
   assert.ok(
-    generation?.rules?.some((rule) => rule.includes("2-3 source-grounded phase scope options")),
-    `${label}: phase_scope rules must require 2-3 options when real alternative cuts exist`,
+    generation?.rules?.some((rule) => rule.includes("present 2-3 source-grounded phase scope options") && rule.includes("by default")),
+    `${label}: phase_scope rules must require 2-3 options by default`,
   );
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("Recommend exactly one")),
     `${label}: phase_scope rules must require one recommended option`,
   );
   assert.ok(
-    generation?.rules?.some((rule) => rule.includes("do not fabricate extra options")),
-    `${label}: phase_scope rules must avoid fake alternatives when only one clear cut exists`,
+    generation?.rules?.some((rule) => rule.includes("nextPhaseSeed") && rule.includes("not as a preselected user answer")),
+    `${label}: phase_scope rules must keep nextPhaseSeed from becoming a preselected answer`,
   );
   assert.ok(
-    request?.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("2-3 source-grounded phase scope options")),
+    generation?.rules?.some((rule) => rule.includes("atomic phase") && rule.includes("single phase_scope")),
+    `${label}: phase_scope rules must allow single scope only for atomic phases`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("multiple nextPhaseSeed.scopePreview items") && rule.includes("not atomic")),
+    `${label}: phase continuation with multiple scopePreview items must require options`,
+  );
+  assert.ok(
+    request?.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("present 2-3 source-grounded phase scope options") && rule.includes("by default")),
     `${label}: phase_scope block must expose option comparison instructions to Agent`,
   );
   assert.ok(

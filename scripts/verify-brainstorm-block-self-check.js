@@ -176,6 +176,10 @@ assert.equal(request.requestType, "brainstorm_session");
 
 const blockRules = request.clarificationConversationProtocol.blockExecutionRules.join("\n");
 includes(blockRules, "phase_scope self-check", "phase_scope must have a block-level self-check before confirmation.");
+includes(blockRules, "present 2-3 source-grounded phase scope options", "phase_scope must present option comparison by default.");
+includes(blockRules, "nextPhaseSeed", "phase_scope must treat nextPhaseSeed as non-binding.");
+includes(blockRules, "atomic single-scope exception", "phase_scope must restrict single-scope confirmation to atomic scope.");
+includes(blockRules, "single preselected phase_scope", "phase_scope self-check must reject preselected single-scope output when the phase is not atomic.");
 includes(blockRules, "concept_grounding self-check", "concept_grounding must have a block-level self-check before confirmation.");
 includes(blockRules, "frontend_experience self-check", "frontend_experience must have a block-level self-check before confirmation.");
 includes(blockRules, "business scenario confirmation", "concept_grounding must include business scenario confirmation.");
@@ -186,6 +190,7 @@ includes(blockRules, "Do not use the Chinese word 反讲", "user-facing scenario
 
 const confirmationRules = request.clarificationConversationProtocol.blockConfirmationRules;
 includes(confirmationRules.phase_scope, "phase_scope self-check", "phase_scope confirmation must depend on self-check.");
+includes(confirmationRules.phase_scope, "recommended option", "phase_scope confirmation must include recommended option confirmation.");
 includes(confirmationRules.concept_grounding, "business scenario confirmation", "concept confirmation must mention scenario confirmation.");
 includes(confirmationRules.concept_grounding, "decision impact ordering", "concept confirmation must mention decision impact ordering.");
 includes(confirmationRules.concept_grounding, "lifecycle scan", "concept confirmation must mention lifecycle scan.");
@@ -206,6 +211,8 @@ assert.ok(
   "semantic contract must list lifecycle scan as a required visible topic.",
 );
 assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("phase_scope self-check")));
+assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("2-3 source-grounded phase scope options")));
+assert.ok(semantic.blockSelfCheckContract.phase_scope.rules.some((rule) => rule.includes("single preselected phase_scope")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("business scenario confirmation")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("decision impact")));
 assert.ok(semantic.blockSelfCheckContract.concept_grounding.rules.some((rule) => rule.includes("Lifecycle actions")));

@@ -161,6 +161,36 @@ function assertDeployReferencesAligned() {
   }
 }
 
+function assertBrainstormPhaseScopeGuidanceAligned() {
+  const files = [
+    "plugins/codex/skills/loom/SKILL.md",
+    "plugins/claude-code/skills/loom/SKILL.md",
+    "plugins/opencode/.opencode/commands/loom.md",
+  ];
+  for (const file of files) {
+    assertIncludes(
+      file,
+      "phaseScopeOptionComparison",
+      "Brainstorm phase_scope must point agents at request-owned option comparison guidance",
+    );
+    assertIncludes(
+      file,
+      "present 2-3 source-grounded scope options by default",
+      "Brainstorm phase_scope must default to multiple source-grounded options",
+    );
+    assertIncludes(
+      file,
+      "treat `nextPhaseSeed` as a non-binding seed rather than a preselected answer",
+      "Brainstorm phase_scope must not treat nextPhaseSeed as a preselected answer",
+    );
+    assertIncludes(
+      file,
+      "Use a single scope only when the request rules' atomic-scope exception is satisfied",
+      "Brainstorm phase_scope must restrict single-scope confirmation to the atomic exception",
+    );
+  }
+}
+
 function assertCoreInstructionShape(envelope) {
   assert.equal(envelope.ok, true);
   assert.ok(
@@ -512,6 +542,7 @@ for (const referenceName of ["interaction", "system", "content", "data"]) {
   );
 }
 assertDeployReferencesAligned();
+assertBrainstormPhaseScopeGuidanceAligned();
 
 const codexManifest = JSON.parse(read("plugins/codex/.codex-plugin/plugin.json"));
 assert.equal(codexManifest.name, "loom");

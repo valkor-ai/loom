@@ -599,6 +599,27 @@ function main() {
     assert.equal(brainstormRequest.contextRefs.latestRepositoryContextRef, ".loom/deliveries/delivery-preview-candidate/workspace/phase-2/repository-context.json");
     assert.equal(brainstormRequest.phaseContinuationContext.nextPhaseSeed.kind, "candidate");
     assert.equal(Object.hasOwn(brainstormRequest.phaseContinuationContext, "completedPhases"), false);
+    assert.equal(
+      brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.requiredByDefault,
+      true,
+      "Phase continuation Brainstorm must require phase scope option comparison by default.",
+    );
+    assert.equal(
+      brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.nextPhaseSeedIsPreselectedAnswer,
+      false,
+      "Phase continuation Brainstorm must not treat nextPhaseSeed as a preselected answer.",
+    );
+    assert.equal(
+      brainstormRequest.clarificationGuidance.phaseScopeOptionComparison.atomicSingleScopeException.disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist,
+      true,
+      "Phase continuation Brainstorm must not use single-scope confirmation for multi-item nextPhaseSeed.",
+    );
+    assert.ok(
+      brainstormRequest.rules.phaseScopeOptionComparison.rules.some((rule) =>
+        rule.includes("multiple nextPhaseSeed.scopePreview items") && rule.includes("not atomic"),
+      ),
+      "Phase continuation Brainstorm rules must force multi-item nextPhaseSeed into option comparison.",
+    );
     const compactBrainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.requestRef)));
     writeJson(projectFile(candidateRoot, compactBrainstormRequest.outputContract.candidateFile), createDeferredScopeCandidatePreviewCandidate(compactBrainstormRequest));
     const acceptedBrainstorm = run([

@@ -11,10 +11,13 @@ export function nextPhasePreviewCandidateRules(): string[] {
 
 export function phaseScopeOptionComparisonRules(): string[] {
   return [
-    "During the phase_scope block, when the current phase boundary has real alternative cuts, present 2-3 source-grounded phase scope options before asking for confirmation.",
+    "During the phase_scope block, present 2-3 source-grounded phase scope options before asking for confirmation by default. Treat nextPhaseSeed as a non-binding seed for option design, not as a preselected user answer.",
     "Each phase_scope option must identify included scope, excluded/deferred boundary, the reason for that cut, and the tradeoff for delivery speed, completeness, and implementation risk.",
+    "For product, domain, UI, workflow, or multi-step phases, derive options from source-grounded cuts such as a balanced current-phase cut, a narrower dependency-first or lower-risk cut, and a broader adjacent-workflow cut when those cuts exist in the requirement context.",
     "Recommend exactly one phase_scope option and explain why it is the best current-phase cut.",
-    "When the current phase boundary has only one clear source-grounded cut, present that single scope and explicitly state that meaningful alternatives were not found; do not fabricate extra options.",
+    "Use a single phase_scope only for an atomic phase where no source-grounded narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary exists.",
+    "When using the atomic single-scope exception, explicitly state why no narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary exists before asking for confirmation.",
+    "For phase continuation, multiple nextPhaseSeed.scopePreview items, multiple lifecycle actions, or multiple deferred/excluded items mean the phase is not atomic and must be presented as 2-3 options.",
     "A confirmed phase_scope option must be reflected in scope.included, scope.excluded, scope.deferred, phasePlan.current, and phasePlan.nextPhasePreview using the existing BrainstormCandidate fields.",
   ];
 }
@@ -53,6 +56,9 @@ export function phaseScopeSelfCheckRules(): string[] {
   return [
     "Before presenting phase_scope for user confirmation, run a phase_scope self-check inside the block.",
     "The self-check must verify that included, deferred, and excluded scope are explicit and that included scope names concrete objects, actions, workflows, deliverables, or boundaries when present in the source.",
+    "The self-check must verify that 2-3 source-grounded phase scope options were considered and shown before confirmation unless the atomic single-scope exception is explicitly justified.",
+    "If fewer than 2 options are shown, the self-check must document why there is no narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary.",
+    "The self-check must reject a single preselected phase_scope when nextPhaseSeed, deferred scope, excluded scope, or the source requirement contains multiple concrete actions, workflows, UI surfaces, lifecycle changes, or deliverable boundaries.",
     "The self-check must verify that the chosen current phase cut explains why the work belongs now and what meaningful work is deferred or excluded.",
     "The self-check must verify that nextPhasePreview carries remaining deferred or future scope when such scope exists.",
     "If the phase_scope self-check finds unclear or missing current-phase boundaries, ask a focused scope question before marking phase_scope confirmed.",

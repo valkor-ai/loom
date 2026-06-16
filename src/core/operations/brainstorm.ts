@@ -1399,10 +1399,21 @@ function buildBrainstormSessionRequest(input: {
       confirmIncludedExcludedDeferredExplicitly: true,
       confirmPhase1ForRoadmap: true,
       phaseScopeOptionComparison: {
-        requiredWhen: "current phase boundary has real alternative cuts",
+        requiredByDefault: true,
+        nextPhaseSeedIsPreselectedAnswer: false,
         optionCount: { min: 2, max: 3 },
         recommendationRequired: true,
-        doNotFabricateAlternativesWhenSingleClearCut: true,
+        atomicSingleScopeException: {
+          allowedOnlyWhenNoSourceGroundedAlternativeCutExists: true,
+          mustExplainMissingAlternativeCuts: [
+            "narrower cut",
+            "broader adjacent-workflow cut",
+            "dependency or ordering cut",
+            "deferred lifecycle action",
+            "alternate UI or runtime boundary",
+          ],
+          disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist: true,
+        },
       },
     },
     conceptGroundingRequest: {
@@ -1530,6 +1541,10 @@ function buildBrainstormSessionRequest(input: {
       phasePlanCurrentAcceptanceRefsMustUseOnlyAcceptanceIds: true,
       phaseScopeOptionComparison: {
         validationMode: "generation_guidance_only",
+        requiredByDefault: true,
+        nextPhaseSeedIsPreselectedAnswer: false,
+        optionCount: { min: 2, max: 3 },
+        atomicSingleScopeExceptionAllowedOnlyForAtomicScope: true,
         rules: phaseScopeOptionComparisonRules(),
       },
       nextPhasePreviewGeneration: {
