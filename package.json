@@ -47,6 +47,7 @@
     "verify:deploy-capability": "npm run smoke:deploy",
     "verify:requirement-context": "node scripts/verify-requirement-context-keyword-hints.js",
     "verify:knowledge-registration": "npm run build && node scripts/verify-knowledge-registration.js",
+    "verify:knowledge-mechanical-build": "npm run build && node scripts/verify-knowledge-mechanical-build.js",
     "agent:e2e-guard": "node scripts/guard-agent-e2e-processes.js",
     "audit:claude-log": "node scripts/audit-claude-loom-session.js",
     "smoke:deploy": "npm run build && node scripts/deploy-smoke-test.js",

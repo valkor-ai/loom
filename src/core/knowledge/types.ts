@@ -135,3 +135,131 @@ export type KnowledgeToggleResult = {
   status: KnowledgeSourceStatus;
   message: string;
 };
+
+export type KnowledgeFileSnapshot = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  contentHash: string;
+  extension: string;
+};
+
+export type KnowledgeDocumentBlock =
+  | { type: "heading"; level: number; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "list"; items: string[] }
+  | { type: "table"; header: string[]; rows: string[][] }
+  | { type: "code"; text: string }
+  | { type: "pageBreak"; page?: number };
+
+export type KnowledgeDocumentRecord = {
+  documentId: string;
+  sourceId: string;
+  path: string;
+  title: string;
+  extension: string;
+  size: number;
+  mtimeMs: number;
+  contentHash: string;
+  chunkIds: string[];
+};
+
+export type KnowledgeSemanticLabel = {
+  kind: "object" | "operation" | "state" | "rule" | "field" | "page" | "flow" | "other";
+  text: string;
+  normalizedText: string;
+  aliases: string[];
+  confidence: "low" | "medium" | "high";
+};
+
+export type KnowledgeBlockAffinity = {
+  phaseScope: number;
+  conceptGrounding: number;
+  frontendExperience: number;
+  finalSummary: number;
+};
+
+export type KnowledgeRetrievalFields = {
+  title: string;
+  headingPath: string[];
+  summary: string;
+  semanticLabelTexts: string[];
+  semanticAliases: string[];
+  bodyTextRef: string;
+};
+
+export type KnowledgeChunkRecord = {
+  chunkId: string;
+  documentId: string;
+  sourceId: string;
+  title: string;
+  headingPath: string[];
+  textRef: string;
+  tokenEstimate: number;
+  neighborChunkIds: string[];
+  contextPrefix: string;
+  splitReason: "section" | "soft_boundary" | "hard_boundary" | "hard_window_fallback" | "merged_small";
+  retrievalFields: KnowledgeRetrievalFields;
+  semanticLabels: KnowledgeSemanticLabel[];
+  blockAffinity: KnowledgeBlockAffinity;
+};
+
+export type KnowledgeLexicalIndex = {
+  schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+  sourceId: string;
+  buildId: string;
+  chunkCount: number;
+  averageDocumentLength: number;
+  fieldWeights: {
+    title: number;
+    headingPath: number;
+    summary: number;
+    semanticLabelTexts: number;
+    semanticAliases: number;
+    body: number;
+  };
+  terms: Record<string, {
+    df: number;
+    postings: Array<{
+      chunkId: string;
+      tf: number;
+      fields: Partial<Record<"title" | "headingPath" | "summary" | "semanticLabelTexts" | "semanticAliases" | "body", number>>;
+    }>;
+  }>;
+};
+
+export type KnowledgeBuildRun = {
+  schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+  buildId: string;
+  sourceId: string;
+  name: string;
+  status: "mechanical_ready";
+  roots: KnowledgeRoot[];
+  documents: KnowledgeDocumentRecord[];
+  chunks: KnowledgeChunkRecord[];
+  files: KnowledgeFileSnapshot[];
+  pendingOperations: PendingKnowledgeOperation[];
+  refs: {
+    chunks: string;
+    snapshot: string;
+    lexicalIndex: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeBuildResult = {
+  name: string;
+  sourceId: string;
+  buildId: string;
+  status: "mechanical_ready";
+  roots: KnowledgeRoot[];
+  documentCount: number;
+  chunkCount: number;
+  skippedFiles: KnowledgeValidationWarning[];
+  buildRunPath: string;
+  chunksPath: string;
+  snapshotPath: string;
+  lexicalIndexPath: string;
+  message: string;
+};

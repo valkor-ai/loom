@@ -31,6 +31,14 @@ export function knowledgeSourceDir(sourceId: string): string {
   return path.join(knowledgePaths().sourcesDir, sourceId);
 }
 
+export function knowledgeBuildRunDir(sourceId: string, buildId: string): string {
+  return path.join(knowledgeSourceDir(sourceId), "build-runs", buildId);
+}
+
+export function knowledgeBuildRunFile(sourceId: string, buildId: string): string {
+  return path.join(knowledgeBuildRunDir(sourceId, buildId), "build-run.json");
+}
+
 function safeKnowledgeFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "_");
 }

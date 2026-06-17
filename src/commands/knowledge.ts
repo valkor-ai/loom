@@ -8,6 +8,7 @@ import {
   setKnowledgeEnabled,
   updateKnowledgeSource,
 } from "../core/knowledge/operations";
+import { buildKnowledgeSource } from "../core/knowledge/build";
 import { ok } from "./envelope";
 import type { CliEnvelope, CommandContext, CommandHandler } from "./types";
 
@@ -57,6 +58,15 @@ export function createKnowledgeDiscardHandler(input: {
   return async (ctx: CommandContext): Promise<CliEnvelope> => {
     const result = await discardKnowledgePending(input.name);
     return ok("knowledge.discard", ctx.projectRoot, result, result.message);
+  };
+}
+
+export function createKnowledgeBuildHandler(input: {
+  name?: string;
+}): CommandHandler {
+  return async (ctx: CommandContext): Promise<CliEnvelope> => {
+    const result = await buildKnowledgeSource({ name: input.name });
+    return ok("knowledge.build", ctx.projectRoot, result, result.message);
   };
 }
 

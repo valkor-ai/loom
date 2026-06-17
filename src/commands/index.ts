@@ -27,6 +27,7 @@ import { handleInit } from "./init";
 import { createInspectHandler } from "./inspect";
 import {
   createKnowledgeAddHandler,
+  createKnowledgeBuildHandler,
   createKnowledgeDisableHandler,
   createKnowledgeDiscardHandler,
   createKnowledgeEnableHandler,
@@ -678,6 +679,16 @@ function registerKnowledgeCommands(program: Command): void {
     .addOption(compactOption())
     .action(async (name: string, options) => {
       await runCommand("knowledge.discard", options, createKnowledgeDiscardHandler({ name }));
+    });
+
+  knowledge
+    .command("build <name>")
+    .description("Build the mechanical knowledge index for a source")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.build", options, createKnowledgeBuildHandler({ name }));
     });
 
   registerKnowledgeSimpleCommand(knowledge, "list", "List knowledge sources", handleKnowledgeList, "knowledge.list");

@@ -1,6 +1,5 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { invalidArgument } from "../errors";
 import {
   findKnowledgeSource,
@@ -435,9 +434,4 @@ function emptyValidationSummary(): KnowledgeValidationSummary {
     skippedFiles: [],
     maxFileBytes: DEFAULT_MAX_KNOWLEDGE_FILE_BYTES,
   };
-}
-
-export function createKnowledgeSourceId(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32);
-  return `ksrc_${slug || "source"}_${crypto.randomBytes(4).toString("hex")}`;
 }
