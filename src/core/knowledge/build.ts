@@ -1,4 +1,4 @@
-import { promises as fs, readFileSync, type Stats } from "node:fs";
+import { promises as fs, type Stats } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import * as mammoth from "mammoth";
@@ -6,7 +6,9 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { PDFParse } from "pdf-parse";
 import { invalidArgument } from "../errors";
 import { ensureDir, writeJsonAtomic, writeTextAtomic } from "../state/fs";
+import { buildLexicalIndex } from "./lexical";
 import { knowledgeBuildRunDir, knowledgeBuildRunFile } from "./paths";
+import { prepareSemanticBuildRequests } from "./semantic";
 import {
   DEFAULT_MAX_KNOWLEDGE_FILE_BYTES,
   KNOWLEDGE_SCHEMA_VERSION,
@@ -18,7 +20,6 @@ import {
   type KnowledgeDocumentBlock,
   type KnowledgeDocumentRecord,
   type KnowledgeFileSnapshot,
-  type KnowledgeLexicalIndex,
   type KnowledgeRoot,
   type KnowledgeValidationWarning,
   type PendingKnowledgeOperation,
@@ -35,15 +36,6 @@ const SOFT_MAX_CHUNK_TOKENS = 1200;
 const HARD_MAX_CHUNK_TOKENS = 1800;
 const MIN_TOKENS = 120;
 const CONTEXT_PREFIX_MAX_TOKENS = 80;
-
-const FIELD_WEIGHTS = {
-  title: 5,
-  headingPath: 4,
-  summary: 4,
-  semanticLabelTexts: 4,
-  semanticAliases: 3,
-  body: 1,
-} as const;
 
 const IGNORED_DIRECTORY_NAMES = new Set([
   ".git",
@@ -218,12 +210,12 @@ export async function buildKnowledgeSource(input: {
   await writeJsonAtomic(lexicalIndexPath, lexicalIndex);
 
   const now = new Date().toISOString();
-  const buildRun: KnowledgeBuildRun = {
+  let buildRun: KnowledgeBuildRun = {
     schemaVersion: KNOWLEDGE_SCHEMA_VERSION,
     buildId,
     sourceId,
     name,
-    status: "mechanical_ready",
+    status: "semantic_pending",
     roots: scanned.roots,
     documents,
     chunks,
@@ -237,22 +229,37 @@ export async function buildKnowledgeSource(input: {
     createdAt: now,
     updatedAt: now,
   };
+  const semanticPreparation = await prepareSemanticBuildRequests({
+    buildRun,
+    buildRunPath,
+    runDir,
+  });
+  buildRun = {
+    ...buildRun,
+    refs: {
+      ...buildRun.refs,
+      semanticState: relativeToKnowledgeSource(sourceId, semanticPreparation.statePath),
+    },
+  };
   await writeJsonAtomic(buildRunPath, buildRun);
 
   return {
     name,
     sourceId,
     buildId,
-    status: "mechanical_ready",
+    status: "semantic_pending",
     roots: scanned.roots,
     documentCount: documents.length,
     chunkCount: chunks.length,
+    packCount: semanticPreparation.packCount,
     skippedFiles: scanned.warnings,
     buildRunPath,
     chunksPath,
     snapshotPath,
     lexicalIndexPath,
-    message: `Knowledge source "${name}" mechanical build is ready. Semantic enrichment must complete before this index is published.`,
+    firstRequestPath: semanticPreparation.firstRequestPath,
+    firstRequest: semanticPreparation.firstRequest,
+    message: `Knowledge source "${name}" semantic build is pending. Complete all semantic packs before this index is published.`,
   };
 }
 
@@ -772,103 +779,6 @@ function chunkBodyText(document: ParsedDocument, chunk: ChunkDraft): string {
     chunk.text,
     "",
   ].join("\n");
-}
-
-function buildLexicalIndex(
-  sourceId: string,
-  buildId: string,
-  chunks: KnowledgeChunkRecord[],
-  runDir: string,
-): KnowledgeLexicalIndex {
-  const termPostings = new Map<string, Map<string, {
-    chunkId: string;
-    tf: number;
-    fields: Partial<Record<"title" | "headingPath" | "summary" | "semanticLabelTexts" | "semanticAliases" | "body", number>>;
-  }>>();
-  let totalLength = 0;
-  for (const chunk of chunks) {
-    const body = readChunkBodyForIndex(runDir, chunk.textRef);
-    const fieldValues = {
-      title: chunk.retrievalFields.title,
-      headingPath: chunk.retrievalFields.headingPath.join(" "),
-      summary: chunk.retrievalFields.summary,
-      semanticLabelTexts: chunk.retrievalFields.semanticLabelTexts.join(" "),
-      semanticAliases: chunk.retrievalFields.semanticAliases.join(" "),
-      body,
-    };
-    const docTokens = new Set<string>();
-    for (const [field, value] of Object.entries(fieldValues) as Array<[keyof typeof fieldValues, string]>) {
-      const counts = countTerms(tokenize(value));
-      for (const [term, count] of counts.entries()) {
-        docTokens.add(term);
-        if (!termPostings.has(term)) {
-          termPostings.set(term, new Map());
-        }
-        const byChunk = termPostings.get(term)!;
-        const posting = byChunk.get(chunk.chunkId) ?? {
-          chunkId: chunk.chunkId,
-          tf: 0,
-          fields: {},
-        };
-        posting.tf += count;
-        posting.fields[field] = (posting.fields[field] ?? 0) + count;
-        byChunk.set(chunk.chunkId, posting);
-      }
-    }
-    totalLength += docTokens.size;
-  }
-  const terms: KnowledgeLexicalIndex["terms"] = {};
-  for (const [term, byChunk] of [...termPostings.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    const postings = [...byChunk.values()].sort((a, b) => a.chunkId.localeCompare(b.chunkId));
-    terms[term] = {
-      df: postings.length,
-      postings,
-    };
-  }
-  return {
-    schemaVersion: KNOWLEDGE_SCHEMA_VERSION,
-    sourceId,
-    buildId,
-    chunkCount: chunks.length,
-    averageDocumentLength: chunks.length > 0 ? totalLength / chunks.length : 0,
-    fieldWeights: FIELD_WEIGHTS,
-    terms,
-  };
-}
-
-function readChunkBodyForIndex(runDir: string, textRef: string): string {
-  return readFileSync(path.join(runDir, textRef), "utf8");
-}
-
-function tokenize(text: string): string[] {
-  const normalized = text.toLowerCase();
-  const latin = normalized.match(/[a-z0-9_]+/g) ?? [];
-  const cjk = [...normalized.matchAll(/[\u3400-\u9fff]+/g)]
-    .flatMap((match) => cjkNgrams(match[0]));
-  return [...latin, ...cjk].filter((token) => token.length > 0);
-}
-
-function cjkNgrams(text: string): string[] {
-  const chars = [...text];
-  if (chars.length <= 1) {
-    return chars;
-  }
-  const result: string[] = [];
-  for (let index = 0; index < chars.length - 1; index += 1) {
-    result.push(chars.slice(index, index + 2).join(""));
-  }
-  for (let index = 0; index < chars.length - 2; index += 1) {
-    result.push(chars.slice(index, index + 3).join(""));
-  }
-  return result;
-}
-
-function countTerms(tokens: string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const token of tokens) {
-    counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-  return counts;
 }
 
 function estimateTokens(text: string): number {

@@ -9,6 +9,7 @@ import {
   updateKnowledgeSource,
 } from "../core/knowledge/operations";
 import { buildKnowledgeSource } from "../core/knowledge/build";
+import { submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
 import { ok } from "./envelope";
 import type { CliEnvelope, CommandContext, CommandHandler } from "./types";
 
@@ -67,6 +68,19 @@ export function createKnowledgeBuildHandler(input: {
   return async (ctx: CommandContext): Promise<CliEnvelope> => {
     const result = await buildKnowledgeSource({ name: input.name });
     return ok("knowledge.build", ctx.projectRoot, result, result.message);
+  };
+}
+
+export function createKnowledgeSemanticSubmitHandler(input: {
+  requestFile?: string;
+  resultFile?: string;
+}): CommandHandler {
+  return async (ctx: CommandContext): Promise<CliEnvelope> => {
+    const result = await submitKnowledgeSemanticPack({
+      requestFile: input.requestFile,
+      resultFile: input.resultFile,
+    });
+    return ok("knowledge.semantic.submit", ctx.projectRoot, result, result.message);
   };
 }
 

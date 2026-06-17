@@ -24,6 +24,7 @@ const knowledgeSourceSchema: z.ZodType<KnowledgeSource> = z.object({
   index: z.object({
     version: z.number().int().nonnegative(),
     lastBuiltAt: z.string().nullable(),
+    currentBuildId: z.string().min(1).nullable().optional(),
     documentCount: z.number().int().nonnegative(),
     chunkCount: z.number().int().nonnegative(),
   }),

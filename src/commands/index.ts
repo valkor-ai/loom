@@ -33,6 +33,7 @@ import {
   createKnowledgeEnableHandler,
   createKnowledgePendingHandler,
   createKnowledgeRemoveHandler,
+  createKnowledgeSemanticSubmitHandler,
   createKnowledgeStatusHandler,
   createKnowledgeUpdateHandler,
   handleKnowledgeList,
@@ -731,6 +732,22 @@ function registerKnowledgeCommands(program: Command): void {
     .addOption(compactOption())
     .action(async (name: string, options) => {
       await runCommand("knowledge.disable", options, createKnowledgeDisableHandler({ name }));
+    });
+
+  const semantic = knowledge.command("semantic").description("Manage knowledge semantic build packs");
+  semantic
+    .command("submit")
+    .description("Submit a KnowledgeSemanticPackResult for the current pack")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--request <path>", "KnowledgeSemanticBuildRequest JSON file")
+    .option("--result-file <path>", "KnowledgeSemanticPackResult JSON file")
+    .action(async (options) => {
+      await runCommand("knowledge.semantic.submit", options, createKnowledgeSemanticSubmitHandler({
+        requestFile: stringOption(options.request),
+        resultFile: stringOption(options.resultFile),
+      }));
     });
 }
 

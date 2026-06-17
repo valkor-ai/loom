@@ -27,6 +27,7 @@ export type KnowledgeSource = {
   index: {
     version: number;
     lastBuiltAt: string | null;
+    currentBuildId?: string | null;
     documentCount: number;
     chunkCount: number;
   };
@@ -228,12 +229,26 @@ export type KnowledgeLexicalIndex = {
   }>;
 };
 
+export type KnowledgeSemanticIndex = {
+  schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+  sourceId: string;
+  buildId: string;
+  labels: Record<string, {
+    postings: Array<{
+      chunkId: string;
+      kind: KnowledgeSemanticLabel["kind"];
+      source: "label" | "alias";
+      confidence: KnowledgeSemanticLabel["confidence"];
+    }>;
+  }>;
+};
+
 export type KnowledgeBuildRun = {
   schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
   buildId: string;
   sourceId: string;
   name: string;
-  status: "mechanical_ready";
+  status: "semantic_pending" | "published";
   roots: KnowledgeRoot[];
   documents: KnowledgeDocumentRecord[];
   chunks: KnowledgeChunkRecord[];
@@ -243,6 +258,8 @@ export type KnowledgeBuildRun = {
     chunks: string;
     snapshot: string;
     lexicalIndex: string;
+    semanticIndex?: string;
+    semanticState?: string;
   };
   createdAt: string;
   updatedAt: string;
@@ -252,14 +269,135 @@ export type KnowledgeBuildResult = {
   name: string;
   sourceId: string;
   buildId: string;
-  status: "mechanical_ready";
+  status: "semantic_pending";
   roots: KnowledgeRoot[];
   documentCount: number;
   chunkCount: number;
+  packCount: number;
   skippedFiles: KnowledgeValidationWarning[];
   buildRunPath: string;
   chunksPath: string;
   snapshotPath: string;
   lexicalIndexPath: string;
+  firstRequestPath: string;
+  firstRequest: KnowledgeSemanticBuildRequest;
+  message: string;
+};
+
+export type KnowledgeCommandInvocation = {
+  argv: string[];
+};
+
+export type KnowledgeSemanticPackInfo = {
+  packId: string;
+  packIndex: number;
+  chunkIds: string[];
+  requestPath: string;
+  resultFile: string;
+};
+
+export type KnowledgeSemanticBuildState = {
+  schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+  buildId: string;
+  sourceId: string;
+  sourceName: string;
+  status: "pending" | "published";
+  packCount: number;
+  acceptedPackIds: string[];
+  packs: KnowledgeSemanticPackInfo[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeSemanticBuildRequest = {
+  schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+  requestId: string;
+  buildId: string;
+  buildRunPath: string;
+  sourceId: string;
+  sourceName: string;
+  packId: string;
+  packIndex: number;
+  packCount: number;
+  chunkPack: {
+    chunks: Array<{
+      chunkId: string;
+      documentId: string;
+      documentTitle: string;
+      relativePath: string;
+      headingPath: string[];
+      tokenEstimate: number;
+      textRef: string;
+      readCommand: KnowledgeCommandInvocation;
+      previousChunkTitle?: string;
+      nextChunkTitle?: string;
+      splitReason?: string;
+    }>;
+  };
+  outputContract: {
+    resultFile: string;
+    schema: "KnowledgeSemanticPackResult";
+  };
+  generationRules: {
+    labelKinds: KnowledgeSemanticLabel["kind"][];
+    confidenceValues: KnowledgeSemanticLabel["confidence"][];
+    summaryRule: string;
+    semanticLabelRule: string;
+    blockAffinityRule: string;
+  };
+  submitCommand: KnowledgeCommandInvocation;
+  requestReadPlan: {
+    mustReadChunkText: boolean;
+    chunkTextRefs: string[];
+  };
+};
+
+export type KnowledgeSemanticChunkResult = {
+  chunkId: string;
+  status: "completed" | "low_signal" | "unreadable";
+  summary: string;
+  semanticLabels: KnowledgeSemanticLabel[];
+  blockAffinity: KnowledgeBlockAffinity;
+  notes?: string[];
+};
+
+export type KnowledgeSemanticPackResult = {
+  schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+  buildId: string;
+  packId: string;
+  chunkResults: KnowledgeSemanticChunkResult[];
+};
+
+export type KnowledgeSemanticSubmitIssue = {
+  code: string;
+  message: string;
+  path?: string;
+  chunkId?: string;
+};
+
+export type KnowledgeSemanticSubmitResult = {
+  status: "accepted" | "needs_repair";
+  buildId: string;
+  packId: string;
+  acceptedPackIds: string[];
+  packCount: number;
+  nextRequestPath?: string;
+  nextRequest?: KnowledgeSemanticBuildRequest;
+  published?: {
+    name: string;
+    sourceId: string;
+    buildId: string;
+    documentCount: number;
+    chunkCount: number;
+  };
+  repairRequestPath?: string;
+  repairRequest?: {
+    schemaVersion: typeof KNOWLEDGE_SCHEMA_VERSION;
+    buildId: string;
+    packId: string;
+    resultFile: string;
+    issues: KnowledgeSemanticSubmitIssue[];
+    repairScope: "current_pack_result_only";
+  };
   message: string;
 };

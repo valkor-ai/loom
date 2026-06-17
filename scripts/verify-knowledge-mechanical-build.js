@@ -75,10 +75,15 @@ run(["knowledge", "add", "--name", "funds-build", knowledgeDir]);
 const build = run(["knowledge", "build", "funds-build"]);
 
 assert.equal(build.command, "knowledge.build");
-assert.equal(build.data.status, "mechanical_ready");
+assert.equal(build.data.status, "semantic_pending");
 assert.equal(build.data.name, "funds-build");
 assert.match(build.data.sourceId, /^ksrc_funds-build_/);
 assert.match(build.data.buildId, /^kbld_/);
+assert.equal(build.data.packCount, 1);
+assert.equal(fs.existsSync(build.data.firstRequestPath), true);
+assert.equal(build.data.firstRequest.packId, "kpack_0001");
+assert.equal(build.data.firstRequest.chunkPack.chunks.length, build.data.chunkCount);
+assert.equal(build.data.firstRequest.requestReadPlan.mustReadChunkText, true);
 assert.equal(build.data.roots.length, 1);
 assert.equal(build.data.roots[0].type, "directory");
 assert.equal(build.data.documentCount, 3);
@@ -98,7 +103,7 @@ for (const filePath of [
 }
 
 const buildRun = readJson(build.data.buildRunPath);
-assert.equal(buildRun.status, "mechanical_ready");
+assert.equal(buildRun.status, "semantic_pending");
 assert.equal(buildRun.sourceId, build.data.sourceId);
 assert.equal(buildRun.pendingOperations.length, 1);
 assert.equal(buildRun.documents.length, 3);
@@ -106,6 +111,7 @@ assert.equal(buildRun.chunks.length, build.data.chunkCount);
 assert.ok(buildRun.refs.chunks.endsWith("chunks.json"));
 assert.ok(buildRun.refs.snapshot.endsWith("snapshot.json"));
 assert.ok(buildRun.refs.lexicalIndex.endsWith("lexical-index.json"));
+assert.ok(buildRun.refs.semanticState.endsWith("semantic-state.json"));
 
 const chunksPayload = readJson(build.data.chunksPath);
 assert.equal(chunksPayload.chunks.length, build.data.chunkCount);

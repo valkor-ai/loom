@@ -39,6 +39,22 @@ export function knowledgeBuildRunFile(sourceId: string, buildId: string): string
   return path.join(knowledgeBuildRunDir(sourceId, buildId), "build-run.json");
 }
 
+export function knowledgeSemanticStateFile(sourceId: string, buildId: string): string {
+  return path.join(knowledgeBuildRunDir(sourceId, buildId), "semantic-state.json");
+}
+
+export function knowledgeSemanticRequestFile(sourceId: string, buildId: string, packId: string): string {
+  return path.join(knowledgeBuildRunDir(sourceId, buildId), "semantic-requests", `${packId}.json`);
+}
+
+export function knowledgeSemanticResultFile(sourceId: string, buildId: string, packId: string): string {
+  return path.join(knowledgeBuildRunDir(sourceId, buildId), "semantic-results", `${packId}.json`);
+}
+
+export function knowledgeSemanticRepairFile(sourceId: string, buildId: string, packId: string): string {
+  return path.join(knowledgeBuildRunDir(sourceId, buildId), "semantic-repairs", `${packId}.json`);
+}
+
 function safeKnowledgeFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "_");
 }
