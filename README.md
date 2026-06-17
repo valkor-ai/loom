@@ -282,6 +282,16 @@ After uninstalling an adapter, open a new agent session so that agent reloads it
 
 <img src="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/logo/Zhejiang_University_Logo.svg" alt="Zhejiang University" width="220"> <img src="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/logo/University_College_London_logo.svg" alt="University College London" width="220">
 
+## Star History
+
+<a href="https://www.star-history.com/#valkor-ai/loom&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=valkor-ai/loom&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=valkor-ai/loom&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=valkor-ai/loom&type=Date" />
+  </picture>
+</a>
+
 ## License
 
 Loom is open source under the [Apache License 2.0](./LICENSE).
