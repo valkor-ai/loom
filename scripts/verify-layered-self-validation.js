@@ -2446,6 +2446,14 @@ function main() {
     assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.requirementDetailReview"));
     assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("conceptRef from conceptReviewMatrix")));
     assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("detailReviewMatrix")));
+    assert.ok(
+      reviewRequest.agentAction.write.rules.some((rule) => rule.includes("add it as a new reachable entry")),
+      "ReviewRequest must tell agents to check that new frontend modules are added as entries instead of replacing existing app-shell entries.",
+    );
+    assert.ok(
+      reviewRequest.outputContract.frontendExperienceReview.reviewGuidance.some((rule) => rule.includes("add it as a new reachable entry")),
+      "frontendExperienceReview must carry the app-shell entry preservation review rule.",
+    );
     assert.equal(reviewRequest.conceptReviewMatrix[0].conceptRef, "concept-core-validation");
     assert.equal(reviewRequest.conceptReviewMatrix[0].priority, "must_understand");
     assert.ok(reviewRequest.conceptReviewMatrix[0].mustNotMisinterpretAs.includes("deployment work"));

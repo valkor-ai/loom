@@ -47,6 +47,7 @@ import {
   loadRequiredTechnicalBaseline,
 } from "./contracts";
 import {
+  frontendModuleEntryPreservationRule,
   loadCurrentTaskPlan,
   loadCurrentTaskPlanRun,
 } from "./tasks";
@@ -202,6 +203,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
           "Use outputContract.reviewSignals for mechanical facts such as missing workflow closure assignment or TaskResult self-check static/gap contradictions. Do not approve when a workflow closure signal says closureSatisfied=false.",
           "For concept-related findings, use findingType and conceptRef from conceptReviewMatrix; do not invent concept ids.",
           "Use detailReviewMatrix and outputContract.reviewSignals for requirement detail evidence. Do not approve when a requirement_detail_evidence signal says detailSatisfied=false.",
+          frontendModuleEntryPreservationRule,
           "Do not modify project files during review.",
         ],
       },
@@ -304,6 +306,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
         "If outputContract.reviewSignals contains frontend_workflow_closure with closureSatisfied=false and recommendedNextAction=execution_repair, write a blocking frontend_experience finding and route execution_repair.",
         "If outputContract.reviewSignals contains frontend_workflow_closure with recommendedNextAction=taskplan_repair, write a blocking task_artifact_mapping_issue or task_verification_mapping_issue finding and route taskplan_repair.",
         "If outputContract.reviewSignals contains requirement_detail_evidence with detailSatisfied=false, write a blocking evidence_insufficient or task_verification_mapping_issue finding and route execution_repair.",
+        frontendModuleEntryPreservationRule,
       ],
       changeSetRules: changeSet.mode === "git_diff_ref"
         ? [
@@ -1310,6 +1313,7 @@ function buildFrontendExperienceReview(aac: Awaited<ReturnType<typeof loadArchit
       "Block objective contract violations such as no visible UI when frontend is required.",
       "When workflowClosureRequirements is non-empty, check matching reviewSignals before approving.",
       "For workflow closures with operationPathRefs/dataViewRefs/actionRefs, check that evidence covers target discovery, action entry, declared interface invocation, result refresh/readback or status observation, and success/blocking feedback.",
+      frontendModuleEntryPreservationRule,
       "Use manual_review for subjective visual polish decisions.",
       "Playwright failure alone is not a frontend product defect.",
     ],

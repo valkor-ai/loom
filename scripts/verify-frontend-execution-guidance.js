@@ -644,6 +644,10 @@ try {
   assert.equal(frontendRules.executionGuidanceIsNonBlocking, true);
   assert.equal(frontendRules.workflowClosureRequired, true);
   assert.deepEqual(frontendRules.workflowClosureRequirementIds, ["closure:flow-submit-booking:step-submit"]);
+  assert.ok(
+    frontendRules.implementationOrganizationRules.some((rule) => rule.includes("add it as a new reachable entry")),
+    "frontend execution rules must tell agents to add new modules as entries instead of replacing existing app-shell entries.",
+  );
 
   const probePolicyRead = run([
     "inspect",

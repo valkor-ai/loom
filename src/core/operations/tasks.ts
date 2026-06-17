@@ -172,9 +172,12 @@ export const controlledRuntimeProbeRules = [
   "Runtime probe cleanup failure, unknown cleanup, or not-safe cleanup is non-blocking by itself: record runtimeDeliveryEvidence.runtimeProbeCleanup and use completed_with_notes unless an independent implementation or verification defect remains.",
 ];
 
+export const frontendModuleEntryPreservationRule = "When adding a frontend module to an existing app, add it as a new reachable entry, route, tab, or navigation item in the existing app shell; do not replace, hide, or remove existing reachable module entries unless the requirement explicitly asks for that replacement or removal.";
+
 export const frontendImplementationOrganizationRules = [
   "For frontend tasks, organize implementation by responsibility boundaries rather than by one giant mixed file.",
   "Use the project's existing frontend structure when present.",
+  frontendModuleEntryPreservationRule,
   "When creating new frontend code, choose the smallest maintainable structure appropriate to the detected stack.",
   "The implementation should make UI/view, API/service interaction, state/feedback handling, and verification/test evidence distinguishable.",
   "Do not force every responsibility into a separate directory or file when the task is small.",
