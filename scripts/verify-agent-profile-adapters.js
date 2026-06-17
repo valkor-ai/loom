@@ -857,56 +857,54 @@ assert.match(executeTaskOutput.output, /requestRef: \\.loom\\/tasks\\/phase-1\\/
 assert.match(executeTaskOutput.output.split("\\n\\n")[0], /submitCommand: .*record-result/);
 promptPayload = null;
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-2" } } });
-assert.ok(promptPayload, "execute_task idle recovery must first read agentAction so the read plan is known");
-assert.match(promptPayload.body.parts[0].text, /agentAction first/);
-assert.match(promptPayload.body.parts[0].text, /--field agentAction/);
-const agentActionInspectEnvelope = {
+assert.ok(promptPayload, "execute_task idle recovery must first read requestReadPlan so the read plan is known");
+assert.match(promptPayload.body.parts[0].text, /requestReadPlan first/);
+assert.match(promptPayload.body.parts[0].text, /--field requestReadPlan/);
+const requestReadPlanInspectEnvelope = {
   ok: true,
   command: "inspect",
   projectRoot: "/tmp/loom-opencode-project",
   agentProfile: { id: "opencode", adapter: "opencode", commandSurface: "/loom" },
   data: {
     requestRef: ".loom/tasks/phase-1/execution-requests/exec-task.json",
-    requestedFields: ["agentAction"],
+    requestedFields: ["requestReadPlan"],
     fields: {
-      agentAction: {
+      requestReadPlan: {
         status: "resolved",
         value: {
-          read: {
-            fieldGroups: [
-              {
-                groupId: "execute_task_core",
-                required: true,
-                fields: ["task", "sourceContext.acceptanceSnapshot"],
-                readCommand: {
-                  name: "inspect",
-                  argv: ["inspect", "--request", "{requestRef}", "--field", "task,sourceContext.acceptanceSnapshot"],
-                },
+          groups: [
+            {
+              groupId: "execute_task_core",
+              required: true,
+              fields: ["task", "sourceContext.acceptanceSnapshot"],
+              readCommand: {
+                name: "inspect",
+                argv: ["inspect", "--request", ".loom/tasks/phase-1/execution-requests/exec-task.json", "--field", "task,sourceContext.acceptanceSnapshot"],
               },
-              {
-                groupId: "execute_task_optional_context",
-                required: false,
-                fields: ["sourceRefs"],
-                readCommand: {
-                  name: "inspect",
-                  argv: ["inspect", "--request", "{requestRef}", "--field", "sourceRefs"],
-                },
+            },
+            {
+              groupId: "execute_task_optional_context",
+              required: false,
+              fields: ["sourceRefs"],
+              readCommand: {
+                name: "inspect",
+                argv: ["inspect", "--request", ".loom/tasks/phase-1/execution-requests/exec-task.json", "--field", "sourceRefs"],
               },
-            ],
-          },
+            },
+          ],
         },
       },
     },
   },
 };
-const agentActionInspectOutput = { title: "tool", output: JSON.stringify(agentActionInspectEnvelope, null, 2), metadata: {} };
-await hooks["tool.execute.after"]({ tool: "bash", sessionID: "session-2", callID: "call-agent-action" }, agentActionInspectOutput);
-assert.match(agentActionInspectOutput.output, /LOOM_NEXT_ACTION/, "agentAction inspect output must inline the next read action instead of waiting for idle recovery");
-assert.match(agentActionInspectOutput.output, /next required TaskExecutionRequest field now: task/);
-assert.match(agentActionInspectOutput.output, /--field '?task,sourceContext\\.acceptanceSnapshot'?/);
+const requestReadPlanInspectOutput = { title: "tool", output: JSON.stringify(requestReadPlanInspectEnvelope, null, 2), metadata: {} };
+await hooks["tool.execute.after"]({ tool: "bash", sessionID: "session-2", callID: "call-request-read-plan" }, requestReadPlanInspectOutput);
+assert.match(requestReadPlanInspectOutput.output, /LOOM_NEXT_ACTION/, "requestReadPlan inspect output must inline the next read action instead of waiting for idle recovery");
+assert.match(requestReadPlanInspectOutput.output, /next required TaskExecutionRequest field now: task/);
+assert.match(requestReadPlanInspectOutput.output, /--field '?task,sourceContext\\.acceptanceSnapshot'?/);
 promptPayload = null;
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-2" } } });
-assert.ok(promptPayload, "after agentAction inspect, adapter must prompt the next required request field");
+assert.ok(promptPayload, "after requestReadPlan inspect, adapter must prompt the next required request field");
 assert.match(promptPayload.body.parts[0].text, /next required TaskExecutionRequest field now: task/);
 assert.match(promptPayload.body.parts[0].text, /--field '?task,sourceContext\\.acceptanceSnapshot'?/);
 const inspectRequiredFieldsEnvelope = {
@@ -981,29 +979,29 @@ assert.match(generateOutput.output, /targetCandidateFile: \\.loom\\/tmp\\/archit
 promptPayload = null;
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-3" } } });
 assert.ok(promptPayload, "generate_candidate auto-runnable instructions must also be guarded");
-assert.match(promptPayload.body.parts[0].text, /agentAction first/);
-assert.match(promptPayload.body.parts[0].text, /--field agentAction/);
-const generateAgentActionInspectEnvelope = {
+assert.match(promptPayload.body.parts[0].text, /requestReadPlan first/);
+assert.match(promptPayload.body.parts[0].text, /--field requestReadPlan/);
+const generateRequestReadPlanInspectEnvelope = {
   ok: true,
   command: "inspect",
   projectRoot: "/tmp/loom-opencode-project",
   agentProfile: { id: "opencode", adapter: "opencode", commandSurface: "/loom" },
   data: {
     requestRef: ".loom/architecture/requests/arch-req.json",
-    requestedFields: ["agentAction"],
+    requestedFields: ["requestReadPlan"],
     fields: {
-      agentAction: {
+      requestReadPlan: {
         status: "resolved",
-        value: { read: { fieldGroups: [] } },
+        value: { groups: [] },
       },
     },
   },
 };
-const generateAgentActionInspectOutput = { title: "tool", output: JSON.stringify(generateAgentActionInspectEnvelope, null, 2), metadata: {} };
-await hooks["tool.execute.after"]({ tool: "bash", sessionID: "session-3", callID: "call-generate-agent-action" }, generateAgentActionInspectOutput);
-assert.match(generateAgentActionInspectOutput.output, /LOOM_NEXT_ACTION/, "generate_candidate inspect output must inline candidate generation action");
-assert.match(generateAgentActionInspectOutput.output, /Generate\\/write/);
-assert.match(generateAgentActionInspectOutput.output, /runtime-delivery\\.json/);
+const generateRequestReadPlanInspectOutput = { title: "tool", output: JSON.stringify(generateRequestReadPlanInspectEnvelope, null, 2), metadata: {} };
+await hooks["tool.execute.after"]({ tool: "bash", sessionID: "session-3", callID: "call-generate-request-read-plan" }, generateRequestReadPlanInspectOutput);
+assert.match(generateRequestReadPlanInspectOutput.output, /LOOM_NEXT_ACTION/, "generate_candidate inspect output must inline candidate generation action");
+assert.match(generateRequestReadPlanInspectOutput.output, /Generate\\/write/);
+assert.match(generateRequestReadPlanInspectOutput.output, /runtime-delivery\\.json/);
 promptPayload = null;
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-3" } } });
 assert.ok(promptPayload, "generate_candidate should prompt writing only after required read plan fields are resolved");
@@ -1033,9 +1031,9 @@ const repairEnvelope = {
 await hooks["tool.execute.after"]({ tool: "bash", sessionID: "session-repair", callID: "call-repair" }, { title: "tool", output: JSON.stringify(repairEnvelope, null, 2), metadata: {} });
 promptPayload = null;
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-repair" } } });
-assert.ok(promptPayload, "repair auto-runnable instructions must first read repair request agentAction");
-assert.match(promptPayload.body.parts[0].text, /repair request agentAction first/);
-assert.match(promptPayload.body.parts[0].text, /--field agentAction/);
+assert.ok(promptPayload, "repair auto-runnable instructions must first read repair requestReadPlan");
+assert.match(promptPayload.body.parts[0].text, /repair request requestReadPlan first/);
+assert.match(promptPayload.body.parts[0].text, /--field requestReadPlan/);
 const resetHooks = await LoomPlugin({
   directory: "/tmp/loom-opencode-project",
   client: { session: { promptAsync: async (payload) => { promptPayload = payload; promptCount += 1; } } },
@@ -1926,8 +1924,8 @@ for (const file of [
   );
   assertIncludes(
     file,
-    "requestManifest.refs.agentAction.ref",
-    `${file}: main adapter must load agentActionRef for ref-first requests`,
+    "requestReadPlan",
+    `${file}: main adapter must use requestReadPlan for request reads`,
   );
 }
 assertIncludes(

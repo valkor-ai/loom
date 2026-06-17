@@ -379,8 +379,9 @@ function shouldKeepPendingAfterNonRunnableEnvelope(envelope, pending) {
 
 function pendingAfterInspect(pending, envelope) {
   const inspected = inspectedFieldsFromEnvelope(envelope);
+  const failedFields = inspectErrorRequestedFieldsFromEnvelope(envelope);
   const requestRef = typeof envelope.data?.requestRef === "string" ? envelope.data.requestRef : null;
-  if (inspected.fields.length === 0) {
+  if (inspected.fields.length === 0 && failedFields.length === 0) {
     return pending;
   }
   if (pending.requestRef && requestRef && pending.requestRef !== requestRef) {
@@ -388,11 +389,16 @@ function pendingAfterInspect(pending, envelope) {
   }
   const beforeStage = stageForPending(pending);
   const beforeAttemptKey = attemptKeyForPending(pending, beforeStage);
-  const readFields = new Set([...(pending.readFields ?? []), ...inspected.fields]);
+  const readFields = new Set([...(pending.readFields ?? []), ...inspected.fields, ...failedFields]);
+  const requestReadPlanValue = inspected.values.get("requestReadPlan");
   const agentActionValue = inspected.values.get("agentAction");
-  const readPlan = inspected.fields.includes("agentAction")
+  const requestReadPlan = inspected.fields.includes("requestReadPlan")
+    ? requiredReadPlanFromRequestReadPlan(requestReadPlanValue)
+    : null;
+  const agentActionReadPlan = inspected.fields.includes("agentAction")
     ? requiredReadPlanFromAgentAction(agentActionValue)
     : null;
+  const readPlan = requestReadPlan ?? agentActionReadPlan;
   const requiredReadFields = readPlan?.fields ?? pending.requiredReadFields ?? null;
   const requiredReadGroups = readPlan?.groups ?? pending.requiredReadGroups ?? null;
   const updated = {
@@ -434,6 +440,17 @@ function inspectedFieldsFromEnvelope(envelope) {
     }
   }
   return { fields: uniqueFieldNames(fields), values };
+}
+
+function inspectErrorRequestedFieldsFromEnvelope(envelope) {
+  if (envelope?.ok !== false || envelope?.command !== "inspect") {
+    return [];
+  }
+  const requested = envelope?.error?.details?.inspectRecovery?.requestedFields
+    ?? envelope?.error?.details?.requestedFields;
+  return Array.isArray(requested)
+    ? uniqueFieldNames(requested.filter((field) => typeof field === "string" && field.length > 0))
+    : [];
 }
 
 function isStopMode(mode) {
@@ -605,12 +622,14 @@ function idlePromptForPending(pending, stage) {
   }
   if (pending.mode === "execute_task") {
     const submitLine = pending.submitCommand ? `After writing the result file, run:\n${pending.submitCommand}` : "After writing the result file, run the submitCommand from the request.";
-    if (stage === "read_agent_action" || stage === "read_required_fields") {
-      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "agentAction";
+    if (stage === "read_request_read_plan" || stage === "read_agent_action" || stage === "read_required_fields") {
+      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "requestReadPlan";
       return [
         ...common,
-        stage === "read_agent_action"
-          ? `Read the TaskExecutionRequest agentAction first so the required read plan is known: ${pending.requestRef ?? "instruction.requestRef"}.`
+        stage === "read_request_read_plan"
+          ? `Read the TaskExecutionRequest requestReadPlan first so the required field groups are known: ${pending.requestRef ?? "instruction.requestRef"}.`
+          : stage === "read_agent_action"
+          ? `Compatibility fallback: read the TaskExecutionRequest agentAction because requestReadPlan was unavailable: ${pending.requestRef ?? "instruction.requestRef"}.`
           : `Read the next required TaskExecutionRequest field now: ${nextReadField}.`,
         pending.requiredReadFields?.length
           ? `Required fields remaining: ${missingRequiredReadFields(pending).join(", ") || "none"}.`
@@ -631,12 +650,14 @@ function idlePromptForPending(pending, stage) {
   }
   if (pending.mode === "generate_candidate") {
     const target = pending.targetCandidateFile ?? pending.candidateFile ?? "the candidate/result files named by the request output contract";
-    if (stage === "read_agent_action" || stage === "read_required_fields") {
-      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "agentAction";
+    if (stage === "read_request_read_plan" || stage === "read_agent_action" || stage === "read_required_fields") {
+      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "requestReadPlan";
       return [
         ...common,
-        stage === "read_agent_action"
-          ? `Read the generation request agentAction first so the required read plan is known: ${pending.requestRef ?? "instruction.requestRef"}.`
+        stage === "read_request_read_plan"
+          ? `Read the generation request requestReadPlan first so the required field groups are known: ${pending.requestRef ?? "instruction.requestRef"}.`
+          : stage === "read_agent_action"
+          ? `Compatibility fallback: read the generation request agentAction because requestReadPlan was unavailable: ${pending.requestRef ?? "instruction.requestRef"}.`
           : `Read the next required generation request field now: ${nextReadField}.`,
         pending.requiredReadFields?.length
           ? `Required fields remaining: ${missingRequiredReadFields(pending).join(", ") || "none"}.`
@@ -655,12 +676,14 @@ function idlePromptForPending(pending, stage) {
     ].filter(Boolean).join("\n\n");
   }
   if (pending.mode === "submit_existing_candidate") {
-    if (stage === "read_agent_action" || stage === "read_required_fields") {
-      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "agentAction";
+    if (stage === "read_request_read_plan" || stage === "read_agent_action" || stage === "read_required_fields") {
+      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "requestReadPlan";
       return [
         ...common,
-        stage === "read_agent_action"
-          ? `Read the submit request agentAction first so the required read plan is known: ${pending.requestRef ?? "instruction.requestRef"}.`
+        stage === "read_request_read_plan"
+          ? `Read the submit request requestReadPlan first so the required field groups are known: ${pending.requestRef ?? "instruction.requestRef"}.`
+          : stage === "read_agent_action"
+          ? `Compatibility fallback: read the submit request agentAction because requestReadPlan was unavailable: ${pending.requestRef ?? "instruction.requestRef"}.`
           : `Read the next required submit request field now: ${nextReadField}.`,
         pending.requiredReadFields?.length
           ? `Required fields remaining: ${missingRequiredReadFields(pending).join(", ") || "none"}.`
@@ -678,12 +701,14 @@ function idlePromptForPending(pending, stage) {
     ].filter(Boolean).join("\n\n");
   }
   if (pending.mode === "repair_candidate" || pending.mode === "repair_result_contract") {
-    if (stage === "read_agent_action" || stage === "read_required_fields") {
-      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "agentAction";
+    if (stage === "read_request_read_plan" || stage === "read_agent_action" || stage === "read_required_fields") {
+      const nextReadField = nextRequiredReadFieldForPending(pending) ?? "requestReadPlan";
       return [
         ...common,
-        stage === "read_agent_action"
-          ? `Read the repair request agentAction first so the required read plan is known: ${pending.requestRef ?? "instruction.requestRef"}.`
+        stage === "read_request_read_plan"
+          ? `Read the repair request requestReadPlan first so the required field groups are known: ${pending.requestRef ?? "instruction.requestRef"}.`
+          : stage === "read_agent_action"
+          ? `Compatibility fallback: read the repair request agentAction because requestReadPlan was unavailable: ${pending.requestRef ?? "instruction.requestRef"}.`
           : `Read the next required repair request field now: ${nextReadField}.`,
         pending.requiredReadFields?.length
           ? `Required fields remaining: ${missingRequiredReadFields(pending).join(", ") || "none"}.`
@@ -749,6 +774,9 @@ function stageForPending(pending) {
     if (pending.resultFile && fileExists(pending.projectRoot, pending.resultFile)) {
       return "submit_result";
     }
+    if (shouldReadRequestReadPlan(pending)) {
+      return "read_request_read_plan";
+    }
     if (shouldReadAgentAction(pending)) {
       return "read_agent_action";
     }
@@ -762,6 +790,9 @@ function stageForPending(pending) {
     if (outputFile && fileExists(pending.projectRoot, outputFile)) {
       return pending.followUpCommand ? "run_follow_up" : "submit_candidate";
     }
+    if (shouldReadRequestReadPlan(pending)) {
+      return "read_request_read_plan";
+    }
     if (shouldReadAgentAction(pending)) {
       return "read_agent_action";
     }
@@ -771,6 +802,9 @@ function stageForPending(pending) {
     return "generate_candidate";
   }
   if (pending.mode === "submit_existing_candidate") {
+    if (shouldReadRequestReadPlan(pending)) {
+      return "read_request_read_plan";
+    }
     if (shouldReadAgentAction(pending)) {
       return "read_agent_action";
     }
@@ -780,6 +814,9 @@ function stageForPending(pending) {
     return "submit_candidate";
   }
   if (pending.mode === "repair_candidate" || pending.mode === "repair_result_contract") {
+    if (shouldReadRequestReadPlan(pending)) {
+      return "read_request_read_plan";
+    }
     if (shouldReadAgentAction(pending)) {
       return "read_agent_action";
     }
@@ -855,10 +892,20 @@ function requiresRequestReadPlan(mode) {
   ]).has(mode);
 }
 
+function shouldReadRequestReadPlan(pending) {
+  return Boolean(
+    requiresRequestReadPlan(pending.mode) &&
+    pending.requestRef &&
+    !pending.readFields?.has("requestReadPlan") &&
+    !Array.isArray(pending.requiredReadFields),
+  );
+}
+
 function shouldReadAgentAction(pending) {
   return Boolean(
     requiresRequestReadPlan(pending.mode) &&
     pending.requestRef &&
+    pending.readFields?.has("requestReadPlan") &&
     !pending.readFields?.has("agentAction") &&
     !Array.isArray(pending.requiredReadFields),
   );
@@ -872,6 +919,9 @@ function missingRequiredReadFields(pending) {
 }
 
 function nextRequiredReadFieldForPending(pending) {
+  if (shouldReadRequestReadPlan(pending)) {
+    return "requestReadPlan";
+  }
   if (shouldReadAgentAction(pending)) {
     return "agentAction";
   }
@@ -898,6 +948,20 @@ function nextRequiredReadGroupCommandForPending(pending) {
   return null;
 }
 
+function requiredReadPlanFromRequestReadPlan(value) {
+  if (!value || typeof value !== "object" || !Array.isArray(value.groups)) {
+    return null;
+  }
+  const groups = requiredReadGroupsFromRequestReadPlan(value);
+  if (groups.length > 0) {
+    return {
+      fields: dedupeCoveredFieldPaths(groups.flatMap((group) => group.fields)),
+      groups,
+    };
+  }
+  return { fields: [], groups: [] };
+}
+
 function requiredReadPlanFromAgentAction(value) {
   const read = value?.read;
   if (!read || typeof read !== "object") {
@@ -919,6 +983,33 @@ function requiredReadPlanFromAgentAction(value) {
     : [];
   const fields = dedupeCoveredFieldPaths(labels);
   return fields.length > 0 ? { fields, groups: null } : { fields: [], groups: [] };
+}
+
+function requiredReadGroupsFromRequestReadPlan(readPlan) {
+  if (!Array.isArray(readPlan.groups)) {
+    return [];
+  }
+  const groups = [];
+  for (const group of readPlan.groups) {
+    if (!group || typeof group !== "object" || group.required === false || !Array.isArray(group.fields)) {
+      continue;
+    }
+    const fields = dedupeCoveredFieldPaths(group.fields.filter((field) => typeof field === "string" && field.length > 0));
+    if (fields.length === 0) {
+      continue;
+    }
+    const argv = Array.isArray(group.readCommand?.argv)
+      ? group.readCommand.argv.map((value) => String(value))
+      : ["inspect", "--request", "{requestRef}", "--field", fields.join(",")];
+    groups.push({
+      fields,
+      readCommand: {
+        name: "inspect",
+        argv,
+      },
+    });
+  }
+  return groups;
 }
 
 function requiredReadGroupsFromAgentAction(read) {

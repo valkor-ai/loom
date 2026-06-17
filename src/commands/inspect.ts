@@ -422,15 +422,16 @@ async function buildInspectRecovery(
   request: Record<string, unknown>,
   requestedFields: string[],
 ): Promise<Record<string, unknown>> {
-  const readPlan = await resolveAgentActionReadPlan(projectRoot, requestRef, request);
+  const readPlan = await resolveRequestReadPlan(projectRoot, requestRef, request);
   const requiredGroup = readPlan.availableFieldGroups.find((group) => group.required)
     ?? readPlan.availableFieldGroups[0];
   return {
     status: "field_not_found_use_request_read_plan",
     requestedFields,
     requestRef,
-    readPlanAuthority: "agentAction.read.fieldGroups",
-    agentActionSource: readPlan.source,
+    readPlanAuthority: readPlan.source === "request_read_plan" ? "requestReadPlan.groups" : "agentAction.read.fieldGroups",
+    readPlanSource: readPlan.source,
+    ...(readPlan.source !== "request_read_plan" ? { agentActionSource: readPlan.source } : {}),
     ...(readPlan.ref ? { agentActionRef: readPlan.ref } : {}),
     ...(readPlan.readError ? { agentActionReadError: readPlan.readError } : {}),
     availableFieldGroups: readPlan.availableFieldGroups,
@@ -451,7 +452,7 @@ async function buildInspectRecovery(
       },
     fallbackRule: "If the recommended inspect command fails, read the listed fieldGroup fields through requestManifest refs and targeted selectors. If the read plan is missing or unreadable, read requestRef and requestManifest refs directly as a correctness fallback while keeping chat output compact.",
     doNot: [
-      "Do not guess old wrapper fields such as phaseScopePrompt, data, contract, objective, scope, or outputContract when they are not listed in agentAction.read.fieldGroups.",
+      "Do not guess old wrapper fields such as phaseScopePrompt, data, contract, objective, scope, or outputContract when they are not listed in requestReadPlan.groups or agentAction.read.fieldGroups.",
       "Do not run broad searches over $HOME/.loom, .codex, node_modules, unrelated test directories, or the whole project to discover request fields.",
       "Do not print full .loom request, TaskPlan, run, result, or ref JSON into chat.",
     ],
@@ -460,16 +461,25 @@ async function buildInspectRecovery(
   };
 }
 
-async function resolveAgentActionReadPlan(
+async function resolveRequestReadPlan(
   projectRoot: string,
   requestRef: string,
   request: Record<string, unknown>,
 ): Promise<{
-  source: "request_root" | "request_manifest_ref" | "missing";
+  source: "request_read_plan" | "request_root" | "request_manifest_ref" | "missing";
   ref: string | null;
   readError?: string;
   availableFieldGroups: InspectRecoveryReadGroup[];
 }> {
+  const requestReadPlanGroups = fieldGroupsFromRequestReadPlan(request.requestReadPlan, requestRef);
+  if (requestReadPlanGroups.length > 0) {
+    return {
+      source: "request_read_plan",
+      ref: null,
+      availableFieldGroups: requestReadPlanGroups,
+    };
+  }
+
   const rootGroups = fieldGroupsFromAgentAction(request.agentAction, requestRef, request);
   if (rootGroups.length > 0) {
     return {
@@ -523,6 +533,46 @@ type InspectRecoveryReadGroup = {
   };
   fallbackRule: string;
 };
+
+function fieldGroupsFromRequestReadPlan(value: unknown, requestRef: string): InspectRecoveryReadGroup[] {
+  if (!isRecord(value) || !Array.isArray(value.groups)) {
+    return [];
+  }
+  return value.groups
+    .filter((group): group is Record<string, unknown> => isRecord(group))
+    .map((group) => {
+      const fields = Array.isArray(group.fields)
+        ? [...new Set(group.fields.filter((field): field is string => typeof field === "string" && field.trim().length > 0).map((field) => field.trim()))]
+        : [];
+      if (fields.length === 0) {
+        return null;
+      }
+      const readArgv = isRecord(group.readCommand) && Array.isArray(group.readCommand.argv)
+        ? group.readCommand.argv.map((part) => String(part) === "{requestRef}" ? requestRef : String(part))
+        : ["inspect", "--request", requestRef, "--field", fields.join(",")];
+      return {
+        groupId: typeof group.groupId === "string" && group.groupId.trim().length > 0 ? group.groupId : "request_fields",
+        required: typeof group.required === "boolean" ? group.required : true,
+        purpose: typeof group.purpose === "string" ? group.purpose : "Request fields required by the current loom action.",
+        whenToRead: typeof group.whenToRead === "string" ? group.whenToRead : "Before acting on the current loom request.",
+        fields,
+        readCommand: {
+          name: "inspect" as const,
+          argv: readArgv,
+        },
+        commandInvocation: {
+          name: "inspect" as const,
+          argv: readArgv,
+          projectRootRequired: true as const,
+          preserveEnv: ["LOOM_AGENT_PROFILE", "LOOM_COMPACT_OUTPUT"],
+        },
+        fallbackRule: typeof group.fallbackRule === "string" && group.fallbackRule.trim().length > 0
+          ? group.fallbackRule
+          : "If this grouped inspect read fails, read each listed field through requestManifest refs as a targeted fallback.",
+      };
+    })
+    .filter((group): group is InspectRecoveryReadGroup => group !== null);
+}
 
 function fieldGroupsFromAgentAction(value: unknown, requestRef: string, request: Record<string, unknown>): InspectRecoveryReadGroup[] {
   const normalized = normalizeAgentActionForRequest(value, request);

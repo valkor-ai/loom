@@ -526,7 +526,7 @@ async function instructionFor(
         : "当前阶段范围需要由 Agent 总结并等待用户确认；确认 phase_scope 后继续后续 Brainstorm 块，只有 final_summary 被确认后才提交 BrainstormCandidate。",
       expectedResponse: {
         kind: "brainstorm_progressive_clarification",
-        rule: "Agent manages the conversation. Before presenting confirmation or writing BrainstormCandidate, read requestRef through agentAction.read.fieldGroups inspect commands. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read the candidate write contract, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
+        rule: "Agent manages the conversation. Before presenting confirmation or writing BrainstormCandidate, read requestRef through requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups inspect commands. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read the candidate write contract, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
         requestReadRule: brainstormAskUserReadStep,
         currentTurnAnswerRule: {
           consumeCurrentUserMessage: true,
@@ -1796,7 +1796,7 @@ function agentActionCurrentTargetReadGroup(): Record<string, unknown> {
       name: "inspect",
       argv: ["inspect", "--request", "{requestRef}", "--field", field],
     },
-    fallbackRule: "If this grouped inspect read fails, read requestManifest.refs.agentAction.ref and select .write.currentTarget. Do not print full .loom artifacts.",
+    fallbackRule: "If this grouped inspect read fails, use the requestReadPlan field list or targeted agentAction.write.currentTarget fallback. Do not print full .loom artifacts.",
   };
 }
 

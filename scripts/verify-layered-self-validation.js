@@ -196,10 +196,10 @@ function assertInstructionOutputPolicy(instruction, label) {
   assert.equal(instruction?.mustNotReportProgressBeforeExecuting, true, `${label}: instruction must forbid progress-only messages before auto-runnable execution`);
   assert.ok(typeof instruction?.requestRef === "string" || instruction?.mode === "run_cli", `${label}: instruction must route through requestRef or run_cli command`);
   if (typeof instruction?.requestRef === "string") {
-    assert.equal(instruction?.requestReadProtocol?.authority, "request_manifest_refs", `${label}: instruction must expose ref-first request read authority`);
+    assert.equal(instruction?.requestReadProtocol?.authority, "requestReadPlan", `${label}: instruction must expose requestReadPlan-first request read authority`);
     assert.ok(
-      instruction?.requestReadProtocol?.nullFieldRule?.includes("read its listed *Ref"),
-      `${label}: instruction must tell Agent to read listed refs when root fields are null`,
+      instruction?.requestReadProtocol?.nullFieldRule?.includes("requestReadPlan/inspect"),
+      `${label}: instruction must tell Agent to use requestReadPlan/inspect before listed refs`,
     );
   }
   assert.equal(Object.prototype.hasOwnProperty.call(instruction ?? {}, "agentAction"), false, `${label}: top-level instruction must not echo full agentAction`);
@@ -212,7 +212,7 @@ function assertPlanCompactBrainstormInstruction(envelope) {
   assert.equal(envelope.instruction?.requestRef, envelope.data?.requestPath, "plan --compact instruction requestRef must point to requestPath");
   assert.equal(envelope.instruction?.candidateFile, undefined, "plan --compact ask_user must not expose candidateFile before final_summary confirmation");
   assert.equal(envelope.instruction?.submitCommand, undefined, "plan --compact ask_user must not expose brainstorm submitCommand before final_summary confirmation");
-  assert.equal(envelope.instruction?.requestReadProtocol?.authority, "request_manifest_refs", "plan --compact must expose ref-first request read protocol");
+  assert.equal(envelope.instruction?.requestReadProtocol?.authority, "requestReadPlan", "plan --compact must expose requestReadPlan-first request read protocol");
   assert.equal(envelope.instruction?.expectedResponse?.requestRef, envelope.instruction?.requestRef, "plan expectedResponse must repeat requestRef");
   assert.equal(envelope.instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification", "plan expectedResponse must describe progressive clarification, not immediate accept");
   assert.equal(envelope.instruction?.expectedResponse?.candidateFile, undefined, "plan expectedResponse must not expose candidateFile before final_summary confirmation");
@@ -227,7 +227,7 @@ function assertBrainstormStartInstruction(instruction, requestPath, label) {
   assert.equal(instruction?.requestRef, requestPath, `${label}: instruction requestRef must point to requestPath`);
   assert.equal(instruction?.candidateFile, undefined, `${label}: ask_user instruction must not expose candidateFile before final_summary confirmation`);
   assert.equal(instruction?.submitCommand, undefined, `${label}: ask_user instruction must not expose brainstorm submitCommand before final_summary confirmation`);
-  assert.equal(instruction?.requestReadProtocol?.authority, "request_manifest_refs", `${label}: instruction must expose ref-first request read protocol`);
+  assert.equal(instruction?.requestReadProtocol?.authority, "requestReadPlan", `${label}: instruction must expose requestReadPlan-first request read protocol`);
   assert.ok(
     instruction?.requestReadProtocol?.readRule?.includes("agentAction.read.fieldGroups"),
     `${label}: instruction must require Brainstorm ask_user inspect read plan`,

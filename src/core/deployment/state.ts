@@ -3,6 +3,7 @@ import path from "node:path";
 import { ZodError, z } from "zod";
 import { deployNotPrepared, stateCorrupted } from "../errors";
 import { readJsonFile, readJsonWithSchemaVersion, writeJsonAtomic } from "../state/fs";
+import { hydrateRequestManifest, writeRequestManifestAtomic } from "../operations/request-manifest";
 import { DEFAULT_DEPLOY_REPAIR_MAX_ATTEMPTS } from "./constants";
 import { getDeploymentPaths, getDeploymentRepairPaths } from "./paths";
 import type {
@@ -767,7 +768,7 @@ export async function readDeployExecutionRepairRequest(
 ): Promise<DeployExecutionRepairRequest> {
   const paths = getDeploymentRepairPaths(projectRoot, repairId);
   try {
-    const raw = await readJsonFile(paths.requestFile);
+    const raw = await hydrateRequestManifest(projectRoot, paths.requestFile);
     return deployExecutionRepairRequestSchema.parse(raw);
   } catch (error) {
     if (error instanceof ZodError) {
@@ -787,7 +788,7 @@ export async function writeDeployExecutionRepairRequest(
   request: DeployExecutionRepairRequest,
 ): Promise<void> {
   const paths = getDeploymentRepairPaths(projectRoot, request.repairId);
-  await writeJsonAtomic(paths.requestFile, deployExecutionRepairRequestSchema.parse(request));
+  await writeRequestManifestAtomic(projectRoot, paths.requestFile, deployExecutionRepairRequestSchema.parse(request));
 }
 
 export async function readDeployExecutionRepairTaskResult(

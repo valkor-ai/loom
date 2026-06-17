@@ -270,7 +270,7 @@ function summaryForInstruction(mode: string, instruction: Record<string, unknown
       return withNoRecapGuard(`ACTION REQUIRED: ${userVisibleMeaning.summary}`);
     }
     const requestRef = typeof instruction.requestRef === "string" ? instruction.requestRef : "instruction.requestRef";
-    return withNoRecapGuard(`ACTION REQUIRED: execute_task is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands for required request fields, complete the task, write the resultFile, and run submitCommand now. A final response before resultFile exists and submitCommand succeeds is invalid. Do not summarize progress or ask whether to continue.`);
+    return withNoRecapGuard(`ACTION REQUIRED: execute_task is auto-runnable. Read ${requestRef}, use root requestReadPlan groups when present, otherwise use agentAction.read.fieldGroups inspect readCommands as compatibility fallback, complete the task, write the resultFile, and run submitCommand now. A final response before resultFile exists and submitCommand succeeds is invalid. Do not summarize progress or ask whether to continue.`);
   }
   if (mode === "run_cli") {
     const command = isRecord(instruction.command) && Array.isArray(instruction.command.argv)
@@ -283,19 +283,19 @@ function summaryForInstruction(mode: string, instruction: Record<string, unknown
     if (instruction.candidateKind === "ArchitectureSections" && instruction.sectionGenerationMode === "single_section") {
       const targetSection = typeof instruction.targetSection === "string" ? instruction.targetSection : "targetSection";
       const targetCandidateFile = typeof instruction.targetCandidateFile === "string" ? instruction.targetCandidateFile : "targetCandidateFile";
-      return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands, write only the ${targetSection} section to ${targetCandidateFile}, then run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can route the next missing section or submit_existing_candidate. This follow-up command is not a user instruction. Do not summarize progress or ask whether to continue.`);
+      return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, use root requestReadPlan groups when present, otherwise use agentAction.read.fieldGroups inspect readCommands as compatibility fallback, write only the ${targetSection} section to ${targetCandidateFile}, then run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can route the next missing section or submit_existing_candidate. This follow-up command is not a user instruction. Do not summarize progress or ask whether to continue.`);
     }
     if (instruction.candidateKind === "TaskPlanGroupedOutputs") {
       const outputSummary = isRecord(instruction.outputSummary) ? instruction.outputSummary : {};
       const outlineFile = typeof outputSummary.outlineFile === "string" ? outputSummary.outlineFile : "outputContract.outlineFile";
       const groupFilePattern = typeof outputSummary.groupFilePattern === "string" ? outputSummary.groupFilePattern : "outputContract.groupFilePattern";
-      return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands, write TaskPlan outline to ${outlineFile}, write group files using ${groupFilePattern}, and run submitCommand now. Do not summarize request creation, report progress, or ask whether to continue.`);
+      return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, use root requestReadPlan groups when present, otherwise use agentAction.read.fieldGroups inspect readCommands as compatibility fallback, write TaskPlan outline to ${outlineFile}, write group files using ${groupFilePattern}, and run submitCommand now. Do not summarize request creation, report progress, or ask whether to continue.`);
     }
-    return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands, write the requested candidate files, and run submitCommand now. Do not summarize progress or ask whether to continue.`);
+    return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, use root requestReadPlan groups when present, otherwise use agentAction.read.fieldGroups inspect readCommands as compatibility fallback, write the requested candidate files, and run submitCommand now. Do not summarize progress or ask whether to continue.`);
   }
   if (mode === "submit_existing_candidate") {
     const requestRef = typeof instruction.requestRef === "string" ? instruction.requestRef : "instruction.requestRef";
-    return withNoRecapGuard(`ACTION REQUIRED: submit_existing_candidate is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands when request fields are needed, and run submitCommand now. Do not summarize progress or ask whether to continue.`);
+    return withNoRecapGuard(`ACTION REQUIRED: submit_existing_candidate is auto-runnable. Read ${requestRef}, use root requestReadPlan groups when present, otherwise use agentAction.read.fieldGroups inspect readCommands when request fields are needed, and run submitCommand now. Do not summarize progress or ask whether to continue.`);
   }
   if (typeof userVisibleMeaning?.summary === "string" && userVisibleMeaning.summary.length > 0) {
     return withNoRecapGuard(`ACTION REQUIRED: ${userVisibleMeaning.summary}`);
