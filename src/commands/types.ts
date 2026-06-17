@@ -46,6 +46,8 @@ export type CliSuccessEnvelope<T = unknown> = {
     commandInvocation?: Record<string, unknown>;
     completionBarrier?: Record<string, unknown>;
     finalResponseGuard?: Record<string, unknown>;
+    primaryAction?: string;
+    fieldRepairPlan?: unknown[];
     requestReadProtocol?: Record<string, unknown>;
     requiredSteps?: unknown[];
     forbiddenStops?: unknown[];

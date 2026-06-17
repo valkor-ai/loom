@@ -108,9 +108,22 @@ assertIncludes(
 );
 
 const semanticContract = request.rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract;
+assert.equal(
+  semanticContract.confirmedBlockDetailRetentionContract.sourceOfTruth,
+  "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+  "candidate writing must use every confirmed Brainstorm block, not final_summary alone",
+);
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("how users find/select target objects, trigger actions, and observe results"),
-  "business-detail contract must include page operation path topics",
+  semanticContract.confirmedBlockDetailRetentionContract.candidateFields.includes("frontendExperience.dataViews/actions/operationPaths"),
+  "confirmed frontend details must map to structured frontendExperience fields",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.rules.some((rule) => rule.includes("not from final_summary alone")),
+  "confirmed block retention rules must forbid final_summary-only candidate writing",
+);
+assert.ok(
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable"),
+  "final_summary contract must show page-operation coverage without becoming the frontend detail source",
 );
 assert.ok(
   semanticContract.frontendOperationPathContract.candidateFields.includes("frontendExperience.dataViews"),
@@ -121,8 +134,8 @@ assert.ok(
   "operation-path contract must map to frontendExperience.operationPaths",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("applicable inputs or fields"),
-  "business-detail contract must require applicable input or field confirmation",
+  semanticContract.frontendOperationPathContract.rules.some((rule) => rule.includes("input fields")),
+  "frontend operation-path contract must preserve applicable input fields",
 );
 assert.ok(
   semanticContract.objectOperationContract.candidateFields.includes("domainModel.businessFlows[].summary"),
@@ -140,6 +153,16 @@ assertIncludes(
 );
 assertIncludes(
   request.outputContract.schemaShape.candidateRules.join("\n"),
+  "A checklist-style final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional",
+  "candidateRules must keep earlier confirmed block details even when final_summary is a checklist",
+);
+assertIncludes(
+  request.outputContract.schemaShape.candidateRules.join("\n"),
+  "when the user confirmed query criteria in frontend_experience, preserve them in dataViews[].searchCriteria",
+  "candidateRules must require confirmed query criteria to land in structured searchCriteria fields",
+);
+assertIncludes(
+  request.outputContract.schemaShape.candidateRules.join("\n"),
   "Store confirmed object-operation details in existing BrainstormCandidate fields",
   "candidateRules must require object-operation details in existing BrainstormCandidate fields",
 );
@@ -152,8 +175,8 @@ assertIncludes(
 );
 assertIncludes(
   repositoryContextSource,
-  "frontendExperienceDelta.*Deltas",
-  "phase-continuation Brainstorm requests must map frontend deltas to structured fields",
+  "frontendExperience.dataViews/actions/operationPaths",
+  "phase-continuation Brainstorm requests must map frontend paths to structured frontendExperience fields",
 );
 
 const architectureSource = readRepo("src/core/operations/contracts.ts");

@@ -3,6 +3,7 @@ import { ZodError, type ZodSchema } from "zod";
 import {
   type ArchitectureArtifactContract,
   type ContractIssue,
+  type FieldShape,
   type PlanningGenerationContract,
   type ReviewRequest,
   type ReviewResult,
@@ -149,6 +150,22 @@ const ISSUE_TEMPLATES: Record<string, IssueTemplate> = {
     message: "AAC acceptance coverage type does not match the referenced artifact kind.",
     repairHint: "Use the coverage type that matches the artifact id: state machine rules use state_rule, data constraints use data_constraint, modules use module, and so on.",
   },
+  DETAIL_REF_INVALID: {
+    message: "Requirement detail reference is not part of the PlanningGenerationContract requirementDetails index.",
+    repairHint: "Use only detailId values from PGC requirementDetails.items.",
+  },
+  DETAIL_COVERAGE_INVALID: {
+    message: "Requirement detail coverage is missing required artifact refs or reason.",
+    repairHint: "Repair detailCoverage so covered items reference current AAC artifacts and non-covered items include a reason.",
+  },
+  DETAIL_TASK_ASSIGNMENT_MISSING: {
+    message: "A covered current-phase requirement detail is not assigned to TaskPlan tasks and verification intents.",
+    repairHint: "Assign the detailId through task.requirementDetailRefs and verificationIntents[].requirementDetailRefs, or repair AAC if the detail is not actually covered by architecture artifacts.",
+  },
+  TASK_RESULT_DETAIL_EVIDENCE_INVALID: {
+    message: "TaskResult requirement detail evidence is missing, invalid, or inconsistent with assigned detail refs.",
+    repairHint: "Add requirementDetailEvidence entries for every task.requirementDetailRefs detailId and link them to valid verificationIds.",
+  },
   REVIEW_RESULT_STATUS_INCONSISTENT: {
     message: "ReviewResult decision or routing is inconsistent with findings.",
     repairHint: "Repair only ReviewResult contract fields and return a complete replacement ReviewResult.",
@@ -237,6 +254,9 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
   const acceptanceById = new Map(pgc.phaseScope.acceptanceCandidates.map((item) => [item.id, item]));
   const taskIds = new Set(taskPlan.tasks.map((task) => task.taskId));
   const groupIds = new Set(taskPlan.groups.map((group) => group.groupId));
+  const requirementDetailIds = new Set(pgc.requirementDetails?.items.map((item) => item.detailId) ?? []);
+  const taskAssignedDetailIds = new Set<string>();
+  const verificationAssignedDetailIds = new Set<string>();
 
   if (pgc.status !== "ready" || aac.status !== "ready" || !aac.handoff.readyForTaskPlan || !["auto_accepted", "confirmed"].includes(baseline.status)) {
     issues.push(issue("SOURCE_NOT_READY", "/source", "blocked"));
@@ -296,6 +316,13 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
     for (const ref of task.acceptanceRefs) {
       if (!acceptanceById.has(ref)) issues.push(issue("INVALID_ACCEPTANCE_REF", `/tasks/${task.taskId}/acceptanceRefs/${ref}`));
     }
+    for (const ref of task.requirementDetailRefs ?? []) {
+      if (!requirementDetailIds.has(ref)) {
+        issues.push(issue("DETAIL_REF_INVALID", `/tasks/${task.taskId}/requirementDetailRefs/${ref}`));
+      } else {
+        taskAssignedDetailIds.add(ref);
+      }
+    }
     for (const pathValue of task.writeBoundary.forbiddenPaths) {
       if (!isSafeProjectRelativePath(pathValue) && pathValue !== ".loom") {
         issues.push(issue("INVALID_FORBIDDEN_PATH", `/tasks/${task.taskId}/writeBoundary/forbiddenPaths/${pathValue}`));
@@ -317,6 +344,16 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
       }
       if (intent.acceptableEvidence.length === 0) {
         issues.push(issue("INVALID_VERIFICATION_INTENT", `/tasks/${task.taskId}/verificationIntents/${intent.verificationId}/acceptableEvidence`));
+      }
+      for (const ref of intent.requirementDetailRefs ?? []) {
+        if (!requirementDetailIds.has(ref)) {
+          issues.push(issue("DETAIL_REF_INVALID", `/tasks/${task.taskId}/verificationIntents/${intent.verificationId}/requirementDetailRefs/${ref}`));
+        } else {
+          verificationAssignedDetailIds.add(ref);
+        }
+        if (!(task.requirementDetailRefs ?? []).includes(ref)) {
+          issues.push(issue("INVALID_VERIFICATION_INTENT", `/tasks/${task.taskId}/verificationIntents/${intent.verificationId}/requirementDetailRefs/${ref}`));
+        }
       }
     }
 
@@ -381,6 +418,7 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
       issues.push(issue("MUST_ACCEPTANCE_NOT_COVERED", "/tasks/frontendExperienceRequirement", "blocked"));
     }
   }
+  validateTaskPlanRequirementDetailAssignments(taskPlan, pgc, aac, taskAssignedDetailIds, verificationAssignedDetailIds, issues);
   validateWorkflowClosureTaskAssignments(taskPlan, aac, issues);
 
   if (aac.runtimeDelivery?.status === "modified") {
@@ -397,6 +435,32 @@ export function validateTaskPlanCandidate(candidate: unknown, pgc: PlanningGener
       ? "needs_candidate_repair"
       : "ready";
   return { value: taskPlan, issues, status };
+}
+
+function validateTaskPlanRequirementDetailAssignments(
+  taskPlan: TaskPlan,
+  pgc: PlanningGenerationContract,
+  aac: ArchitectureArtifactContract,
+  taskAssignedDetailIds: Set<string>,
+  verificationAssignedDetailIds: Set<string>,
+  issues: ContractIssue[],
+): void {
+  if (taskPlan.status !== "ready" || !pgc.requirementDetails) {
+    return;
+  }
+  const detailCoverageById = new Map((aac.detailCoverage ?? []).map((entry) => [entry.detailId, entry]));
+  for (const detail of pgc.requirementDetails.items.filter((item) => item.requiredForCurrentPhase)) {
+    const coverage = detailCoverageById.get(detail.detailId);
+    if (coverage?.coverageStatus !== "covered") {
+      continue;
+    }
+    if (!taskAssignedDetailIds.has(detail.detailId)) {
+      issues.push(issue("DETAIL_TASK_ASSIGNMENT_MISSING", `/tasks/requirementDetailRefs/${detail.detailId}`));
+    }
+    if (!verificationAssignedDetailIds.has(detail.detailId)) {
+      issues.push(issue("DETAIL_TASK_ASSIGNMENT_MISSING", `/tasks/verificationIntents/requirementDetailRefs/${detail.detailId}`));
+    }
+  }
 }
 
 function validateWorkflowClosureTaskAssignments(
@@ -635,6 +699,7 @@ export function validateTaskResult(candidate: unknown, request: TaskExecutionReq
   }
   validateExecutionContinuity(result, issues);
   validateRuntimeDeliveryEvidence(result, request, issues);
+  validateRequirementDetailEvidence(result, request, issues);
   validateConceptEvidence(result, request, issues);
   validateWorkflowClosureTaskResult(result, request, issues);
   if (result.status === "blocked") {
@@ -760,6 +825,62 @@ function validateConceptEvidence(result: TaskResult, request: TaskExecutionReque
   for (const evidence of result.conceptEvidence ?? []) {
     if (!allowedConceptRefs.has(evidence.conceptRef)) {
       issues.push(issue("TASK_RESULT_REF_INVALID", `/conceptEvidence/${evidence.conceptRef}`));
+    }
+  }
+}
+
+function validateRequirementDetailEvidence(result: TaskResult, request: TaskExecutionRequest, issues: ContractIssue[]): void {
+  const requiredDetailIds = uniqueStrings([
+    ...(request.task.requirementDetailRefs ?? []),
+    ...request.task.verificationIntents.flatMap((intent) => intent.requirementDetailRefs ?? []),
+  ]);
+  if (requiredDetailIds.length === 0) {
+    return;
+  }
+  const allowedDetailIds = new Set([
+    ...requiredDetailIds,
+    ...((request.sourceContext.requirementDetailSnapshot ?? [])
+      .map((item) => typeof item.detailId === "string" ? item.detailId : null)
+      .filter((item): item is string => Boolean(item))),
+  ]);
+  const verificationIds = new Set(request.task.verificationIntents.map((intent) => intent.verificationId));
+  const expectedVerificationByDetail = new Map<string, Set<string>>();
+  for (const intent of request.task.verificationIntents) {
+    for (const detailId of intent.requirementDetailRefs ?? []) {
+      const refs = expectedVerificationByDetail.get(detailId) ?? new Set<string>();
+      refs.add(intent.verificationId);
+      expectedVerificationByDetail.set(detailId, refs);
+    }
+  }
+  const evidenceByDetail = new Map((result.requirementDetailEvidence ?? []).map((item) => [item.detailId, item]));
+  for (const evidence of result.requirementDetailEvidence ?? []) {
+    if (!allowedDetailIds.has(evidence.detailId)) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}`));
+    }
+    if (evidence.verificationIds.length === 0) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}/verificationIds`));
+    }
+    for (const verificationId of evidence.verificationIds) {
+      if (!verificationIds.has(verificationId)) {
+        issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}/verificationIds/${verificationId}`));
+      }
+    }
+    const expectedVerificationIds = expectedVerificationByDetail.get(evidence.detailId);
+    if (expectedVerificationIds && !evidence.verificationIds.some((verificationId) => expectedVerificationIds.has(verificationId))) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${evidence.detailId}/verificationIds`));
+    }
+  }
+  if (result.status !== "completed" && result.status !== "completed_with_notes") {
+    return;
+  }
+  for (const detailId of requiredDetailIds) {
+    const evidence = evidenceByDetail.get(detailId);
+    if (!evidence) {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${detailId}`));
+      continue;
+    }
+    if (result.status === "completed" && evidence.status !== "satisfied") {
+      issues.push(issue("TASK_RESULT_DETAIL_EVIDENCE_INVALID", `/requirementDetailEvidence/${detailId}/status`));
     }
   }
 }
@@ -1035,6 +1156,9 @@ export function validateReviewResult(candidate: unknown, request: ReviewRequest)
   if ((result.decision === "approved" || result.decision === "approved_with_notes") && hasUnsatisfiedWorkflowClosureSignal(request)) {
     issues.push(issue("REVIEW_RESULT_STATUS_INCONSISTENT", "/decision"));
   }
+  if ((result.decision === "approved" || result.decision === "approved_with_notes") && hasUnsatisfiedRequirementDetailSignal(request)) {
+    issues.push(issue("REVIEW_RESULT_STATUS_INCONSISTENT", "/decision"));
+  }
 
   const expectedTopAction = expectedReviewTopAction(result, request);
   if (result.nextAction.type !== expectedTopAction) {
@@ -1062,6 +1186,20 @@ function hasUnsatisfiedWorkflowClosureSignal(request: ReviewRequest): boolean {
     }
     const record = signal as Record<string, unknown>;
     return record.kind === "frontend_workflow_closure" && record.closureSatisfied === false;
+  });
+}
+
+function hasUnsatisfiedRequirementDetailSignal(request: ReviewRequest): boolean {
+  const signals = request.outputContract.reviewSignals;
+  if (!Array.isArray(signals)) {
+    return false;
+  }
+  return signals.some((signal) => {
+    if (!signal || typeof signal !== "object" || Array.isArray(signal)) {
+      return false;
+    }
+    const record = signal as Record<string, unknown>;
+    return record.kind === "requirement_detail_evidence" && record.detailSatisfied === false;
   });
 }
 
@@ -1154,6 +1292,17 @@ export function validateArchitectureArtifactCandidate(candidate: unknown, pgc: P
   const stateRuleIds = new Set(aac.stateMachines.flatMap((machine) => machine.rules.map((rule) => rule.ruleId)));
   const decisionIds = new Set(aac.risksAndDecisions.decisions.map((item) => item.decisionId));
   const riskIds = new Set(aac.risksAndDecisions.risks.map((item) => item.riskId));
+  const fieldIds = new Set([
+    ...aac.dataModel.entities.flatMap((entity) => entity.fields.flatMap((field) => collectFieldShapeIds(field))),
+    ...aac.interfaces.flatMap((item) => [
+      ...(item.requestSchema ?? []).flatMap((field) => collectFieldShapeIds(field)),
+      ...(item.responseSchema ?? []).flatMap((field) => collectFieldShapeIds(field)),
+      ...(item.errorSchema ?? []).flatMap((field) => collectFieldShapeIds(field)),
+    ]),
+  ]);
+  const frontendDataViewIds = new Set(aac.frontendExperience?.dataViews?.map((item) => item.viewId) ?? []);
+  const frontendActionIds = new Set(aac.frontendExperience?.actions?.map((item) => item.actionId) ?? []);
+  const frontendOperationPathIds = new Set(aac.frontendExperience?.operationPaths?.map((item) => item.pathId) ?? []);
 
   if (aac.source.planningGenerationContractId !== pgc.planningContractId) {
     issues.push(issue("SOURCE_NOT_READY", "/source/planningGenerationContractId", "blocked"));
@@ -1331,6 +1480,40 @@ export function validateArchitectureArtifactCandidate(candidate: unknown, pgc: P
     const entry = aac.acceptanceMatrix.find((item) => item.acceptanceId === acceptance.id);
     if (!entry) {
       issues.push(issue("MUST_ACCEPTANCE_NOT_COVERED", `/acceptanceMatrix/${acceptance.id}`));
+    }
+  }
+
+  const requirementDetailIds = new Set(pgc.requirementDetails?.items.map((item) => item.detailId) ?? []);
+  if (pgc.requirementDetails && requirementDetailIds.size > 0) {
+    for (const detail of pgc.requirementDetails.items.filter((item) => item.requiredForCurrentPhase)) {
+      if (!(aac.detailCoverage ?? []).some((entry) => entry.detailId === detail.detailId)) {
+        issues.push(issue("DETAIL_COVERAGE_INVALID", `/detailCoverage/${detail.detailId}`));
+      }
+    }
+    for (const entry of aac.detailCoverage ?? []) {
+      if (!requirementDetailIds.has(entry.detailId)) {
+        issues.push(issue("DETAIL_REF_INVALID", `/detailCoverage/${entry.detailId}`));
+      }
+      const allRefs = Object.values(entry.artifactRefs).flat();
+      if (entry.coverageStatus === "covered" && allRefs.length === 0) {
+        issues.push(issue("DETAIL_COVERAGE_INVALID", `/detailCoverage/${entry.detailId}/artifactRefs`));
+      }
+      if (entry.coverageStatus !== "covered" && !entry.reason) {
+        issues.push(issue("DETAIL_COVERAGE_INVALID", `/detailCoverage/${entry.detailId}/reason`));
+      }
+      validateDetailCoverageRefs(entry, {
+        moduleIds,
+        entityIds,
+        fieldIds,
+        dataConstraintIds,
+        interfaceIds,
+        userFlowIds,
+        stateMachineIds,
+        frontendDataViewIds,
+        frontendActionIds,
+        frontendOperationPathIds,
+        acceptanceIds: new Set(aac.acceptanceMatrix.map((item) => item.acceptanceId)),
+      }, issues);
     }
   }
 
@@ -1705,6 +1888,10 @@ function duplicates(values: string[]): string[] {
   return [...dupes];
 }
 
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.length > 0))];
+}
+
 function getArtifactSets(aac: ArchitectureArtifactContract): {
   moduleIds: Set<string>;
   entityIds: Set<string>;
@@ -1915,6 +2102,53 @@ function coverageRefActualType(
   if (ids.decisionIds.has(ref)) return "decision";
   if (ids.riskIds.has(ref)) return "risk";
   return null;
+}
+
+function validateDetailCoverageRefs(
+  entry: NonNullable<ArchitectureArtifactContract["detailCoverage"]>[number],
+  ids: {
+    moduleIds: Set<string>;
+    entityIds: Set<string>;
+    fieldIds: Set<string>;
+    dataConstraintIds: Set<string>;
+    interfaceIds: Set<string>;
+    userFlowIds: Set<string>;
+    stateMachineIds: Set<string>;
+    frontendDataViewIds: Set<string>;
+    frontendActionIds: Set<string>;
+    frontendOperationPathIds: Set<string>;
+    acceptanceIds: Set<string>;
+  },
+  issues: ContractIssue[],
+): void {
+  const checks: Array<[keyof typeof entry.artifactRefs, Set<string>]> = [
+    ["modules", ids.moduleIds],
+    ["entities", ids.entityIds],
+    ["fields", ids.fieldIds],
+    ["constraints", ids.dataConstraintIds],
+    ["interfaces", ids.interfaceIds],
+    ["userFlows", ids.userFlowIds],
+    ["stateMachines", ids.stateMachineIds],
+    ["frontendDataViews", ids.frontendDataViewIds],
+    ["frontendActions", ids.frontendActionIds],
+    ["frontendOperationPaths", ids.frontendOperationPathIds],
+    ["acceptanceMatrix", ids.acceptanceIds],
+  ];
+  for (const [key, validIds] of checks) {
+    for (const ref of entry.artifactRefs[key]) {
+      if (!validIds.has(ref)) {
+        issues.push(issue("UNKNOWN_ARTIFACT_REF", `/detailCoverage/${entry.detailId}/artifactRefs/${key}/${ref}`));
+      }
+    }
+  }
+}
+
+function collectFieldShapeIds(field: FieldShape): string[] {
+  return [
+    field.fieldId,
+    ...(field.items ? collectFieldShapeIds(field.items) : []),
+    ...(field.fields?.flatMap((nested) => collectFieldShapeIds(nested)) ?? []),
+  ];
 }
 
 function computeArchitectureStatus(

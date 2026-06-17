@@ -83,6 +83,7 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
   if (isRecord(manifest.agentAction)) {
     manifest.agentAction = normalizeAgentActionForRequest(manifest.agentAction, manifest);
   }
+  const requestReadPlan = buildInlineRequestReadPlan(projectRoot, requestFile, manifest.agentAction);
   const fullRequestBytes = prettyJsonByteLength(manifest);
   const refKeys = options.refKeys ?? DEFAULT_REF_KEYS;
   const refsDir = requestRefsDir(requestFile);
@@ -118,8 +119,11 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
     refFirst: true,
     protocolAuthority: "request_manifest_refs",
     refs,
-    rule: "Read this request manifest first, then use agentAction.read.fieldGroups inspect readCommands for complete grouped request field values. If inspect fails, use the matching group fields against these refs with targeted selectors. Do not invent or probe unlisted sidecar files under the .refs directory.",
+    rule: "Read requestReadPlan first when present, then run its loom inspect read commands for grouped request field values. Do not read full sidecar files to discover the read plan. If inspect fails, use the matching group fields against requestManifest refs with targeted selectors. Do not invent or probe unlisted sidecar files under the .refs directory.",
   };
+  if (requestReadPlan) {
+    manifest.requestReadPlan = requestReadPlan;
+  }
   await recordTokenSavingEvent({
     projectRoot,
     source: "request_manifest_refs",
@@ -134,6 +138,58 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
   return manifest as T;
 }
 
+function buildInlineRequestReadPlan(
+  projectRoot: string,
+  requestFile: string,
+  agentAction: unknown,
+): Record<string, unknown> | null {
+  if (!isRecord(agentAction) || !isRecord(agentAction.read) || !Array.isArray(agentAction.read.fieldGroups)) {
+    return null;
+  }
+  const requestRef = toProjectRelative(projectRoot, requestFile);
+  const groups = agentAction.read.fieldGroups
+    .filter((group): group is Record<string, unknown> => isRecord(group))
+    .map((group) => {
+      const fields = Array.isArray(group.fields)
+        ? [...new Set(group.fields.filter((field): field is string => typeof field === "string" && field.trim().length > 0))]
+        : [];
+      if (fields.length === 0) {
+        return null;
+      }
+      const argv = ["inspect", "--request", requestRef, "--field", fields.join(",")];
+      return {
+        groupId: typeof group.groupId === "string" ? group.groupId : "request_fields",
+        required: typeof group.required === "boolean" ? group.required : true,
+        purpose: typeof group.purpose === "string" ? group.purpose : "Request fields required by the current loom action.",
+        whenToRead: typeof group.whenToRead === "string" ? group.whenToRead : "Before acting on the current loom request.",
+        fields,
+        readCommand: {
+          name: "inspect",
+          argv,
+        },
+        fallbackRule: "If this inspect read fails, read only these exact fields through requestManifest refs with short targeted selectors. Do not print full sidecar files.",
+      };
+    })
+    .filter((group) => group !== null);
+  if (groups.length === 0) {
+    return null;
+  }
+  return {
+    schemaVersion: "1.0",
+    authority: "agentAction.read.fieldGroups",
+    primaryMethod: "loom inspect",
+    requestRef,
+    groups,
+    rules: [
+      "Use this requestReadPlan before opening agentActionRef, outputContractRef, contextProjectionRef, taskRef, sourceContextRef, or executionRulesRef.",
+      "Run required groups with loom inspect and use data.fields[field].value as the field value.",
+      "Do not use shell selectors or full-file reads on .loom sidecar refs during the normal path.",
+      "If an inspect command fails or a required field is missing, fall back only to the fields listed in that same group with targeted selectors.",
+      "Full sidecar reads are a last-resort correctness fallback and must not be printed into chat.",
+    ],
+  };
+}
+
 function refManifestMetadata(key: string): {
   purpose?: string;
   requiredSelectors?: string[];
@@ -143,15 +199,17 @@ function refManifestMetadata(key: string): {
     agentAction: {
       purpose: "Primary agent action map: what to read, what to write, and how to submit.",
       requiredSelectors: [".actionKind", ".read", ".write", ".submit", ".schema"],
+      rule: "Do not read this full sidecar to discover the read plan when requestReadPlan is present on the request root.",
     },
     outputContract: {
       purpose: "Complete output path and schema authority. For architecture section generation, section schemas and enums live here under .sectionOutputs[].schemaShape and .sectionOutputs[].enumRefs.",
       requiredSelectors: [".candidateFile", ".resultFile", ".outlineFile", ".groupFilePattern", ".sectionOutputs[].section", ".sectionOutputs[].candidateFile", ".sectionOutputs[].schemaShape", ".sectionOutputs[].enumRefs"],
-      rule: "Do not look for separate section schema sidecars such as section-schemas.json; if this ref is listed, it is the schema authority.",
+      rule: "Do not look for separate section schema sidecars such as section-schemas.json. Prefer requestReadPlan/inspect fields over full sidecar reads.",
     },
     fieldAccessHints: {
       purpose: "Selector hints for reading this request and its refs without guessing old wrapper roots or sidecar names.",
-      requiredSelectors: [".*", ".commonSelectors"],
+      requiredSelectors: [".commonSelectors"],
+      rule: "Prefer requestReadPlan/inspect groups. Use this ref only for targeted selector recovery; do not print the full sidecar.",
     },
     referencedArtifactReadGuide: {
       purpose: "Selector map for every external source/context ref.",
@@ -163,12 +221,11 @@ function refManifestMetadata(key: string): {
     },
     contextProjection: {
       purpose: "Request-scoped projection of existing authority artifacts for the current operation. Read only the fields listed in agentAction.read.fieldGroups.",
-      requiredSelectors: [".*"],
-      rule: "This is not a parallel authority model. It mechanically carries selected current-operation details from authority artifacts so agents do not reassemble them from large refs by default.",
+      rule: "This is not a parallel authority model. Use requestReadPlan/inspect groups to read selected fields; do not print this full sidecar.",
     },
     enumRefs: {
       purpose: "Allowed enum values for generated candidate/result fields.",
-      requiredSelectors: [".*"],
+      rule: "Read only the enum sets named by requestReadPlan/inspect fields or the output schema currently being written.",
     },
     allowedRefs: {
       purpose: "Allowed business/scope/acceptance refs for generated candidate fields.",
@@ -180,7 +237,7 @@ function refManifestMetadata(key: string): {
     },
     rules: {
       purpose: "Generation and validation rules that are too large for the routing instruction.",
-      requiredSelectors: [".*"],
+      rule: "Read only the rule sections named by requestReadPlan/inspect fields. Do not use this ref as a full-file default read.",
     },
   };
   return metadata[key] ?? {};

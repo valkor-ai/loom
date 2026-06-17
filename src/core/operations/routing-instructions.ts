@@ -133,9 +133,9 @@ function requiredStepsForInstruction(instruction: Record<string, unknown>): stri
   }
   if (mode === "execute_task") {
     return [
-      "read instruction.requestRef and requestManifest.refs",
-      "if root agentAction is absent, read requestManifest.refs.agentAction.ref before using the read plan",
-      "use agentAction.read.fieldGroups inspect commands for required TaskExecutionRequest fields",
+      "read instruction.requestRef and its root requestReadPlan when present",
+      "use requestReadPlan.groups inspect commands for required TaskExecutionRequest fields",
+      "if requestReadPlan is absent, use agentAction.read.fieldGroups inspect commands as compatibility fallback",
       "execute exactly that TaskExecutionRequest",
       "write instruction.resultFile",
       "run instruction.submitCommand",
@@ -144,8 +144,8 @@ function requiredStepsForInstruction(instruction: Record<string, unknown>): stri
   }
   if (mode === "submit_existing_candidate") {
     return [
-      "read instruction.requestRef and requestManifest.refs when request fields are needed",
-      "if root agentAction is absent, read requestManifest.refs.agentAction.ref before using the read plan",
+      "read instruction.requestRef and its root requestReadPlan when request fields are needed",
+      "use requestReadPlan groups first; if absent, use agentAction.read.fieldGroups as compatibility fallback",
       "verify the existing candidate/result files referenced by the instruction",
       "run instruction.submitCommand",
       "immediately follow the returned instruction when it is auto-runnable",
@@ -153,8 +153,8 @@ function requiredStepsForInstruction(instruction: Record<string, unknown>): stri
   }
   if (mode === "repair_candidate" || mode === "repair_result_contract") {
     return [
-      "read instruction.requestRef and requestManifest.refs when present",
-      "if root agentAction is absent, read requestManifest.refs.agentAction.ref before using the read plan",
+      "read instruction.requestRef and its root requestReadPlan when present",
+      "use requestReadPlan groups first; if absent, use agentAction.read.fieldGroups as compatibility fallback",
       "inspect instruction.issues",
       "repair only the referenced candidate/result artifact",
       "run instruction.submitCommand",

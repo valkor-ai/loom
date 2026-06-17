@@ -75,6 +75,7 @@ Loom 就是为弥合这条鸿沟而存在的。
 --- | ---
 Dynamic workflows | 把每个交付目标变成一条可自适应的循环：澄清、规划、执行、验证、修复和交接。
 Delivery harness | 把需求澄清、规划、构建、检查、预览、review、修复和报告变成稳定流程。
+Requirement intelligence | 把需求澄清从普通聊天确认变成交付质量门：将已确认的阶段范围、业务规则、生命周期覆盖和页面办理路径沉淀为结构化上下文，让后续规划、编码和 review 必须承接。
 Token-saving context | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，减少 agent 反复读取全仓库。
 Task contracts | 将宽泛目标拆成有边界的任务，并带上 source refs、验收意图、结果文件和 continuation rules。
 Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 CLI 命令。

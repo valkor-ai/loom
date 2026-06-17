@@ -9,8 +9,6 @@ export function brainstormStartInstruction(result: BrainstormStartResult): Recor
     mode: "ask_user",
     ...brainstormAskUserInstructionPolicy(),
     requestRef: result.requestPath,
-    candidateFile: result.request.outputContract.candidateFile,
-    submitCommand: result.request.submitCommand,
     nextAction: {
       type: "brainstorm_clarification",
       source: "brainstorm_session_request",
@@ -19,14 +17,12 @@ export function brainstormStartInstruction(result: BrainstormStartResult): Recor
       ref: result.requestPath,
       reason: "BRAINSTORM_SESSION_REQUEST_CREATED",
     },
-    userMessage: "Read the BrainstormSessionRequest through requestRef, present the required progressive clarification blocks, then submit the confirmed BrainstormCandidate.",
+    userMessage: "Read the BrainstormSessionRequest through requestRef, then present the next required Brainstorm clarification block. Write and submit BrainstormCandidate only after the user confirms the dedicated final_summary block.",
     expectedResponse: {
-      kind: "brainstorm_candidate_accept",
-      rule: "Agent manages the Brainstorm conversation. Read requestRef and its requestManifest refs for agentAction, outputContract, rules, enumRefs, context refs, keyword hints, concept grounding, and frontend clarification protocol. After explicit user confirmation, write BrainstormCandidate to candidateFile and run submitCommand.",
+      kind: "brainstorm_progressive_clarification",
+      rule: "Agent manages the Brainstorm conversation. Read requestRef and its requestManifest refs for agentAction, rules, context refs, keyword hints, concept grounding, and frontend clarification protocol. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read outputContract/generationProtocol/enumRefs, write BrainstormCandidate, and run submitCommand only after the user explicitly confirms the dedicated final_summary block.",
       requestReadRule: brainstormAskUserReadStep,
       requestRef: result.requestPath,
-      candidateFile: result.request.outputContract.candidateFile,
-      submitCommand: result.request.submitCommand,
       currentTurnAnswerRule: {
         consumeCurrentUserMessage: true,
         meaning: "If the same user message that invoked @loom plan already contains clear phase scope, concept, frontend, and final confirmation details, treat it as the user's answer for the relevant Brainstorm gates instead of asking again.",

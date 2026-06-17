@@ -122,6 +122,7 @@ assert.deepEqual(candidateRequirementSemanticRulesGroup.fields, ["rules.requirem
 assert.deepEqual(candidateSelfReviewRulesGroup.fields, ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"]);
 assert.deepEqual(conceptGroundingGroup.fields, [
   "conceptGroundingRequest",
+  "clarificationConversationProtocol.blockExecutionRules",
   "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
   "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
   "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
@@ -129,6 +130,22 @@ assert.deepEqual(conceptGroundingGroup.fields, [
 assert.equal(phaseScopeCoreGroup.fields.includes("agentAction"), false, "phase_scope core must not read agentAction");
 assert.equal(phaseScopeCoreGroup.fields.includes("clarificationConversationProtocol"), false, "phase_scope core must not read clarificationConversationProtocol");
 assert.equal(phaseScopeCoreGroup.fields.includes("requestManifest"), false, "phase_scope core must not read requestManifest");
+for (const candidateGroup of [
+  candidateWriteControlsGroup,
+  candidateSchemaHandoffGroup,
+  candidateFinalSummaryRulesGroup,
+  candidateRequirementSemanticRulesGroup,
+  candidateSelfReviewRulesGroup,
+]) {
+  assert.ok(
+    candidateGroup.whenToRead.includes("final_summary"),
+    `${candidateGroup.groupId} must be readable only after final_summary confirmation`,
+  );
+}
+assert.ok(
+  candidateWriteControlsGroup.whenToRead.includes("Do not read this group after phase_scope"),
+  "BrainstormRequest candidate write controls must not be read after early Brainstorm block confirmations",
+);
 assert.equal(phaseScopeCoreGroup.fields.includes("outputContract"), false, "phase_scope core must not read outputContract");
 assert.equal(phaseScopeCoreGroup.fields.includes("rules"), false, "phase_scope core must not read rules");
 assert.equal(phaseScopeCoreGroup.fields.includes("generationProtocol"), false, "phase_scope core must not read generationProtocol");

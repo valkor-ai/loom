@@ -71,6 +71,7 @@ includes(blockRules, "applicable objects or subjects, actions or behaviors, inpu
 includes(blockRules, "identity fields, input fields, display fields, relationship fields, state fields", "field-set categories must be explicit and generic.");
 includes(blockRules, "operation input, preconditions, validation rules, blocking conditions, blocking reasons", "operation rule details must be explicit.");
 includes(blockRules, "Do not present only noun definitions", "concept grounding must not degrade to noun glossary.");
+includes(blockRules, "structured BrainstormCandidate fields", "confirmed details must be preserved in structured fields instead of final_summary.");
 
 const conceptRule = request.clarificationConversationProtocol.blockConfirmationRules.concept_grounding;
 includes(conceptRule, "covers every confirmed scope.included item", "concept confirmation must require every included scope item to be covered.");
@@ -80,6 +81,27 @@ includes(conceptRule, "actions or behaviors", "concept confirmation must include
 includes(conceptRule, "visible feedback", "concept confirmation must include visible feedback.");
 
 const semanticContract = request.rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract;
+assert.equal(
+  semanticContract.confirmedBlockDetailRetentionContract.sourceOfTruth,
+  "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+  "confirmed block detail retention must use all confirmed Brainstorm blocks as source.",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.candidateFields.includes("scope.included[].items"),
+  "retention contract must preserve phase_scope details in existing scope fields.",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.candidateFields.includes("conceptGrounding.phaseConceptGrounding.concepts[].explanation"),
+  "retention contract must preserve concept_grounding details in existing concept fields.",
+);
+assert.ok(
+  semanticContract.confirmedBlockDetailRetentionContract.rules.some((rule) => rule.includes("For concept_grounding, preserve confirmed business scenario")),
+  "retention rules must preserve concept_grounding business details.",
+);
+assert.ok(
+  semanticContract.finalSummaryReviewContract.rules.some((rule) => rule.includes("not be required to repeat every confirmed object")),
+  "final summary review rules must not require exhaustive detail repetition.",
+);
 assert.equal(semanticContract.scopeItemCoverageContract.owningBlock, "concept_grounding");
 assert.ok(
   semanticContract.scopeItemCoverageContract.candidateFields.includes("scope.included[].items"),
@@ -99,15 +121,18 @@ assert.ok(
   "object-operation details must map to existing business flow summaries.",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("current phase scope-item coverage"),
-  "final summary contract must preserve scope-item coverage after concept confirmation.",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("business-rule checklist from confirmed business understanding including concrete objects, relationships, operations, field-set headlines, state changes, blocking rules, success outcomes, and high-risk misunderstanding guards when applicable"),
+  "final summary contract must surface concrete business-rule checklist coverage.",
 );
 assert.ok(
-  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("applicable inputs or fields"),
-  "final summary contract must preserve applicable inputs or fields after concept confirmation.",
+  semanticContract.requiredUserVisibleTopicsWhenApplicable.includes("explicit final_summary corrections that must be written back to structured fields"),
+  "final summary contract must route corrections back to structured fields.",
 );
 
 const candidateRules = request.outputContract.schemaShape.candidateRules.join("\n");
+includes(candidateRules, "The accepted BrainstormCandidate must be built from all user-confirmed Brainstorm blocks", "candidate rules must not use final_summary as the only source.");
+includes(candidateRules, "For phase_scope, preserve the confirmed option's included scope", "candidate rules must preserve phase_scope details.");
+includes(candidateRules, "For concept_grounding, preserve confirmed business scenario", "candidate rules must preserve concept_grounding details.");
 includes(candidateRules, "Every scope.included item should be represented", "candidate rules must require each included scope item to be represented.");
 includes(candidateRules, "confirmed scope.included item has been considered", "candidate self-review must check scope item coverage.");
 includes(candidateRules, "Store confirmed object-operation details in existing BrainstormCandidate fields", "candidate rules must store details in existing fields.");

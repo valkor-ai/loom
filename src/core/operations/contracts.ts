@@ -12,6 +12,7 @@ import {
   type ArchitectureSectionsGenerationRequest,
   type PlanningGenerationContract,
   type RepoSignalSet,
+  type RequirementDetailsIndex,
   type TechnicalBaseline,
   type TechnicalBaselineRequest,
   architectureArtifactContractSchema,
@@ -251,7 +252,7 @@ function technicalBaselineSelectionGuidance(input: {
         "contextRefs.brainstormContractRef summary and deliveryContext.originalRequest",
         "scope.included, scope.deferred, scope.excluded, and assumptions",
         "domainModel capability groups and business flows",
-        "frontendExperience or frontendExperienceDelta when present",
+        "frontendExperience when present",
         "roadmap phases, deferred scope, and known next-phase previews",
       ],
       currentPhaseLensRole: "currentPhaseLens identifies the first implementation slice only. Do not choose the initial technology baseline from the current phase scope alone when the full requirement or roadmap implies later product surfaces, persistence scale, app clients, services, integrations, or operational needs.",
@@ -1138,6 +1139,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
     ? toProjectRelative(root, repositoryContextPath(root, locator))
     : undefined;
   const brainstormContractRef = toProjectRelative(root, brainstormContractPath(root, locator.deliveryId));
+  const requirementDetails = buildRequirementDetailsIndex(brainstorm, phase, brainstormContractRef);
   const contextRefs = {
     brainstormContractRef,
     ...(repositoryContextRef ? { repositoryContextRef } : {}),
@@ -1193,6 +1195,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
         "Concept refs are confirmed Brainstorm semantic facts. CLI validates refs only; Agent performs semantic use.",
         "Frontend experience refs are user-confirmed product targets. AAC may engineer them but must not downgrade or override them without user decision.",
         "PGC mechanically preserves Brainstorm current-phase detail fields; do not summarize away phaseScope.*.items, phaseScope.acceptanceCandidates[].sourceRefs/capabilityRefs, planningInputs.businessFlows[].summary, concept refs, frontend refs, or frontend operation path details carried by those frontend refs.",
+        "PGC requirementDetails.items is the canonical detail index after Brainstorm. AAC, TaskPlan, TaskExecution, and Review should reference detailId instead of duplicating full detail text.",
       ],
     } : {}),
     technicalBaseline: {
@@ -1208,10 +1211,10 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
       capabilityGroups: brainstorm.domainModel.capabilityGroups,
       businessFlows: brainstorm.domainModel.businessFlows,
       frontendExperience: brainstorm.frontendExperience ?? null,
-      frontendExperienceDelta: brainstorm.frontendExperienceDelta ?? null,
       sourceRefs: brainstorm.sources.map((source) => source.sourceId),
       contextNotes: ["Brainstorm contract 已确认当前阶段范围。"],
     },
+    requirementDetails,
     planningRules: {
       scopeIsolation: {
         onlyPlanCurrentPhase: true,
@@ -1413,7 +1416,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
     requestType: "architecture_sections_generation",
     agentAction: agentActionContract({
       actionKind: "generate_sections",
-      instruction: "Generate Architecture section candidate files through the single-section continue protocol. Write only the current target section file, then immediately run loom continue; when continue returns submit_existing_candidate or all sections exist, run submitCommand exactly.",
+      instruction: "Generate Architecture section candidate files through the single-section continuation protocol. Write only the current target section file, then immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action. When the follow-up command returns submit_existing_candidate, run submitCommand exactly.",
       read: {
         required: [
           "this request",
@@ -1443,7 +1446,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "Read agentAction.write.currentTarget before writing; it is the current instruction's concrete section/candidateFile.",
           "Single-section protocol: each auto-runnable instruction selects one targetSection and targetCandidateFile.",
           "For the current instruction, write only the selected targetSection to targetCandidateFile.",
-          "After targetCandidateFile exists, immediately run loom continue as the next action; do not summarize progress or ask whether to continue first.",
+          "After targetCandidateFile exists, immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action; do not summarize progress or ask whether to continue first.",
           "Only write every outputContract.sectionOutputs[] entry in one turn if the instruction has no targetSection.",
           "Use agentAction.write.currentTarget.schemaShape, currentTarget.enumRefs, and currentTarget.generationRules as the current section contract.",
           "Use outputContract.sectionOutputs only as a fallback if the current instruction has no targetSection or currentTarget lacks schemaShape.",
@@ -1453,6 +1456,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "Every deferredRef must be selected exactly from allowedRefs.deferredScopeRefs and every excludedRef must be selected exactly from allowedRefs.excludedScopeRefs.",
           "Do not probe guessed jq paths. Use fieldAccessHints and agentAction.read/write when locating request fields.",
           "Use contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef as the current phase requirement-detail authority. Do not drop phaseScope.*.items, acceptance sourceRefs/capabilityRefs, planningInputs.businessFlows summaries, concept refs, frontend refs, or frontendExperienceDetails while generating AAC sections.",
+          "Use contextProjection.requirementDetailTransfer.requirementDetails.items as the canonical detail index when generating AAC artifact responsibilities and coverage.detailCoverage. Do not copy full detail summaries into detailCoverage.",
           "For frontend_experience, read contextProjection.requirementDetailTransfer.frontendExperienceDetails and frontendExperienceSource, then write frontendExperience.sourceRefs.brainstormFrontendExperienceRef from confirmedFrontendExperienceRef or currentFrontendExperienceRef when present.",
           "For runtime_delivery with runtimeDelivery.status=unchanged, set basis.previousRuntimeDeliveryRef exactly to sourceRefs.previousRuntimeDeliveryRef. If that source ref is absent, do not write status=unchanged; write status=modified or blocked based on the current phase facts.",
           "Do not assemble or write final aac.json.",
@@ -1463,7 +1467,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
         command: submitCommand,
         requiredArgs: ["--delivery-id", "--phase-id", "--request-id"],
         placeholders: {},
-        runAfter: "loom continue returns submit_existing_candidate, or all outputContract.sectionOutputs candidate files already exist",
+        runAfter: "the follow-up command returns submit_existing_candidate, or all outputContract.sectionOutputs candidate files already exist",
       },
       schema: {
         primary: "ArchitectureSectionCandidate",
@@ -1506,7 +1510,6 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
         ".phaseScope.acceptanceCandidates[] | {id,statement,priority,sourceRefs,capabilityRefs}",
         ".planningInputs.businessFlows[].summary",
         ".planningInputs.frontendExperience.dataViews/actions/operationPaths",
-        ".planningInputs.frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
         ".contextRefs.phaseConceptGroundingRef",
         ".contextRefs.deliveryConceptGlossaryRef",
         ".contextRefs.confirmedFrontendExperienceRef",
@@ -1541,18 +1544,17 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
       frontendExperienceAuthority: "When frontendExperienceSource has confirmedFrontendExperienceRef or currentFrontendExperienceRef, the frontend_experience section must consume it and must not omit, downgrade, or override the user-confirmed frontend target without a user decision ref.",
       requirementDetailTransfer: {
         authority: "PlanningGenerationContract is the current phase requirement-detail authority for AAC generation.",
-        rule: "Consume contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef selectors while writing domain_contract, behavior, frontend_experience, and coverage. Preserve details instead of rediscovering them from raw requirements.",
+        rule: "Consume contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef selectors while writing domain_contract, behavior, frontend_experience, and coverage. Preserve details instead of rediscovering them from raw requirements. Use requirementDetails.items as the canonical detail index and coverage.detailCoverage as detailId-to-artifact coverage.",
         selectors: [
           "planningContractRef.phaseScope.included[].items",
           "planningContractRef.phaseScope.acceptanceCandidates[].statement/sourceRefs/capabilityRefs",
           "planningContractRef.planningInputs.businessFlows[].summary",
           "planningContractRef.planningInputs.frontendExperience.dataViews/actions/operationPaths",
-          "planningContractRef.planningInputs.frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
           "planningContractRef.contextRefs.phaseConceptGroundingRef",
           "planningContractRef.contextRefs.confirmedFrontendExperienceRef/currentFrontendExperienceRef and the referenced frontend experience .dataViews/.actions/.operationPaths when present",
         ],
       },
-      singleSectionRouting: "For auto-runnable ArchitectureSections instructions with targetSection, write only targetCandidateFile, then immediately run loom continue before any chat summary.",
+      singleSectionRouting: "For auto-runnable ArchitectureSections instructions with targetSection, write only targetCandidateFile, then immediately run instruction.completionBarrier.followUpCommand.commandInvocation before any chat summary.",
       allowedRefsAuthority: "All AAC scopeRefs, acceptanceRefs, acceptanceMatrix.acceptanceId, deferredRef, and excludedRef values must come from allowedRefs exactly; the Agent must not invent ids and the CLI validates this mechanically.",
     },
     enumRefs: architectureEnumRefs(),
@@ -1685,12 +1687,12 @@ function architectureGenerationInstruction(
       "Do not probe guessed jq paths; if a lookup returns null, use fieldAccessHints and agentAction.write.sectionOutputs.",
       "Write only targetSection to targetCandidateFile.",
       "The section candidate files are the only required progress signal; do not run a heartbeat command.",
-      "After targetCandidateFile exists, immediately run loom continue as the next action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
-      "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running loom continue.",
-      "Do not run submitCommand until loom continue returns submit_existing_candidate or all section files exist.",
+      "After targetCandidateFile exists, immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
+      "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running the follow-up command.",
+      "Do not run submitCommand until the follow-up command returns submit_existing_candidate or all section files exist.",
     ],
-    routingRule: "Generate only the target architecture section for the existing request, then immediately run loom continue to get the next section or submit instruction. Do not create another request and do not stop after writing one section.",
-    userMessage: options?.userMessage ?? "ArchitectureSectionsGenerationRequest created. Generate the first section candidate file, then run loom continue.",
+    routingRule: "Generate only the target architecture section for the existing request, then immediately run instruction.completionBarrier.followUpCommand.commandInvocation to get the next section or submit instruction. Do not create another request and do not stop after writing one section.",
+    userMessage: options?.userMessage ?? "ArchitectureSectionsGenerationRequest created. Generate the first section candidate file, then run the instruction completion follow-up command.",
   }, {
     sourceCommand: "architecture request",
     sourceSummary: "ArchitectureSectionsGenerationRequest was created.",
@@ -2047,6 +2049,342 @@ function scopeItemsForRefs<T extends { id: string; label: string; items?: string
   });
 }
 
+function buildRequirementDetailsIndex(
+  brainstorm: BrainstormContract,
+  phase: NonNullable<BrainstormContract["roadmap"]>["phases"][number],
+  brainstormContractRef: string,
+): RequirementDetailsIndex {
+  const allSourceIds = uniqueStrings(brainstorm.sources.map((source) => source.sourceId));
+  const currentScopeRefs = new Set(phase.scope.includedRefs);
+  const deferredScopeRefs = new Set(phase.scope.deferredRefs);
+  const excludedScopeRefs = new Set(phase.scope.excludedRefs);
+  const currentAcceptanceRefs = new Set(phase.acceptanceRefs);
+  const items: RequirementDetailsIndex["items"] = [];
+  const extractionWarnings: RequirementDetailsIndex["extractionWarnings"] = [];
+
+  const addItem = (input: {
+    kind?: RequirementDetailsIndex["items"][number]["kind"];
+    title: string;
+    summary: string;
+    requiredForCurrentPhase: boolean;
+    priority?: "must" | "should" | "could";
+    sourceFieldRefs: string[];
+    sourceRefs?: string[];
+    scopeRefs?: string[];
+    acceptanceRefs?: string[];
+    conceptRefs?: string[];
+    frontendRefs?: string[];
+    unresolvedNote?: string | null;
+  }): void => {
+    const summary = input.summary.trim();
+    if (!summary) {
+      return;
+    }
+    const sourceFieldRefs = uniqueStrings(input.sourceFieldRefs);
+    const kind = input.kind ?? inferRequirementDetailKind(summary);
+    const detailId = stableRequirementDetailId(kind, sourceFieldRefs, summary);
+    if (items.some((item) => item.detailId === detailId)) {
+      return;
+    }
+    const item: RequirementDetailsIndex["items"][number] = {
+      detailId,
+      kind,
+      title: truncateDetailTitle(input.title),
+      summary,
+      requiredForCurrentPhase: input.requiredForCurrentPhase,
+      priority: input.priority ?? (input.requiredForCurrentPhase ? "must" : "could"),
+      sourceFieldRefs,
+      sourceRefs: uniqueStrings(input.sourceRefs && input.sourceRefs.length > 0 ? input.sourceRefs : allSourceIds),
+      scopeRefs: uniqueStrings(input.scopeRefs ?? []),
+      acceptanceRefs: uniqueStrings(input.acceptanceRefs ?? []),
+      conceptRefs: uniqueStrings(input.conceptRefs ?? []),
+      frontendRefs: uniqueStrings(input.frontendRefs ?? []),
+      impactTags: inferRequirementDetailImpactTags(summary, kind),
+      lifecycleStage: inferRequirementDetailLifecycleStage(summary),
+      quality: inferRequirementDetailQuality(summary),
+      unresolvedNote: input.unresolvedNote ?? inferRequirementDetailUnresolvedNote(summary),
+    };
+    items.push(item);
+    if (item.quality === "thin") {
+      extractionWarnings.push({
+        warningId: stableRequirementDetailWarningId(item.detailId, "thin"),
+        detailId: item.detailId,
+        sourceFieldRef: item.sourceFieldRefs[0] ?? null,
+        severity: "warning",
+        message: "Requirement detail was extracted, but the source text is thin. Downstream stages must not invent missing business rules.",
+      });
+    }
+  };
+
+  const addScopeItems = (
+    bucket: "included" | "deferred" | "excluded",
+    scopeItems: BrainstormContract["scope"]["included"],
+    activeRefs: Set<string>,
+  ): void => {
+    scopeItems.forEach((scopeItem, scopeIndex) => {
+      if (!activeRefs.has(scopeItem.id)) {
+        return;
+      }
+      const requiredForCurrentPhase = bucket === "included";
+      const kind = bucket === "included" ? "scope_boundary" : "deferred_or_excluded_boundary";
+      const values = scopeItem.items && scopeItem.items.length > 0 ? scopeItem.items : [scopeItem.label];
+      values.forEach((value, itemIndex) => {
+        const sourceFieldRef = scopeItem.items && scopeItem.items.length > 0
+          ? `brainstorm.scope.${bucket}[${scopeIndex}].items[${itemIndex}]`
+          : `brainstorm.scope.${bucket}[${scopeIndex}].label`;
+        addItem({
+          kind,
+          title: `${scopeItem.label}: ${value}`,
+          summary: value,
+          requiredForCurrentPhase,
+          priority: requiredForCurrentPhase ? "must" : "could",
+          sourceFieldRefs: [sourceFieldRef],
+          scopeRefs: [scopeItem.id],
+          unresolvedNote: scopeItem.items && scopeItem.items.length > 0 ? null : "Scope item has no detailed items array; label was used as the detail source.",
+        });
+      });
+      if (!scopeItem.items || scopeItem.items.length === 0) {
+        extractionWarnings.push({
+          warningId: stableRequirementDetailWarningId(scopeItem.id, "scope-items-empty"),
+          detailId: null,
+          sourceFieldRef: `brainstorm.scope.${bucket}[${scopeIndex}]`,
+          severity: "warning",
+          message: `Scope ${scopeItem.id} has no items array, so PGC could only index the scope label.`,
+        });
+      }
+    });
+  };
+
+  addScopeItems("included", brainstorm.scope.included, currentScopeRefs);
+  addScopeItems("deferred", brainstorm.scope.deferred, deferredScopeRefs);
+  addScopeItems("excluded", brainstorm.scope.excluded, excludedScopeRefs);
+
+  brainstorm.acceptance.candidates.forEach((acceptance, index) => {
+    if (!currentAcceptanceRefs.has(acceptance.id)) {
+      return;
+    }
+    addItem({
+      kind: inferRequirementDetailKind(acceptance.statement, "acceptance_outcome"),
+      title: acceptance.id,
+      summary: acceptance.statement,
+      requiredForCurrentPhase: true,
+      priority: acceptance.priority,
+      sourceFieldRefs: [`brainstorm.acceptance.candidates[${index}].statement`],
+      sourceRefs: acceptance.sourceRefs,
+      acceptanceRefs: [acceptance.id],
+    });
+  });
+
+  brainstorm.domainModel.businessFlows.forEach((flow, index) => {
+    const acceptanceRefs = flow.capabilityRefs.flatMap((capabilityRef) =>
+      brainstorm.acceptance.candidates
+        .filter((acceptance) => acceptance.capabilityRefs.includes(capabilityRef) && currentAcceptanceRefs.has(acceptance.id))
+        .map((acceptance) => acceptance.id)
+    );
+    addItem({
+      kind: "business_flow",
+      title: flow.name,
+      summary: flow.summary,
+      requiredForCurrentPhase: true,
+      priority: "must",
+      sourceFieldRefs: [`brainstorm.domainModel.businessFlows[${index}].summary`],
+      acceptanceRefs,
+    });
+  });
+
+  const conceptSets = [
+    { path: "deliveryConceptGlossary", value: brainstorm.conceptGrounding?.deliveryConceptGlossary },
+    { path: "phaseConceptGrounding", value: brainstorm.conceptGrounding?.phaseConceptGrounding },
+  ];
+  for (const conceptSet of conceptSets) {
+    conceptSet.value?.concepts.forEach((concept, index) => {
+      const conceptInCurrentPhase =
+        concept.phaseRelevance === "current" ||
+        concept.scopeRefs.some((scopeRef) => currentScopeRefs.has(scopeRef)) ||
+        concept.acceptanceRefs.some((acceptanceRef) => currentAcceptanceRefs.has(acceptanceRef));
+      if (!conceptInCurrentPhase) {
+        return;
+      }
+      addItem({
+        kind: inferRequirementDetailKind(concept.explanation),
+        title: concept.term,
+        summary: concept.explanation,
+        requiredForCurrentPhase: concept.phaseRelevance === "current",
+        priority: concept.priority === "must_understand" ? "must" : concept.priority === "should_understand" ? "should" : "could",
+        sourceFieldRefs: [`brainstorm.conceptGrounding.${conceptSet.path}.concepts[${index}].explanation`],
+        scopeRefs: concept.scopeRefs.filter((scopeRef) => currentScopeRefs.has(scopeRef)),
+        acceptanceRefs: concept.acceptanceRefs.filter((acceptanceRef) => currentAcceptanceRefs.has(acceptanceRef)),
+        conceptRefs: [concept.conceptId],
+      });
+    });
+  }
+
+  const frontend = brainstorm.frontendExperience;
+  frontend?.dataViews?.forEach((view, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: view.name,
+      summary: `${view.purpose} Selection: ${view.selectionMode}. Pagination required: ${view.paginationRequired}.`,
+      requiredForCurrentPhase: frontend.required,
+      priority: frontend.required ? "must" : "could",
+      sourceFieldRefs: [`brainstorm.frontendExperience.dataViews[${index}]`],
+      sourceRefs: view.sourceRefs,
+      frontendRefs: [view.viewId],
+    });
+  });
+  frontend?.actions?.forEach((action, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: action.label,
+      summary: `${action.label}. Entry: ${action.entryPoint}. Refresh: ${action.refreshPolicy}. Success feedback: ${action.successFeedback.join("; ")}. Blocking or error feedback: ${action.blockingOrErrorFeedback.join("; ")}.`,
+      requiredForCurrentPhase: frontend.required,
+      priority: frontend.required ? "must" : "could",
+      sourceFieldRefs: [`brainstorm.frontendExperience.actions[${index}]`],
+      sourceRefs: action.sourceRefs,
+      frontendRefs: [action.actionId],
+    });
+  });
+  frontend?.operationPaths?.forEach((operationPath, index) => {
+    addItem({
+      kind: "frontend_operation_path",
+      title: operationPath.name,
+      summary: operationPath.selectionSummary,
+      requiredForCurrentPhase: frontend.required,
+      priority: frontend.required ? "must" : "could",
+      sourceFieldRefs: [`brainstorm.frontendExperience.operationPaths[${index}]`],
+      sourceRefs: operationPath.sourceRefs,
+      frontendRefs: [operationPath.pathId, ...operationPath.dataViewRefs, ...operationPath.actionRefs],
+    });
+  });
+
+  brainstorm.scope.assumptions.forEach((assumption, index) => {
+    addItem({
+      kind: "assumption",
+      title: assumption.id,
+      summary: assumption.text,
+      requiredForCurrentPhase: assumption.requiresConfirmation === false,
+      priority: assumption.requiresConfirmation ? "should" : "could",
+      sourceFieldRefs: [`brainstorm.scope.assumptions[${index}].text`],
+      unresolvedNote: assumption.requiresConfirmation ? "Assumption still requires confirmation." : null,
+    });
+  });
+
+  return {
+    schemaVersion: "1.0",
+    authority: "brainstorm_contract",
+    sourceBrainstormContractRef: brainstormContractRef,
+    items,
+    extractionWarnings,
+  };
+}
+
+function stableRequirementDetailId(
+  kind: RequirementDetailsIndex["items"][number]["kind"],
+  sourceFieldRefs: string[],
+  summary: string,
+): string {
+  return `detail-${kind}-${createHash("sha1")
+    .update(`${sourceFieldRefs.join("|")}:${summary}`)
+    .digest("hex")
+    .slice(0, 10)}`;
+}
+
+function stableRequirementDetailWarningId(seed: string, suffix: string): string {
+  return `detail-warning-${createHash("sha1").update(`${seed}:${suffix}`).digest("hex").slice(0, 10)}`;
+}
+
+function inferRequirementDetailKind(
+  value: string,
+  fallback: RequirementDetailsIndex["items"][number]["kind"] = "business_scenario",
+): RequirementDetailsIndex["items"][number]["kind"] {
+  const text = value.toLowerCase();
+  if (matchesAny(text, ["frontend", "ui", "page", "screen", "list", "query", "select", "refresh", "页面", "列表", "查询", "选择", "刷新", "反馈"])) {
+    return "frontend_operation_path";
+  }
+  if (matchesAny(text, ["block", "blocking", "deny", "reject", "error", "invalid", "阻断", "拒绝", "失败", "无效", "原因"])) {
+    return "blocking_rule";
+  }
+  if (matchesAny(text, ["validate", "validation", "required", "format", "校验", "必填", "格式", "规则"])) {
+    return "validation_rule";
+  }
+  if (matchesAny(text, ["state", "status", "transition", "状态", "变更", "流转"])) {
+    return "state_transition";
+  }
+  if (matchesAny(text, ["field", "input", "display", "relationship", "字段", "录入", "展示", "关系"])) {
+    return "object_field_set";
+  }
+  if (matchesAny(text, ["create", "update", "approve", "cancel", "close", "submit", "operation", "action", "创建", "修改", "审批", "提交", "销户", "操作", "办理"])) {
+    return "object_operation";
+  }
+  if (matchesAny(text, ["flow", "workflow", "process", "流程", "步骤"])) {
+    return "business_flow";
+  }
+  return fallback;
+}
+
+function inferRequirementDetailImpactTags(
+  value: string,
+  kind: RequirementDetailsIndex["items"][number]["kind"],
+): RequirementDetailsIndex["items"][number]["impactTags"] {
+  const text = value.toLowerCase();
+  const tags = new Set<RequirementDetailsIndex["items"][number]["impactTags"][number]>();
+  if (kind === "scope_boundary" || kind === "deferred_or_excluded_boundary" || matchesAny(text, ["scope", "phase", "范围", "阶段", "边界"])) tags.add("scope");
+  if (kind === "object_field_set" || matchesAny(text, ["field", "data", "entity", "model", "字段", "数据", "模型", "关系"])) tags.add("data_model");
+  if (kind === "business_flow" || kind === "object_operation" || kind === "state_transition" || matchesAny(text, ["flow", "workflow", "process", "operation", "流程", "操作", "状态"])) tags.add("business_flow");
+  if (kind === "frontend_operation_path" || matchesAny(text, ["frontend", "ui", "page", "list", "query", "页面", "列表", "查询", "反馈"])) tags.add("frontend");
+  if (matchesAny(text, ["api", "interface", "request", "response", "http", "接口", "请求", "响应"])) tags.add("interface");
+  if (kind === "acceptance_outcome" || matchesAny(text, ["acceptance", "verify", "success", "验收", "验证", "成功"])) tags.add("acceptance");
+  if (matchesAny(text, ["runtime", "build", "start", "deploy", "运行", "构建", "启动", "部署"])) tags.add("runtime");
+  return tags.size > 0 ? [...tags] : ["scope"];
+}
+
+function inferRequirementDetailLifecycleStage(value: string): RequirementDetailsIndex["items"][number]["lifecycleStage"] {
+  const text = value.toLowerCase();
+  if (matchesAny(text, ["create", "open", "apply", "submit", "创建", "开户", "申请", "提交", "新增"])) return "create";
+  if (matchesAny(text, ["query", "search", "select", "list", "lookup", "查询", "搜索", "选择", "列表"])) return "query_select";
+  if (matchesAny(text, ["view", "detail", "display", "查看", "详情", "展示"])) return "view";
+  if (matchesAny(text, ["update", "edit", "change", "修改", "更新", "变更"])) return "update";
+  if (matchesAny(text, ["approve", "review", "process", "审批", "审核", "处理"])) return "approve_or_process";
+  if (matchesAny(text, ["state", "status", "transition", "状态", "流转"])) return "state_change";
+  if (matchesAny(text, ["terminate", "cancel", "close", "delete", "撤销", "取消", "销户", "删除", "终止"])) return "terminate_or_cancel";
+  if (matchesAny(text, ["block", "reject", "invalid", "error", "阻断", "拒绝", "失败", "异常"])) return "blocking_or_exception";
+  return "not_applicable";
+}
+
+function inferRequirementDetailQuality(value: string): RequirementDetailsIndex["items"][number]["quality"] {
+  const text = value.trim();
+  if (text.length < 36) {
+    return "thin";
+  }
+  const detailMarkers = [
+    "field", "input", "precondition", "validation", "blocking", "reason", "state", "feedback", "refresh",
+    "字段", "录入", "前置", "校验", "阻断", "原因", "状态", "反馈", "刷新",
+  ].filter((marker) => text.toLowerCase().includes(marker)).length;
+  if (text.length >= 160 || detailMarkers >= 3) {
+    return "rich";
+  }
+  return "usable";
+}
+
+function inferRequirementDetailUnresolvedNote(value: string): string | null {
+  const text = value.toLowerCase();
+  return matchesAny(text, ["unclear", "unknown", "tbd", "to be confirmed", "未确认", "不明确", "待确认"])
+    ? "Detail source contains unresolved wording."
+    : null;
+}
+
+function matchesAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+function truncateDetailTitle(value: string): string {
+  return value.length > 96 ? `${value.slice(0, 93)}...` : value;
+}
+
 function summarizeBaseline(baseline: TechnicalBaseline): Record<string, unknown> {
   return baseline.stack;
 }
@@ -2383,6 +2721,8 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
   return {
     authority: "planning_generation_contract",
     purpose: "Mechanically carry Brainstorm-confirmed current phase requirement details into AAC generation without adding a parallel requirement model.",
+    requirementDetails: compactRequirementDetailsIndex(pgc),
+    requirementDetailsUsageRule: "When requirementDetails exists, treat requirementDetails.items as the canonical detail index after Brainstorm. Generate AAC artifacts that carry those details, then write coverage.detailCoverage using detailId plus artifact refs only; do not duplicate full detail summaries in coverage.",
     currentPhaseScope: {
       included: pgc.phaseScope.included.map((item) => ({
         scopeId: item.scopeId,
@@ -2431,14 +2771,10 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
     },
     frontendExperienceDetails: {
       frontendExperience: pgc.planningInputs.frontendExperience ?? null,
-      frontendExperienceDelta: pgc.planningInputs.frontendExperienceDelta ?? null,
       operationPathSelectors: [
         "planningContractRef.planningInputs.frontendExperience.dataViews",
         "planningContractRef.planningInputs.frontendExperience.actions",
         "planningContractRef.planningInputs.frontendExperience.operationPaths",
-        "planningContractRef.planningInputs.frontendExperienceDelta.dataViewDeltas",
-        "planningContractRef.planningInputs.frontendExperienceDelta.actionDeltas",
-        "planningContractRef.planningInputs.frontendExperienceDelta.operationPathDeltas",
       ],
       usageRule: "Use these Brainstorm-confirmed frontend operation path details when generating AAC frontend_experience. If null, read frontendExperienceSource refs when present.",
     },
@@ -2455,7 +2791,38 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       behavior: "Represent object operations, flow steps, preconditions, validation/blocking rules, blocking reasons, outcomes, state changes, guards, effects, and visible feedback from PGC business flow and acceptance details.",
       frontend_experience: "Represent required input, display, feedback, navigation, target discovery/selection, action entry, refresh policy, and operation path expectations from PGC frontendExperienceDetails and frontend refs.",
       coverage: "Map each acceptance detail and confirmed scope item to current AAC artifacts and verification hints without dropping rule, field, state, unresolved-note, or source-ref context.",
+      detailCoverage: "Map each requirementDetails.items[].detailId to the AAC artifacts that carry it, using coverage.content.detailCoverage.",
     },
+  };
+}
+
+function compactRequirementDetailsIndex(pgc: PlanningGenerationContract): Record<string, unknown> | null {
+  if (!pgc.requirementDetails) {
+    return null;
+  }
+  return {
+    schemaVersion: pgc.requirementDetails.schemaVersion,
+    authority: pgc.requirementDetails.authority,
+    sourceBrainstormContractRef: pgc.requirementDetails.sourceBrainstormContractRef,
+    items: pgc.requirementDetails.items.map((item) => ({
+      detailId: item.detailId,
+      kind: item.kind,
+      title: item.title,
+      summary: item.summary,
+      requiredForCurrentPhase: item.requiredForCurrentPhase,
+      priority: item.priority,
+      sourceRefs: item.sourceRefs,
+      scopeRefs: item.scopeRefs,
+      acceptanceRefs: item.acceptanceRefs,
+      conceptRefs: item.conceptRefs,
+      frontendRefs: item.frontendRefs,
+      impactTags: item.impactTags,
+      lifecycleStage: item.lifecycleStage,
+      quality: item.quality,
+      unresolvedNote: item.unresolvedNote,
+    })),
+    extractionWarningCount: pgc.requirementDetails.extractionWarnings.length,
+    fullDetailSource: "sourceRefs.planningContractRef#/requirementDetails",
   };
 }
 
@@ -3129,6 +3496,30 @@ function coverageSectionContentShape(): Record<string, unknown> {
         description: "How later TaskPlan/Review can verify this acceptance.",
       }],
     }],
+    detailCoverage: [{
+      detailId: "detail-id-from-request.contextProjection.requirementDetailTransfer.requirementDetails.items",
+      coverageStatus: "covered | partial | not_applicable | uncovered",
+      artifactRefs: {
+        modules: ["module-id"],
+        entities: ["entity-id"],
+        fields: ["field-id"],
+        constraints: ["constraint-id"],
+        interfaces: ["interface-id"],
+        userFlows: ["flow-id"],
+        stateMachines: ["state-machine-id"],
+        frontendDataViews: ["view-id"],
+        frontendActions: ["action-id"],
+        frontendOperationPaths: ["path-id"],
+        acceptanceMatrix: ["AC-ref-from-allowedRefs.acceptanceRefs"],
+      },
+      reason: "Required when coverageStatus is partial, not_applicable, or uncovered. Omit for fully covered entries.",
+    }],
+    detailCoverageRules: [
+      "detailCoverage[].detailId must come from request.contextProjection.requirementDetailTransfer.requirementDetails.items[].detailId.",
+      "detailCoverage stores only detailId, coverageStatus, artifactRefs, and reason; do not copy full requirement detail summary into coverage.",
+      "covered detailCoverage entries must reference at least one real AAC artifact or acceptanceMatrix entry.",
+      "partial, not_applicable, and uncovered detailCoverage entries require a non-empty reason.",
+    ],
     risksAndDecisions: {
       decisions: [{
         decisionId: "decision-id",
@@ -3193,6 +3584,9 @@ function coverageSectionContentShape(): Record<string, unknown> {
 function coverageSectionGenerationRules(): string[] {
   return [
     "Use request.contextProjection.requirementDetailTransfer.acceptanceDetails as the acceptance detail source for coverage.",
+    "Use request.contextProjection.requirementDetailTransfer.requirementDetails.items as the canonical detail index for detailCoverage when present.",
+    "For every current-phase requirementDetails item, write one detailCoverage entry that references the AAC artifacts carrying the detail or explains why the detail is partial, not_applicable, or uncovered.",
+    "Do not copy full requirement detail text into detailCoverage; detailCoverage must use detailId plus artifactRefs only.",
     "For every acceptanceMatrix entry, preserve the PGC acceptance statement exactly and describe how current AAC artifacts cover the concrete rule, field, flow, state, blocking reason, or source-ref detail behind that acceptance.",
     "Verification hints should reflect the concrete requirement details carried from PGC, not only the high-level module label.",
     "Coverage refs must point to artifact ids declared in this current phase AAC, not directly to old phase AAC ids.",
@@ -3321,6 +3715,7 @@ async function assembleArchitectureCandidateFromSections(
     frontendExperience: frontend.frontendExperience,
     runtimeDelivery: runtime.runtimeDelivery,
     acceptanceMatrix: coverage.acceptanceMatrix,
+    detailCoverage: coverage.detailCoverage ?? [],
     risksAndDecisions: coverage.risksAndDecisions,
     handoff: coverage.handoff,
     createdAt: now,

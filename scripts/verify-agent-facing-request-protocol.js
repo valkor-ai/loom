@@ -122,7 +122,12 @@ assertIncludes(
 );
 assertIncludes(
   "src/core/operations/output-policy.ts",
-  "group fields through requestManifest refs",
+  "requestReadPlan",
+  "auto-runnable instructions must prefer the root requestReadPlan before fallback reads",
+);
+assertIncludes(
+  "src/core/operations/output-policy.ts",
+  "that group's fields through requestManifest refs",
   "auto-runnable instructions must preserve requestManifest fallback reads",
 );
 assertIncludes(
@@ -358,8 +363,8 @@ for (const file of [
 }
 assertMatches(
   "plugins/codex/skills/loom/SKILL.md",
-  /Do not invent jq paths/,
-  "skill must prevent guessed request paths when agentAction exists",
+  /Do not invent shell selectors/,
+  "skill must prevent guessed request selectors when requestReadPlan or agentAction exists",
 );
 
 console.log("Agent-facing request protocol verification passed.");

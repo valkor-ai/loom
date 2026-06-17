@@ -59,18 +59,18 @@ export const contextReadOutputPolicy = {
   preferredChatVisibleMethods: [
     "programmatic full-file parsing without printing contents",
     "loom continue/status compact response",
-    "jq field selection for displayed summaries",
+    "loom inspect field selection for request fields",
     "rg targeted search for displayed matches",
     "short excerpts under 80 lines only when necessary",
   ],
-  rule: "You may read full loom artifacts when needed for correctness, but keep terminal/chat-visible output compact. Do not print full .loom JSON artifacts, historical TaskResult files, TaskPlan files, request files, SKILL.md, full source files, or large command outputs into chat unless the user explicitly asks.",
+  rule: "Use loom inspect for loom request fields whenever requestReadPlan or agentAction.read.fieldGroups are present. You may read full loom artifacts only as a last-resort correctness fallback, but keep terminal/chat-visible output compact. Do not print full .loom JSON artifacts, historical TaskResult files, TaskPlan files, request files, SKILL.md, full source files, or large command outputs into chat unless the user explicitly asks.",
 } as const;
 
 export const compactContextReadStep =
-  "Use agentAction.read.fieldGroups as the default request-reading plan. For each required group, run its inspect readCommand first so the complete grouped field values are read together without printing full .loom artifacts. If inspect fails, fall back to that group's fields through requestManifest refs and targeted selectors. You may still read requestRef/requestManifest refs directly as a correctness fallback, but keep chat-visible output compact: do not print full .loom JSON, historical TaskResult files, TaskPlan/run/result files, request files, SKILL.md, full source files, or large command outputs.";
+  "Use requestReadPlan as the default request-reading plan when present; otherwise use agentAction.read.fieldGroups. For each required group, run its loom inspect readCommand first so the complete grouped field values are read together without printing full .loom artifacts. Do not open full agentAction/outputContract/contextProjection/task/sourceContext/executionRules sidecars to discover the read plan. If inspect fails, fall back only to that group's fields through requestManifest refs and targeted selectors. Full sidecar reads are a last-resort correctness fallback and must stay compact: do not print full .loom JSON, historical TaskResult files, TaskPlan/run/result files, request files, SKILL.md, full source files, or large command outputs.";
 
 export const brainstormAskUserReadStep =
-  "For Brainstorm ask_user gates, read requestRef and its agentAction.read.fieldGroups inspect commands before presenting the phase_scope, concept_grounding, frontend_experience, or final_summary blocks. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block as a concrete user-facing question or confirmation summary. Do not infer Brainstorm scope, sources, concepts, frontend target, candidateFile, output schema, or submit command from guessed legacy root fields such as .objective, .scope, or .outputContract; if such selectors return null, discard that result and use requestManifest refs plus sourceFieldAccessHints.";
+  "For Brainstorm ask_user gates, read requestRef and use requestReadPlan groups first when present; otherwise use agentAction.read.fieldGroups inspect commands before presenting the phase_scope, concept_grounding, frontend_experience, or final_summary blocks. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block as a concrete user-facing question or confirmation summary. Do not infer Brainstorm scope, sources, concepts, frontend target, candidateFile, output schema, or submit command from guessed legacy root fields such as .objective, .scope, or .outputContract; if such selectors return null, discard that result and use requestManifest refs plus sourceFieldAccessHints. Do not read candidate_write_contract, outputContract, generationProtocol, enumRefs, candidateFile, or submitCommand until the dedicated final_summary block has been presented and explicitly confirmed by the user.";
 
 export const quietArtifactWriteStep =
   "Write .loom candidate/result files silently with a quiet programmatic file write. If the target file's parent directory does not exist, create that parent directory and retry the same write instead of stopping. If a native file-write tool fails input validation because path/content arguments are missing or invalid, retry with complete valid arguments or use a quiet programmatic write instead of repeating the malformed tool call. Do not use apply_patch or any chat-visible diff workflow for .loom artifacts because those tools print the full patch/body into the conversation. The only stdout after writing should be the artifact path or a short confirmation.";
@@ -113,16 +113,18 @@ export function brainstormAskUserInstructionPolicy(): Record<string, unknown> {
       "Do not paste full BrainstormSessionRequest JSON into chat.",
       "A Brainstorm request-ready/path-only message is not a valid ask_user response. Present the current required Brainstorm block so the user has something concrete to confirm or correct.",
       "Ask the user only for missing or ambiguous Brainstorm confirmation details; if the current user message already answers the current gate, consume it.",
+      "During phase_scope, concept_grounding, and frontend_experience confirmations, continue the progressive conversation in chat; do not write BrainstormCandidate or run brainstorm accept.",
+      "Write and submit BrainstormCandidate only after the user confirms the dedicated final_summary block.",
     ],
   };
 }
 
 export function refFirstRequestReadProtocol(): Record<string, unknown> {
   return {
-    authority: "request_manifest_refs",
-    firstSelector: ".requestManifest.refs",
-    readRule: "After opening requestRef, read requestManifest.refs.agentAction.ref when root agentAction is absent, then use agentAction.read.fieldGroups and each group's inspect readCommand for complete grouped field values. If inspect fails, use the group fields through requestManifest refs and targeted selectors before reading larger artifacts directly.",
-    nullFieldRule: "If a large field such as agentAction, sourceRefs, outputContract, rules, enumRefs, or fieldAccessHints is null at the request root, read its listed *Ref instead of guessing wrapper roots or unlisted sidecar filenames.",
+    authority: "requestReadPlan",
+    firstSelector: ".requestReadPlan",
+    readRule: "After opening requestRef, use requestReadPlan.groups[].readCommand when present. If requestReadPlan is absent, use agentAction.read.fieldGroups and each group's inspect readCommand. Do not read the agentAction sidecar merely to discover the read plan when requestReadPlan is present.",
+    nullFieldRule: "If a large field such as agentAction, sourceRefs, outputContract, rules, enumRefs, task, sourceContext, executionRules, or fieldAccessHints is null at the request root, read it through requestReadPlan/inspect first. Use listed *Ref sidecars only as targeted fallback for the exact fields requested by the read group.",
     unlistedSidecarRule: "Do not probe unlisted .refs files such as section-schemas.json; listed refs are the complete protocol authority.",
   };
 }

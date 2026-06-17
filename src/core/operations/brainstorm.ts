@@ -53,18 +53,35 @@ import { createRequirementContext, type RequirementContextResult } from "../requ
 import { brainstormSessionAgentActionContract, type AgentActionContract } from "./agent-action";
 import { referencedArtifactReadGuide, type ReferencedArtifactReadGuideEntry } from "./artifact-read-guide";
 import { repairSubmitRouting } from "./repair-routing";
-import { autoRunInstruction } from "./routing-instructions";
-import { artifactGenerationProtocolPolicy, artifactRepairPolicy, compactContextReadStep } from "./output-policy";
+import { autoRunInstruction, withAutoRunnableTransition } from "./routing-instructions";
 import {
+  artifactGenerationProtocolPolicy,
+  artifactRepairPolicy,
+  brainstormAskUserInstructionPolicy,
+  brainstormAskUserReadStep,
+  compactContextReadStep,
+} from "./output-policy";
+import {
+  businessLifecycleScanRules,
+  businessScenarioConfirmationRules,
   businessObjectOperationCandidateRules,
   businessObjectOperationClarificationRules,
   brainstormCandidateSelfReviewRules,
   brainstormRequirementSemanticCompactRules,
   brainstormRequirementSemanticRules,
+  confirmedBlockDetailRetentionRules,
+  conceptGroundingSelfCheckRules,
+  conceptGroundingPresentationRules,
+  decisionImpactOrderingRules,
+  finalSummaryRequiredUserVisibleTopicsWhenApplicable,
+  finalSummaryReviewRules,
+  frontendExperiencePresentationRules,
+  frontendExperienceSelfCheckRules,
   frontendOperationPathCandidateRules,
   frontendOperationPathClarificationRules,
   nextPhasePreviewCandidateRules,
   phaseScopeOptionComparisonRules,
+  phaseScopeSelfCheckRules,
   scopeItemCoverageCandidateRules,
   scopeItemCoverageClarificationRules,
 } from "./brainstorm-rules";
@@ -575,6 +592,13 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
   const candidatePath = resolveCliPath(root, input.candidateFile);
   const rawCandidate = await readJsonFileForCandidate(candidatePath);
   const now = new Date().toISOString();
+  if (isRecord(rawCandidate) && "frontendExperienceDelta" in rawCandidate) {
+    return invalidBrainstormAcceptResult(input, [{
+      code: "UNSUPPORTED_FRONTEND_EXPERIENCE_DELTA",
+      path: "frontendExperienceDelta",
+      message: "frontendExperienceDelta is no longer part of BrainstormCandidate. Store the current phase frontend target in frontendExperience.",
+    }]);
+  }
   const parsed = brainstormCandidateSchema.safeParse(normalizeBrainstormCandidateForAccept(rawCandidate, now));
   if (!parsed.success) {
     return invalidBrainstormAcceptResult(input, parsed.error.issues.map((issue) => ({
@@ -611,6 +635,14 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
     ...validateBrainstormCandidate(candidate, locator.deliveryId, locator.phaseId),
   ];
   if (issues.length > 0) {
+    const instruction = brainstormAcceptFailureInstruction(root, {
+      deliveryId: locator.deliveryId,
+      phaseId: locator.phaseId,
+      brainstormRunId: candidate.brainstormRunId,
+      requestId: input.requestId,
+      candidateFile: input.candidateFile,
+      issues,
+    });
     return {
       accepted: false,
       deliveryId: locator.deliveryId,
@@ -624,18 +656,33 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
         type: candidate.status === "blocked" ? "blocked" : "brainstorm_clarification",
         reason: "BRAINSTORM_CANDIDATE_INVALID",
       },
-      repairInstruction: brainstormRepairInstruction(root, {
-        deliveryId: locator.deliveryId,
-        phaseId: locator.phaseId,
-        brainstormRunId: candidate.brainstormRunId,
-        requestId: input.requestId,
-        candidateFile: input.candidateFile,
-        issues,
-      }),
+      ...(instruction.mode === "repair_candidate" ? { repairInstruction: instruction } : { instruction }),
     };
   }
 
   if (candidate.status !== "confirmed") {
+    const issues = [{
+      code: "CANDIDATE_NOT_CONFIRMED",
+      path: "status",
+      message: "Only confirmed BrainstormCandidate can be accepted.",
+    }];
+    const instruction = candidate.status === "blocked"
+      ? brainstormRepairInstruction(root, {
+          deliveryId: locator.deliveryId,
+          phaseId: locator.phaseId,
+          brainstormRunId: candidate.brainstormRunId,
+          requestId: input.requestId,
+          candidateFile: input.candidateFile,
+          issues,
+        })
+      : brainstormMissingClarificationInstruction(root, {
+          deliveryId: locator.deliveryId,
+          phaseId: locator.phaseId,
+          brainstormRunId: candidate.brainstormRunId,
+          requestId: input.requestId,
+          candidateFile: input.candidateFile,
+          issues,
+        });
     return {
       accepted: false,
       deliveryId: locator.deliveryId,
@@ -643,28 +690,13 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
       brainstormRunId: candidate.brainstormRunId,
       contractId: null,
       status: candidate.status,
-      issues: [{
-        code: "CANDIDATE_NOT_CONFIRMED",
-        path: "status",
-        message: "Only confirmed BrainstormCandidate can be accepted.",
-      }],
+      issues,
       contractPath: null,
       routeDecision: {
         type: candidate.status === "blocked" ? "blocked" : "brainstorm_clarification",
         reason: candidate.status === "blocked" ? "BRAINSTORM_BLOCKED" : "BRAINSTORM_NEEDS_CLARIFICATION",
       },
-      repairInstruction: brainstormRepairInstruction(root, {
-        deliveryId: locator.deliveryId,
-        phaseId: locator.phaseId,
-        brainstormRunId: candidate.brainstormRunId,
-        requestId: input.requestId,
-        candidateFile: input.candidateFile,
-        issues: [{
-          code: "CANDIDATE_NOT_CONFIRMED",
-          path: "status",
-          message: "Only confirmed BrainstormCandidate can be accepted.",
-        }],
-      }),
+      ...(instruction.mode === "repair_candidate" ? { repairInstruction: instruction } : { instruction }),
     };
   }
 
@@ -676,7 +708,6 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
     clarificationProgress: candidate.clarificationProgress,
     conceptGroundingRefs: derivedRefs.conceptGroundingRefs,
     frontendExperience: candidate.frontendExperience,
-    frontendExperienceDelta: candidate.frontendExperienceDelta,
     frontendExperienceRefs: derivedRefs.frontendExperienceRefs,
   });
   await saveBrainstormContract(root, contract, locator.deliveryId);
@@ -707,6 +738,79 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
       argv: ["technical-baseline", "request", "--delivery-id", locator.deliveryId, "--phase-id", locator.phaseId],
       userMessage: "BrainstormCandidate accepted. Continue immediately by creating TechnicalBaselineRequest.",
     }),
+  };
+}
+
+function brainstormAcceptFailureInstruction(
+  root: string,
+  input: {
+    deliveryId: string;
+    phaseId: string;
+    brainstormRunId: string;
+    requestId?: string;
+    candidateFile: string;
+    issues: Array<{ code: string; path: string; message: string }>;
+  },
+): Record<string, unknown> {
+  if (requiresBrainstormUserClarification(input.issues)) {
+    return brainstormMissingClarificationInstruction(root, input);
+  }
+  return brainstormRepairInstruction(root, input);
+}
+
+function requiresBrainstormUserClarification(issues: Array<{ code: string; path: string; message: string }>): boolean {
+  const userConfirmationIssueCodes = new Set([
+    "USER_CONFIRMATION_MISSING",
+    "CONFIRMATION_BASIS_MISSING",
+    "INITIAL_REQUEST_CANNOT_CONFIRM",
+    "SUMMARY_NOT_PRESENTED",
+    "CONFIRMATION_NOT_AFTER_SUMMARY",
+    "CONFIRMATION_PRESENTED_ITEM_MISSING",
+    "CLARIFICATION_PROGRESS_MISSING",
+    "FINAL_SUMMARY_NOT_CONFIRMED",
+    "CLARIFICATION_BLOCK_MISSING",
+    "CLARIFICATION_BLOCK_NOT_CONFIRMED",
+    "CONCEPT_GROUNDING_MISSING",
+    "CONCEPT_CONFIRMATION_MISSING",
+    "CONCEPTS_NOT_SHOWN_TO_USER",
+    "FRONTEND_BLOCK_UNRESOLVED",
+    "FRONTEND_TARGET_MISSING",
+  ]);
+  return issues.some((issue) => userConfirmationIssueCodes.has(issue.code));
+}
+
+function brainstormMissingClarificationInstruction(
+  root: string,
+  input: {
+    deliveryId: string;
+    phaseId: string;
+    brainstormRunId: string;
+    requestId?: string;
+    candidateFile: string;
+    issues: Array<{ code: string; path: string; message: string }>;
+  },
+): Record<string, unknown> {
+  const requestRef = input.requestId
+    ? toProjectRelative(root, brainstormSessionRequestPath(root, input.deliveryId, input.requestId))
+    : null;
+  return {
+    mode: "ask_user",
+    ...brainstormAskUserInstructionPolicy(),
+    requestRef,
+    issues: input.issues,
+    userMessage: "BrainstormCandidate is incomplete because one or more progressive clarification blocks have not been confirmed. Continue the Brainstorm conversation with the next missing block; do not repair JSON or rerun brainstorm accept until final_summary is explicitly confirmed.",
+    expectedResponse: {
+      kind: "brainstorm_progressive_clarification",
+      rule: "Treat the failed accept as an early-submit signal, not a JSON repair task. Read requestRef through requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups, present the next missing Brainstorm block to the user, and continue the progressive conversation. Only after final_summary is explicitly confirmed should you read candidate_write_contract, write BrainstormCandidate, and run brainstorm accept.",
+      requestReadRule: brainstormAskUserReadStep,
+      requestRef,
+      currentTurnAnswerRule: {
+        consumeCurrentUserMessage: false,
+        meaning: "The previous user confirmation was already consumed for an earlier Brainstorm block. Ask or present the next missing block instead of treating the earlier confirmation as final_summary confirmation.",
+        doNotAskAgainWhenCurrentMessageIsExplicit: false,
+        ifAmbiguousAskUser: true,
+      },
+    },
   };
 }
 
@@ -1306,10 +1410,24 @@ function buildBrainstormSessionRequest(input: {
       confirmIncludedExcludedDeferredExplicitly: true,
       confirmPhase1ForRoadmap: true,
       phaseScopeOptionComparison: {
-        requiredWhen: "current phase boundary has real alternative cuts",
+        requiredByDefault: true,
+        nextPhaseSeedIsPreselectedAnswer: false,
         optionCount: { min: 2, max: 3 },
         recommendationRequired: true,
-        doNotFabricateAlternativesWhenSingleClearCut: true,
+        recommendationMustPreserveCoreCurrentPhaseOutcome: true,
+        narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems: true,
+        scopeReductionRequiresExplicitUserConfirmation: true,
+        atomicSingleScopeException: {
+          allowedOnlyWhenNoSourceGroundedAlternativeCutExists: true,
+          mustExplainMissingAlternativeCuts: [
+            "narrower cut",
+            "broader adjacent-workflow cut",
+            "dependency or ordering cut",
+            "deferred lifecycle action",
+            "alternate UI or runtime boundary",
+          ],
+          disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist: true,
+        },
       },
     },
     conceptGroundingRequest: {
@@ -1372,23 +1490,32 @@ function buildBrainstormSessionRequest(input: {
         "Each required block must be presented as its own user-visible step or a clearly separated section before it can be marked confirmed.",
         "A phase_scope option may mention concept or frontend context, but those mentions are context only and do not satisfy concept_grounding or frontend_experience.",
         ...phaseScopeOptionComparisonRules(),
+        ...phaseScopeSelfCheckRules(),
         "Do not set clarificationProgress.confirmedBlocks for a block until the user has seen that block's dedicated question or summary and confirmed or corrected it.",
         "The concept_grounding block must first map every confirmed scope.included item to its applicable requirement details before asking for concept confirmation.",
         ...scopeItemCoverageClarificationRules(),
+        ...businessScenarioConfirmationRules(),
+        ...decisionImpactOrderingRules(),
+        ...businessLifecycleScanRules(),
+        ...conceptGroundingPresentationRules(),
+        ...conceptGroundingSelfCheckRules(),
         "The concept_grounding block must clarify applicable objects or subjects, actions or behaviors, inputs or fields, preconditions, validation or blocking reasons, success state/data/UI/API/result changes, visible or returned feedback, and unresolved notes before final_summary when those details apply.",
         ...businessObjectOperationClarificationRules(),
-        "The final_summary block must be shown after all applicable prior blocks and must summarize scope, concept understanding, frontend target or skip reason, and nextPhasePreview.",
+        "The final_summary block must be shown after all applicable prior blocks and must present one user-facing pre-submit coverage checklist, not a one-sentence summary and not separate reconfirmation rounds.",
         "The frontend_experience block must clarify page operation paths before final_summary when UI or user-visible workflow applies: how users find or receive target objects, where actions start, and how results are observed.",
+        ...frontendExperienceSelfCheckRules(),
+        ...frontendExperiencePresentationRules(),
         ...frontendOperationPathClarificationRules(),
-        "When the current phase involves business flows, user operations, state changes, forms/fields, validation/blocking rules, frontend/backend interaction, or user-facing operation paths, the final_summary block must include a business-detail confirmation with flows, preconditions, validation rules, blocking rules and reasons, success conditions and state changes, fields to input/display/pass through, page operation path, deferred or not-done details, and source refs.",
+        "When the current phase involves business flows, user operations, state changes, forms/fields, validation/blocking rules, frontend/backend interaction, or user-facing operation paths, those details must be confirmed in their owning blocks and written into structured BrainstormCandidate fields; final_summary should only present a user-facing coverage checklist and any corrections.",
         "When those business-detail categories do not apply, the final_summary block must state the concrete not-applicable reason before the user confirms.",
+        ...finalSummaryReviewRules(),
         ...brainstormCandidateSelfReviewRules(),
       ],
       blockConfirmationRules: {
-        phase_scope: "Satisfied only after the user confirms current phase included, excluded, deferred scope and nextPhasePreview direction, including the recommended option when real alternative phase cuts were presented.",
-        concept_grounding: "Satisfied only after the user sees a dedicated concept and business-rules summary that first covers every confirmed scope.included item, then lists applicable key concepts, objects or subjects, actions or behaviors, inputs or fields, preconditions, rule boundaries, blocking reasons, success changes, visible feedback, source refs, unresolved notes, and must-not-misinterpret-as guards when applicable, then confirms or corrects it.",
-        frontend_experience: "Satisfied only after the user sees a dedicated frontend target question or summary covering UI need, experience level, main users/workflows, how users find or receive target objects, action entry points, result/refresh feedback, and explicit unacceptable shapes, then confirms or corrects it.",
-        final_summary: "Satisfied only after the user sees a combined final summary, including business-detail and page-operation-path confirmation when applicable or a concrete not-applicable reason when not applicable, and confirms it after the prior applicable blocks.",
+        phase_scope: "Satisfied only after the phase_scope self-check is complete and the user confirms current phase included, excluded, deferred scope and nextPhasePreview direction, including the recommended option when real alternative phase cuts were presented.",
+        concept_grounding: "Satisfied only after the concept_grounding self-check is complete and the user sees a dedicated concept and business-rules summary that first covers every confirmed scope.included item, then lists business scenario confirmation, decision impact ordering, lifecycle scan, applicable key concepts, objects or subjects, actions or behaviors, inputs or fields, preconditions, rule boundaries, blocking reasons, success changes, visible feedback, source refs, unresolved notes, and must-not-misinterpret-as guards when applicable, then confirms or corrects it.",
+        frontend_experience: "Satisfied only after the frontend_experience self-check is complete and the user sees a dedicated frontend target question or summary covering UI need, experience level, main users/workflows, how users find or receive target objects, action entry points, result/refresh feedback, and explicit unacceptable shapes, then confirms or corrects it.",
+        final_summary: "Satisfied only after the user sees one pre-submit coverage checklist using user-facing labels, with current phase goal, concrete scope coverage, business-rule coverage or skip reason, page-operation coverage or skip reason, deferred/not-done boundaries, next phase preview in user language, and any corrections after the prior applicable blocks.",
       },
       frontendBlockRequiredWhen: [
         "requirement asks for user-facing UI",
@@ -1430,6 +1557,13 @@ function buildBrainstormSessionRequest(input: {
       phasePlanCurrentAcceptanceRefsMustUseOnlyAcceptanceIds: true,
       phaseScopeOptionComparison: {
         validationMode: "generation_guidance_only",
+        requiredByDefault: true,
+        nextPhaseSeedIsPreselectedAnswer: false,
+        optionCount: { min: 2, max: 3 },
+        recommendationMustPreserveCoreCurrentPhaseOutcome: true,
+        narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems: true,
+        scopeReductionRequiresExplicitUserConfirmation: true,
+        atomicSingleScopeExceptionAllowedOnlyForAtomicScope: true,
         rules: phaseScopeOptionComparisonRules(),
       },
       nextPhasePreviewGeneration: {
@@ -1453,44 +1587,79 @@ function buildBrainstormSessionRequest(input: {
             "frontend/backend interaction",
             "user-facing operation paths",
           ],
-          requiredUserVisibleTopicsWhenApplicable: [
-            "current phase scope-item coverage",
-            "applicable objects or subjects",
-            "applicable actions or behaviors",
-            "applicable inputs or fields",
-            "applicable preconditions",
-            "applicable validation rules",
-            "applicable blocking rules and blocking reasons",
-            "applicable success conditions and state/data/UI/API/result changes",
-            "fields to input, display, or pass through",
-            "how users find/select target objects, trigger actions, and observe results",
-            "deferred or not-done details",
-            "source refs",
-          ],
+          requiredUserVisibleTopicsWhenApplicable: finalSummaryRequiredUserVisibleTopicsWhenApplicable(),
           notApplicableRule: "If none of these categories applies, state the concrete not-applicable reason in final_summary instead of fabricating business rules.",
           candidateFieldMapping: {
             scopeIncludedItems: "modules/actions/rules/fields/boundaries",
             acceptanceStatements: "verifiable business outcomes",
-            businessFlowSummary: "flow steps, preconditions, validation/blocking, success state",
-            conceptGrounding: "high-risk concepts, applicable objects or subjects, actions or behaviors, inputs or fields, hard rules, state changes, blocking reasons, visible or returned feedback, unresolved notes, misunderstanding boundaries",
+            businessFlowSummary: "business scenario, lifecycle actions, flow steps, preconditions, validation/blocking, success state",
+            conceptGrounding: "high-risk concepts, business scenario meaning, decision impact, lifecycle semantics, applicable objects or subjects, actions or behaviors, inputs or fields, hard rules, state changes, blocking reasons, visible or returned feedback, unresolved notes, misunderstanding boundaries",
             frontendExperience: "target discovery, selection, input, display, action entry, refresh, and feedback expectations",
+          },
+          confirmedBlockDetailRetentionContract: {
+            sourceOfTruth: "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+            finalSummaryRole: "review_gate_and_delta_confirmation_not_the_only_candidate_source",
+            candidateFields: [
+              "scope.included[].items",
+              "scope.excluded",
+              "scope.deferred",
+              "acceptance[].statement",
+              "domainModel.businessFlows[].summary",
+              "conceptGrounding.phaseConceptGrounding.concepts[].explanation",
+              "frontendExperience.dataViews/actions/operationPaths",
+              "phasePlan.nextPhasePreview",
+            ],
+            rules: confirmedBlockDetailRetentionRules(),
+          },
+          blockSelfCheckContract: {
+            phase_scope: {
+              owningBlock: "phase_scope",
+              rules: phaseScopeSelfCheckRules(),
+            },
+            concept_grounding: {
+              owningBlock: "concept_grounding",
+              rules: [
+                ...businessScenarioConfirmationRules(),
+                ...decisionImpactOrderingRules(),
+                ...businessLifecycleScanRules(),
+                ...conceptGroundingPresentationRules(),
+                ...conceptGroundingSelfCheckRules(),
+              ],
+            },
+            frontend_experience: {
+              owningBlock: "frontend_experience",
+              rules: [
+                ...frontendExperienceSelfCheckRules(),
+                ...frontendExperiencePresentationRules(),
+              ],
+            },
+            final_summary: {
+              owningBlock: "final_summary",
+              rules: finalSummaryReviewRules(),
+            },
+          },
+          finalSummaryReviewContract: {
+            owningBlock: "final_summary",
+            purpose: "Final summary is the user's last pre-submit coverage checklist before BrainstormCandidate submit. It confirms or corrects prior blocks; it is not the source of detailed requirements.",
+            rules: finalSummaryReviewRules(),
           },
           scopeItemCoverageContract: {
             owningBlock: "concept_grounding",
             userLanguageRule: "Use the confirmed scope wording; do not expose internal schema language or force a fixed capability taxonomy.",
-            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience/frontendExperienceDelta when UI applies"],
+            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience when UI applies"],
             rules: scopeItemCoverageCandidateRules(),
           },
           objectOperationContract: {
             owningBlock: "concept_grounding",
             userLanguageRule: "Use natural user-facing wording in the conversation; do not expose internal schema field names as if they were user choices.",
-            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience/frontendExperienceDelta when UI applies"],
+            candidateFields: ["scope.included[].items", "acceptance[].statement", "domainModel.businessFlows[].summary", "conceptGrounding.phaseConceptGrounding.concepts[].explanation", "frontendExperience when UI applies"],
             rules: businessObjectOperationCandidateRules(),
           },
           frontendOperationPathContract: {
             owningBlock: "frontend_experience",
             userLanguageRule: "Use natural user-facing wording in the conversation; do not expose internal schema enum values.",
-            candidateFields: ["frontendExperience.dataViews", "frontendExperience.actions", "frontendExperience.operationPaths", "frontendExperienceDelta.dataViewDeltas", "frontendExperienceDelta.actionDeltas", "frontendExperienceDelta.operationPathDeltas"],
+            presentationRules: frontendExperiencePresentationRules(),
+            candidateFields: ["frontendExperience.dataViews", "frontendExperience.actions", "frontendExperience.operationPaths"],
             rules: frontendOperationPathCandidateRules(),
           },
         },
@@ -1623,6 +1792,7 @@ function brainstormCandidateSchemaShape(input: {
           "Current phase user/system action.",
           "Current phase key field set: identity/input/display/relationship/status/result-feedback fields when applicable.",
           "Current phase precondition, validation, blocking rule and reason, success state change, feedback expectation, or boundary when applicable.",
+          "Business scenario, decision impact, or lifecycle action detail confirmed in the relevant Brainstorm block when applicable.",
         ],
         reason: "Why it is included now.",
         source: "user_confirmed",
@@ -1724,7 +1894,7 @@ function brainstormCandidateSchemaShape(input: {
         name: "Core flow",
         actors: ["actor-user"],
         capabilityRefs: ["capability-core"],
-        summary: "When applicable, include scope-item coverage, objects or subjects, actions or behaviors, inputs or fields, flow steps, preconditions, validation or blocking rules and reasons, success outcome, state/data/UI/API/result changes, visible or returned feedback, and fields to input/display/pass through. If this phase is non-domain technical work, describe the technical workflow and why business-detail confirmation is not applicable.",
+        summary: "When applicable, include the current business scenario confirmation, decision impacts ordered by downstream effect, relevant lifecycle actions for key objects, scope-item coverage, objects or subjects, actions or behaviors, inputs or fields, flow steps, preconditions, validation or blocking rules and reasons, success outcome, state/data/UI/API/result changes, visible or returned feedback, and fields to input/display/pass through. If this phase is non-domain technical work, describe the technical workflow and why business detail is not applicable.",
       }],
     },
     acceptance: [{
@@ -1771,7 +1941,7 @@ function brainstormCandidateSchemaShape(input: {
           conceptId: "concept-current-001",
           term: "Current phase concept",
           normalizedName: "current_phase_concept",
-          explanation: "Concept explanation shown to the user, including scope-item coverage, current phase object or subject semantics, key field meaning, supported actions or behaviors, inputs or fields, validation or blocking rules, state transition expectations, visible feedback, unresolved notes, and implementation misunderstanding boundaries when applicable.",
+          explanation: "Concept explanation shown to the user, including scope-item coverage, current business scenario meaning, decision impact, lifecycle semantics, current phase object or subject semantics, key field meaning, supported actions or behaviors, inputs or fields, validation or blocking rules, state transition expectations, visible feedback, unresolved notes, and implementation misunderstanding boundaries when applicable.",
           mustNotMisinterpretAs: ["Incorrect implementation meaning"],
           phaseRelevance: "current",
           priority: "must_understand",
@@ -1874,9 +2044,10 @@ function brainstormCandidateSchemaShape(input: {
       "Excluded scope belongs only in scope.excluded and roadmap phase excluded refs when supported; deferred scope belongs only in scope.deferred or nextPhasePreview.",
       "phasePlan.current.acceptanceRefs may reference only acceptance[].id values.",
       "roadmap.required is normalized by Loom on accept from confirmed scope and phasePlan signals. Do not let this boolean override scope.deferred or phasePlan.nextPhasePreview.",
-      "If clarificationProgress confirms frontend_experience, include frontendExperience or frontendExperienceDelta. If the frontend block is skipped, include skippedBlocks with a concrete reason and do not invent frontend work.",
+      "If clarificationProgress confirms frontend_experience, include frontendExperience. If the frontend block is skipped, include skippedBlocks with a concrete reason and do not invent frontend work.",
       "When frontendExperience is present, it is the user-confirmed product target that AAC must consume later; do not use it for implementation details.",
-      "Write page operation path details into frontendExperience.dataViews/actions/operationPaths or frontendExperienceDelta.*Deltas; do not leave them only in confirmationSummary or chat.",
+      "Write page operation path details into frontendExperience.dataViews/actions/operationPaths; do not leave them only in confirmationSummary or chat.",
+      "Use outputContract.schemaShape.frontendExperience as the write template for UI targets. Do not copy prior candidates or currentFrontendExperienceRef as the candidate template; prior refs are context only.",
       "Do not show internal frontend enum values to the user during clarification. Use natural language when asking or summarizing.",
       "For Phase 1, deliveryConceptGlossary should capture delivery-wide high-risk concepts from the whole requirement; do not collapse it to a single generic project label.",
       "For every phase, phaseConceptGrounding should capture current-phase high-risk concepts and must not promote future/deferred/excluded concepts into current scope.",
@@ -1885,8 +2056,8 @@ function brainstormCandidateSchemaShape(input: {
       "When deriving sources from RequirementContext, read sourceFieldAccessHints: input sources use sourceItems[].itemId/kind, while BrainstormCandidate output sources use sources[].sourceId/type.",
       "Required clarification blocks must not be merged: phase_scope mentions are context only and do not satisfy concept_grounding or frontend_experience.",
       "Set frontend_experience confirmed only after a dedicated frontend_experience block showed the UI target or skip reason to the user.",
-      "Set finalSummaryConfirmed=true only after a dedicated final_summary block summarized scope, concepts, frontend target, nextPhasePreview, and business-detail confirmation when applicable.",
-      "If the current phase involves business flows, user operations, state changes, forms/fields, validation/blocking rules, or frontend/backend interaction, final_summary and candidate fields must preserve those details using existing fields; do not leave them for PGC, AAC, TaskPlan, or TaskExecution to rediscover from the original requirement.",
+      "Set finalSummaryConfirmed=true only after a dedicated final_summary block presented one user-facing pre-submit coverage checklist with concrete scope coverage, business-rule coverage or skip reason, page-operation coverage or skip reason, next phase preview in user language, deferred/not-done boundaries, and explicit corrections.",
+      "If the current phase involves business flows, user operations, state changes, forms/fields, validation/blocking rules, or frontend/backend interaction, structured candidate fields must preserve those confirmed details using existing fields; do not rely on final_summary text and do not leave details for PGC, AAC, TaskPlan, or TaskExecution to rediscover from the original requirement.",
       "If those business-detail categories do not apply, final_summary must record the concrete reason and the candidate should avoid fabricating domain rules.",
       ...phaseScopeOptionComparisonRules(),
       ...brainstormCandidateSelfReviewRules(),
@@ -2385,8 +2556,8 @@ function validateFrontendExperienceConfirmation(
   }
   const frontendConfirmed = progress.confirmedBlocks.some((block) => block.block === "frontend_experience" && block.confirmedByUser);
   const frontendSkipped = progress.skippedBlocks.some((block) => block.block === "frontend_experience");
-  if (frontendConfirmed && !candidate.frontendExperience && !candidate.frontendExperienceDelta) {
-    issues.push({ code: "FRONTEND_TARGET_MISSING", path: "frontendExperience", message: "A confirmed frontend_experience block requires frontendExperience or frontendExperienceDelta." });
+  if (frontendConfirmed && !candidate.frontendExperience) {
+    issues.push({ code: "FRONTEND_TARGET_MISSING", path: "frontendExperience", message: "A confirmed frontend_experience block requires frontendExperience." });
   }
   if (!frontendConfirmed && !frontendSkipped) {
     issues.push({ code: "FRONTEND_BLOCK_UNRESOLVED", path: "clarificationProgress", message: "frontend_experience block must be confirmed or explicitly skipped." });
@@ -2565,20 +2736,13 @@ async function writeBrainstormDerivedArtifacts(
 
   let confirmedFrontendExperienceRef: string | null = null;
   let currentFrontendExperienceRef: string | null = null;
-  if (candidate.frontendExperience || candidate.frontendExperienceDelta) {
-    const previousCurrentFrontend = await readOptionalRecord(currentFrontendAbs);
-    const inheritedFrontendExperience =
-      candidate.frontendExperience
-        ? null
-        : (previousCurrentFrontend?.frontendExperience ?? previousCurrentFrontend?.inheritedFrontendExperience ?? null);
+  if (candidate.frontendExperience) {
     const target = {
       schemaVersion: "1.0",
       deliveryId: locator.deliveryId,
       phaseId: locator.phaseId,
       updatedAt: now,
-      frontendExperience: candidate.frontendExperience ?? null,
-      frontendExperienceDelta: candidate.frontendExperienceDelta ?? null,
-      ...(inheritedFrontendExperience ? { inheritedFrontendExperience } : {}),
+      frontendExperience: candidate.frontendExperience,
       source: "brainstorm_user_confirmed",
     };
     await writeJsonAtomic(confirmedFrontendAbs, target);
@@ -2751,6 +2915,7 @@ function brainstormContractFromCandidate(
       candidates: candidate.acceptance,
       coverageNotes: ["BrainstormCandidate accepted from Agent-managed conversation."],
     },
+    userConfirmation: candidate.userConfirmation,
     deliveryStrategy: {
       mode: roadmapRequired ? "roadmap" : "single_phase",
       reason: roadmapRequired
@@ -2825,7 +2990,6 @@ async function writeBrainstormDecisionSnapshot(
     conceptConfirmation: contract.conceptConfirmation ?? null,
     clarificationProgress: contract.clarificationProgress ?? null,
     frontendExperience: contract.frontendExperience ?? null,
-    frontendExperienceDelta: contract.frontendExperienceDelta ?? null,
     phasePlan: contract.phasePlan,
     userConfirmation: candidate.userConfirmation,
   };
@@ -2944,25 +3108,30 @@ function brainstormRepairInstruction(
     issues: Array<{ code: string; path: string; message: string }>;
   },
 ): Record<string, unknown> {
-  return {
+  const schemaShape = brainstormCandidateSchemaShape({
+    deliveryId: input.deliveryId,
+    phaseId: input.phaseId,
+    brainstormRunId: input.brainstormRunId,
+  });
+  const fieldRepairPlan = brainstormFieldRepairPlan(input.issues, schemaShape);
+  return withAutoRunnableTransition({
     mode: "repair_candidate",
     schema: "BrainstormCandidate",
     ...artifactRepairPolicy(),
+    primaryAction: "Edit candidateFile according to fieldRepairPlan, write a complete replacement BrainstormCandidate JSON, then run submitCommand.",
     candidateFile: toProjectRelative(root, resolveCliPath(root, input.candidateFile)),
     issues: input.issues,
+    fieldRepairPlan,
     repairSubmitRouting: repairSubmitRouting({
       kind: "candidate",
       submitCommandName: "brainstorm accept",
     }),
-    schemaShape: brainstormCandidateSchemaShape({
-      deliveryId: input.deliveryId,
-      phaseId: input.phaseId,
-      brainstormRunId: input.brainstormRunId,
-    }),
+    schemaShape,
     enumRefs: brainstormEnumRefs(),
     instructions: [
       compactContextReadStep,
       "Repair only the BrainstormCandidate JSON contract fields.",
+      "Start from fieldRepairPlan. Each item names the failed path, expected shape, and concrete candidate edit.",
       "Preserve phase-1 in roadmap.phases. For Phase N, roadmap.phases must include prior phases plus the current phase.",
       "phasePlan.current.scopeRefs must contain only ids from scope.included. Remove any scope.excluded or scope.deferred ids from phasePlan.current.scopeRefs.",
       "phasePlan.current.acceptanceRefs must contain only ids from acceptance.",
@@ -2992,7 +3161,107 @@ function brainstormRepairInstruction(
         toProjectRelative(root, resolveCliPath(root, input.candidateFile)),
       ],
     },
-  };
+  }, {
+    sourceCommand: "brainstorm accept",
+    sourceSucceeded: false,
+    sourceSummary: "BrainstormCandidate validation returned agent-repairable issues.",
+    primaryAction: "repair_candidate_and_submit",
+  });
+}
+
+function brainstormFieldRepairPlan(
+  issues: Array<{ code: string; path: string; message: string }>,
+  schemaShape: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  return issues.map((issue) => {
+    if (issue.code === "UNSUPPORTED_FRONTEND_EXPERIENCE_DELTA" || issue.path === "frontendExperienceDelta") {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "remove_unsupported_field",
+        expectedShape: { frontendExperience: schemaShape.frontendExperience },
+        suggestedAction: "Remove frontendExperienceDelta. If the frontend_experience block was confirmed, put the complete current phase frontend target into frontendExperience.dataViews, frontendExperience.actions, and frontendExperience.operationPaths.",
+      };
+    }
+
+    if (issue.code === "FRONTEND_TARGET_MISSING" || issue.path === "frontendExperience") {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "fill_required_field",
+        expectedShape: schemaShape.frontendExperience,
+        suggestedAction: "Create frontendExperience from the confirmed page-operation block. Do not create frontendExperienceDelta.",
+      };
+    }
+
+    if (issue.code === "SCHEMA_INVALID") {
+      return {
+        path: issue.path || "<root>",
+        code: issue.code,
+        message: issue.message,
+        actionType: "match_schema_shape",
+        expectedShape: schemaShapeAtPath(schemaShape, issue.path),
+        suggestedAction: `Rewrite ${issue.path || "the candidate root"} so it matches schemaShape at the same path. Preserve user-confirmed scope, concepts, frontend target, and final confirmation facts.`,
+      };
+    }
+
+    if (issue.code.endsWith("_REF_INVALID") || issue.code.includes("MISMATCH")) {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "repair_reference",
+        expected: "Use ids that exist in the referenced candidate arrays and keep deliveryId, phaseId, and brainstormRunId equal to the active request.",
+        suggestedAction: "Replace the invalid id or command metadata with a value from the candidate/request authority fields; do not invent new scope or acceptance just to satisfy the ref.",
+      };
+    }
+
+    if (issue.code.includes("NEXT_PHASE") || issue.path.startsWith("phasePlan.nextPhasePreview")) {
+      return {
+        path: issue.path,
+        code: issue.code,
+        message: issue.message,
+        actionType: "repair_phase_plan",
+        expectedShape: schemaShapeAtPath(schemaShape, "phasePlan.nextPhasePreview"),
+        suggestedAction: "Align nextPhasePreview with confirmed deferred scope: use kind=candidate only when later source-grounded work remains; use kind=none only when nothing remains.",
+      };
+    }
+
+    return {
+      path: issue.path,
+      code: issue.code,
+      message: issue.message,
+      actionType: "repair_candidate_field",
+      expectedShape: schemaShapeAtPath(schemaShape, issue.path),
+      suggestedAction: "Edit only this BrainstormCandidate field to satisfy the issue while preserving user-confirmed content.",
+    };
+  });
+}
+
+function schemaShapeAtPath(schemaShape: Record<string, unknown>, fieldPath: string): unknown {
+  if (!fieldPath) {
+    return schemaShape;
+  }
+  const pathParts = fieldPath
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .filter(Boolean);
+  let current: unknown = schemaShape;
+  for (const part of pathParts) {
+    if (Array.isArray(current)) {
+      current = current[0];
+      if (/^\d+$/.test(part)) {
+        continue;
+      }
+    }
+    if (!isRecord(current) || !(part in current)) {
+      return null;
+    }
+    current = current[part];
+  }
+  return current;
 }
 
 function resolveCliPath(projectRoot: string, filePath: string): string {

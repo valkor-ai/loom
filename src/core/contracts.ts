@@ -198,6 +198,83 @@ export const pgcAcceptanceCandidateSchema = z.object({
   priority: z.enum(["must", "should", "could"]),
 });
 
+export const requirementDetailKindSchema = z.enum([
+  "business_scenario",
+  "scope_boundary",
+  "object_field_set",
+  "object_operation",
+  "business_flow",
+  "validation_rule",
+  "blocking_rule",
+  "state_transition",
+  "frontend_operation_path",
+  "acceptance_outcome",
+  "assumption",
+  "deferred_or_excluded_boundary",
+]);
+
+export const requirementDetailImpactTagSchema = z.enum([
+  "scope",
+  "data_model",
+  "business_flow",
+  "frontend",
+  "interface",
+  "acceptance",
+  "runtime",
+]);
+
+export const requirementDetailLifecycleStageSchema = z.enum([
+  "create",
+  "query_select",
+  "view",
+  "update",
+  "approve_or_process",
+  "state_change",
+  "terminate_or_cancel",
+  "blocking_or_exception",
+  "not_applicable",
+]);
+
+export const requirementDetailQualitySchema = z.enum(["thin", "usable", "rich"]);
+
+export const requirementDetailItemSchema = z.object({
+  detailId: z.string().min(1),
+  kind: requirementDetailKindSchema,
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  requiredForCurrentPhase: z.boolean(),
+  priority: z.enum(["must", "should", "could"]),
+  sourceFieldRefs: stringArraySchema,
+  sourceRefs: stringArraySchema,
+  scopeRefs: stringArraySchema,
+  acceptanceRefs: stringArraySchema,
+  conceptRefs: stringArraySchema,
+  frontendRefs: stringArraySchema,
+  impactTags: z.array(requirementDetailImpactTagSchema),
+  lifecycleStage: requirementDetailLifecycleStageSchema,
+  quality: requirementDetailQualitySchema,
+  unresolvedNote: z.string().min(1).nullable(),
+});
+
+export const requirementDetailWarningSchema = z.object({
+  warningId: z.string().min(1),
+  detailId: z.string().min(1).nullable(),
+  sourceFieldRef: z.string().min(1).nullable(),
+  severity: z.enum(["info", "warning"]),
+  message: z.string().min(1),
+});
+
+export const requirementDetailsIndexSchema = z.object({
+  schemaVersion: z.literal("1.0"),
+  authority: z.literal("brainstorm_contract"),
+  sourceBrainstormContractRef: z.string().min(1),
+  items: z.array(requirementDetailItemSchema),
+  extractionWarnings: z.array(requirementDetailWarningSchema),
+});
+
+export type RequirementDetailItem = z.infer<typeof requirementDetailItemSchema>;
+export type RequirementDetailsIndex = z.infer<typeof requirementDetailsIndexSchema>;
+
 export const planningGenerationContractSchema = z.object({
   schemaVersion: z.literal("1.0"),
   planningContractId: z.string().min(1),
@@ -240,10 +317,10 @@ export const planningGenerationContractSchema = z.object({
     capabilityGroups: z.array(z.unknown()),
     businessFlows: z.array(z.unknown()),
     frontendExperience: z.record(z.unknown()).nullable().optional(),
-    frontendExperienceDelta: z.record(z.unknown()).nullable().optional(),
     sourceRefs: stringArraySchema,
     contextNotes: stringArraySchema,
   }),
+  requirementDetails: requirementDetailsIndexSchema.optional(),
   planningRules: z.object({
     scopeIsolation: z.object({
       onlyPlanCurrentPhase: z.boolean(),
@@ -760,6 +837,24 @@ export const architectureArtifactContractSchema = z.object({
       description: z.string().min(1),
     })),
   })),
+  detailCoverage: z.array(z.object({
+    detailId: z.string().min(1),
+    coverageStatus: z.enum(["covered", "partial", "not_applicable", "uncovered"]),
+    artifactRefs: z.object({
+      modules: refsSchema,
+      entities: refsSchema,
+      fields: refsSchema,
+      constraints: refsSchema,
+      interfaces: refsSchema,
+      userFlows: refsSchema,
+      stateMachines: refsSchema,
+      frontendDataViews: refsSchema,
+      frontendActions: refsSchema,
+      frontendOperationPaths: refsSchema,
+      acceptanceMatrix: refsSchema,
+    }),
+    reason: z.string().min(1).optional(),
+  })).optional(),
   risksAndDecisions: z.object({
     decisions: z.array(z.object({
       decisionId: z.string().min(1),
@@ -1068,6 +1163,7 @@ export const taskArtifactRefsSchema = z.object({
 export const verificationIntentSchema = z.object({
   verificationId: z.string().min(1),
   acceptanceRefs: refsSchema,
+  requirementDetailRefs: refsSchema.optional(),
   behavior: z.string().min(1),
   preferredEvidence: z.array(verificationEvidenceSchema),
   acceptableEvidence: z.array(verificationEvidenceSchema),
@@ -1103,6 +1199,7 @@ export const taskSchema = z.object({
   dependsOn: refsSchema,
   scopeRefs: refsSchema,
   acceptanceRefs: refsSchema,
+  requirementDetailRefs: refsSchema.optional(),
   writeBoundary: z.object({
     forbiddenPaths: refsSchema,
     artifactRefs: taskArtifactRefsSchema,
@@ -1368,6 +1465,7 @@ export const taskExecutionRequestSchema = z.object({
     technicalBaseline: z.record(z.unknown()),
     architectureArtifactProjection: z.record(z.unknown()),
     acceptanceSnapshot: z.array(z.record(z.unknown())),
+    requirementDetailSnapshot: z.array(z.record(z.unknown())).optional(),
     dependencyResults: z.array(z.record(z.unknown())),
   }),
   executionRules: z.record(z.unknown()),
@@ -1393,6 +1491,14 @@ export const verificationResultSchema = z.object({
   verificationId: z.string().min(1),
   status: z.enum(["passed", "not_run", "failed", "inconclusive"]),
   evidenceType: verificationEvidenceSchema.optional(),
+  summary: z.string().min(1),
+});
+
+export const requirementDetailEvidenceSchema = z.object({
+  detailId: z.string().min(1),
+  status: z.enum(["satisfied", "partially_satisfied", "not_satisfied", "not_verified"]),
+  verificationIds: refsSchema,
+  evidenceRefs: refsSchema,
   summary: z.string().min(1),
 });
 
@@ -1445,6 +1551,7 @@ export const taskResultSchema = z.object({
   notes: refsSchema,
   frontendExperienceSelfCheck: z.record(z.unknown()).optional(),
   runtimeDeliveryEvidence: runtimeDeliveryEvidenceSchema.optional(),
+  requirementDetailEvidence: z.array(requirementDetailEvidenceSchema).optional(),
   conceptEvidence: z.array(z.object({
     conceptRef: z.string().min(1),
     evidenceType: conceptEvidenceTypeSchema,
@@ -1596,6 +1703,14 @@ export const reviewRequestSchema = z.object({
     taskRefs: refsSchema,
     evidenceRefs: refsSchema,
     mustNotMisinterpretAs: refsSchema,
+  })).optional(),
+  detailReviewMatrix: z.array(z.object({
+    detailId: z.string().min(1),
+    taskRefs: refsSchema,
+    expectedVerificationIds: refsSchema,
+    evidenceRefs: refsSchema,
+    status: z.enum(["satisfied", "partially_satisfied", "not_satisfied", "not_verified", "missing"]),
+    summary: z.string().min(1),
   })).optional(),
   changeSet: z.record(z.unknown()).optional(),
   reviewRules: z.object({

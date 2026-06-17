@@ -174,6 +174,7 @@ function planningGenerationContractGuide(): Omit<ReferencedArtifactReadGuideEntr
       ".technicalBaseline",
       ".planningInputs",
       ".planningInputs.businessFlows[].summary",
+      ".requirementDetails",
       ".planningRules",
       ".qualityGates",
       ".handoff",
@@ -409,7 +410,6 @@ function brainstormDecisionGuide(): Omit<ReferencedArtifactReadGuideEntry, "refK
       ".conceptGrounding",
       ".clarificationProgress",
       ".frontendExperience",
-      ".frontendExperienceDelta",
       ".sourceRefs",
     ],
     doNotGuessAlternateRoots: true,
@@ -520,12 +520,11 @@ function frontendExperienceTargetGuide(
     purpose,
     requiredSelectors: [
       ".frontendExperience",
-      ".frontendExperienceDelta",
-      ".inheritedFrontendExperience",
       ".source",
       ".phaseId",
     ],
     optionalSelectors: [
+      ".inheritedFrontendExperience",
       ".currentPhaseId",
       ".confirmedFrontendExperienceRef",
       ".frontendExperience.required",
@@ -533,11 +532,9 @@ function frontendExperienceTargetGuide(
       ".frontendExperience.audiences",
       ".frontendExperience.surfaces",
       ".frontendExperience.mustNot",
-      ".frontendExperienceDelta.inheritsPrevious",
-      ".frontendExperienceDelta.currentPhaseImpact",
     ],
     doNotGuessAlternateRoots: true,
-    nullSelectorHandling: "If frontendExperience is null, inspect inheritedFrontendExperience and frontendExperienceDelta together. If all are null, treat frontend as not confirmed for this phase and do not guess a UI target.",
+    nullSelectorHandling: "If frontendExperience is null, inspect inheritedFrontendExperience only as prior context. Treat the current phase frontend target as not confirmed unless the current contract provides frontendExperience.",
   };
 }
 

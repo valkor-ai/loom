@@ -47,6 +47,7 @@ import {
   loadRequiredTechnicalBaseline,
 } from "./contracts";
 import {
+  frontendModuleEntryPreservationRule,
   loadCurrentTaskPlan,
   loadCurrentTaskPlanRun,
 } from "./tasks";
@@ -143,6 +144,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
   const reviewPacket = buildReviewPacket(taskPlan, run, taskResults, aac);
   const changeContext = buildChangeContext(changeSet);
   const conceptReviewMatrix = await buildConceptReviewMatrix(root, locator, taskPlan, taskResults);
+  const detailReviewMatrix = buildRequirementDetailReviewMatrix(taskPlan, taskResults);
   await writeJsonAtomic(reviewPacketFile, reviewPacket);
   await writeJsonAtomic(changeContextFile, changeContext);
   const resultFile = toProjectRelative(root, reviewResultCandidatePath(root, locator, reviewId));
@@ -175,6 +177,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
           "reviewPacketRef",
           "changeContextRef",
           "conceptReviewMatrix",
+          "detailReviewMatrix",
           "reviewRules.commonRules",
           "reviewRules.changeSetRules",
           "enumRefs",
@@ -183,6 +186,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
           "outputContract.severityPolicy",
           "outputContract.routingRules",
           "outputContract.conceptReviewRules",
+          "outputContract.requirementDetailReview",
           "outputContract.frontendExperienceReview",
           "outputContract.reviewSignals",
         ],
@@ -198,6 +202,8 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
           "Classify severity semantically using outputContract.severityPolicy; CLI validates structure only.",
           "Use outputContract.reviewSignals for mechanical facts such as missing workflow closure assignment or TaskResult self-check static/gap contradictions. Do not approve when a workflow closure signal says closureSatisfied=false.",
           "For concept-related findings, use findingType and conceptRef from conceptReviewMatrix; do not invent concept ids.",
+          "Use detailReviewMatrix and outputContract.reviewSignals for requirement detail evidence. Do not approve when a requirement_detail_evidence signal says detailSatisfied=false.",
+          frontendModuleEntryPreservationRule,
           "Do not modify project files during review.",
         ],
       },
@@ -259,6 +265,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
       ...artifactGenerationProtocolPolicy(),
     },
     conceptReviewMatrix,
+    detailReviewMatrix,
     enumRefs: {
       decision: [...reviewDecisionSchema.options],
       findingSeverity: ["critical", "major", "minor", "note"],
@@ -298,6 +305,8 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
         "Report design gaps as blocked findings and route them instead of fixing them in review.",
         "If outputContract.reviewSignals contains frontend_workflow_closure with closureSatisfied=false and recommendedNextAction=execution_repair, write a blocking frontend_experience finding and route execution_repair.",
         "If outputContract.reviewSignals contains frontend_workflow_closure with recommendedNextAction=taskplan_repair, write a blocking task_artifact_mapping_issue or task_verification_mapping_issue finding and route taskplan_repair.",
+        "If outputContract.reviewSignals contains requirement_detail_evidence with detailSatisfied=false, write a blocking evidence_insufficient or task_verification_mapping_issue finding and route execution_repair.",
+        frontendModuleEntryPreservationRule,
       ],
       changeSetRules: changeSet.mode === "git_diff_ref"
         ? [
@@ -334,6 +343,14 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
       frontendExperienceReview: buildFrontendExperienceReview(aac),
       runtimeDeliveryReview: buildRuntimeDeliveryReview(aac),
       conceptReviewMatrix,
+      requirementDetailReview: {
+        detailReviewMatrix,
+        rules: [
+          "Every detailReviewMatrix item with status other than satisfied requires a blocking finding before approval.",
+          "Use taskRefs and evidenceRefs from detailReviewMatrix; do not invent detail ids.",
+          "Route missing or not_satisfied task evidence to execution_repair unless the finding shows TaskPlan assignment itself is wrong.",
+        ],
+      },
       conceptReviewRules: [
         "Use conceptReviewMatrix as the review scope for concept coverage; do not re-extract concepts from scratch.",
         "Report concept_missing or concept_evidence_missing when a must concept lacks implementation evidence.",
@@ -790,6 +807,7 @@ function buildReviewPacket(
         groupId: task.groupId,
         status: state?.status ?? "pending",
         acceptanceRefs: task.acceptanceRefs,
+        requirementDetailRefs: task.requirementDetailRefs ?? [],
         scopeRefs: task.scopeRefs,
         changedFiles: result?.changedFiles ?? [],
         taskResultId: result?.taskResultId ?? null,
@@ -804,6 +822,7 @@ function buildReviewPacket(
       status: result.status,
       changedFiles: result.changedFiles,
       verificationResults: result.verificationResults,
+      requirementDetailEvidence: result.requirementDetailEvidence ?? [],
       conceptEvidence: result.conceptEvidence ?? [],
       runtimeDeliveryEvidence: summarizeRuntimeDeliveryEvidence(result.runtimeDeliveryEvidence),
       frontendExperienceSelfCheck: result.frontendExperienceSelfCheck ?? null,
@@ -851,6 +870,73 @@ async function buildConceptReviewMatrix(projectRoot: string, locator: DeliveryPh
   }));
 }
 
+function buildRequirementDetailReviewMatrix(taskPlan: TaskPlan, taskResults: TaskResult[]): NonNullable<ReviewRequest["detailReviewMatrix"]> {
+  const resultByTaskId = new Map(taskResults.map((result) => [result.taskId, result]));
+  const byDetail = new Map<string, {
+    taskRefs: Set<string>;
+    expectedVerificationIds: Set<string>;
+    evidenceRefs: Set<string>;
+    statuses: Set<"satisfied" | "partially_satisfied" | "not_satisfied" | "not_verified" | "missing">;
+  }>();
+  for (const task of taskPlan.tasks) {
+    const detailIds = uniqueRefs([
+      ...(task.requirementDetailRefs ?? []),
+      ...task.verificationIntents.flatMap((intent) => intent.requirementDetailRefs ?? []),
+    ]);
+    if (detailIds.length === 0) {
+      continue;
+    }
+    const result = resultByTaskId.get(task.taskId);
+    for (const detailId of detailIds) {
+      const entry = byDetail.get(detailId) ?? {
+        taskRefs: new Set<string>(),
+        expectedVerificationIds: new Set<string>(),
+        evidenceRefs: new Set<string>(),
+        statuses: new Set<"satisfied" | "partially_satisfied" | "not_satisfied" | "not_verified" | "missing">(),
+      };
+      entry.taskRefs.add(task.taskId);
+      for (const intent of task.verificationIntents.filter((item) => (item.requirementDetailRefs ?? []).includes(detailId))) {
+        entry.expectedVerificationIds.add(intent.verificationId);
+      }
+      const evidence = result?.requirementDetailEvidence?.find((item) => item.detailId === detailId);
+      if (!result || !evidence) {
+        entry.statuses.add("missing");
+      } else {
+        entry.statuses.add(evidence.status);
+        entry.evidenceRefs.add(result.taskResultId);
+        for (const ref of evidence.evidenceRefs) {
+          entry.evidenceRefs.add(ref);
+        }
+        for (const verificationId of evidence.verificationIds) {
+          entry.evidenceRefs.add(`${result.taskResultId}:${verificationId}`);
+        }
+      }
+      byDetail.set(detailId, entry);
+    }
+  }
+  return [...byDetail.entries()].map(([detailId, entry]) => {
+    const status = aggregateDetailEvidenceStatus(entry.statuses);
+    return {
+      detailId,
+      taskRefs: [...entry.taskRefs],
+      expectedVerificationIds: [...entry.expectedVerificationIds],
+      evidenceRefs: [...entry.evidenceRefs],
+      status,
+      summary: status === "satisfied"
+        ? "All assigned task result evidence reports this requirement detail as satisfied."
+        : "At least one assigned task result is missing or does not report this requirement detail as satisfied.",
+    };
+  });
+}
+
+function aggregateDetailEvidenceStatus(statuses: Set<"satisfied" | "partially_satisfied" | "not_satisfied" | "not_verified" | "missing">): "satisfied" | "partially_satisfied" | "not_satisfied" | "not_verified" | "missing" {
+  if (statuses.has("missing")) return "missing";
+  if (statuses.has("not_satisfied")) return "not_satisfied";
+  if (statuses.has("not_verified")) return "not_verified";
+  if (statuses.has("partially_satisfied")) return "partially_satisfied";
+  return "satisfied";
+}
+
 async function readPhaseConcepts(projectRoot: string, locator: DeliveryPhaseLocator): Promise<Map<string, { priority: string; mustNotMisinterpretAs: string[] }>> {
   const file = phaseConceptGroundingPath(projectRoot, locator.deliveryId, locator.phaseId);
   if (!(await pathExists(file))) {
@@ -893,6 +979,10 @@ function summarizeVerificationValue(taskResults: TaskResult[]): Record<string, n
     failed: all.filter((item) => item.status === "failed").length,
     inconclusive: all.filter((item) => item.status === "inconclusive").length,
   };
+}
+
+function uniqueRefs(refs: string[]): string[] {
+  return [...new Set(refs.filter((ref) => ref.length > 0))];
 }
 
 function summarizeRuntimeDeliveryEvidence(evidence: TaskResult["runtimeDeliveryEvidence"]): Record<string, unknown> | null {
@@ -1223,6 +1313,7 @@ function buildFrontendExperienceReview(aac: Awaited<ReturnType<typeof loadArchit
       "Block objective contract violations such as no visible UI when frontend is required.",
       "When workflowClosureRequirements is non-empty, check matching reviewSignals before approving.",
       "For workflow closures with operationPathRefs/dataViewRefs/actionRefs, check that evidence covers target discovery, action entry, declared interface invocation, result refresh/readback or status observation, and success/blocking feedback.",
+      frontendModuleEntryPreservationRule,
       "Use manual_review for subjective visual polish decisions.",
       "Playwright failure alone is not a frontend product defect.",
     ],
@@ -1292,6 +1383,23 @@ function buildReviewSignals(
     blockedTasks: run.summary.blocked,
   }];
   const workflowClosureRequirements = buildWorkflowClosureRequirements(aac);
+  for (const detail of buildRequirementDetailReviewMatrix(taskPlan, taskResults)) {
+    const detailSatisfied = detail.status === "satisfied";
+    signals.push({
+      signalId: `sig-requirement-detail-${safeSignalId(detail.detailId)}`,
+      kind: "requirement_detail_evidence",
+      detailId: detail.detailId,
+      taskRefs: detail.taskRefs,
+      expectedVerificationIds: detail.expectedVerificationIds,
+      evidenceRefs: detail.evidenceRefs,
+      detailSatisfied,
+      actualStatus: detail.status,
+      recommendedNextAction: detailSatisfied ? "none" : "execution_repair",
+      reason: detailSatisfied
+        ? "Assigned TaskResult evidence reports this requirement detail as satisfied."
+        : "Assigned TaskResult evidence is missing or does not report this requirement detail as satisfied.",
+    });
+  }
   for (const requirement of workflowClosureRequirements) {
     const coveringTasks = taskPlan.tasks.filter((task) => taskCoversWorkflowClosure(task, requirement));
     if (coveringTasks.length === 0) {

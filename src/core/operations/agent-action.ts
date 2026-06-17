@@ -123,7 +123,7 @@ export function brainstormSessionAgentActionContract(input: {
     : [];
   return agentActionContract({
     actionKind: "brainstorm_session",
-    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary or writing a BrainstormCandidate, read the request through agentAction.read.fieldGroups inspect commands. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
+    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary, read the request through root requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups inspect commands. Continue through phase_scope, concept_grounding, frontend_experience, and final_summary in chat. Write and submit BrainstormCandidate only after the user explicitly confirms the dedicated final_summary block. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
     read: {
       required: [
         "this request",
@@ -150,7 +150,8 @@ export function brainstormSessionAgentActionContract(input: {
       candidateFile: input.candidateFile,
       blockedFile: input.blockedFile ?? undefined,
       rules: [
-        "Write only outputContract.candidateFile for a confirmed BrainstormCandidate.",
+        "Do not write outputContract.candidateFile during phase_scope, concept_grounding, or frontend_experience confirmation.",
+        "Write only outputContract.candidateFile for a confirmed BrainstormCandidate after final_summary has been presented and explicitly confirmed by the user.",
         "If blocked, write only blockedOutput.candidateFile when present.",
         "Do not write accepted Brainstorm contract files directly.",
         "Do not base BrainstormCandidate fields on null values returned from guessed selectors; return to agentAction.read.fieldGroups and sourceFieldAccessHints.",
@@ -160,7 +161,7 @@ export function brainstormSessionAgentActionContract(input: {
       command: input.submitCommand,
       requiredArgs: ["--delivery-id", "--phase-id", "--request-id", "--run-id", "--candidate-file"],
       placeholders: { "{candidateFile}": input.candidateFile },
-      runAfter: "candidateFile exists and validates against outputContract.schemaShape",
+      runAfter: "the dedicated final_summary block has been explicitly confirmed, candidateFile exists, and the candidate validates against outputContract.schemaShape",
     },
     schema: {
       primary: "BrainstormCandidate",
@@ -689,6 +690,7 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
   ];
   const conceptGroundingFields = filterAvailable([
     "conceptGroundingRequest",
+    "clarificationConversationProtocol.blockExecutionRules",
     "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
@@ -745,6 +747,7 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.finalSummaryReviewContract",
   ], hasField);
   const candidateRequirementSemanticRuleFields = filterAvailable([
     "rules.requirementSemanticGrounding.compactRules",
@@ -988,18 +991,18 @@ function isReadField(value: unknown): value is Record<string, unknown> & { field
 }
 
 function purposeForFieldGroup(groupId: string, fields: string[]): string {
-  if (groupId === "brainstorm_session_phase_scope_core") return "Phase-scope controls and protocol selectors.";
-  if (groupId === "brainstorm_session_phase_scope_authority") return "Source authority for current phase scope.";
-  if (groupId === "brainstorm_session_concept_grounding_context") return "Concept grounding selectors and rules.";
-  if (groupId === "brainstorm_session_frontend_experience_context") return "Frontend experience selectors and rules.";
-  if (groupId === "brainstorm_session_keyword_hints_advisory") return "Advisory keyword hints; never use this group as scope or acceptance authority.";
+  if (groupId === "brainstorm_session_phase_scope_core") return "Brainstorm phase_scope gate controls, request refs, conversation rules, and root user request fields needed before asking the current phase scope question.";
+  if (groupId === "brainstorm_session_phase_scope_authority") return "Source-grounded phase_scope authority fields: original requirements, prior confirmed requirement decisions, current phase seed, and narrow repository fact selectors.";
+  if (groupId === "brainstorm_session_concept_grounding_context") return "Brainstorm concept-grounding context to read only when presenting or writing the concept confirmation block.";
+  if (groupId === "brainstorm_session_frontend_experience_context") return "Brainstorm frontend-experience context to read only when presenting or writing the frontend experience block.";
+  if (groupId === "brainstorm_session_keyword_hints_advisory") return "Advisory keyword hints for Brainstorm concept discovery and clarification only; never use this group as scope or acceptance authority.";
   if (groupId === "brainstorm_session_candidate_write_controls") return "Candidate write, submit, schema, enum controls.";
   if (groupId === "brainstorm_session_candidate_schema_identity") return "BrainstormCandidate identity/source schema selectors.";
   if (groupId === "brainstorm_session_candidate_schema_scope") return "BrainstormCandidate scope/roadmap/acceptance schema.";
   if (groupId === "brainstorm_session_candidate_schema_concepts") return "BrainstormCandidate domain/concept schema.";
   if (groupId === "brainstorm_session_candidate_schema_frontend") return "BrainstormCandidate frontend schema.";
   if (groupId === "brainstorm_session_candidate_schema_handoff") return "BrainstormCandidate handoff schema.";
-  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Final summary rule selectors.";
+  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Final summary review and business-detail rule selectors.";
   if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Requirement semantic grounding rule list.";
   if (groupId === "brainstorm_session_candidate_self_review_rules") return "Candidate self-review and next-phase rules.";
   if (groupId === "execute_task_task_core") return "Task identity, objective, write boundary, acceptance refs, concept refs, and verification intents needed before editing project files.";
@@ -1031,15 +1034,15 @@ function whenToReadForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_concept_grounding_context") return "Only for concept_grounding or candidate concept fields.";
   if (groupId === "brainstorm_session_frontend_experience_context") return "Only for frontend_experience or frontend candidate fields.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Only when concept extraction, terminology ambiguity, or candidate discovery needs advisory hints. Do not read this group by default for phase_scope, and never use keywordHints as scope or acceptance authority.";
-  if (groupId === "brainstorm_session_candidate_write_controls") return "Before writing candidate output or submit behavior.";
-  if (groupId === "brainstorm_session_candidate_schema_identity") return "Before writing identity, summary, or source metadata.";
-  if (groupId === "brainstorm_session_candidate_schema_scope") return "Before writing scope, roadmap, phasePlan, or acceptance.";
-  if (groupId === "brainstorm_session_candidate_schema_concepts") return "When writing concept or clarification progress fields.";
-  if (groupId === "brainstorm_session_candidate_schema_frontend") return "When frontendExperience/frontendExperienceDelta applies.";
-  if (groupId === "brainstorm_session_candidate_schema_handoff") return "Before setting handoff routing fields.";
-  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Before final_summary or business-detail candidate fields.";
-  if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "When detailed requirement semantic grounding rules are needed.";
-  if (groupId === "brainstorm_session_candidate_self_review_rules") return "Before final self-review or submitCommand.";
+  if (groupId === "brainstorm_session_candidate_write_controls") return "Only after the user has explicitly confirmed the dedicated final_summary block, immediately before writing BrainstormCandidate or running submitCommand. Do not read this group after phase_scope, concept_grounding, or frontend_experience confirmations.";
+  if (groupId === "brainstorm_session_candidate_schema_identity") return "Only after final_summary confirmation, before writing identity, summary, or source metadata.";
+  if (groupId === "brainstorm_session_candidate_schema_scope") return "Only after final_summary confirmation, before writing scope, roadmap, phasePlan, or acceptance.";
+  if (groupId === "brainstorm_session_candidate_schema_concepts") return "Only after final_summary confirmation, when writing concept or clarification progress fields.";
+  if (groupId === "brainstorm_session_candidate_schema_frontend") return "Only after final_summary confirmation, when frontendExperience applies.";
+  if (groupId === "brainstorm_session_candidate_schema_handoff") return "Only after final_summary confirmation, before setting handoff routing fields.";
+  if (groupId === "brainstorm_session_candidate_final_summary_rules") return "Read before presenting the final_summary block; read again after final_summary confirmation before writing business-detail candidate fields.";
+  if (groupId === "brainstorm_session_candidate_requirement_semantic_rules") return "Only after final_summary confirmation, when detailed requirement semantic grounding rules are needed.";
+  if (groupId === "brainstorm_session_candidate_self_review_rules") return "Only after final_summary confirmation, before final self-review or submitCommand.";
   if (groupId === "execute_task_task_core") return "First TaskExecution read, before deciding source edits or verification approach.";
   if (groupId === "execute_task_acceptance_and_concepts") return "Read before editing to preserve acceptance and concept coverage.";
   if (groupId === "execute_task_architecture_context") return "Read before editing project files; use sourceRefs.architectureArtifactContractRef as targeted fallback only when this projection lacks a required detail.";

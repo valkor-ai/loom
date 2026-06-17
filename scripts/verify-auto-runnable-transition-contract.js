@@ -143,10 +143,10 @@ function assertTopLevelActionRequired(envelope, expectedTaskId, label) {
   assert.equal(envelope.actionRequired?.submitCommand, undefined, `${label}: actionRequired must not duplicate instruction.submitCommand`);
   assert.equal(envelope.actionRequired?.requestReadProtocol, undefined, `${label}: actionRequired must not duplicate instruction.requestReadProtocol`);
   assert.ok(envelope.instruction?.submitCommand?.commandInvocation, `${label}: instruction submitCommand must expose launcher invocation`);
-  assert.ok(envelope.instruction?.requestReadProtocol?.readRule?.includes("requestManifest.refs.agentAction.ref"), `${label}: instruction must explain ref-first agentAction reads`);
+  assert.ok(envelope.instruction?.requestReadProtocol?.readRule?.includes("requestReadPlan.groups"), `${label}: instruction must explain requestReadPlan-first reads`);
   assert.equal(envelope.actionRequired?.continuationContract, undefined, `${label}: top-level action must not duplicate the full continuation contract`);
   assert.equal(envelope.actionRequired?.agentObligation, undefined, `${label}: top-level action must not duplicate the full agent obligation`);
-  assert.ok(envelope.actionRequired?.requiredSteps?.some((step) => String(step).includes("requestManifest.refs.agentAction.ref")), `${label}: top-level action requiredSteps must mention agentActionRef sidecar`);
+  assert.ok(envelope.actionRequired?.requiredSteps?.some((step) => String(step).includes("requestReadPlan")), `${label}: top-level action requiredSteps must mention requestReadPlan`);
   assert.ok(envelope.actionRequired?.forbiddenStops?.some((step) => String(step).includes("progress summary")), `${label}: top-level action must expose forbidden progress stops`);
   assert.ok(envelope.actionRequired?.completionBarrier?.resultFile, `${label}: top-level action must expose completion barrier resultFile`);
   assert.equal(envelope.actionRequired?.completionBarrier?.submitCommand, undefined, `${label}: completion barrier must not duplicate top-level submitCommand`);
@@ -668,6 +668,16 @@ function assertCompactArchitectureRequestTransitionOutput() {
     assert.equal(envelope.actionRequired?.autoContinue, true);
     assert.equal(envelope.actionRequired?.mustRunImmediately, true);
     assert.equal(envelope.actionRequired?.targetCandidateFile, envelope.instruction?.targetCandidateFile);
+    assert.equal(
+      envelope.actionRequired?.submitCommand,
+      undefined,
+      "architecture.request single-section actionRequired must not expose submitCommand before submit_existing_candidate",
+    );
+    assert.equal(
+      envelope.instruction?.submitCommand,
+      undefined,
+      "architecture.request single-section instruction must not expose submitCommand before submit_existing_candidate",
+    );
     assert.ok(
       envelope.actionRequired?.completionBarrier?.targetCandidateFile,
       "architecture.request action must expose target completion barrier",
@@ -677,8 +687,8 @@ function assertCompactArchitectureRequestTransitionOutput() {
       "architecture.request action must expose follow-up continue barrier",
     );
     assert.ok(
-      envelope.actionRequired?.requiredSteps?.some((step) => String(step).includes("requestManifest.refs.agentAction.ref")),
-      "architecture.request action requiredSteps must mention ref-first agentAction reads",
+      envelope.actionRequired?.requiredSteps?.some((step) => String(step).includes("requestReadPlan")),
+      "architecture.request action requiredSteps must mention requestReadPlan-first reads",
     );
     assert.ok(
       envelope.actionRequired?.requiredSteps?.some((step) => String(step).includes("targetCandidateFile")),
@@ -695,6 +705,20 @@ function assertCompactArchitectureRequestTransitionOutput() {
     assert.ok(
       envelope.actionRequired?.finalResponseGuard?.requiredActionBeforeFinalResponse?.includes("targetCandidateFile"),
       "architecture.request final response guard must force section write before final response",
+    );
+    assert.ok(
+      envelope.actionRequired?.summary?.includes("completionBarrier.followUpCommand.commandInvocation"),
+      "architecture.request action summary must point to the structured follow-up command invocation",
+    );
+    assert.equal(
+      envelope.actionRequired?.summary?.includes("run loom continue"),
+      false,
+      "architecture.request action summary must not phrase the follow-up as a user-facing continue command",
+    );
+    assert.equal(
+      envelope.actionRequired?.summary?.includes("This follow-up command is not a user instruction"),
+      true,
+      "architecture.request action summary must explicitly keep the follow-up as an agent action",
     );
     assert.equal(envelope.data.instruction, undefined, "compact data must not duplicate instruction");
     assert.equal(
@@ -737,8 +761,8 @@ function assertCompactRepositoryContextRequestTransitionOutput() {
     assert.ok(envelope.instruction?.submitCommand?.commandInvocation, "repository-context.request must expose submit launcher invocation");
     assert.ok(envelope.actionRequired?.finalResponseGuard?.requiredActionBeforeFinalResponse?.includes("run submitCommand"));
     assert.ok(
-      envelope.instruction?.requestReadProtocol?.readRule?.includes("requestManifest.refs.agentAction.ref"),
-      "repository-context.request instruction must expose ref-first request read protocol",
+      envelope.instruction?.requestReadProtocol?.readRule?.includes("requestReadPlan.groups"),
+      "repository-context.request instruction must expose requestReadPlan-first request read protocol",
     );
     assert.equal(envelope.actionRequired?.stopRecoveryInstruction, undefined);
     assert.equal(envelope.instruction?.stopRecoveryInstruction, undefined);

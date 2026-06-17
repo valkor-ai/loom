@@ -196,10 +196,10 @@ function assertInstructionOutputPolicy(instruction, label) {
   assert.equal(instruction?.mustNotReportProgressBeforeExecuting, true, `${label}: instruction must forbid progress-only messages before auto-runnable execution`);
   assert.ok(typeof instruction?.requestRef === "string" || instruction?.mode === "run_cli", `${label}: instruction must route through requestRef or run_cli command`);
   if (typeof instruction?.requestRef === "string") {
-    assert.equal(instruction?.requestReadProtocol?.authority, "request_manifest_refs", `${label}: instruction must expose ref-first request read authority`);
+    assert.equal(instruction?.requestReadProtocol?.authority, "requestReadPlan", `${label}: instruction must expose requestReadPlan-first request read authority`);
     assert.ok(
-      instruction?.requestReadProtocol?.nullFieldRule?.includes("read its listed *Ref"),
-      `${label}: instruction must tell Agent to read listed refs when root fields are null`,
+      instruction?.requestReadProtocol?.nullFieldRule?.includes("requestReadPlan/inspect"),
+      `${label}: instruction must tell Agent to use requestReadPlan/inspect before listed refs`,
     );
   }
   assert.equal(Object.prototype.hasOwnProperty.call(instruction ?? {}, "agentAction"), false, `${label}: top-level instruction must not echo full agentAction`);
@@ -210,10 +210,13 @@ function assertInstructionOutputPolicy(instruction, label) {
 function assertPlanCompactBrainstormInstruction(envelope) {
   assert.equal(envelope.instruction?.mode, "ask_user", "plan --compact must return a Brainstorm ask_user instruction");
   assert.equal(envelope.instruction?.requestRef, envelope.data?.requestPath, "plan --compact instruction requestRef must point to requestPath");
-  assert.equal(typeof envelope.instruction?.candidateFile, "string", "plan --compact instruction must expose candidateFile");
-  assert.equal(envelope.instruction?.submitCommand?.name, "brainstorm accept", "plan --compact instruction must expose brainstorm submitCommand");
-  assert.equal(envelope.instruction?.requestReadProtocol?.authority, "request_manifest_refs", "plan --compact must expose ref-first request read protocol");
+  assert.equal(envelope.instruction?.candidateFile, undefined, "plan --compact ask_user must not expose candidateFile before final_summary confirmation");
+  assert.equal(envelope.instruction?.submitCommand, undefined, "plan --compact ask_user must not expose brainstorm submitCommand before final_summary confirmation");
+  assert.equal(envelope.instruction?.requestReadProtocol?.authority, "requestReadPlan", "plan --compact must expose requestReadPlan-first request read protocol");
   assert.equal(envelope.instruction?.expectedResponse?.requestRef, envelope.instruction?.requestRef, "plan expectedResponse must repeat requestRef");
+  assert.equal(envelope.instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification", "plan expectedResponse must describe progressive clarification, not immediate accept");
+  assert.equal(envelope.instruction?.expectedResponse?.candidateFile, undefined, "plan expectedResponse must not expose candidateFile before final_summary confirmation");
+  assert.equal(envelope.instruction?.expectedResponse?.submitCommand, undefined, "plan expectedResponse must not expose submitCommand before final_summary confirmation");
   assert.equal(envelope.actionRequired, undefined, "plan ask_user instruction must not be auto-runnable");
   assert.equal(Object.prototype.hasOwnProperty.call(envelope.instruction ?? {}, "agentAction"), false, "plan instruction must not echo full agentAction");
   assert.equal(Object.prototype.hasOwnProperty.call(envelope.instruction ?? {}, "outputContract"), false, "plan instruction must not echo full outputContract");
@@ -222,9 +225,9 @@ function assertPlanCompactBrainstormInstruction(envelope) {
 function assertBrainstormStartInstruction(instruction, requestPath, label) {
   assert.equal(instruction?.mode, "ask_user", `${label}: must return a Brainstorm ask_user instruction`);
   assert.equal(instruction?.requestRef, requestPath, `${label}: instruction requestRef must point to requestPath`);
-  assert.equal(typeof instruction?.candidateFile, "string", `${label}: instruction must expose candidateFile`);
-  assert.equal(instruction?.submitCommand?.name, "brainstorm accept", `${label}: instruction must expose brainstorm submitCommand`);
-  assert.equal(instruction?.requestReadProtocol?.authority, "request_manifest_refs", `${label}: instruction must expose ref-first request read protocol`);
+  assert.equal(instruction?.candidateFile, undefined, `${label}: ask_user instruction must not expose candidateFile before final_summary confirmation`);
+  assert.equal(instruction?.submitCommand, undefined, `${label}: ask_user instruction must not expose brainstorm submitCommand before final_summary confirmation`);
+  assert.equal(instruction?.requestReadProtocol?.authority, "requestReadPlan", `${label}: instruction must expose requestReadPlan-first request read protocol`);
   assert.ok(
     instruction?.requestReadProtocol?.readRule?.includes("agentAction.read.fieldGroups"),
     `${label}: instruction must require Brainstorm ask_user inspect read plan`,
@@ -238,6 +241,9 @@ function assertBrainstormStartInstruction(instruction, requestPath, label) {
     instruction?.expectedResponse?.requestReadRule?.includes("request-ready/path-only"),
     `${label}: expectedResponse must prevent path-only Brainstorm ask_user stops`,
   );
+  assert.equal(instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification", `${label}: expectedResponse must not imply immediate Brainstorm accept`);
+  assert.equal(instruction?.expectedResponse?.candidateFile, undefined, `${label}: expectedResponse must not expose candidateFile before final_summary confirmation`);
+  assert.equal(instruction?.expectedResponse?.submitCommand, undefined, `${label}: expectedResponse must not expose submitCommand before final_summary confirmation`);
   assert.equal(instruction?.expectedResponse?.requestRef, instruction?.requestRef, `${label}: expectedResponse must repeat requestRef`);
 }
 
@@ -253,18 +259,15 @@ function assertBrainstormRequestReadPlan(request, label) {
   );
   const fields = new Set(groups.flatMap((group) => group.fields ?? []));
   for (const field of [
-    "agentAction",
-    "requestManifest",
+    "agentAction.instruction",
+    "agentAction.stopConditions",
     "originalRequest",
     "contextRefs",
     "sourceFieldAccessHints",
     "firstClarificationGate",
-    "clarificationConversationProtocol",
+    "clarificationConversationProtocol.requiredBlocks",
     "conceptGroundingRequest",
-    "outputContract",
-    "rules",
-    "generationProtocol",
-    "enumRefs",
+    "rules.phaseScopeOptionComparison",
   ]) {
     assert.ok(fields.has(field), `${label}: Brainstorm read plan must include ${field}`);
   }
@@ -313,22 +316,111 @@ function assertNextPhasePreviewGenerationRules(request, label) {
 }
 
 function assertPhaseScopeOptionComparisonRules(request, label) {
+  const guidance = request?.clarificationGuidance?.phaseScopeOptionComparison;
+  assert.equal(guidance?.requiredByDefault, true, `${label}: phase_scope option comparison must be required by default`);
+  assert.equal(guidance?.nextPhaseSeedIsPreselectedAnswer, false, `${label}: nextPhaseSeed must not be treated as a preselected user answer`);
+  assert.deepEqual(guidance?.optionCount, { min: 2, max: 3 }, `${label}: phase_scope guidance must request 2-3 options`);
+  assert.equal(guidance?.recommendationMustPreserveCoreCurrentPhaseOutcome, true, `${label}: recommended phase_scope option must preserve the current phase core outcome`);
+  assert.equal(guidance?.narrowerOptionCannotBeRecommendedWhenDefersExplicitSeedItems, true, `${label}: narrower options must not be recommended when they defer explicit seed items`);
+  assert.equal(guidance?.scopeReductionRequiresExplicitUserConfirmation, true, `${label}: scope reductions must require explicit user confirmation`);
+  assert.equal(
+    guidance?.atomicSingleScopeException?.disallowedWhenMultipleScopePreviewItemsOrLifecycleActionsExist,
+    true,
+    `${label}: multi-item or multi-action phase continuation must not use a single preselected scope`,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(guidance ?? {}, "doNotFabricateAlternativesWhenSingleClearCut"),
+    false,
+    `${label}: phase_scope guidance must not keep the old broad single-clear-cut escape hatch`,
+  );
   const generation = request?.rules?.phaseScopeOptionComparison;
   assert.equal(generation?.validationMode, "generation_guidance_only", `${label}: phase_scope option comparison must be generation guidance, not an accept validator`);
+  assert.equal(generation?.requiredByDefault, true, `${label}: phase_scope rules must require option comparison by default`);
+  assert.equal(generation?.nextPhaseSeedIsPreselectedAnswer, false, `${label}: phase_scope rules must keep nextPhaseSeed non-binding`);
   assert.ok(
-    generation?.rules?.some((rule) => rule.includes("2-3 source-grounded phase scope options")),
-    `${label}: phase_scope rules must require 2-3 options when real alternative cuts exist`,
+    generation?.rules?.some((rule) => rule.includes("present 2-3 source-grounded phase scope options") && rule.includes("by default")),
+    `${label}: phase_scope rules must require 2-3 options by default`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("decompose the source-grounded current-phase candidate work into scope items")),
+    `${label}: phase_scope rules must classify scope items before composing options`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("goal-essential item")) &&
+      generation?.rules?.some((rule) => rule.includes("flow-support item")) &&
+      generation?.rules?.some((rule) => rule.includes("current-object lifecycle item")),
+    `${label}: phase_scope rules must define goal, support, and lifecycle scope categories`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("Do not expose these internal category names to the user")),
+    `${label}: phase_scope category names must stay internal`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("recommended option from all goal-essential items plus all flow-support items")),
+    `${label}: phase_scope rules must generate recommended option from required items`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("alternate option includes a support-like item")),
+    `${label}: phase_scope rules must compare support items across options`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("compare the included-scope line of every alternate option against the recommended option")),
+    `${label}: phase_scope rules must reconcile alternate included scope with recommended scope`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("broader option by adding real experience/management extension items")),
+    `${label}: phase_scope rules must keep broad option to true extensions`,
   );
   assert.ok(
     generation?.rules?.some((rule) => rule.includes("Recommend exactly one")),
     `${label}: phase_scope rules must require one recommended option`,
   );
   assert.ok(
-    generation?.rules?.some((rule) => rule.includes("do not fabricate extra options")),
-    `${label}: phase_scope rules must avoid fake alternatives when only one clear cut exists`,
+    generation?.rules?.some((rule) => rule.includes("one separate visual block per phase_scope option")),
+    `${label}: phase_scope rules must prevent run-on option paragraphs`,
   );
   assert.ok(
-    request?.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("2-3 source-grounded phase scope options")),
+    generation?.rules?.some((rule) => rule.includes("stable multi-line template")),
+    `${label}: phase_scope rules must require a stable multi-line option template`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("nextPhaseSeed") && rule.includes("not as a preselected user answer")),
+    `${label}: phase_scope rules must keep nextPhaseSeed from becoming a preselected answer`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("must preserve the current phase's source-grounded core outcome")),
+    `${label}: phase_scope rules must keep recommendations from shrinking the current phase core outcome`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("do not recommend it when it defers explicit nextPhaseSeed.scopePreview items")),
+    `${label}: phase_scope rules must prevent narrower alternatives from becoming the default recommendation`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("scope reduction") && rule.includes("ask the user to confirm")),
+    `${label}: phase_scope rules must require explicit confirmation for seed-item reductions`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("Do not rewrite source-grounded or previously confirmed object relationships")),
+    `${label}: phase_scope rules must protect confirmed object semantics`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("defer detailed relationship semantics to concept_grounding")),
+    `${label}: phase_scope rules must defer uncertain relationship semantics to concept grounding`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("Avoid implying that one object is replaced, relinked, inherited, transferred, frozen, or restored")),
+    `${label}: phase_scope rules must avoid inventing relationship effects`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("atomic phase") && rule.includes("single phase_scope")),
+    `${label}: phase_scope rules must allow single scope only for atomic phases`,
+  );
+  assert.ok(
+    generation?.rules?.some((rule) => rule.includes("multiple nextPhaseSeed.scopePreview items") && rule.includes("not atomic")),
+    `${label}: phase continuation with multiple scopePreview items must require options`,
+  );
+  assert.ok(
+    request?.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("present 2-3 source-grounded phase scope options") && rule.includes("by default")),
     `${label}: phase_scope block must expose option comparison instructions to Agent`,
   );
   assert.ok(
@@ -726,8 +818,32 @@ function assertBrainstormConceptGroundingRequest(request) {
     "BrainstormSessionRequest: scope coverage must avoid fixed capability taxonomy",
   );
   assert.ok(
+    blockRules.some((rule) => rule.includes("业务理解与规则确认") && rule.includes("Do not show internal names")),
+    "BrainstormSessionRequest: concept_grounding must use user-facing title and hide internal names",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("stable user-visible section order") && rule.includes("scope-by-scope coverage")),
+    "BrainstormSessionRequest: concept_grounding must use a stable readable section order",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("one separate bullet or mini-block per confirmed current-phase scope item")),
+    "BrainstormSessionRequest: concept_grounding must not collapse scope coverage into prose",
+  );
+  assert.ok(
     blockConfirmationRules.frontend_experience?.includes("dedicated frontend target"),
     "BrainstormSessionRequest: frontend_experience must require a dedicated frontend target confirmation",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("页面办理路径确认") && rule.includes("Do not show internal names")),
+    "BrainstormSessionRequest: frontend_experience must use user-facing title and hide internal names",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("query criteria as a separate labeled line")),
+    "BrainstormSessionRequest: frontend_experience must surface query criteria as a separate line",
+  );
+  assert.ok(
+    blockRules.some((rule) => rule.includes("one separate bullet or compact mini-block per operation")),
+    "BrainstormSessionRequest: frontend_experience must not collapse operations into prose",
   );
   assert.ok(
     conceptGroundingRequest?.selectionGuidance?.preferConceptsAffecting?.includes("business_invariant"),
@@ -766,12 +882,49 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormSessionRequest: missing requirement semantic grounding rules",
   );
   assert.ok(
-    request.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("business-detail confirmation")),
-    "BrainstormSessionRequest: final_summary must require business-detail confirmation when applicable",
+    request.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("structured BrainstormCandidate fields")),
+    "BrainstormSessionRequest: confirmed details must be written into structured fields",
   );
   assert.ok(
-    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("applicable blocking rules and blocking reasons"),
-    "BrainstormSessionRequest: final_summary business detail contract must include blocking reasons",
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("coverage checklist from confirmed phase scope including concrete included work and deferred or not-done boundaries"),
+    "BrainstormSessionRequest: final_summary must include concrete scope coverage checklist topic",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("business-rule checklist from confirmed business understanding including concrete objects, relationships, operations, field-set headlines, state changes, blocking rules, success outcomes, and high-risk misunderstanding guards when applicable"),
+    "BrainstormSessionRequest: final_summary must include concrete business-rule checklist topic",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable"),
+    "BrainstormSessionRequest: final_summary must include concrete page-operation checklist topic",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.frontendOperationPathContract?.presentationRules?.some((rule) => rule.includes("页面办理路径确认")),
+    "BrainstormSessionRequest: frontend operation-path contract must carry user-facing presentation rules",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.frontendOperationPathContract?.presentationRules?.some((rule) => rule.includes("query criteria as a separate labeled line")),
+    "BrainstormSessionRequest: frontend operation-path contract must require separate query-criteria display",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("explicit final_summary corrections that must be written back to structured fields"),
+    "BrainstormSessionRequest: final_summary corrections must write back to structured fields",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("not the source of detailed requirements")),
+    "BrainstormSessionRequest: final_summary review contract must not be the detail source",
+  );
+  assert.equal(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.sourceOfTruth,
+    "all_confirmed_brainstorm_blocks_plus_final_summary_corrections",
+    "BrainstormSessionRequest: candidate writing must retain all confirmed block details, not final_summary alone",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.rules?.some((rule) => rule.includes("For phase_scope, preserve")),
+    "BrainstormSessionRequest: retention contract must preserve phase_scope details",
+  );
+  assert.ok(
+    request.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.confirmedBlockDetailRetentionContract?.rules?.some((rule) => rule.includes("For frontend_experience, preserve")),
+    "BrainstormSessionRequest: retention contract must preserve frontend_experience details",
   );
   assert.equal(
     request.rules?.requirementSemanticGrounding?.validationMode,
@@ -851,12 +1004,24 @@ function assertBrainstormCandidateRules(request) {
     "BrainstormCandidate schemaShape: missing dedicated frontend confirmation rule",
   );
   assert.ok(
-    shape?.candidateRules?.some((rule) => rule.includes("business-detail confirmation")),
-    "BrainstormCandidate schemaShape: missing final_summary business-detail rule",
+    shape?.candidateRules?.some((rule) => rule.includes("pre-submit coverage checklist")),
+    "BrainstormCandidate schemaShape: missing pre-submit final_summary checklist rule",
+  );
+  assert.ok(
+    shape?.candidateRules?.some((rule) => rule.includes("do not rely on final_summary text")),
+    "BrainstormCandidate schemaShape: missing no-final-summary-detail-source rule",
   );
   assert.ok(
     shape?.candidateRules?.some((rule) => rule.includes("using existing fields")),
     "BrainstormCandidate schemaShape: missing requirement semantic preservation in existing fields",
+  );
+  assert.ok(
+    shape?.candidateRules?.some((rule) => rule.includes("all user-confirmed Brainstorm blocks")),
+    "BrainstormCandidate schemaShape: missing all-confirmed-block retention rule",
+  );
+  assert.ok(
+    shape?.candidateRules?.some((rule) => rule.includes("A checklist-style final_summary does not make earlier phase_scope, concept_grounding, or frontend_experience details optional")),
+    "BrainstormCandidate schemaShape: missing checklist-final-summary retention rule",
   );
   mark("L2", "BrainstormCandidate request documents Phase N roadmap/ref rules");
 }
@@ -951,6 +1116,19 @@ function assertBrainstormRepairRules(repairInstruction) {
   assert.ok(
     repairInstruction?.instructions?.some((rule) => rule.includes("phasePlan.current.scopeRefs must contain only ids from scope.included")),
     "Brainstorm repairInstruction: missing included-only current scopeRefs rule",
+  );
+  assert.equal(
+    repairInstruction?.primaryAction,
+    "Edit candidateFile according to fieldRepairPlan, write a complete replacement BrainstormCandidate JSON, then run submitCommand.",
+    "Brainstorm repairInstruction: missing explicit primary repair action",
+  );
+  assert.ok(
+    Array.isArray(repairInstruction?.fieldRepairPlan) && repairInstruction.fieldRepairPlan.length > 0,
+    "Brainstorm repairInstruction: missing field-level repair plan",
+  );
+  assert.ok(
+    repairInstruction.fieldRepairPlan.every((item) => item.path && item.suggestedAction),
+    "Brainstorm repairInstruction: each field repair item must include path and suggestedAction",
   );
   assert.ok(repairInstruction?.schemaShape?.candidateRules, "Brainstorm repairInstruction: missing schemaShape candidateRules");
   mark("L2", "Brainstorm repairInstruction repeats Phase N roadmap/ref rules");
@@ -1398,6 +1576,25 @@ function writeArchitectureSections(root, request, pgc) {
         ],
         verificationHints: [{ kind: "static", description: "Verify validationName handling, VALIDATION_NAME_REQUIRED blocking, and status=ready output in source file and TaskResult." }],
       }],
+      detailCoverage: (pgc.requirementDetails?.items ?? [])
+        .filter((item) => item.requiredForCurrentPhase)
+        .map((item) => ({
+          detailId: item.detailId,
+          coverageStatus: "covered",
+          artifactRefs: {
+            modules: ["module-core"],
+            entities: ["entity-validation-result"],
+            fields: ["field-validation-name", "field-normalized-name", "field-status"],
+            constraints: ["constraint-validation-name-required", "constraint-validation-success-status"],
+            interfaces: ["interface-run-validation"],
+            userFlows: ["flow-run-validation"],
+            stateMachines: [],
+            frontendDataViews: [],
+            frontendActions: [],
+            frontendOperationPaths: [],
+            acceptanceMatrix: ["AC-001"],
+          },
+        })),
       risksAndDecisions: { decisions: [], risks: [], assumptions: [], deferredNotes: [] },
       handoff: { readyForTaskPlan: true, blockingReasons: [], nextNode: "task_plan" },
     },
@@ -1413,6 +1610,9 @@ function writeArchitectureSections(root, request, pgc) {
 }
 
 function writeTaskPlanGroupedOutputs(root, request) {
+  const requirementDetailRefs = (request.contextProjection?.requirementDetailTransfer?.requirementDetailAssignment?.items ?? [])
+    .filter((item) => item.coverageStatus === "covered")
+    .map((item) => item.detailId);
   const outline = {
     schemaVersion: "1.0",
     requestId: request.requestId,
@@ -1448,6 +1648,7 @@ function writeTaskPlanGroupedOutputs(root, request) {
       dependsOn: [],
       scopeRefs: ["scope-core"],
       acceptanceRefs: ["AC-001"],
+      requirementDetailRefs,
       writeBoundary: {
         forbiddenPaths: [".loom"],
         artifactRefs: {
@@ -1463,6 +1664,7 @@ function writeTaskPlanGroupedOutputs(root, request) {
       verificationIntents: [{
         verificationId: "VI-core",
         acceptanceRefs: ["AC-001"],
+        requirementDetailRefs,
         behavior: "Given validationName, verify empty input is blocked with VALIDATION_NAME_REQUIRED and valid input returns status=ready with normalizedName.",
         preferredEvidence: ["static_check"],
         acceptableEvidence: ["static_check", "agent_review_explanation"],
@@ -1518,6 +1720,15 @@ function taskResult(request) {
       notes: [],
     },
     notes: [],
+    requirementDetailEvidence: (request.task.requirementDetailRefs ?? []).map((detailId) => ({
+      detailId,
+      status: "satisfied",
+      verificationIds: request.task.verificationIntents
+        .filter((intent) => (intent.requirementDetailRefs ?? []).includes(detailId))
+        .map((intent) => intent.verificationId),
+      evidenceRefs: ["src/layered.js", request.task.verificationIntents[0].verificationId],
+      summary: "The validation detail is implemented and verified by the layered fixture source and static verification intent.",
+    })),
     conceptEvidence: [{
       conceptRef: "concept-core-validation",
       evidenceType: "code",
@@ -1739,7 +1950,8 @@ function main() {
     assertBrainstormCandidateRules(startedRequest);
     assertRequestOutputParentDirsExist(root, startedRequest, "BrainstormSessionRequest");
     assert.equal(startedRequest.contextRefs.originalRequirementContextRef, startedRequest.contextRefs.requirementContextRef, "BrainstormSessionRequest must expose originalRequirementContextRef alias.");
-    writeJson(projectFile(root, startedRequest.outputContract.candidateFile), brainstormCandidate(startedRequest, { includeNextPhase: true }));
+    const acceptedBrainstormCandidate = brainstormCandidate(startedRequest, { includeNextPhase: true });
+    writeJson(projectFile(root, startedRequest.outputContract.candidateFile), acceptedBrainstormCandidate);
     const brainstormAccepted = run([
       "brainstorm", "accept",
       "--delivery-id", started.deliveryId,
@@ -1756,8 +1968,14 @@ function main() {
     assert.ok(phase1AfterBrainstormAccept.latestRefs.brainstormDecisionsIndex, "Brainstorm accept must write decisions index ref.");
     const phase1Decision = readJson(projectFile(root, phase1AfterBrainstormAccept.latestRefs.brainstormDecision));
     assert.equal(phase1Decision.phaseId, started.phaseId);
-    assert.deepEqual(phase1Decision.scope, brainstormCandidate(startedRequest, { includeNextPhase: true }).scope);
+    assert.deepEqual(phase1Decision.scope, acceptedBrainstormCandidate.scope);
     assert.ok(phase1Decision.domainModel.businessFlows.length > 0, "Brainstorm decision snapshot must preserve domainModel business flows.");
+    const phase1Contract = readJson(projectFile(root, brainstormAccepted.contractPath));
+    assert.equal(
+      phase1Contract.userConfirmation.confirmationSummary,
+      acceptedBrainstormCandidate.userConfirmation.confirmationSummary,
+      "Brainstorm contract must preserve userConfirmation for downstream readers.",
+    );
     const decisionIndex = readJson(projectFile(root, phase1AfterBrainstormAccept.latestRefs.brainstormDecisionsIndex));
     assert.equal(decisionIndex.latestConfirmedPhaseId, started.phaseId);
     assert.equal(decisionIndex.decisions[0].decisionRef, phase1AfterBrainstormAccept.latestRefs.brainstormDecision);
@@ -1788,6 +2006,7 @@ function main() {
     assert.equal(offsetDateAccepted.accepted, true);
     const offsetDateContract = readJson(projectFile(offsetDateRoot, offsetDateAccepted.contractPath));
     assert.equal(offsetDateContract.handoff.confirmedAt, "2026-05-25T12:51:00.000Z");
+    assert.equal(offsetDateContract.userConfirmation.confirmedAt, "2026-05-25T12:51:00.000Z");
     mark("L1", "BrainstormCandidate accept normalizes confirmedAt timezone offsets");
 
     const invalidPhase2Candidate = brainstormCandidate({
@@ -1810,16 +2029,22 @@ function main() {
     invalidPhase2Candidate.phasePlan.current.scopeRefs.push("scope-excluded-in-current");
     const invalidPhase2File = startedRequest.outputContract.candidateFile.replace(/candidate\.json$/, "invalid-phase2-candidate.json");
     writeJson(projectFile(root, invalidPhase2File), invalidPhase2Candidate);
-    const invalidBrainstorm = run([
+    const invalidBrainstormEnvelope = run([
       "brainstorm", "accept",
       "--delivery-id", started.deliveryId,
       "--phase-id", "phase-2",
       "--request-id", started.requestId,
       "--run-id", started.brainstormRunId,
       "--candidate-file", invalidPhase2File,
-    ], root);
+    ], root, { returnEnvelope: true });
+    const invalidBrainstorm = invalidBrainstormEnvelope.data;
     assert.equal(invalidBrainstorm.accepted, false);
     assertBrainstormRepairRules(invalidBrainstorm.repairInstruction);
+    assert.equal(invalidBrainstormEnvelope.actionRequired.mode, "repair_candidate");
+    assert.ok(
+      Array.isArray(invalidBrainstormEnvelope.actionRequired.fieldRepairPlan) && invalidBrainstormEnvelope.actionRequired.fieldRepairPlan.length > 0,
+      "Brainstorm repair actionRequired must expose fieldRepairPlan.",
+    );
 
     let decision = run(["continue"], root);
     assert.equal(decision.nextAction.type, "technical_baseline_request");
@@ -1933,7 +2158,7 @@ function main() {
       "ArchitectureSectionsGenerationRequest must not expose ambiguous write-all section rule",
     );
     assert.ok(
-      archRequestBody.agentAction.write.rules.some((rule) => rule.includes("immediately run loom continue")),
+      archRequestBody.agentAction.write.rules.some((rule) => rule.includes("completionBarrier.followUpCommand.commandInvocation")),
       "ArchitectureSectionsGenerationRequest must tell Agent to continue immediately after each target section",
     );
     assert.equal(
@@ -1991,10 +2216,10 @@ function main() {
     assertRequestOutputParentDirsExist(root, refreshedArchRequest, "refreshed ArchitectureSectionsGenerationRequest");
     assert.equal(refreshedArchRequest.agentAction.schema.enumLocation, "agentAction.write.currentTarget.enumRefs", "ArchitectureSections current target enum authority must not fall back to broad enumRefs");
     assert.equal(allReadFields(refreshedArchRequest.agentAction).includes("enumRefs"), false, "ArchitectureSections single-section read plan must not read broad enumRefs when currentTarget is present");
+    assert.equal(decision.instruction.submitCommand, undefined, "ArchitectureSections single-section instruction must not expose submitCommand before submit_existing_candidate");
     assert.ok(
-      decision.instruction.routingRule.includes("Run loom continue immediately") ||
-        decision.instruction.routingRule.includes("run loom continue"),
-      "ArchitectureSections continue recovery must require immediate continue after target file",
+      decision.instruction.routingRule.includes("completionBarrier.followUpCommand.commandInvocation"),
+      "ArchitectureSections continue recovery must require the structured follow-up command after target file",
     );
     mark("L3", "active architecture lease recovers to generate_candidate");
     writeArchitectureSections(root, archRequestBody, pgc.contract);
@@ -2043,6 +2268,14 @@ function main() {
     assert.ok(
       taskPlanRequestBody.contextProjection.requirementDetailTransfer.architectureDetails.userFlows.some((item) => item.flowId === "flow-run-validation"),
       "TaskPlan requirementDetailTransfer must carry AAC user flow details.",
+    );
+    assert.ok(
+      taskPlanRequestBody.contextProjection.requirementDetailTransfer.requirementDetailAssignment.items.some((item) =>
+        item.detailId &&
+        item.coverageStatus === "covered" &&
+        item.artifactRefs.interfaces.includes("interface-run-validation")
+      ),
+      "TaskPlan requirementDetailTransfer must carry detailId assignment with AAC artifact refs.",
     );
     assert.ok(
       taskPlanRequestBody.generationRules.requirementDetailTransferRules.rules.some((rule) => rule.includes("verificationIntents[].behavior")),
@@ -2136,6 +2369,18 @@ function main() {
     assertSourceEditPreparationContract(executionRequest, "TaskExecutionRequest");
     assert.ok(executionRequest.agentAction.read.required.some((item) => item.includes("taskConceptGrounding")));
     assert.ok(executionRequest.agentAction.write.rules.some((rule) => rule.includes("conceptEvidence")));
+    assert.ok(
+      executionRequest.agentAction.read.required.includes("sourceContext.requirementDetailSnapshot"),
+      "TaskExecutionRequest must require reading task-scoped requirement detail snapshot when TaskPlan assigned detail refs.",
+    );
+    assert.ok(
+      executionRequest.sourceContext.requirementDetailSnapshot.some((item) =>
+        item.detailId &&
+        item.aacCoverage?.artifactRefs?.interfaces?.includes("interface-run-validation") &&
+        item.verificationIntentRefs.includes("VI-core")
+      ),
+      "TaskExecutionRequest must carry task-scoped detail snapshot with AAC refs and verification linkage.",
+    );
     assertSourceChangeOutputPolicy(nextTask.instruction, executionRequest, "TaskExecutionRequest");
     assertTaskExecutionEnvironmentPreparation(executionRequest, "TaskExecutionRequest");
     assertTaskExecutionCompletionBarrierProtocol(executionRequest, "TaskExecutionRequest");
@@ -2196,11 +2441,37 @@ function main() {
     assert.equal(review.instruction.requestRef, review.requestPath);
     assert.equal(review.instruction.resultFile, reviewRequest.outputContract.resultFile);
     assert.ok(reviewRequest.agentAction.read.required.includes("conceptReviewMatrix"));
+    assert.ok(reviewRequest.agentAction.read.required.includes("detailReviewMatrix"));
     assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.conceptReviewRules"));
+    assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.requirementDetailReview"));
     assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("conceptRef from conceptReviewMatrix")));
+    assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("detailReviewMatrix")));
+    assert.ok(
+      reviewRequest.agentAction.write.rules.some((rule) => rule.includes("add it as a new reachable entry")),
+      "ReviewRequest must tell agents to check that new frontend modules are added as entries instead of replacing existing app-shell entries.",
+    );
+    assert.ok(
+      reviewRequest.outputContract.frontendExperienceReview.reviewGuidance.some((rule) => rule.includes("add it as a new reachable entry")),
+      "frontendExperienceReview must carry the app-shell entry preservation review rule.",
+    );
     assert.equal(reviewRequest.conceptReviewMatrix[0].conceptRef, "concept-core-validation");
     assert.equal(reviewRequest.conceptReviewMatrix[0].priority, "must_understand");
     assert.ok(reviewRequest.conceptReviewMatrix[0].mustNotMisinterpretAs.includes("deployment work"));
+    assert.ok(
+      reviewRequest.detailReviewMatrix.some((item) =>
+        item.status === "satisfied" &&
+        item.taskRefs.includes("task-core") &&
+        item.evidenceRefs.includes("result-layered")
+      ),
+      "ReviewRequest must carry requirement detail review matrix from TaskResult evidence.",
+    );
+    assert.ok(
+      reviewRequest.outputContract.reviewSignals.some((signal) =>
+        signal.kind === "requirement_detail_evidence" &&
+        signal.detailSatisfied === true
+      ),
+      "ReviewRequest reviewSignals must include satisfied requirement detail evidence facts.",
+    );
     mark("L3", "ReviewRequest create returned auto-runnable instruction");
     assert.deepEqual(readJson(projectFile(root, reviewRequest.changeContextRef)).changedFiles.map((file) => file.path), ["src/layered.js", "package-lock.json"]);
     const manualReviewFile = reviewRequest.outputContract.resultFile.replace(/result\.json$/, "manual-result.json");
@@ -2273,6 +2544,22 @@ function main() {
     assertRequestOutputParentDirsExist(root, phase2BrainstormRequest, "Phase continuation BrainstormSessionRequest");
     assertBrainstormRequestReadPlan(phase2BrainstormRequest, "Phase continuation BrainstormSessionRequest");
     assertBrainstormConceptGroundingRequest(phase2BrainstormRequest);
+    assert.ok(
+      phase2BrainstormRequest.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("business scenario confirmation")),
+      "Phase continuation Brainstorm request must keep business scenario clarification rules.",
+    );
+    assert.ok(
+      phase2BrainstormRequest.clarificationConversationProtocol?.blockExecutionRules?.some((rule) => rule.includes("structured BrainstormCandidate fields")),
+      "Phase continuation Brainstorm request must keep structured detail retention rules.",
+    );
+    assert.ok(
+      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.requiredUserVisibleTopicsWhenApplicable?.includes("explicit final_summary corrections that must be written back to structured fields"),
+      "Phase continuation Brainstorm request must route final_summary corrections to structured fields.",
+    );
+    assert.ok(
+      phase2BrainstormRequest.rules?.requirementSemanticGrounding?.finalSummaryBusinessDetailContract?.finalSummaryReviewContract?.rules?.some((rule) => rule.includes("not the source of detailed requirements")),
+      "Phase continuation Brainstorm request must keep final_summary as a checklist gate.",
+    );
     assert.equal(phase2Index.latestRefs.requirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must inherit requirementContextRef");
     assert.equal(phase2Index.latestRefs.originalRequirementContextRef, phase1Index.latestRefs.requirementContextRef, "Phase continuation latestRefs must expose originalRequirementContextRef alias");
     assert.equal(phase2Index.latestRefs.normalizedRequirementTextRef, phase1Index.latestRefs.normalizedRequirementTextRef, "Phase continuation latestRefs must inherit normalizedRequirementTextRef");
@@ -2321,8 +2608,11 @@ function main() {
       "Phase continuation Brainstorm request must include correction/optimization semantic grounding rule",
     );
     assert.ok(phase2BrainstormRequest.outputContract.schemaShape.frontendExperience);
-    assert.ok(phase2BrainstormRequest.outputContract.schemaShape.frontendExperienceDelta);
-    assert.ok(phase2BrainstormRequest.outputContract.schemaShape.candidateRules.some((rule) => rule.includes("frontendExperienceDelta")));
+    assert.equal(phase2BrainstormRequest.outputContract.schemaShape.frontendExperienceDelta, undefined);
+    assert.ok(
+      phase2BrainstormRequest.outputContract.schemaShape.candidateRules.some((rule) => rule.includes("frontendExperience.dataViews/actions/operationPaths")),
+      "Phase continuation Brainstorm request must route frontend details into frontendExperience",
+    );
     const expectedCandidateFile = phase2Index.latestRefs.brainstormCandidateFile;
     delete phase2Index.latestRefs.brainstormCandidateFile;
     writeJson(projectFile(root, `.loom/deliveries/${started.deliveryId}/index.json`), indexBeforeBrainstormResume);
@@ -2331,10 +2621,16 @@ function main() {
     assertBrainstormStartInstruction(phase2BrainstormGate.instruction, phase2Index.latestRefs.brainstormRequest, "brainstorm waiting_user continue");
     assertNoMechanicalMaintenanceFields(phase2BrainstormGate, "brainstorm waiting_user continue");
     assert.equal(phase2BrainstormGate.instruction.expectedResponse.requestRef, phase2Index.latestRefs.brainstormRequest);
-    assert.equal(phase2BrainstormGate.instruction.expectedResponse.candidateFile, phase2BrainstormRequest.outputContract.candidateFile);
-    assert.equal(phase2BrainstormGate.instruction.expectedResponse.candidateFile, expectedCandidateFile);
-    assert.ok(phase2BrainstormGate.instruction.expectedResponse.submitCommand, "continue must recover brainstorm submitCommand from request artifact");
-    mark("L3", "brainstorm waiting_user continue recovers candidate path from request artifact");
+    assert.equal(phase2BrainstormGate.instruction.expectedResponse.candidateFile, undefined);
+    assert.equal(phase2BrainstormGate.instruction.expectedResponse.submitCommand, undefined);
+    assert.equal(phase2BrainstormRequest.outputContract.candidateFile, expectedCandidateFile);
+    assert.ok(
+      phase2BrainstormRequest.agentAction.read.fieldGroups
+        .find((group) => group.groupId === "brainstorm_session_candidate_write_controls")
+        ?.whenToRead.includes("final_summary"),
+      "Brainstorm request must keep candidate path in delayed final_summary write contract",
+    );
+    mark("L3", "brainstorm waiting_user continue hides submit command until final_summary confirmation");
 
     const phase2Candidate = brainstormCandidate(phase2BrainstormRequest);
     phase2Candidate.phaseId = "phase-2";
@@ -2391,7 +2687,6 @@ function main() {
         mustNot: ["unstyled_browser_default"],
         confirmationSummary: "Existing frontend target.",
       },
-      frontendExperienceDelta: null,
       source: "test_existing_frontend_target",
     });
     phase2Candidate.clarificationProgress.confirmedBlocks = [
@@ -2399,15 +2694,51 @@ function main() {
       { block: "frontend_experience", summary: "User confirmed inherited frontend with phase 2 adjustments.", confirmedByUser: true },
     ];
     phase2Candidate.clarificationProgress.skippedBlocks = [];
-    phase2Candidate.frontendExperienceDelta = {
-      inheritsPrevious: true,
-      currentPhaseImpact: "Phase 2 extends the existing frontend target without redefining it.",
-      newSurfaceRequired: false,
-      affectedSurfaceRefs: ["surface-existing"],
-      affectedViewCandidates: ["Existing workspace"],
-      experienceLevelOverride: null,
-      mustNotDelta: ["Do not downgrade the inherited frontend target."],
-      confirmationSummary: "User confirmed phase 2 frontend delta.",
+    phase2Candidate.frontendExperience = {
+      required: true,
+      kind: "business_application",
+      experienceLevel: "usable_internal_product",
+      audiences: [{ audienceId: "audience-existing", name: "Existing user", primaryJobs: ["Use existing workflow with phase 2 validation."] }],
+      surfaces: [{ surfaceId: "surface-existing", name: "Existing workspace", audienceRefs: ["audience-existing"], primaryJobs: ["Use phase 2 validation workflow."] }],
+      dataViews: [{
+        viewId: "view-phase2-validation",
+        name: "Phase 2 validation list",
+        purpose: "Let users find and select the phase 2 validation target.",
+        targetObject: "Follow-up validation",
+        selectionMode: "query_and_select",
+        paginationRequired: true,
+        defaultLoadsFirstPage: true,
+        searchCriteria: [],
+        sourceRefs: ["src-001"],
+      }],
+      actions: [{
+        actionId: "action-phase2-validation",
+        label: "Run phase 2 validation",
+        targetObject: "Follow-up validation",
+        entryPoint: "result_row_action",
+        inputFields: [],
+        resultObservation: ["list_refresh", "response_message"],
+        refreshPolicy: "refresh_current_query",
+        successFeedback: ["Validation result is visible after refresh."],
+        blockingOrErrorFeedback: ["Validation blocking reason is visible."],
+        sourceRefs: ["src-001"],
+      }],
+      operationPaths: [{
+        pathId: "path-phase2-validation",
+        name: "Phase 2 validation operation path",
+        userGoal: "Complete the follow-up validation workflow.",
+        surfaceRef: "surface-existing",
+        workflowRef: "flow-core",
+        targetObject: "Follow-up validation",
+        selectionMode: "query_and_select",
+        selectionSummary: "Paginated list -> select validation target -> run validation -> see refreshed result.",
+        dataViewRefs: ["view-phase2-validation"],
+        actionRefs: ["action-phase2-validation"],
+        requiredStates: ["loading", "success", "error", "empty", "business_blocking"],
+        sourceRefs: ["src-001"],
+      }],
+      mustNot: ["unstyled_browser_default"],
+      confirmationSummary: "User confirmed phase 2 frontend target.",
     };
     writeJson(projectFile(root, phase2BrainstormRequest.outputContract.candidateFile), phase2Candidate);
     const phase2BrainstormAccepted = run([
@@ -2429,9 +2760,9 @@ function main() {
     const deliveryGlossary = readJson(projectFile(root, `.loom/deliveries/${started.deliveryId}/concepts/delivery-glossary.json`));
     assert.ok(deliveryGlossary.concepts.some((concept) => concept.conceptId === "concept-phase2-added"), "Phase N glossaryUpdates must merge into delivery glossary");
     const currentFrontend = readJson(projectFile(root, currentFrontendPath));
-    assert.equal(currentFrontend.frontendExperience, null);
-    assert.equal(currentFrontend.frontendExperienceDelta.currentPhaseImpact.includes("Phase 2 extends"), true);
-    assert.equal(currentFrontend.inheritedFrontendExperience.experienceLevel, "usable_internal_product");
+    assert.equal(currentFrontend.frontendExperience.confirmationSummary, "User confirmed phase 2 frontend target.");
+    assert.equal(currentFrontend.frontendExperienceDelta, undefined);
+    assert.equal(currentFrontend.inheritedFrontendExperience, undefined);
     mark("L2", "BrainstormCandidate accept normalizes omitted prior roadmap phases");
 
     indexAfterPhase2Activation.status = "completed";

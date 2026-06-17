@@ -355,6 +355,7 @@ assert.deepEqual(
   brainstormConceptGroup.fields,
   [
     "conceptGroundingRequest",
+    "clarificationConversationProtocol.blockExecutionRules",
     "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
@@ -418,8 +419,13 @@ assert.deepEqual(
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
     "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+    "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.finalSummaryReviewContract",
   ],
   "Brainstorm final summary rules must be narrow rule sections instead of the full rules object.",
+);
+assert.ok(
+  brainstormCandidateFinalSummaryRulesGroup.whenToRead.includes("before presenting the final_summary block"),
+  "Brainstorm final summary review rules must be read before presenting final_summary.",
 );
 assert.deepEqual(
   brainstormCandidateRequirementSemanticRulesGroup.fields,
@@ -430,6 +436,26 @@ assert.deepEqual(
   brainstormCandidateSelfReviewRulesGroup.fields,
   ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"],
   "Brainstorm self-review rules must be narrow rule sections instead of candidateRules.",
+);
+for (const candidateGroup of [
+  brainstormCandidateWriteControlsGroup,
+  brainstormCandidateSchemaIdentityGroup,
+  brainstormCandidateSchemaScopeGroup,
+  brainstormCandidateSchemaConceptsGroup,
+  brainstormCandidateSchemaFrontendGroup,
+  brainstormCandidateSchemaHandoffGroup,
+  brainstormCandidateFinalSummaryRulesGroup,
+  brainstormCandidateRequirementSemanticRulesGroup,
+  brainstormCandidateSelfReviewRulesGroup,
+]) {
+  assert.ok(
+    candidateGroup.whenToRead.includes("final_summary"),
+    `${candidateGroup.groupId} must only be read after final_summary confirmation.`,
+  );
+}
+assert.ok(
+  brainstormCandidateWriteControlsGroup.whenToRead.includes("Do not read this group after phase_scope"),
+  "Brainstorm write controls must not be read after early Brainstorm block confirmations.",
 );
 assert.equal(
   brainstormScopeCoreGroup.fields.includes("outputContract") ||
@@ -586,6 +612,26 @@ writeJson(path.join(tmp, ".loom/requests/request.refs/task-concept-grounding.jso
   ],
 });
 writeJson(path.join(tmp, ".loom/requests/request.refs/agent-action.json"), action);
+function inlineRequestReadPlan(requestRef, agentAction) {
+  return {
+    schemaVersion: "1.0",
+    authority: "agentAction.read.fieldGroups",
+    primaryMethod: "loom inspect",
+    requestRef,
+    groups: agentAction.read.fieldGroups.map((group) => ({
+      groupId: group.groupId,
+      required: group.required,
+      purpose: group.purpose,
+      whenToRead: group.whenToRead,
+      fields: group.fields,
+      readCommand: {
+        name: "inspect",
+        argv: ["inspect", "--request", requestRef, "--field", group.fields.join(",")],
+      },
+      fallbackRule: group.fallbackRule,
+    })),
+  };
+}
 const technicalBaselineAction = agentActionContract({
   actionKind: "generate_candidate",
   instruction: "Generate TechnicalBaseline.",
@@ -661,6 +707,7 @@ fs.writeFileSync(path.join(tmp, ".loom/context/normalized.txt"), "Full normalize
 writeJson(path.join(tmp, ".loom/requests/request.json"), {
   schemaVersion: "1.0",
   requestId: "request-1",
+  requestReadPlan: inlineRequestReadPlan(".loom/requests/request.json", action),
   contextRefs: {
     requirementContextRef: ".loom/context/requirement-context.json",
     normalizedRequirementTextRef: ".loom/context/normalized.txt",
@@ -879,8 +926,9 @@ writeJson(path.join(tmp, ".loom/requests/tbr.json"), {
   assert.equal(parsed.error.code, "INVALID_ARGUMENT");
   const recovery = parsed.error.details.inspectRecovery;
   assert.equal(recovery.status, "field_not_found_use_request_read_plan");
-  assert.equal(recovery.agentActionSource, "request_manifest_ref");
-  assert.equal(recovery.agentActionRef, ".loom/requests/request.refs/agent-action.json");
+  assert.equal(recovery.readPlanAuthority, "requestReadPlan.groups");
+  assert.equal(recovery.readPlanSource, "request_read_plan");
+  assert.equal(recovery.agentActionRef, undefined);
   assert.ok(Array.isArray(recovery.availableFieldGroups) && recovery.availableFieldGroups.length > 0, "inspect recovery must expose available fieldGroups.");
   const firstGroup = recovery.availableFieldGroups[0];
   assert.equal(firstGroup.groupId, "execute_task_task_core");
@@ -946,6 +994,7 @@ for (const file of [
   "plugins/claude-code/skills/loom-deploy/SKILL.md",
   "plugins/opencode/.opencode/commands/loom-deploy.md",
 ]) {
+  assertIncludes(file, "requestReadPlan", `${file}: adapter must prefer root requestReadPlan.`);
   assertIncludes(file, "agentAction.read.fieldGroups", `${file}: adapter must mention structured read field groups.`);
   assertIncludes(file, "inspect", `${file}: adapter must mention inspect.`);
   assertIncludes(file, "fallback", `${file}: adapter must mention fallback.`);

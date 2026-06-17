@@ -92,9 +92,14 @@ function auditReadPlan(label, request, options = {}) {
   assert.equal(agentAction.read.fields, undefined, `${label}: legacy read.fields must not be emitted`);
   assert.ok(Array.isArray(agentAction.read.fieldGroups), `${label}: read.fieldGroups missing`);
   assert.ok(agentAction.read.fieldGroups.length > 0, `${label}: read.fieldGroups must not be empty`);
+  assert.ok(request.requestReadPlan, `${label}: request root must expose requestReadPlan before sidecar fallback`);
+  assert.equal(request.requestReadPlan.authority, "agentAction.read.fieldGroups", `${label}: requestReadPlan must mirror agentAction fieldGroups`);
+  assert.ok(Array.isArray(request.requestReadPlan.groups), `${label}: requestReadPlan.groups missing`);
+  assert.equal(request.requestReadPlan.groups.length, agentAction.read.fieldGroups.length, `${label}: requestReadPlan groups must mirror fieldGroups`);
+  assert.equal(JSON.stringify(request.requestReadPlan).includes("{requestRef}"), false, `${label}: requestReadPlan commands must use the concrete requestRef, not a placeholder`);
 
   const globalFields = [];
-  for (const group of agentAction.read.fieldGroups) {
+  for (const [index, group] of agentAction.read.fieldGroups.entries()) {
     assert.equal(typeof group.groupId, "string", `${label}: fieldGroup.groupId missing`);
     assert.equal(typeof group.required, "boolean", `${label}.${group.groupId}: fieldGroup.required missing`);
     assert.ok(Array.isArray(group.fields), `${label}.${group.groupId}: fields must be array`);
@@ -106,6 +111,14 @@ function auditReadPlan(label, request, options = {}) {
       group.readCommand?.argv,
       ["inspect", "--request", "{requestRef}", "--field", group.fields.join(",")],
       `${label}.${group.groupId}: readCommand argv must match fields exactly`,
+    );
+    const rootPlanGroup = request.requestReadPlan.groups[index];
+    assert.equal(rootPlanGroup.groupId, group.groupId, `${label}.${group.groupId}: requestReadPlan groupId must match agentAction`);
+    assert.deepEqual(rootPlanGroup.fields, group.fields, `${label}.${group.groupId}: requestReadPlan fields must match agentAction`);
+    assert.deepEqual(
+      rootPlanGroup.readCommand?.argv,
+      ["inspect", "--request", request.requestReadPlan.requestRef, "--field", group.fields.join(",")],
+      `${label}.${group.groupId}: requestReadPlan readCommand must target the concrete requestRef`,
     );
     globalFields.push(...group.fields);
   }
@@ -302,6 +315,30 @@ function planningContract(deliveryId, phaseId) {
     },
     technicalBaseline: { technicalBaselineId: "tb-read-plan", status: "confirmed", scope: "project", summary: {}, mustFollow: true },
     planningInputs: { businessGoal: "Deliver a small status workflow.", actors: [], capabilityGroups: [], businessFlows: [], sourceRefs: [], contextNotes: [] },
+    requirementDetails: {
+      schemaVersion: "1.0",
+      authority: "brainstorm_contract",
+      sourceBrainstormContractRef: `.loom/deliveries/${deliveryId}/brainstorm/contract.json`,
+      items: [{
+        detailId: "detail-status-workflow",
+        kind: "business_flow",
+        title: "Status workflow",
+        summary: "The current phase status workflow is implemented and verifiable.",
+        requiredForCurrentPhase: true,
+        priority: "must",
+        sourceFieldRefs: ["brainstorm.acceptance.candidates[0]"],
+        sourceRefs: [],
+        scopeRefs: ["scope-status"],
+        acceptanceRefs: ["AC-status"],
+        conceptRefs: [],
+        frontendRefs: [],
+        impactTags: ["business_flow", "acceptance"],
+        lifecycleStage: "not_applicable",
+        quality: "usable",
+        unresolvedNote: null,
+      }],
+      extractionWarnings: [],
+    },
     planningRules: {
       scopeIsolation: { onlyPlanCurrentPhase: true, forbidDeferredScopeImplementation: true, forbidFuturePhaseImplementation: true },
       outputRequirements: { mustCreateArchitectureArtifactContract: true, mustCreateTaskPlan: true, taskPlanMustReferenceAcceptance: true },
@@ -380,6 +417,23 @@ function architectureContract(deliveryId, phaseId) {
       coverage: [{ type: "module", refs: ["module-status"], description: "Status workflow module." }],
       verificationHints: [{ kind: "static", description: "Static verification is sufficient." }],
     }],
+    detailCoverage: [{
+      detailId: "detail-status-workflow",
+      coverageStatus: "covered",
+      artifactRefs: {
+        modules: ["module-status"],
+        entities: [],
+        fields: [],
+        constraints: [],
+        interfaces: [],
+        userFlows: [],
+        stateMachines: [],
+        frontendDataViews: [],
+        frontendActions: [],
+        frontendOperationPaths: [],
+        acceptanceMatrix: ["AC-status"],
+      },
+    }],
     risksAndDecisions: { decisions: [], risks: [], assumptions: [], deferredNotes: [] },
     handoff: { readyForTaskPlan: true, blockingReasons: [], nextNode: "task_plan" },
     createdAt: now(),
@@ -431,6 +485,7 @@ function taskPlan(deliveryId, phaseId) {
       dependsOn: [],
       scopeRefs: ["scope-status"],
       acceptanceRefs: ["AC-status"],
+      requirementDetailRefs: ["detail-status-workflow"],
       writeBoundary: {
         forbiddenPaths: [".loom"],
         artifactRefs: {
@@ -446,6 +501,7 @@ function taskPlan(deliveryId, phaseId) {
       verificationIntents: [{
         verificationId: "VI-status",
         acceptanceRefs: ["AC-status"],
+        requirementDetailRefs: ["detail-status-workflow"],
         behavior: "Status workflow can be verified.",
         preferredEvidence: ["static_check"],
         acceptableEvidence: ["static_check", "agent_review_explanation"],
@@ -515,6 +571,13 @@ function validTaskResult(request) {
       notes: [],
     },
     notes: [],
+    requirementDetailEvidence: [{
+      detailId: "detail-status-workflow",
+      status: "satisfied",
+      verificationIds: ["VI-status"],
+      evidenceRefs: ["src/example.ts", "VI-status"],
+      summary: "Fixture status workflow detail is verified.",
+    }],
     blockedReasons: [],
     createdAt: now(),
     updatedAt: now(),
@@ -666,7 +729,12 @@ async function auditBrainstorm() {
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.requiredUserVisibleTopicsWhenApplicable",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.notApplicableRule",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.candidateFieldMapping",
+      "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.finalSummaryReviewContract",
     ], "candidate_final_summary_rules must hold narrow final summary rule fields");
+    assert.ok(
+      candidateFinalSummaryRules.whenToRead.includes("before presenting the final_summary block"),
+      "candidate_final_summary_rules must be readable before final_summary is presented",
+    );
     assert.deepEqual(candidateRequirementSemanticRules.fields, ["rules.requirementSemanticGrounding.compactRules"], "candidate_requirement_semantic_rules must hold compact requirement semantic rule list");
     assert.deepEqual(candidateSelfReviewRules.fields, ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"], "candidate_self_review_rules must hold narrow self-review rule fields");
     const brainstormFields = request.agentAction.read.fieldGroups.flatMap((group) => group.fields);
@@ -679,6 +747,7 @@ async function auditBrainstorm() {
     assert.equal(brainstormFields.includes("rules"), false, "BrainstormSessionRequest must not read full rules in fieldGroups");
     assert.deepEqual(conceptContext.fields, [
       "conceptGroundingRequest",
+      "clarificationConversationProtocol.blockExecutionRules",
       "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.scopeItemCoverageContract",
       "rules.requirementSemanticGrounding.finalSummaryBusinessDetailContract.objectOperationContract",
@@ -707,6 +776,16 @@ async function auditArchitecture() {
     assert.ok(readGroup(request, "generate_sections_current_target"), "ArchitectureSectionsGenerationRequest: current target group must exist");
     assert.ok(readGroup(request, "generate_sections_section_authority"), "ArchitectureSectionsGenerationRequest: section authority group must exist");
     assert.ok(readGroup(request, "generate_sections_section_contract"), "ArchitectureSectionsGenerationRequest: section contract group must exist");
+    assert.equal(
+      request.contextProjection.requirementDetailTransfer.requirementDetails.fullDetailSource,
+      "sourceRefs.planningContractRef#/requirementDetails",
+      "ArchitectureSectionsGenerationRequest: requirementDetails projection must point to full detail source instead of duplicating full PGC internals",
+    );
+    assert.equal(
+      request.contextProjection.requirementDetailTransfer.requirementDetails.extractionWarnings,
+      undefined,
+      "ArchitectureSectionsGenerationRequest: compact requirementDetails projection must not inline extractionWarnings",
+    );
 
     const firstTarget = request.outputContract.sectionOutputs[0];
     writeJson(projectFile(root, firstTarget.candidateFile), sectionCandidate(request, firstTarget.section));
@@ -773,6 +852,24 @@ async function auditTaskPlan() {
       request.outputContract.workflowClosureRequirements,
       undefined,
       "TaskPlanGenerationRequest: outputContract must not duplicate workflow closure requirements",
+    );
+    assert.equal(
+      request.contextProjection.requirementDetailTransfer.architectureDetails.compaction.mode,
+      "artifact_summary",
+      "TaskPlanGenerationRequest: architectureDetails must use compact artifact summaries",
+    );
+    assert.equal(
+      request.contextProjection.requirementDetailTransfer.architectureDetails.engineeringBoundary,
+      undefined,
+      "TaskPlanGenerationRequest: architectureDetails must not inline full AAC engineeringBoundary",
+    );
+    assert.ok(
+      request.contextProjection.requirementDetailTransfer.requirementDetailAssignment.items.some((item) =>
+        item.detailId === "detail-status-workflow" &&
+        item.coverageStatus === "covered" &&
+        item.artifactRefs.modules.includes("module-status")
+      ),
+      "TaskPlanGenerationRequest: detail assignment must retain detailId-to-artifact refs after compaction",
     );
     const optionalGroup = readGroup(request, "generate_taskplan_grouped_optional_context");
     assert.ok(optionalGroup, "TaskPlanGenerationRequest: optional context group must exist");

@@ -521,14 +521,12 @@ async function instructionFor(
       mode: "ask_user",
       ...brainstormAskUserInstructionPolicy(),
       requestRef: brainstormRequest?.requestRef ?? null,
-      candidateFile: brainstormRequest?.candidateFile ?? null,
-      submitCommand: brainstormRequest?.submitCommand ?? null,
       userMessage: actionType === "brainstorm_clarification"
-        ? "当前需求需要由 Agent 继续澄清，并在用户确认后提交 BrainstormCandidate。"
-        : "当前阶段范围需要由 Agent 总结并等待用户确认后提交 BrainstormCandidate。",
+        ? "当前需求需要由 Agent 继续澄清；只有 final_summary 被用户明确确认后，才写入并提交 BrainstormCandidate。"
+        : "当前阶段范围需要由 Agent 总结并等待用户确认；确认 phase_scope 后继续后续 Brainstorm 块，只有 final_summary 被确认后才提交 BrainstormCandidate。",
       expectedResponse: {
-        kind: "brainstorm_candidate_accept",
-        rule: "Agent manages the conversation. Before presenting confirmation or writing BrainstormCandidate, read requestRef through agentAction.read.fieldGroups inspect commands. After explicit user confirmation, write BrainstormCandidate to the request outputContract.candidateFile and run its submitCommand.",
+        kind: "brainstorm_progressive_clarification",
+        rule: "Agent manages the conversation. Before presenting confirmation or writing BrainstormCandidate, read requestRef through requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups inspect commands. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read the candidate write contract, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
         requestReadRule: brainstormAskUserReadStep,
         currentTurnAnswerRule: {
           consumeCurrentUserMessage: true,
@@ -543,25 +541,6 @@ async function instructionFor(
           ifAmbiguousAskUser: true,
         },
         requestRef: brainstormRequest?.requestRef ?? null,
-        candidateFile: brainstormRequest?.candidateFile ?? null,
-        submitCommand: brainstormRequest?.submitCommand ?? null,
-        acceptCommand: {
-          name: "brainstorm accept",
-          argvTemplate: [
-            "brainstorm",
-            "accept",
-            "--delivery-id",
-            deliveryId,
-            "--phase-id",
-            phaseId,
-            "--request-id",
-            brainstormRequest?.requestId ?? "{requestId}",
-            "--run-id",
-            brainstormRequest?.brainstormRunId ?? "{brainstormRunId}",
-            "--candidate-file",
-            brainstormRequest?.candidateFile ?? "{candidateFile}",
-          ],
-        },
       },
     };
   }
@@ -756,13 +735,13 @@ async function recoverableGenerationInstruction(
           "Use agentAction.write.currentTarget.schemaShape, currentTarget.enumRefs, allowedRefs, fieldAccessHints, and generationProtocol as the current section contract.",
           "Do not probe guessed jq paths; if a lookup returns null, use fieldAccessHints and agentAction.write.sectionOutputs.",
           "Write only targetSection to targetCandidateFile unless that file already exists and is complete.",
-          "After targetCandidateFile exists, immediately run loom continue as the next action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
-          "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running loom continue.",
-          "Do not run submitCommand until loom continue returns submit_existing_candidate or all section files exist.",
+          "After targetCandidateFile exists, immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
+          "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running the follow-up command.",
+          "Do not run submitCommand until the follow-up command returns submit_existing_candidate or all section files exist.",
         ],
-        routingRule: "Resume this active generation request by generating only targetSection. The request already exists at requestRef; do not create a new request. Run loom continue immediately after the target file is written; writing one section is not a stop condition.",
+        routingRule: "Resume this active generation request by generating only targetSection. The request already exists at requestRef; do not create a new request. Run instruction.completionBarrier.followUpCommand.commandInvocation immediately after the target file is written; writing one section is not a stop condition.",
         userMessage: targetSection
-          ? `Architecture generation request is active. Generate only the missing ${targetSection} section, then run loom continue.`
+          ? `Architecture generation request is active. Generate only the missing ${targetSection} section, then run the instruction completion follow-up command.`
           : "Architecture generation request is active but no missing section could be selected. Run loom status and inspect the request.",
       }, {
         sourceCommand: "continue",
@@ -1817,7 +1796,7 @@ function agentActionCurrentTargetReadGroup(): Record<string, unknown> {
       name: "inspect",
       argv: ["inspect", "--request", "{requestRef}", "--field", field],
     },
-    fallbackRule: "If this grouped inspect read fails, read requestManifest.refs.agentAction.ref and select .write.currentTarget. Do not print full .loom artifacts.",
+    fallbackRule: "If this grouped inspect read fails, use the requestReadPlan field list or targeted agentAction.write.currentTarget fallback. Do not print full .loom artifacts.",
   };
 }
 
