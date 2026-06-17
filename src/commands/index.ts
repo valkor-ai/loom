@@ -31,8 +31,10 @@ import {
   createKnowledgeDisableHandler,
   createKnowledgeDiscardHandler,
   createKnowledgeEnableHandler,
+  createKnowledgeInspectHandler,
   createKnowledgePendingHandler,
   createKnowledgeRemoveHandler,
+  createKnowledgeSearchHandler,
   createKnowledgeSemanticSubmitHandler,
   createKnowledgeStatusHandler,
   createKnowledgeUpdateHandler,
@@ -712,6 +714,46 @@ function registerKnowledgeCommands(program: Command): void {
     .addOption(compactOption())
     .action(async (name: string, options) => {
       await runCommand("knowledge.remove", options, createKnowledgeRemoveHandler({ name }));
+    });
+
+  knowledge
+    .command("search")
+    .description("Search published knowledge indexes and return chunk cards")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--query <text>", "Natural language query text")
+    .option("--query-file <path>", "JSON KnowledgeSearchQuery file")
+    .option("--source <name>", "Restrict search to a knowledge source", collect, [])
+    .option("--block <block>", "Brainstorm block: phase_scope, concept_grounding, or frontend_experience")
+    .option("--semantic-focus <kind:text>", "Semantic focus entry", collect, [])
+    .option("--limit <count>", "Maximum chunks to return")
+    .action(async (options) => {
+      await runCommand("knowledge.search", options, createKnowledgeSearchHandler({
+        query: stringOption(options.query),
+        queryFile: stringOption(options.queryFile),
+        source: stringArrayOption(options.source),
+        block: stringOption(options.block),
+        semanticFocus: stringArrayOption(options.semanticFocus),
+        limit: stringOption(options.limit),
+      }));
+    });
+
+  knowledge
+    .command("inspect")
+    .description("Read a knowledge chunk body")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--source <name>", "Knowledge source name")
+    .option("--build-id <id>", "Knowledge build id")
+    .option("--chunk <id>", "Knowledge chunk id")
+    .action(async (options) => {
+      await runCommand("knowledge.inspect", options, createKnowledgeInspectHandler({
+        source: stringOption(options.source),
+        buildId: stringOption(options.buildId),
+        chunkId: stringOption(options.chunk),
+      }));
     });
 
   knowledge

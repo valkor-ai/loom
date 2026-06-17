@@ -27,6 +27,7 @@ export function buildLexicalIndex(
     fields: Partial<Record<"title" | "headingPath" | "summary" | "semanticLabelTexts" | "semanticAliases" | "body", number>>;
   }>>();
   let totalLength = 0;
+  const documentLengths: Record<string, number> = {};
   for (const chunk of chunks) {
     const body = readFileSync(path.join(runDir, chunk.textRef), "utf8");
     const fieldValues = {
@@ -37,11 +38,11 @@ export function buildLexicalIndex(
       semanticAliases: chunk.retrievalFields.semanticAliases.join(" "),
       body,
     };
-    const docTokens = new Set<string>();
+    let documentLength = 0;
     for (const [field, value] of Object.entries(fieldValues) as Array<[keyof typeof fieldValues, string]>) {
       const counts = countTerms(tokenizeKnowledgeText(value));
       for (const [term, count] of counts.entries()) {
-        docTokens.add(term);
+        documentLength += count;
         if (!termPostings.has(term)) {
           termPostings.set(term, new Map());
         }
@@ -56,7 +57,8 @@ export function buildLexicalIndex(
         byChunk.set(chunk.chunkId, posting);
       }
     }
-    totalLength += docTokens.size;
+    documentLengths[chunk.chunkId] = documentLength;
+    totalLength += documentLength;
   }
   const terms: KnowledgeLexicalIndex["terms"] = {};
   for (const [term, byChunk] of [...termPostings.entries()].sort(([a], [b]) => a.localeCompare(b))) {
@@ -72,6 +74,7 @@ export function buildLexicalIndex(
     buildId,
     chunkCount: chunks.length,
     averageDocumentLength: chunks.length > 0 ? totalLength / chunks.length : 0,
+    documentLengths,
     fieldWeights: FIELD_WEIGHTS,
     terms,
   };

@@ -10,6 +10,7 @@ import {
 } from "../core/knowledge/operations";
 import { buildKnowledgeSource } from "../core/knowledge/build";
 import { submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
+import { inspectKnowledge, searchKnowledge } from "../core/knowledge/search";
 import { ok } from "./envelope";
 import type { CliEnvelope, CommandContext, CommandHandler } from "./types";
 
@@ -81,6 +82,31 @@ export function createKnowledgeSemanticSubmitHandler(input: {
       resultFile: input.resultFile,
     });
     return ok("knowledge.semantic.submit", ctx.projectRoot, result, result.message);
+  };
+}
+
+export function createKnowledgeSearchHandler(input: {
+  query?: string;
+  queryFile?: string;
+  source?: string[];
+  block?: string;
+  semanticFocus?: string[];
+  limit?: string;
+}): CommandHandler {
+  return async (ctx: CommandContext): Promise<CliEnvelope> => {
+    const result = await searchKnowledge(input);
+    return ok("knowledge.search", ctx.projectRoot, result, `Found ${result.results.length} knowledge chunk(s).`);
+  };
+}
+
+export function createKnowledgeInspectHandler(input: {
+  source?: string;
+  buildId?: string;
+  chunkId?: string;
+}): CommandHandler {
+  return async (ctx: CommandContext): Promise<CliEnvelope> => {
+    const result = await inspectKnowledge(input);
+    return ok("knowledge.inspect", ctx.projectRoot, result, `Loaded knowledge chunk ${result.chunkId}.`);
   };
 }
 

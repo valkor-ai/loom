@@ -211,6 +211,7 @@ export type KnowledgeLexicalIndex = {
   buildId: string;
   chunkCount: number;
   averageDocumentLength: number;
+  documentLengths: Record<string, number>;
   fieldWeights: {
     title: number;
     headingPath: number;
@@ -227,6 +228,49 @@ export type KnowledgeLexicalIndex = {
       fields: Partial<Record<"title" | "headingPath" | "summary" | "semanticLabelTexts" | "semanticAliases" | "body", number>>;
     }>;
   }>;
+};
+
+export type KnowledgeSearchQuery = {
+  naturalLanguageQuery: string;
+  brainstormBlock: "phase_scope" | "concept_grounding" | "frontend_experience";
+  semanticFocus: Array<{
+    kind: KnowledgeSemanticLabel["kind"];
+    text: string;
+  }>;
+  chunkLimit: number;
+};
+
+export type KnowledgeSearchResult = {
+  query: KnowledgeSearchQuery;
+  results: Array<{
+    chunkId: string;
+    sourceName: string;
+    documentTitle: string;
+    headingPath: string[];
+    summary: string;
+    matchedLabels: Array<{
+      kind: KnowledgeSemanticLabel["kind"];
+      text: string;
+      matchSource: "text" | "alias";
+      confidence: KnowledgeSemanticLabel["confidence"];
+    }>;
+    score: number;
+    tokenEstimate: number;
+    inspectCommand: KnowledgeCommandInvocation & {
+      name: "knowledge inspect";
+    };
+  }>;
+};
+
+export type KnowledgeInspectResult = {
+  sourceName: string;
+  sourceId: string;
+  buildId: string;
+  chunkId: string;
+  documentTitle: string;
+  headingPath: string[];
+  tokenEstimate: number;
+  text: string;
 };
 
 export type KnowledgeSemanticIndex = {
