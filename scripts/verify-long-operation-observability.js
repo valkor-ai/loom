@@ -274,14 +274,15 @@ function main() {
     const decisionEnvelope = run(["continue"], root);
     assert.equal(decisionEnvelope.actionRequired?.mode, "generate_candidate");
     assert.equal(decisionEnvelope.actionRequired?.summary.includes("write only the"), true);
-    assert.equal(decisionEnvelope.actionRequired?.summary.includes("run loom continue"), true);
+    assert.equal(decisionEnvelope.actionRequired?.summary.includes("completionBarrier.followUpCommand.commandInvocation"), true);
+    assert.equal(decisionEnvelope.actionRequired?.summary.includes("run loom continue"), false);
     assert.equal(decisionEnvelope.actionRequired?.summary.includes("run submitCommand now"), false);
     const decision = decisionEnvelope.data;
     assert.equal(decision.instruction.mode, "generate_candidate");
     assert.equal(decision.instruction.mustRunImmediately, true);
     assert.equal(decision.instruction.mustNotAskUserBeforeExecuting, true);
     assert.equal(decision.instruction.mustNotReportProgressBeforeExecuting, true);
-    assert.ok(decision.instruction.routingRule.toLowerCase().includes("run loom continue"));
+    assert.ok(decision.instruction.routingRule.includes("completionBarrier.followUpCommand.commandInvocation"));
     assert.equal(Object.prototype.hasOwnProperty.call(decision.instruction, "generationSteps"), false);
     const storedArchRequest = hydrateRequest(root, readJson(projectFile(root, arch.requestPath)));
     assert.equal(storedArchRequest.agentAction.write.currentTarget.section, "domain_contract");
@@ -301,15 +302,19 @@ function main() {
       false,
     );
     assert.ok(storedArchRequest.agentAction.write.rules.some((rule) => rule.includes("Single-section protocol")));
-    assert.ok(storedArchRequest.agentAction.write.rules.some((rule) => rule.includes("immediately run loom continue")));
+    assert.ok(storedArchRequest.agentAction.write.rules.some((rule) => rule.includes("completionBarrier.followUpCommand.commandInvocation")));
     assert.equal(decision.instruction.outputSummary, undefined);
     assert.equal(decisionEnvelope.instruction.outputSummary, undefined);
+    assert.equal(decisionEnvelope.instruction.submitCommand, undefined);
+    assert.equal(decisionEnvelope.actionRequired?.submitCommand, undefined);
     assert.equal(decisionEnvelope.actionRequired?.completionBarrier?.targetCandidateFile, decision.instruction.targetCandidateFile);
     assert.deepEqual(decisionEnvelope.actionRequired?.completionBarrier?.followUpCommand?.argv, ["continue"]);
     assert.equal(decisionEnvelope.actionRequired?.completionBarrier?.followUpCommand?.commandInvocation?.kind, "loom_user_launcher");
     assert.equal(decisionEnvelope.actionRequired?.completionBarrier?.rules, undefined);
     assert.ok(decisionEnvelope.actionRequired?.finalResponseGuard?.invalidFinalResponseWhen?.includes("completionBarrier.followUpCommand"));
     assert.ok(decisionEnvelope.actionRequired?.requiredSteps?.some((step) => step.includes("completionBarrier.followUpCommand")));
+    assert.ok(decisionEnvelope.actionRequired?.summary?.includes("completionBarrier.followUpCommand.commandInvocation"));
+    assert.equal(decisionEnvelope.actionRequired?.summary?.includes("run loom continue"), false);
     assert.equal(JSON.stringify(decision).includes("heartbeatCommand"), false);
 
     writeActiveLease(root, deliveryId, phaseId, "architecture_generation", {
@@ -329,6 +334,8 @@ function main() {
     assert.equal(expiredDecision.instruction.mustRunImmediately, true);
     assert.equal(expiredDecision.instruction.requestRef, arch.requestPath);
     assert.equal(expiredDecision.instruction.outputSummary, undefined);
+    assert.equal(expiredEnvelope.instruction.submitCommand, undefined);
+    assert.equal(expiredEnvelope.actionRequired?.submitCommand, undefined);
     assert.deepEqual(expiredEnvelope.actionRequired?.completionBarrier?.followUpCommand?.argv, ["continue"]);
     assert.equal(expiredEnvelope.actionRequired?.completionBarrier?.followUpCommand?.commandInvocation?.kind, "loom_user_launcher");
     assert.ok(expiredEnvelope.actionRequired?.finalResponseGuard?.invalidFinalResponseWhen?.includes("completionBarrier.followUpCommand"));

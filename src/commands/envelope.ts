@@ -155,7 +155,7 @@ function summarizeActionRequired(instruction: Record<string, unknown>): {
     mustNotReportProgress: true,
     mustNotAskBeforeExecuting: true,
     ...pickStringFields(instruction, ["requestRef", "resultFile", "candidateFile", "targetCandidateFile"]),
-    ...(mode !== "execute_task" && isRecord(instruction.submitCommand) ? { submitCommand: instruction.submitCommand } : {}),
+    ...(mode !== "execute_task" && !isArchitectureSingleSectionInstruction(instruction) && isRecord(instruction.submitCommand) ? { submitCommand: instruction.submitCommand } : {}),
     ...(isRecord(instruction.command) ? { command: instruction.command } : {}),
     ...(isRecord(instruction.retryCommand) ? { retryCommand: instruction.retryCommand } : {}),
     ...(isRecord(instruction.commandInvocation) ? { commandInvocation: instruction.commandInvocation } : {}),
@@ -225,7 +225,7 @@ function finalResponseGuardForInstruction(
       return {
         rule: "Do not send a final or progress-only response while this auto-runnable architecture section generation step is incomplete.",
         invalidFinalResponseWhen: `${targetCandidateFile} is missing, or completionBarrier.followUpCommand has not been run and its returned auto-runnable instruction has not been followed.`,
-        requiredActionBeforeFinalResponse: "Read instruction.requestRef, generate only instruction.targetSection at instruction.targetCandidateFile, run completionBarrier.followUpCommand immediately, then follow the returned instruction when auto-runnable.",
+        requiredActionBeforeFinalResponse: "Read instruction.requestRef, generate only instruction.targetSection at instruction.targetCandidateFile, run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action, then follow the returned instruction when auto-runnable.",
       };
     }
     return {
@@ -283,7 +283,7 @@ function summaryForInstruction(mode: string, instruction: Record<string, unknown
     if (instruction.candidateKind === "ArchitectureSections" && instruction.sectionGenerationMode === "single_section") {
       const targetSection = typeof instruction.targetSection === "string" ? instruction.targetSection : "targetSection";
       const targetCandidateFile = typeof instruction.targetCandidateFile === "string" ? instruction.targetCandidateFile : "targetCandidateFile";
-      return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands, write only the ${targetSection} section to ${targetCandidateFile}, then run loom continue through commandInvocation so the CLI can route the next missing section or submit_existing_candidate. Do not summarize progress or ask whether to continue.`);
+      return withNoRecapGuard(`ACTION REQUIRED: generate_candidate is auto-runnable. Read ${requestRef}, load requestManifest.refs.agentAction.ref when root agentAction is absent, use agentAction.read.fieldGroups inspect readCommands, write only the ${targetSection} section to ${targetCandidateFile}, then run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can route the next missing section or submit_existing_candidate. This follow-up command is not a user instruction. Do not summarize progress or ask whether to continue.`);
     }
     if (instruction.candidateKind === "TaskPlanGroupedOutputs") {
       const outputSummary = isRecord(instruction.outputSummary) ? instruction.outputSummary : {};
@@ -322,4 +322,8 @@ function pickStringFields(source: Record<string, unknown>, keys: readonly string
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isArchitectureSingleSectionInstruction(instruction: Record<string, unknown>): boolean {
+  return instruction.candidateKind === "ArchitectureSections" && instruction.sectionGenerationMode === "single_section";
 }

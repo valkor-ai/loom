@@ -2158,7 +2158,7 @@ function main() {
       "ArchitectureSectionsGenerationRequest must not expose ambiguous write-all section rule",
     );
     assert.ok(
-      archRequestBody.agentAction.write.rules.some((rule) => rule.includes("immediately run loom continue")),
+      archRequestBody.agentAction.write.rules.some((rule) => rule.includes("completionBarrier.followUpCommand.commandInvocation")),
       "ArchitectureSectionsGenerationRequest must tell Agent to continue immediately after each target section",
     );
     assert.equal(
@@ -2216,10 +2216,10 @@ function main() {
     assertRequestOutputParentDirsExist(root, refreshedArchRequest, "refreshed ArchitectureSectionsGenerationRequest");
     assert.equal(refreshedArchRequest.agentAction.schema.enumLocation, "agentAction.write.currentTarget.enumRefs", "ArchitectureSections current target enum authority must not fall back to broad enumRefs");
     assert.equal(allReadFields(refreshedArchRequest.agentAction).includes("enumRefs"), false, "ArchitectureSections single-section read plan must not read broad enumRefs when currentTarget is present");
+    assert.equal(decision.instruction.submitCommand, undefined, "ArchitectureSections single-section instruction must not expose submitCommand before submit_existing_candidate");
     assert.ok(
-      decision.instruction.routingRule.includes("Run loom continue immediately") ||
-        decision.instruction.routingRule.includes("run loom continue"),
-      "ArchitectureSections continue recovery must require immediate continue after target file",
+      decision.instruction.routingRule.includes("completionBarrier.followUpCommand.commandInvocation"),
+      "ArchitectureSections continue recovery must require the structured follow-up command after target file",
     );
     mark("L3", "active architecture lease recovers to generate_candidate");
     writeArchitectureSections(root, archRequestBody, pgc.contract);

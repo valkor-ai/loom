@@ -668,6 +668,16 @@ function assertCompactArchitectureRequestTransitionOutput() {
     assert.equal(envelope.actionRequired?.autoContinue, true);
     assert.equal(envelope.actionRequired?.mustRunImmediately, true);
     assert.equal(envelope.actionRequired?.targetCandidateFile, envelope.instruction?.targetCandidateFile);
+    assert.equal(
+      envelope.actionRequired?.submitCommand,
+      undefined,
+      "architecture.request single-section actionRequired must not expose submitCommand before submit_existing_candidate",
+    );
+    assert.equal(
+      envelope.instruction?.submitCommand,
+      undefined,
+      "architecture.request single-section instruction must not expose submitCommand before submit_existing_candidate",
+    );
     assert.ok(
       envelope.actionRequired?.completionBarrier?.targetCandidateFile,
       "architecture.request action must expose target completion barrier",
@@ -695,6 +705,20 @@ function assertCompactArchitectureRequestTransitionOutput() {
     assert.ok(
       envelope.actionRequired?.finalResponseGuard?.requiredActionBeforeFinalResponse?.includes("targetCandidateFile"),
       "architecture.request final response guard must force section write before final response",
+    );
+    assert.ok(
+      envelope.actionRequired?.summary?.includes("completionBarrier.followUpCommand.commandInvocation"),
+      "architecture.request action summary must point to the structured follow-up command invocation",
+    );
+    assert.equal(
+      envelope.actionRequired?.summary?.includes("run loom continue"),
+      false,
+      "architecture.request action summary must not phrase the follow-up as a user-facing continue command",
+    );
+    assert.equal(
+      envelope.actionRequired?.summary?.includes("This follow-up command is not a user instruction"),
+      true,
+      "architecture.request action summary must explicitly keep the follow-up as an agent action",
     );
     assert.equal(envelope.data.instruction, undefined, "compact data must not duplicate instruction");
     assert.equal(

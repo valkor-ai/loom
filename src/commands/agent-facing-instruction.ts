@@ -33,7 +33,7 @@ export function agentFacingInstruction(instruction: unknown): Record<string, unk
   if (isRecord(instruction.retryCommand)) {
     output.retryCommand = pick(instruction.retryCommand, ["name", "argv", "commandInvocation"]);
   }
-  if (isRecord(instruction.submitCommand)) {
+  if (isRecord(instruction.submitCommand) && !isArchitectureSingleSectionInstruction(instruction)) {
     output.submitCommand = pick(instruction.submitCommand, ["name", "argv", "argvTemplate", "commandInvocation"]);
   }
   if (isRecord(instruction.completionBarrier)) {

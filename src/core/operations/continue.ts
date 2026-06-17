@@ -735,13 +735,13 @@ async function recoverableGenerationInstruction(
           "Use agentAction.write.currentTarget.schemaShape, currentTarget.enumRefs, allowedRefs, fieldAccessHints, and generationProtocol as the current section contract.",
           "Do not probe guessed jq paths; if a lookup returns null, use fieldAccessHints and agentAction.write.sectionOutputs.",
           "Write only targetSection to targetCandidateFile unless that file already exists and is complete.",
-          "After targetCandidateFile exists, immediately run loom continue as the next action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
-          "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running loom continue.",
-          "Do not run submitCommand until loom continue returns submit_existing_candidate or all section files exist.",
+          "After targetCandidateFile exists, immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
+          "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running the follow-up command.",
+          "Do not run submitCommand until the follow-up command returns submit_existing_candidate or all section files exist.",
         ],
-        routingRule: "Resume this active generation request by generating only targetSection. The request already exists at requestRef; do not create a new request. Run loom continue immediately after the target file is written; writing one section is not a stop condition.",
+        routingRule: "Resume this active generation request by generating only targetSection. The request already exists at requestRef; do not create a new request. Run instruction.completionBarrier.followUpCommand.commandInvocation immediately after the target file is written; writing one section is not a stop condition.",
         userMessage: targetSection
-          ? `Architecture generation request is active. Generate only the missing ${targetSection} section, then run loom continue.`
+          ? `Architecture generation request is active. Generate only the missing ${targetSection} section, then run the instruction completion follow-up command.`
           : "Architecture generation request is active but no missing section could be selected. Run loom status and inspect the request.",
       }, {
         sourceCommand: "continue",

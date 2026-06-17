@@ -12,10 +12,10 @@ export function architectureSingleSectionWriteTarget(
     completionCondition: architectureSingleSectionCompletionCondition,
     followUpCommand: {
       name: "continue",
-      rule: "After candidateFile exists, run instruction.completionBarrier.followUpCommand.commandInvocation immediately.",
+      rule: "After candidateFile exists, run instruction.completionBarrier.followUpCommand.commandInvocation immediately as an agent tool action. Do not present it as a user action.",
     },
     notAStoppingPoint: true,
-    rule: "This is the current section selected by the active instruction. Use schemaShape/enumRefs/generationRules here as the current section contract, write only this candidateFile, then run the follow-up continue command before any recap.",
+    rule: "This is the current section selected by the active instruction. Use schemaShape/enumRefs/generationRules here as the current section contract, write only this candidateFile, then run instruction.completionBarrier.followUpCommand.commandInvocation before any recap.",
   };
   if (isRecord(target?.schemaShape)) {
     currentTarget.schemaShape = target.schemaShape;
@@ -38,10 +38,11 @@ export function architectureSingleSectionCompletionBarrier(targetCandidateFile: 
     },
     rules: [
       "This single-section ArchitectureSections step is incomplete until targetCandidateFile exists and followUpCommand has been run.",
-      "After targetCandidateFile exists, immediately run followUpCommand.commandInvocation and read the returned CLI envelope.",
+      "After targetCandidateFile exists, immediately run followUpCommand.commandInvocation as an agent tool action and read the returned CLI envelope.",
       "If the returned instruction is auto-runnable, follow it immediately before any final or progress response.",
-      "Do not run architecture accept until loom continue returns submit_existing_candidate or all section files exist.",
+      "Do not run architecture accept until the follow-up command returns submit_existing_candidate or all section files exist.",
       "A progress summary listing completedSections or missingSections is not a valid stop condition.",
+      "Do not present the follow-up command as a user action.",
     ],
   };
 }
@@ -52,7 +53,7 @@ export function architectureSingleSectionRequiredSteps(): string[] {
     "if root agentAction is absent, read requestManifest.refs.agentAction.ref before using the read plan",
     "use agentAction.read.fieldGroups inspect commands for required ArchitectureSections fields; the current section schema lives in agentAction.write.currentTarget.schemaShape",
     "write only instruction.targetSection to instruction.targetCandidateFile",
-    "run instruction.completionBarrier.followUpCommand immediately after targetCandidateFile exists",
+    "run instruction.completionBarrier.followUpCommand.commandInvocation immediately after targetCandidateFile exists",
     "read the returned CLI envelope",
     "immediately follow the returned instruction when it is auto-runnable",
   ];

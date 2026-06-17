@@ -73,7 +73,7 @@ Every loom JSON response may include top-level `actionRequired` and `instruction
 Supported instruction modes:
 
 - `run_cli`: run `instruction.commandInvocation` when present. Otherwise run `instruction.command.argv` with `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli"` and the same `--project-root`. Do not use bare `loom`.
-- `generate_candidate`: read `instruction.requestRef`, use `agentAction.read.fieldGroups[].readCommand`, write the requested candidate/result files, then run `instruction.submitCommand`. Do not create a new request.
+- `generate_candidate`: read `requestRef`; inspect `agentAction.read.fieldGroups`; write files. ArchitectureSections `single_section`: write `targetSection` -> `targetCandidateFile`, run `completionBarrier.followUpCommand.commandInvocation`, submit only after `submit_existing_candidate`. Others run `submitCommand`.
 - `submit_existing_candidate`: read `instruction.requestRef` when needed, verify named files exist, then run `instruction.submitCommand`.
 - `execute_task`: read `instruction.requestRef`, use `agentAction.read.fieldGroups[].readCommand`, follow `executionRules.sourceEditPreparationContract` before source/artifact writes, execute only that TaskExecutionRequest, write `instruction.resultFile`, then run `instruction.submitCommand`.
 - `repair_candidate`: repair the same candidate file or grouped candidate files described by `instruction.issues`, then run `instruction.submitCommand`. Do not run `loom continue` before the repaired submit succeeds.

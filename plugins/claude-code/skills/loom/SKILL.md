@@ -39,8 +39,7 @@ For deploy commands, if the first Bash tool call remains active, keep waiting on
 Do not run manual `init` before `status`, `continue`, or `plan`. `status` is read-only and may report `STATE_NOT_INITIALIZED`; `plan` initializes `.loom/` when needed for new delivery requests. Do not hijack ordinary non-loom work: treat natural-language "continue" as loom only when the current project root has initialized and recoverable loom state.
 
 ## Claude Tool Boundaries
-
-Use Claude Code's native file tools normally for source files, project docs, and small text artifacts. If a file-read tool call fails because of tool arguments, retry the same read with a valid native file-tool call or a short field selector. Treat that as a tool-call retry, not as a loom protocol blocker.
+Use Claude Code's native file tools normally. If a file-read call fails because of tool arguments, retry with a valid native file-tool call or short field selector. Treat that as a tool-call retry, not as a loom protocol blocker.
 
 Avoid multi-line shell scripts for read-only inspection. Prefer loom `inspect` readCommands, short single-purpose selectors, or native file reads that do not print full artifacts into chat.
 
@@ -77,7 +76,7 @@ Every loom JSON response may include top-level `actionRequired` and `instruction
 Supported instruction modes:
 
 - `run_cli`: run `instruction.commandInvocation` when present. Otherwise run `instruction.command.argv` with `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli"` and the same `--project-root`. Do not use bare `loom`.
-- `generate_candidate`: read `instruction.requestRef`, use `agentAction.read.fieldGroups[].readCommand`, write the requested candidate/result files, then run `instruction.submitCommand`. Do not create a new request.
+- `generate_candidate`: read `requestRef`; inspect `agentAction.read.fieldGroups`; write files. ArchitectureSections `single_section`: write `targetSection` -> `targetCandidateFile`, run `completionBarrier.followUpCommand.commandInvocation`, submit only after `submit_existing_candidate`. Others run `submitCommand`.
 - `submit_existing_candidate`: read `instruction.requestRef` when needed, verify named files exist, then run `instruction.submitCommand`.
 - `execute_task`: read `instruction.requestRef`, use `agentAction.read.fieldGroups[].readCommand`, follow `executionRules.sourceEditPreparationContract` before source/artifact writes, execute only that TaskExecutionRequest, write `instruction.resultFile`, then run `instruction.submitCommand`.
 - `repair_candidate`: repair the same candidate file or grouped candidate files described by `instruction.issues`, then run `instruction.submitCommand`. Do not run `loom continue` before the repaired submit succeeds.

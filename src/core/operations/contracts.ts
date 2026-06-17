@@ -1416,7 +1416,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
     requestType: "architecture_sections_generation",
     agentAction: agentActionContract({
       actionKind: "generate_sections",
-      instruction: "Generate Architecture section candidate files through the single-section continue protocol. Write only the current target section file, then immediately run loom continue; when continue returns submit_existing_candidate or all sections exist, run submitCommand exactly.",
+      instruction: "Generate Architecture section candidate files through the single-section continuation protocol. Write only the current target section file, then immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action. When the follow-up command returns submit_existing_candidate, run submitCommand exactly.",
       read: {
         required: [
           "this request",
@@ -1446,7 +1446,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "Read agentAction.write.currentTarget before writing; it is the current instruction's concrete section/candidateFile.",
           "Single-section protocol: each auto-runnable instruction selects one targetSection and targetCandidateFile.",
           "For the current instruction, write only the selected targetSection to targetCandidateFile.",
-          "After targetCandidateFile exists, immediately run loom continue as the next action; do not summarize progress or ask whether to continue first.",
+          "After targetCandidateFile exists, immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action; do not summarize progress or ask whether to continue first.",
           "Only write every outputContract.sectionOutputs[] entry in one turn if the instruction has no targetSection.",
           "Use agentAction.write.currentTarget.schemaShape, currentTarget.enumRefs, and currentTarget.generationRules as the current section contract.",
           "Use outputContract.sectionOutputs only as a fallback if the current instruction has no targetSection or currentTarget lacks schemaShape.",
@@ -1467,7 +1467,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
         command: submitCommand,
         requiredArgs: ["--delivery-id", "--phase-id", "--request-id"],
         placeholders: {},
-        runAfter: "loom continue returns submit_existing_candidate, or all outputContract.sectionOutputs candidate files already exist",
+        runAfter: "the follow-up command returns submit_existing_candidate, or all outputContract.sectionOutputs candidate files already exist",
       },
       schema: {
         primary: "ArchitectureSectionCandidate",
@@ -1554,7 +1554,7 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "planningContractRef.contextRefs.confirmedFrontendExperienceRef/currentFrontendExperienceRef and the referenced frontend experience .dataViews/.actions/.operationPaths when present",
         ],
       },
-      singleSectionRouting: "For auto-runnable ArchitectureSections instructions with targetSection, write only targetCandidateFile, then immediately run loom continue before any chat summary.",
+      singleSectionRouting: "For auto-runnable ArchitectureSections instructions with targetSection, write only targetCandidateFile, then immediately run instruction.completionBarrier.followUpCommand.commandInvocation before any chat summary.",
       allowedRefsAuthority: "All AAC scopeRefs, acceptanceRefs, acceptanceMatrix.acceptanceId, deferredRef, and excludedRef values must come from allowedRefs exactly; the Agent must not invent ids and the CLI validates this mechanically.",
     },
     enumRefs: architectureEnumRefs(),
@@ -1687,12 +1687,12 @@ function architectureGenerationInstruction(
       "Do not probe guessed jq paths; if a lookup returns null, use fieldAccessHints and agentAction.write.sectionOutputs.",
       "Write only targetSection to targetCandidateFile.",
       "The section candidate files are the only required progress signal; do not run a heartbeat command.",
-      "After targetCandidateFile exists, immediately run loom continue as the next action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
-      "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running loom continue.",
-      "Do not run submitCommand until loom continue returns submit_existing_candidate or all section files exist.",
+      "After targetCandidateFile exists, immediately run instruction.completionBarrier.followUpCommand.commandInvocation as the next agent tool action so the CLI can scan file progress and return the next missing section or submit_existing_candidate.",
+      "Do not send a progress summary or ask whether to continue between writing targetCandidateFile and running the follow-up command.",
+      "Do not run submitCommand until the follow-up command returns submit_existing_candidate or all section files exist.",
     ],
-    routingRule: "Generate only the target architecture section for the existing request, then immediately run loom continue to get the next section or submit instruction. Do not create another request and do not stop after writing one section.",
-    userMessage: options?.userMessage ?? "ArchitectureSectionsGenerationRequest created. Generate the first section candidate file, then run loom continue.",
+    routingRule: "Generate only the target architecture section for the existing request, then immediately run instruction.completionBarrier.followUpCommand.commandInvocation to get the next section or submit instruction. Do not create another request and do not stop after writing one section.",
+    userMessage: options?.userMessage ?? "ArchitectureSectionsGenerationRequest created. Generate the first section candidate file, then run the instruction completion follow-up command.",
   }, {
     sourceCommand: "architecture request",
     sourceSummary: "ArchitectureSectionsGenerationRequest was created.",

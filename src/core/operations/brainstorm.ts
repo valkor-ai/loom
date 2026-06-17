@@ -53,7 +53,7 @@ import { createRequirementContext, type RequirementContextResult } from "../requ
 import { brainstormSessionAgentActionContract, type AgentActionContract } from "./agent-action";
 import { referencedArtifactReadGuide, type ReferencedArtifactReadGuideEntry } from "./artifact-read-guide";
 import { repairSubmitRouting } from "./repair-routing";
-import { autoRunInstruction } from "./routing-instructions";
+import { autoRunInstruction, withAutoRunnableTransition } from "./routing-instructions";
 import {
   artifactGenerationProtocolPolicy,
   artifactRepairPolicy,
@@ -3114,12 +3114,10 @@ function brainstormRepairInstruction(
     brainstormRunId: input.brainstormRunId,
   });
   const fieldRepairPlan = brainstormFieldRepairPlan(input.issues, schemaShape);
-  return {
+  return withAutoRunnableTransition({
     mode: "repair_candidate",
     schema: "BrainstormCandidate",
     ...artifactRepairPolicy(),
-    autoContinue: true,
-    mustRunImmediately: true,
     primaryAction: "Edit candidateFile according to fieldRepairPlan, write a complete replacement BrainstormCandidate JSON, then run submitCommand.",
     candidateFile: toProjectRelative(root, resolveCliPath(root, input.candidateFile)),
     issues: input.issues,
@@ -3163,7 +3161,12 @@ function brainstormRepairInstruction(
         toProjectRelative(root, resolveCliPath(root, input.candidateFile)),
       ],
     },
-  };
+  }, {
+    sourceCommand: "brainstorm accept",
+    sourceSucceeded: false,
+    sourceSummary: "BrainstormCandidate validation returned agent-repairable issues.",
+    primaryAction: "repair_candidate_and_submit",
+  });
 }
 
 function brainstormFieldRepairPlan(
