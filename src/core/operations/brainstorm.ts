@@ -17,12 +17,14 @@ import {
   brainstormContractSchema,
   brainstormCandidateSchema,
   deliveryIndexSchema,
+  loomConfigV1Schema,
   type BrainstormContract,
   type BrainstormStatus,
   type ClarificationAnswer,
   type RequirementInput,
   type RequirementSource,
   type RequirementSourceType,
+  type UserFacingLanguageConstraint,
 } from "../schemas";
 import { pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
 import {
@@ -50,6 +52,7 @@ import {
   toProjectRelative,
 } from "../state/paths";
 import { createRequirementContext, type RequirementContextResult } from "../requirements/context";
+import { inferUserFacingLanguage, userFacingLanguageRule } from "../requirements/user-facing-language";
 import { brainstormSessionAgentActionContract, type AgentActionContract } from "./agent-action";
 import { referencedArtifactReadGuide, type ReferencedArtifactReadGuideEntry } from "./artifact-read-guide";
 import { repairSubmitRouting } from "./repair-routing";
@@ -160,6 +163,7 @@ export type BrainstormSessionRequest = {
     text: string;
     inputRefs: string[];
   };
+  userFacingLanguage: UserFacingLanguageConstraint;
   interactionMode: "agent_managed_conversation";
   generationProtocol: {
     readRequestBeforeActing: true;
@@ -342,6 +346,11 @@ export async function startBrainstorm(input: StartBrainstormInput): Promise<Brai
   const mode = shouldUseRoadmap(input.requirementInput) ? "roadmap" : "single_phase";
   const title = inferTitle(input.requirementInput);
   const sources = buildSources(input.requirementInput);
+  const config = loomConfigV1Schema.parse(await readJsonFile(paths.configFile));
+  const userFacingLanguage = inferUserFacingLanguage({
+    requirementInput: input.requirementInput,
+    configuredLanguage: config.defaults.language,
+  });
 
   const contract: BrainstormContract = {
     schemaVersion: "1.0",
@@ -388,6 +397,7 @@ export async function startBrainstorm(input: StartBrainstormInput): Promise<Brai
         text: input.requirementInput.primaryRequest,
         inputRefs: sources.map((source) => source.sourceId),
       },
+      userFacingLanguage,
       initialSummary: {
         title,
         oneLine: input.requirementInput.primaryRequest,
@@ -453,6 +463,7 @@ export async function startBrainstorm(input: StartBrainstormInput): Promise<Brai
     originalText: input.requirementInput.primaryRequest,
     sources,
     requirementContext,
+    userFacingLanguage,
     now,
   });
   const requestPath = brainstormSessionRequestPath(paths.root, deliveryId, requestId);
@@ -1330,6 +1341,7 @@ function buildBrainstormSessionRequest(input: {
   originalText: string;
   sources: RequirementSource[];
   requirementContext: RequirementContextResult;
+  userFacingLanguage: UserFacingLanguageConstraint;
   now: string;
 }): BrainstormSessionRequest {
   const candidateFile = toProjectRelative(input.projectRoot, brainstormRequestCandidatePath(input.projectRoot, input.deliveryId, input.phaseId, input.requestId));
@@ -1368,6 +1380,7 @@ function buildBrainstormSessionRequest(input: {
       text: input.originalText,
       inputRefs: input.sources.map((source) => source.sourceId),
     },
+    userFacingLanguage: input.userFacingLanguage,
     interactionMode: "agent_managed_conversation",
     generationProtocol: {
       readRequestBeforeActing: true,
@@ -1525,6 +1538,8 @@ function buildBrainstormSessionRequest(input: {
         "For phase_scope, concept_grounding, and frontend_experience, follow knowledgeContextProtocol before presenting the block: generate a current-block KnowledgeMatchQuery, run knowledge brainstorm-context, inspect all chunks in the returned readPlan when context.status=available, then convert any useful knowledge into user-visible clarification points.",
         "Do not run or use knowledge context for final_summary; final_summary may only summarize prior user-confirmed blocks and corrections.",
         "Knowledge context is reference material only. It cannot directly add scope, remove scope, decide recommendations, write confirmed rules, or set page paths without user-visible confirmation in the owning block.",
+        userFacingLanguageRule(input.userFacingLanguage),
+        "When presenting clarification blocks to the user, use the user's language naturally. Do not expose internal schema field names or enum values as user-facing wording.",
         ...phaseScopeOptionComparisonRules(),
         ...phaseScopeSelfCheckRules(),
         "Do not set clarificationProgress.confirmedBlocks for a block until the user has seen that block's dedicated question or summary and confirmed or corrected it.",
@@ -1613,6 +1628,8 @@ function buildBrainstormSessionRequest(input: {
       requirementSemanticGrounding: {
         validationMode: "generation_guidance_only",
         compactRules: brainstormRequirementSemanticCompactRules(),
+        userFacingLanguage: input.userFacingLanguage,
+        userFacingLanguageRule: userFacingLanguageRule(input.userFacingLanguage),
         finalSummaryBusinessDetailContract: {
           appliesWhenAgentFinds: [
             "business flows",
@@ -1693,7 +1710,7 @@ function buildBrainstormSessionRequest(input: {
           },
           frontendOperationPathContract: {
             owningBlock: "frontend_experience",
-            userLanguageRule: "Use natural user-facing wording in the conversation; do not expose internal schema enum values.",
+            userLanguageRule: `Use natural user-facing wording in the conversation and follow userFacingLanguage.defaultLocale for visible UI labels and feedback. ${userFacingLanguageRule(input.userFacingLanguage)}`,
             presentationRules: frontendExperiencePresentationRules(),
             candidateFields: ["frontendExperience.dataViews", "frontendExperience.actions", "frontendExperience.operationPaths"],
             rules: frontendOperationPathCandidateRules(),
@@ -1844,6 +1861,7 @@ function brainstormCandidateSchemaShape(input: {
   deliveryId: string;
   phaseId: string;
   brainstormRunId: string;
+  userFacingLanguage?: UserFacingLanguageConstraint;
 }): Record<string, unknown> {
   return {
     schemaVersion: "1.0",
@@ -2130,6 +2148,10 @@ function brainstormCandidateSchemaShape(input: {
       "If clarificationProgress confirms frontend_experience, include frontendExperience. If the frontend block is skipped, include skippedBlocks with a concrete reason and do not invent frontend work.",
       "When frontendExperience is present, it is the user-confirmed product target that AAC must consume later; do not use it for implementation details.",
       "Write page operation path details into frontendExperience.dataViews/actions/operationPaths; do not leave them only in confirmationSummary or chat.",
+      ...(input.userFacingLanguage ? [
+        userFacingLanguageRule(input.userFacingLanguage),
+        "When writing frontendExperience labels, names, search criteria labels, action labels, successFeedback, blockingOrErrorFeedback, operation path names, and visible state descriptions, use userFacingLanguage.defaultLocale for user-visible copy. Keep technical ids and refs in conventional identifier form.",
+      ] : []),
       "Use outputContract.schemaShape.frontendExperience as the write template for UI targets. Do not copy prior candidates or currentFrontendExperienceRef as the candidate template; prior refs are context only.",
       "Do not show internal frontend enum values to the user during clarification. Use natural language when asking or summarizing.",
       "For Phase 1, deliveryConceptGlossary should capture delivery-wide high-risk concepts from the whole requirement; do not collapse it to a single generic project label.",
@@ -3137,6 +3159,7 @@ async function writeBrainstormDecisionSnapshot(
     sources: contract.sources,
     sourceRefs,
     summary: contract.summary,
+    deliveryContext: contract.deliveryContext,
     scope: contract.scope,
     acceptance: contract.acceptance,
     domainModel: contract.domainModel,

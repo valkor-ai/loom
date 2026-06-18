@@ -47,6 +47,7 @@
     "verify:deploy-active-operation-boundary": "npm run build && node scripts/verify-deploy-active-operation-boundary.js",
     "verify:deploy-capability": "npm run smoke:deploy",
     "verify:requirement-context": "node scripts/verify-requirement-context-keyword-hints.js",
+    "verify:user-facing-language": "npm run build && node scripts/verify-user-facing-language-contract.js",
     "verify:knowledge-registration": "npm run build && node scripts/verify-knowledge-registration.js",
     "verify:knowledge-mechanical-build": "npm run build && node scripts/verify-knowledge-mechanical-build.js",
     "verify:knowledge-semantic-build": "npm run build && node scripts/verify-knowledge-semantic-build.js",

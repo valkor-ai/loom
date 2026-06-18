@@ -330,6 +330,7 @@ assert.deepEqual(
     "agentAction.instruction",
     "agentAction.stopConditions",
     "originalRequest",
+    "userFacingLanguage",
     "contextRefs",
     "sourceFieldAccessHints",
     "firstClarificationGate",

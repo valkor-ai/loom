@@ -1194,6 +1194,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
         "RepositoryContext must not be treated as current phase scope or acceptance coverage.",
         "Concept refs are confirmed Brainstorm semantic facts. CLI validates refs only; Agent performs semantic use.",
         "Frontend experience refs are user-confirmed product targets. AAC may engineer them but must not downgrade or override them without user decision.",
+        "User-facing language is a delivery-level copy constraint. It applies to visible product text only; it must not translate code identifiers, API paths, database fields, enum values, or internal artifact ids.",
         "PGC mechanically preserves Brainstorm current-phase detail fields; do not summarize away phaseScope.*.items, phaseScope.acceptanceCandidates[].sourceRefs/capabilityRefs, planningInputs.businessFlows[].summary, concept refs, frontend refs, or frontend operation path details carried by those frontend refs.",
         "PGC requirementDetails.items is the canonical detail index after Brainstorm. AAC, TaskPlan, TaskExecution, and Review should reference detailId instead of duplicating full detail text.",
       ],
@@ -1211,6 +1212,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
       capabilityGroups: brainstorm.domainModel.capabilityGroups,
       businessFlows: brainstorm.domainModel.businessFlows,
       frontendExperience: brainstorm.frontendExperience ?? null,
+      userFacingLanguage: brainstorm.deliveryContext.userFacingLanguage ?? null,
       sourceRefs: brainstorm.sources.map((source) => source.sourceId),
       contextNotes: ["Brainstorm contract 已确认当前阶段范围。"],
     },
@@ -2751,6 +2753,8 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       sourceRefs: item.sourceRefs ?? [],
     })),
     businessFlowDetails: pgc.planningInputs.businessFlows,
+    userFacingLanguage: pgc.planningInputs.userFacingLanguage ?? null,
+    userFacingLanguageUsageRule: "Apply only to user-visible product copy such as navigation labels, page text, form labels, action labels, result/status text, success messages, validation errors, and business-blocking feedback. Do not translate code identifiers, API paths, database fields, enum values, package names, framework terms, or internal artifact ids.",
     objectOperationDetailRules: {
       sourceFields: [
         "currentPhaseScope.included[].items",
@@ -3151,6 +3155,7 @@ function frontendExperienceSectionContentShape(): Record<string, unknown> {
         "RepositoryContext and TechnicalBaseline provide implementation facts only.",
         "Do not downgrade a user-confirmed usable_internal_product target to technical_demo without a user decision ref.",
         "Do not invent a current UI implementation target when Brainstorm confirmed frontend required=false or experienceLevel=none.",
+        "Use contextProjection.requirementDetailTransfer.userFacingLanguage for user-visible labels, navigation text, form text, success/error/business-blocking feedback, and visible state/result text. Keep technical identifiers conventional.",
       ],
       detection: {
         source: "agent_inferred_and_repo_detected | agent_inferred | repo_detected | not_applicable",

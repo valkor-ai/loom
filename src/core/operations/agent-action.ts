@@ -130,6 +130,7 @@ export function brainstormSessionAgentActionContract(input: {
         "agentAction",
         "requestManifest",
         "originalRequest",
+        "userFacingLanguage",
         "contextRefs",
         "sourceFieldAccessHints",
         "knowledgeContextProtocol",
@@ -439,6 +440,7 @@ function buildTaskExecutionFieldGroups(actionKind: string, requiredFields: strin
   ]);
   pushTakenAvailableGroup(groups, used, actionKind, "acceptance_and_concepts", true, hasField, [
     "sourceContext.acceptanceSnapshot",
+    "sourceContext.userFacingLanguage",
     "taskConceptGrounding",
   ]);
   pushTakenAvailableGroup(groups, used, actionKind, "architecture_context", true, hasField, [
@@ -462,6 +464,8 @@ function buildTaskExecutionFieldGroups(actionKind: string, requiredFields: strin
     "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
     "task.frontendExperienceRequirement.executionGuidance.purpose",
     "task.frontendExperienceRequirement.executionGuidance.sourceAuthority",
+    "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
+    "task.frontendExperienceRequirement.executionGuidance.userFacingLanguageRule",
     "task.frontendExperienceRequirement.executionGuidance.responsibility",
     "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
     "task.frontendExperienceRequirement.executionGuidance.navigationInScope",
@@ -655,6 +659,7 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
     "agentAction.instruction",
     "agentAction.stopConditions",
     "originalRequest",
+    "userFacingLanguage",
     "contextRefs",
     "sourceFieldAccessHints",
     "firstClarificationGate",
@@ -1127,6 +1132,7 @@ function purposeForField(field: string): string {
   if (field === "agentAction") return "Request-owned action plan, including required inspect read fields, write target, schema location, and submit command.";
   if (field === "requestManifest") return "Ref-first authority map for request sidecars; use it instead of probing unlisted paths.";
   if (field === "originalRequest") return "User-provided requirement text and input refs for Brainstorm clarification.";
+  if (field === "userFacingLanguage") return "Delivery-level constraint for user-visible copy language; it applies to labels, messages, navigation, visible status/results, and feedback, not code identifiers or internal ids.";
   if (field === "contextRefs") return "External context refs available to this request, such as requirement, delivery, repository, glossary, frontend, and keyword refs.";
   if (field === "sourceFieldAccessHints") return "Selector and field-name rules for reading source facts and writing BrainstormCandidate.sources without guessing schemas.";
   if (field === "knowledgeContextProtocol") return "Block-scoped knowledge matching protocol for Brainstorm; reference-only and never a BrainstormCandidate source.";
@@ -1170,6 +1176,7 @@ function whenToReadForField(field: string): string {
   ) return "Before presenting a Brainstorm summary, writing a candidate/result artifact, or deciding submit behavior.";
   if (
     field === "originalRequest" ||
+    field === "userFacingLanguage" ||
     field === "contextRefs" ||
     field === "sourceFieldAccessHints" ||
     field === "phaseContinuationContext" ||

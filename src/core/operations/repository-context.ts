@@ -30,6 +30,7 @@ import {
   workspaceLatestPath,
 } from "../state/paths";
 import type { BrainstormContract, DeliveryIndexPhase } from "../schemas";
+import { inferUserFacingLanguageFromText, userFacingLanguageRule } from "../requirements/user-facing-language";
 import { loadRequiredTechnicalBaseline } from "./contracts";
 import {
   closeOperationLease,
@@ -1097,6 +1098,8 @@ function createPhaseBrainstormSessionRequest(input: {
     .map((source) => source.path ?? source.sourceId)
     .filter((value): value is string => typeof value === "string" && value.length > 0);
   const nextPhaseSeed = input.contract.phasePlan.nextPhasePreview;
+  const userFacingLanguage = input.contract.deliveryContext.userFacingLanguage
+    ?? inferUserFacingLanguageFromText(input.contract.deliveryContext.originalRequest.text);
   return {
     schemaVersion: "1.0",
     requestId: input.requestId,
@@ -1111,6 +1114,7 @@ function createPhaseBrainstormSessionRequest(input: {
     deliveryId: input.deliveryId,
     phaseId: input.phase.phaseId,
     originalRequest: input.contract.deliveryContext.originalRequest,
+    userFacingLanguage,
     interactionMode: "agent_managed_conversation",
     generationProtocol: {
       readRequestBeforeActing: true,
@@ -1205,6 +1209,7 @@ function createPhaseBrainstormSessionRequest(input: {
         "Use latestConfirmedRequirementDecisionRef as the nearest confirmed requirement decision history, including prior user-confirmed scope, requirement changes, concept meaning, frontend target, and deferred/excluded boundaries.",
         "Use confirmedRequirementDecisionsIndexRef only when the user clearly refers to an earlier confirmed phase; read the listed decisionRef for that phase or ask the user which phase they mean.",
         "Use keywordHintsRef, when present, only as advisory extraction support for clarification questions and concept candidates.",
+        userFacingLanguageRule(userFacingLanguage),
         "Use nextPhaseSeed as a non-binding starting point for this phase clarification.",
         "If nextPhaseSeed is broad, consult normalizedRequirementTextRef, requirementContextRef, latestConfirmedRequirementDecisionRef, latestRepositoryContextRef, and previous deferred/excluded scope before presenting a concrete current-phase candidate to the user.",
         "Do not preserve or regenerate a complete future roadmap. Confirm only the current phase and produce a new nextPhasePreview.",
@@ -1310,6 +1315,8 @@ function createPhaseBrainstormSessionRequest(input: {
         "Do not merge required clarification blocks.",
         "Each required block must be presented as its own user-visible step or a clearly separated section before it can be marked confirmed.",
         "A phase_scope option may mention concept or frontend context, but those mentions are context only and do not satisfy concept_grounding or frontend_experience.",
+        userFacingLanguageRule(userFacingLanguage),
+        "When presenting clarification blocks to the user, use the user's language naturally. Do not expose internal schema field names or enum values as user-facing wording.",
         ...phaseScopeOptionComparisonRules(),
         ...phaseScopeSelfCheckRules(),
         "Do not set clarificationProgress.confirmedBlocks for a block until the user has seen that block's dedicated question or summary and confirmed or corrected it.",
@@ -1391,6 +1398,8 @@ function createPhaseBrainstormSessionRequest(input: {
       requirementSemanticGrounding: {
         validationMode: "generation_guidance_only",
         compactRules: brainstormRequirementSemanticCompactRules(),
+        userFacingLanguage,
+        userFacingLanguageRule: userFacingLanguageRule(userFacingLanguage),
         finalSummaryBusinessDetailContract: {
           appliesWhenAgentFinds: [
             "business flows",
@@ -1471,7 +1480,7 @@ function createPhaseBrainstormSessionRequest(input: {
           },
           frontendOperationPathContract: {
             owningBlock: "frontend_experience",
-            userLanguageRule: "Use natural user-facing wording in the conversation; do not expose internal schema enum values.",
+            userLanguageRule: `Use natural user-facing wording in the conversation and follow userFacingLanguage.defaultLocale for visible UI labels and feedback. ${userFacingLanguageRule(userFacingLanguage)}`,
             presentationRules: frontendExperiencePresentationRules(),
             candidateFields: ["frontendExperience.dataViews", "frontendExperience.actions", "frontendExperience.operationPaths"],
             rules: frontendOperationPathCandidateRules(),
@@ -1704,6 +1713,8 @@ function createPhaseBrainstormSessionRequest(input: {
           "Use currentFrontendExperienceRef as inherited frontend context only; the current phase still needs an explicit confirmed frontendExperience when the frontend block is confirmed.",
           "frontendExperience is a user-confirmed product target for AAC to consume later, not implementation detail.",
           "Write page operation path details into frontendExperience.dataViews/actions/operationPaths; do not leave them only in confirmationSummary or chat.",
+          userFacingLanguageRule(userFacingLanguage),
+          "When writing frontendExperience labels, names, search criteria labels, action labels, successFeedback, blockingOrErrorFeedback, operation path names, and visible state descriptions, use userFacingLanguage.defaultLocale for user-visible copy. Keep technical ids and refs in conventional identifier form.",
           "Use outputContract.schemaShape.frontendExperience as the write template for UI targets. Do not copy prior candidates or currentFrontendExperienceRef as the candidate template; prior refs are context only.",
           "Do not show internal frontend enum values to the user during clarification. Use natural language when asking or summarizing.",
           "When deriving sources for this phase, read sourceFieldAccessHints: phase continuation input sources come from deliveryContextRef .sources[].sourceId/type and candidate output sources also use sources[].sourceId/type.",
