@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Use when the user explicitly invokes @loom to route a software delivery task through the local loom CLI. The plugin uses delivery-scoped state, Brainstorm confirmation, contract/request artifacts, task execution requests, review, repair, continue routing, and explicit deploy routing.
+description: Use when the user explicitly invokes @loom to route a software delivery task or knowledge-source command through the local loom CLI. The plugin uses delivery-scoped state, Brainstorm confirmation, contract/request artifacts, task execution requests, review, repair, continue routing, direct knowledge routing, and explicit deploy routing.
 ---
 
 # loom
@@ -27,18 +27,24 @@ For `execute_task`, a task is not complete when code is changed, tests pass, or 
 
 ## First CLI Action
 
-For explicit `@loom continue`, `@loom status`, `@loom deploy`, or `@loom deploy <subcommand>`, your first assistant action must be the matching CLI tool call. Do not answer in prose, recap state, read files, or inspect `.loom/` before that first CLI call.
+For explicit `@loom continue`, `@loom status`, `@loom knowledge`, `@loom knowledge <subcommand>`, `@loom deploy`, or `@loom deploy <subcommand>`, your first assistant action must be the matching CLI tool call. Do not answer in prose, recap state, read files, or inspect `.loom/` before that first CLI call.
 
 - `@loom continue`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root /abs/project`
 - `@loom status`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" status --project-root /abs/project`
+- `@loom knowledge`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge --project-root /abs/project`
+- `@loom knowledge <subcommand>`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge <subcommand and args> --project-root /abs/project`
 - `@loom deploy`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`
 - `@loom deploy <subcommand>`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <subcommand> --project-root /abs/project`
+
+Knowledge commands are direct knowledge-source management, build, search, context, inspect, enable, disable, remove, and semantic commands. They are not delivery requests. For `@loom knowledge ...`, do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command. After the knowledge command returns, parse the JSON envelope and follow any returned CLI instruction; otherwise report the user-facing result compactly.
 
 For deploy commands, keep waiting on the first CLI session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
 Do not run manual `init` before `status`, `continue`, or `plan`. `status` is read-only and may report `STATE_NOT_INITIALIZED`; `plan` initializes `.loom/` when needed for new delivery requests. Do not hijack ordinary non-loom work: treat natural-language "continue" as loom only when the current project root has initialized and recoverable loom state.
 
 ## New Requests
+
+This section applies only after explicit routing commands such as `continue`, `status`, `knowledge`, and `deploy` have not matched.
 
 For `@loom <request>` or `@loom plan <request>`, run `plan` through the launcher. For local requirement files such as PDF, DOCX, XLSX, TXT, MD, CSV, or TSV paths, pass one `--requirement-file <path>` per file, plus `--request "<remaining natural-language request>"` only when there is remaining non-file text. Do not pass requirement file paths as plain request text.
 

@@ -1,7 +1,7 @@
 ---
 name: loom
-description: Use when the user explicitly invokes /loom to route a software delivery task through the local loom CLI. The plugin uses delivery-scoped state, Brainstorm confirmation, contract/request artifacts, task execution requests, review, repair, continue routing, and explicit deploy routing.
-argument-hint: "<request> | plan <request> | continue | deploy [subcommand] | status"
+description: Use when the user explicitly invokes /loom to route a software delivery task or knowledge-source command through the local loom CLI. The plugin uses delivery-scoped state, Brainstorm confirmation, contract/request artifacts, task execution requests, review, repair, continue routing, direct knowledge routing, and explicit deploy routing.
+argument-hint: "<request> | plan <request> | continue | knowledge [subcommand] | deploy [subcommand] | status"
 allowed-tools: [Read, Glob, Grep, Bash, Edit, MultiEdit, Write]
 ---
 
@@ -27,12 +27,16 @@ For `execute_task`, a task is complete only after the TaskResult exists at `inst
 
 ## First CLI Action
 
-For `/loom continue`, `/loom status`, `/loom deploy`, or `/loom deploy <subcommand>`, your first assistant action must be the matching Bash tool call. Do not answer in prose, recap state, read files, or inspect `.loom/` before that first CLI call.
+For `/loom continue`, `/loom status`, `/loom knowledge`, `/loom knowledge <subcommand>`, `/loom deploy`, or `/loom deploy <subcommand>`, your first assistant action must be the matching Bash tool call. Do not answer in prose, recap state, read files, or inspect `.loom/` before that first CLI call.
 
 - `/loom continue`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root /abs/project`
 - `/loom status`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" status --project-root /abs/project`
+- `/loom knowledge`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge --project-root /abs/project`
+- `/loom knowledge <subcommand>`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge <subcommand and args> --project-root /abs/project`
 - `/loom deploy`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`
 - `/loom deploy <subcommand>`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <subcommand> --project-root /abs/project`
+
+Knowledge commands are direct source commands, not delivery requests. For `/loom knowledge ...`, do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command. Parse its JSON envelope; follow returned CLI instruction or report the result compactly.
 
 For deploy commands, keep waiting on the first Bash session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
@@ -117,28 +121,11 @@ Keep chat output compact. Do not paste generated JSON candidates, result files, 
 
 ## Engineering Discipline
 
-Load only the delivery reference that matches the current instruction:
-
-- [references/delivery/repair.md](references/delivery/repair.md): bug fixes, failed checks, regressions, repairs.
-- [references/delivery/testing.md](references/delivery/testing.md): tests and verification seams.
-- [references/delivery/domain.md](references/delivery/domain.md): concept conflicts.
-- [references/delivery/planning.md](references/delivery/planning.md): scope, slices, dependencies.
-- [references/delivery/design.md](references/delivery/design.md): modules, interfaces, seams.
-- [references/delivery/review.md](references/delivery/review.md): findings and repairable issues.
-- [references/delivery/handoff.md](references/delivery/handoff.md): final, blocked, handoff, continuation.
+Load only the delivery reference matching the current instruction: [repair](references/delivery/repair.md), [testing](references/delivery/testing.md), [domain](references/delivery/domain.md), [planning](references/delivery/planning.md), [design](references/delivery/design.md), [review](references/delivery/review.md), or [handoff](references/delivery/handoff.md).
 
 ## Frontend UIX Delivery
 
-Keep UIX knowledge modular. When a request includes `frontend_experience`, `frontendExperienceRequirement`, frontend review signals, or user-visible UI work, load only the relevant references:
-
-- [references/uix/core.md](references/uix/core.md) for the baseline UIX delivery contract.
-- [references/uix/interaction.md](references/uix/interaction.md) for complex flows, forms, search, loading, feedback, state machines, or error recovery.
-- [references/uix/system.md](references/uix/system.md) for design systems, tokens, component specs, theming, localization, icons, or motion.
-- [references/uix/mobile.md](references/uix/mobile.md) for mobile, tablet, responsive, PWA, or native-app expectations.
-- [references/uix/frameworks.md](references/uix/frameworks.md) when a frontend framework or component library is named.
-- [references/uix/content.md](references/uix/content.md) for UX writing, empty states, error copy, CTAs, onboarding copy, or terminology.
-- [references/uix/data.md](references/uix/data.md) for charts, dashboards, tables, analytics, finance, research, or visualization-heavy screens.
-- [references/uix/verification.md](references/uix/verification.md) before visual, interaction, accessibility, or screenshot-based review.
+For `frontend_experience`, `frontendExperienceRequirement`, frontend review signals, or user-visible UI work, load only relevant UIX references: [core](references/uix/core.md), [interaction](references/uix/interaction.md), [system](references/uix/system.md), [mobile](references/uix/mobile.md), [frameworks](references/uix/frameworks.md), [content](references/uix/content.md), [data](references/uix/data.md), or [verification](references/uix/verification.md).
 
 ## Deploy
 

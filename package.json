@@ -9,7 +9,7 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json && chmod +x dist/cli.js",
-    "check": "npm run build && npm run verify:delivery-reference-sync",
+    "check": "npm run build && npm run verify:delivery-reference-sync && npm run verify:knowledge-adapter-routing",
     "verify:phase2-repository-context": "node scripts/verify-phase2-repository-context-flow.js",
     "verify:phase-handoff-git-advisory": "node scripts/verify-phase-handoff-git-advisory.js",
     "verify:next-phase-preview-routing": "node scripts/verify-next-phase-preview-routing.js",
@@ -50,6 +50,7 @@
     "verify:requirement-context": "node scripts/verify-requirement-context-keyword-hints.js",
     "verify:user-facing-language": "npm run build && node scripts/verify-user-facing-language-contract.js",
     "verify:knowledge-registration": "npm run build && node scripts/verify-knowledge-registration.js",
+    "verify:knowledge-adapter-routing": "node scripts/verify-knowledge-adapter-routing.js",
     "verify:knowledge-mechanical-build": "npm run build && node scripts/verify-knowledge-mechanical-build.js",
     "verify:knowledge-semantic-build": "npm run build && node scripts/verify-knowledge-semantic-build.js",
     "verify:knowledge-search-inspect": "npm run build && node scripts/verify-knowledge-search-inspect.js",
