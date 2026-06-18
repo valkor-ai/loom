@@ -149,24 +149,22 @@ npm run plugin:install-adapters
 
 `plugin:install-adapters` 会一次性安装或刷新 Codex、Claude Code 和 OpenCode。
 
-安装或更新 adapter 后，请打开一个新的 agent 会话，让本地插件重新加载。
+安装或更新 adapter 后，请在目标项目里打开一个新的 agent 会话，让本地插件重新加载。
 
-如果只想验证安装是否正常、但还不想开始需求交付，可以执行：
+如果只想验证安装是否正常、但还不想开始需求交付，请在 coding agent 里使用 Loom 命令：
 
-```bash
-"$HOME/.loom/bin/loom-cli" --version
-"$HOME/.loom/bin/loom-cli" status --project-root /path/to/project
+```text
+@loom status     # Codex
+/loom status     # Claude Code 和 OpenCode
 ```
 
-`status` 是只读命令。对于还没有使用过 Loom 的项目，返回 `STATE_NOT_INITIALIZED` 也属于正常的 smoke check 结果：这说明 launcher 可用，并且没有启动任何交付流程。也可以在新的 agent 会话里验证 adapter 命令：Codex 使用 `@loom status`，Claude Code 和 opencode 使用 `/loom status`。
+`status` 是只读命令。对于还没有使用过 Loom 的项目，返回 `STATE_NOT_INITIALIZED` 也属于正常的 smoke check 结果：这说明 adapter 命令可用，并且没有启动任何交付流程。
 
-正常使用时不需要手动先执行 `loom init`。从 agent 发起交付，例如 `@loom build ...` 或 `/loom build ...`，会在需要时自动为当前项目初始化 `.loom/`。如果你是直接使用 CLI，也可以显式初始化：
-
-```bash
-"$HOME/.loom/bin/loom-cli" init --project-root /path/to/project
-```
+正常使用时不需要手动初始化 `.loom/`。从 agent 发起交付，例如 `@loom build ...` 或 `/loom build ...`，会在需要时自动为当前项目初始化本地交付状态。
 
 ## 如何使用
+
+Loom 的正常使用入口是 code agent 里的本地插件。Codex 使用 `@loom`，Claude Code 和 OpenCode 使用 `/loom`；底层 CLI launcher 由 adapter 接好，不是普通用户的主要操作入口。
 
 ### 使用知识库
 
@@ -174,53 +172,48 @@ npm run plugin:install-adapters
 
 Loom 会把知识库当作需求澄清辅助，而不是把它当成需求本身。需求澄清时，Loom 会搜索已启用且已成功构建的知识库索引，只读取当前澄清步骤匹配到的片段，并把有用信息转成对用户可见的问题或确认点。
 
-以下命令使用 adapter 安装脚本写入的稳定 launcher：
-
-```bash
-LOOM="$HOME/.loom/bin/loom-cli"
-PROJECT=/path/to/project
-```
+知识库命令应在当前项目的 coding agent 会话里执行。下面示例使用 Codex 的 `@loom`；在 Claude Code 和 OpenCode 中，把同样的子命令换成 `/loom`。
 
 新增知识库：
 
-```bash
-"$LOOM" knowledge add --name product-rules ~/Documents/product-rules --project-root "$PROJECT"
-"$LOOM" knowledge build product-rules --project-root "$PROJECT"
+```text
+@loom knowledge add --name product-rules ~/Documents/product-rules
+@loom knowledge build product-rules
 ```
 
 `--name` 必填且必须全局唯一。一个知识库可以包含单个文件、多个文件、单个目录、多个目录，或文件与目录混合。MVP 支持 `.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.pdf`、`.docx`。
 
 更新已有知识库的路径集合：
 
-```bash
-"$LOOM" knowledge update product-rules --add-path ~/Documents/new-rules.md --project-root "$PROJECT"
-"$LOOM" knowledge update product-rules --remove-path ~/Documents/old-rules.md --project-root "$PROJECT"
-"$LOOM" knowledge update product-rules --replace-paths ~/Documents/current-rules --project-root "$PROJECT"
-"$LOOM" knowledge build product-rules --project-root "$PROJECT"
+```text
+@loom knowledge update product-rules --add-path ~/Documents/new-rules.md
+@loom knowledge update product-rules --remove-path ~/Documents/old-rules.md
+@loom knowledge update product-rules --replace-paths ~/Documents/current-rules
+@loom knowledge build product-rules
 ```
 
 如果只是已注册路径里的文件内容发生变化，直接重新执行 `build`。只有知识库包含的路径集合发生变化时，才需要先执行 `update`。
 
 查看和管理已有知识库：
 
-```bash
-"$LOOM" knowledge list --project-root "$PROJECT"
-"$LOOM" knowledge status product-rules --project-root "$PROJECT"
-"$LOOM" knowledge pending product-rules --project-root "$PROJECT"
-"$LOOM" knowledge discard product-rules --project-root "$PROJECT"
+```text
+@loom knowledge list
+@loom knowledge status product-rules
+@loom knowledge pending product-rules
+@loom knowledge discard product-rules
 ```
 
 临时停用或重新启用某个知识库：
 
-```bash
-"$LOOM" knowledge disable product-rules --project-root "$PROJECT"
-"$LOOM" knowledge enable product-rules --project-root "$PROJECT"
+```text
+@loom knowledge disable product-rules
+@loom knowledge enable product-rules
 ```
 
 删除知识库注册和 Loom 本地索引：
 
-```bash
-"$LOOM" knowledge remove product-rules --project-root "$PROJECT"
+```text
+@loom knowledge remove product-rules
 ```
 
 `remove` 不会删除你的原始文档，只会删除 Loom 对这个知识库的注册信息、待构建队列和已构建索引。
@@ -258,21 +251,7 @@ Claude Code 和 OpenCode：
 /loom continue     # Claude Code 和 OpenCode
 ```
 
-也可以通过稳定 launcher 直接运行 CLI：
-
-```bash
-"$HOME/.loom/bin/loom-cli" status --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" plan --project-root /path/to/project --request "Add team invitations"
-"$HOME/.loom/bin/loom-cli" continue --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" review --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project
-```
-
-Agent adapter 通常会自动设置 `LOOM_AGENT_PROFILE` 和 `LOOM_COMPACT_OUTPUT`。如果你正在接入新的 adapter，路由命令应通过 launcher 执行，并建议使用 compact output：
-
-```bash
-LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root /path/to/project
-```
+Agent adapter 会自动设置 Loom 所需的 agent profile 和路由环境。正常使用时请走 agent 命令入口；底层 CLI launcher 是 adapter 实现细节。
 
 ## 工作方式
 
@@ -290,12 +269,12 @@ Loom 在项目本地创建 `.loom/` 交付状态，并把它作为 agent 下一�
 
 需求 | 命令或文件
 --- | ---
-查看可用命令 | `"$HOME/.loom/bin/loom-cli" --help`
+检查 Loom 插件可用性 | Codex 使用 `@loom status`，Claude Code 和 OpenCode 使用 `/loom status`
 安装或刷新全部 adapters | `npm run plugin:install-adapters`
 安装或刷新 Codex adapter | `npm run plugin:install-codex`
 安装或刷新 Claude Code adapter | `npm run plugin:install-claude`
 安装或刷新 OpenCode adapter | `npm run plugin:install-opencode`
-运行本地部署预览 | `"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project`
+运行本地部署预览 | Codex 使用 `@loom deploy`，Claude Code 和 OpenCode 使用 `/loom deploy`
 
 ## FAQ
 
