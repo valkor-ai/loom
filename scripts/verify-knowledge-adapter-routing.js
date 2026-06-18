@@ -38,6 +38,11 @@ expect(
   "do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command",
   "Codex adapter must prevent knowledge commands from falling through to Brainstorm or delivery routing.",
 );
+expect(
+  "codex",
+  "`generate_knowledge_semantics`",
+  "Codex adapter must know how to complete semantic build packs returned by knowledge build.",
+);
 
 expect(
   "claudeSkill",
@@ -58,6 +63,11 @@ expect(
   "claudeSkill",
   "For `/loom knowledge ...`, do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command",
   "Claude skill must prevent knowledge commands from falling through to Brainstorm or delivery routing.",
+);
+expect(
+  "claudeSkill",
+  "`generate_knowledge_semantics`",
+  "Claude skill must know how to complete semantic build packs returned by knowledge build.",
 );
 
 expect(
@@ -100,6 +110,11 @@ expect(
   "opencode",
   "do not route into phase planning, Brainstorm, candidate generation, task execution, review, repair, or deploy",
   "OpenCode command must keep knowledge commands out of delivery routing.",
+);
+expect(
+  "opencode",
+  "`generate_knowledge_semantics`",
+  "OpenCode command must know how to complete semantic build packs returned by knowledge build.",
 );
 
 assertOrder(

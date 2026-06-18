@@ -62,6 +62,21 @@ const doc = writeFixture("knowledge/fund.md", [
 run(["knowledge", "add", "--name", "funds-semantic", doc]);
 const build = run(["knowledge", "build", "funds-semantic"]);
 const request = build.data.firstRequest;
+assert.equal(build.instruction.mode, "generate_knowledge_semantics");
+assert.equal(build.actionRequired.mode, "generate_knowledge_semantics");
+assert.equal(build.actionRequired.autoContinue, true);
+assert.equal(build.actionRequired.mustRunImmediately, true);
+assert.equal(build.instruction.requestRef, build.data.firstRequestPath);
+assert.equal(build.instruction.resultFile, request.outputContract.resultFile);
+assert.deepEqual(build.instruction.submitCommand.argv, [
+  "knowledge",
+  "semantic",
+  "submit",
+  "--request",
+  build.data.firstRequestPath,
+  "--result-file",
+  request.outputContract.resultFile,
+]);
 
 writeJson(request.outputContract.resultFile, {
   schemaVersion: "1.0",
@@ -81,6 +96,10 @@ const repair = run([
 assert.equal(repair.data.status, "needs_repair");
 assert.equal(repair.data.packId, request.packId);
 assert.ok(repair.data.repairRequest.issues.some((issue) => issue.code === "missing_chunk_result"));
+assert.equal(repair.instruction.mode, "generate_knowledge_semantics");
+assert.equal(repair.actionRequired.autoContinue, true);
+assert.equal(repair.instruction.requestRef, build.data.firstRequestPath);
+assert.equal(repair.instruction.resultFile, request.outputContract.resultFile);
 assert.equal(readJson(path.join(loomHome, "knowledge", "registry.json")).sources.length, 0);
 
 writeJson(request.outputContract.resultFile, {

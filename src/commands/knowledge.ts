@@ -11,8 +11,13 @@ import {
 import { buildKnowledgeSource } from "../core/knowledge/build";
 import { submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
 import { buildBrainstormKnowledgeContext, inspectKnowledge, searchKnowledge } from "../core/knowledge/search";
+import { withAutoRunnableTransition } from "../core/operations/routing-instructions";
 import { ok } from "./envelope";
 import type { CliEnvelope, CommandContext, CommandHandler } from "./types";
+import type {
+  KnowledgeSemanticBuildRequest,
+  KnowledgeSemanticSubmitIssue,
+} from "../core/knowledge/types";
 
 export function createKnowledgeAddHandler(input: {
   name?: string;
@@ -68,7 +73,15 @@ export function createKnowledgeBuildHandler(input: {
 }): CommandHandler {
   return async (ctx: CommandContext): Promise<CliEnvelope> => {
     const result = await buildKnowledgeSource({ name: input.name });
-    return ok("knowledge.build", ctx.projectRoot, result, result.message);
+    return ok("knowledge.build", ctx.projectRoot, {
+      ...result,
+      instruction: knowledgeSemanticInstruction({
+        sourceCommand: "knowledge.build",
+        sourceSummary: result.message,
+        requestPath: result.firstRequestPath,
+        request: result.firstRequest,
+      }),
+    }, result.message);
   };
 }
 
@@ -81,8 +94,105 @@ export function createKnowledgeSemanticSubmitHandler(input: {
       requestFile: input.requestFile,
       resultFile: input.resultFile,
     });
-    return ok("knowledge.semantic.submit", ctx.projectRoot, result, result.message);
+    return ok("knowledge.semantic.submit", ctx.projectRoot, {
+      ...result,
+      ...(result.nextRequestPath && result.nextRequest
+        ? {
+            instruction: knowledgeSemanticInstruction({
+              sourceCommand: "knowledge.semantic.submit",
+              sourceSummary: result.message,
+              requestPath: result.nextRequestPath,
+              request: result.nextRequest,
+            }),
+          }
+        : {}),
+      ...(result.status === "needs_repair" && result.repairRequestPath
+        ? {
+            instruction: knowledgeSemanticInstruction({
+              sourceCommand: "knowledge.semantic.submit",
+              sourceSummary: result.message,
+              requestPath: input.requestFile,
+              request: undefined,
+              resultFile: input.resultFile,
+              issues: result.repairRequest?.issues,
+              repairRequestPath: result.repairRequestPath,
+            }),
+          }
+        : {}),
+    }, result.message);
   };
+}
+
+function knowledgeSemanticInstruction(input: {
+  sourceCommand: string;
+  sourceSummary: string;
+  requestPath: string | undefined;
+  request: KnowledgeSemanticBuildRequest | undefined;
+  resultFile?: string;
+  issues?: KnowledgeSemanticSubmitIssue[];
+  repairRequestPath?: string;
+}): Record<string, unknown> {
+  const requestRef = input.requestPath;
+  const resultFile = input.resultFile ?? input.request?.outputContract.resultFile;
+  const request = input.request;
+  const submitCommand = requestRef && resultFile
+    ? {
+        name: "knowledge semantic submit",
+        argv: ["knowledge", "semantic", "submit", "--request", requestRef, "--result-file", resultFile],
+      }
+    : undefined;
+  return withAutoRunnableTransition({
+    mode: "generate_knowledge_semantics",
+    requestRef,
+    resultFile,
+    schema: "KnowledgeSemanticPackResult",
+    submitCommand,
+    issues: input.issues,
+    repairRequestPath: input.repairRequestPath,
+    knowledgeSemantic: request
+      ? {
+          sourceName: request.sourceName,
+          buildId: request.buildId,
+          packId: request.packId,
+          packIndex: request.packIndex,
+          packCount: request.packCount,
+          chunkCount: request.chunkPack.chunks.length,
+          mustReadChunkText: request.requestReadPlan.mustReadChunkText,
+        }
+      : undefined,
+    routingRule: "Generate the requested knowledge semantic pack now. Do not ask the user whether to continue between knowledge build, semantic pack generation, and semantic submit.",
+    instructions: [
+      "Read instruction.requestRef as a KnowledgeSemanticBuildRequest.",
+      "For every chunk listed in request.chunkPack.chunks, read the chunk text through chunk.readCommand.",
+      "Write instruction.resultFile as KnowledgeSemanticPackResult with schemaVersion, buildId, packId, and one chunkResult per requested chunk.",
+      "For each chunkResult, provide status, concise summary, semanticLabels using allowed label kinds/confidence values, blockAffinity values from 0 to 1, and optional notes.",
+      "Run instruction.submitCommand after writing the result.",
+      "If the submit response returns another generate_knowledge_semantics instruction, continue immediately until the source is published or a non-repairable blocker appears.",
+    ],
+  }, {
+    sourceCommand: input.sourceCommand,
+    sourceSummary: input.sourceSummary,
+    primaryAction: "generate_knowledge_semantic_pack_and_submit",
+    userVisibleSummary: `${input.sourceSummary} Continue generating the semantic pack now; this is part of the knowledge build, not a separate user decision.`,
+    completionCondition: "The semantic pack result has been written and submitted; if another pack is returned, it has also been generated and submitted until publish or blocker.",
+    requiredSteps: [
+      "read instruction.requestRef",
+      "read every chunk body listed by the KnowledgeSemanticBuildRequest",
+      "write instruction.resultFile as KnowledgeSemanticPackResult",
+      "run instruction.submitCommand",
+      "follow any returned generate_knowledge_semantics instruction immediately",
+    ],
+    forbiddenStops: [
+      "do not stop after knowledge build reports semantic_pending",
+      "do not ask the user whether to continue to the semantic pack",
+      "do not summarize progress before instruction.submitCommand succeeds",
+    ],
+    stopOnlyWhen: [
+      "the knowledge source is published",
+      "the requestRef or required chunk text cannot be read",
+      "semantic submit returns a non-repairable failure",
+    ],
+  });
 }
 
 export function createKnowledgeSearchHandler(input: {
