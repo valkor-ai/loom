@@ -10,7 +10,7 @@ import {
 } from "../core/knowledge/operations";
 import { buildKnowledgeSource } from "../core/knowledge/build";
 import { submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
-import { inspectKnowledge, searchKnowledge } from "../core/knowledge/search";
+import { buildBrainstormKnowledgeContext, inspectKnowledge, searchKnowledge } from "../core/knowledge/search";
 import { ok } from "./envelope";
 import type { CliEnvelope, CommandContext, CommandHandler } from "./types";
 
@@ -96,6 +96,27 @@ export function createKnowledgeSearchHandler(input: {
   return async (ctx: CommandContext): Promise<CliEnvelope> => {
     const result = await searchKnowledge(input);
     return ok("knowledge.search", ctx.projectRoot, result, `Found ${result.results.length} knowledge chunk(s).`);
+  };
+}
+
+export function createKnowledgeBrainstormContextHandler(input: {
+  query?: string;
+  queryFile?: string;
+  block?: string;
+  semanticFocus?: string[];
+  sourceLimit?: string;
+  chunkLimitPerSource?: string;
+}): CommandHandler {
+  return async (ctx: CommandContext): Promise<CliEnvelope> => {
+    const context = await buildBrainstormKnowledgeContext(input);
+    return ok(
+      "knowledge.brainstorm_context",
+      ctx.projectRoot,
+      { context },
+      context.status === "available"
+        ? `Prepared Brainstorm knowledge context for ${context.block}.`
+        : `No matching Brainstorm knowledge context for ${context.block}.`,
+    );
   };
 }
 

@@ -27,6 +27,7 @@ import { handleInit } from "./init";
 import { createInspectHandler } from "./inspect";
 import {
   createKnowledgeAddHandler,
+  createKnowledgeBrainstormContextHandler,
   createKnowledgeBuildHandler,
   createKnowledgeDisableHandler,
   createKnowledgeDiscardHandler,
@@ -736,6 +737,29 @@ function registerKnowledgeCommands(program: Command): void {
         block: stringOption(options.block),
         semanticFocus: stringArrayOption(options.semanticFocus),
         limit: stringOption(options.limit),
+      }));
+    });
+
+  knowledge
+    .command("brainstorm-context")
+    .description("Prepare block-scoped Brainstorm knowledge context from published indexes")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--query <text>", "Natural language query text")
+    .option("--query-file <path>", "JSON KnowledgeMatchQuery file")
+    .option("--block <block>", "Brainstorm block: phase_scope, concept_grounding, or frontend_experience")
+    .option("--semantic-focus <kind:text>", "Semantic focus entry", collect, [])
+    .option("--source-limit <count>", "Maximum matched sources")
+    .option("--chunk-limit-per-source <count>", "Maximum chunks per matched source")
+    .action(async (options) => {
+      await runCommand("knowledge.brainstorm_context", options, createKnowledgeBrainstormContextHandler({
+        query: stringOption(options.query),
+        queryFile: stringOption(options.queryFile),
+        block: stringOption(options.block),
+        semanticFocus: stringArrayOption(options.semanticFocus),
+        sourceLimit: stringOption(options.sourceLimit),
+        chunkLimitPerSource: stringOption(options.chunkLimitPerSource),
       }));
     });
 

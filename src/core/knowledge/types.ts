@@ -240,26 +240,79 @@ export type KnowledgeSearchQuery = {
   chunkLimit: number;
 };
 
+export type KnowledgeMatchQuery = {
+  naturalLanguageQuery: string;
+  brainstormBlock: KnowledgeSearchQuery["brainstormBlock"];
+  semanticFocus: KnowledgeSearchQuery["semanticFocus"];
+  sourceLimit: number;
+  chunkLimitPerSource: number;
+};
+
+export type KnowledgeChunkCard = {
+  sourceName: string;
+  chunkId: string;
+  documentTitle: string;
+  headingPath: string[];
+  summary: string;
+  matchedLabels: Array<{
+    kind: KnowledgeSemanticLabel["kind"];
+    text: string;
+    matchSource: "text" | "alias";
+    confidence: KnowledgeSemanticLabel["confidence"];
+  }>;
+  score: number;
+  tokenEstimate: number;
+  inspectCommand: KnowledgeCommandInvocation & {
+    name: "knowledge inspect";
+  };
+};
+
 export type KnowledgeSearchResult = {
   query: KnowledgeSearchQuery;
-  results: Array<{
-    chunkId: string;
+  results: KnowledgeChunkCard[];
+};
+
+export type KnowledgeMatchCandidate = {
+  sourceId: string;
+  sourceName: string;
+  lastBuiltAt: string;
+  documentCount: number;
+  chunkCount: number;
+  matchScore: number;
+  scoreBreakdown: {
+    bestChunkScore: number;
+    averageTop3ChunkScore: number;
+    matchedFocusCoverage: number;
+  };
+  matchedFocus: Array<{
+    kind: KnowledgeSemanticLabel["kind"];
+    text: string;
+    matchedChunkIds: string[];
+  }>;
+  topChunks: KnowledgeChunkCard[];
+};
+
+export type KnowledgeBlockReadPlan = {
+  mode: "inspect_all_listed_chunks";
+  chunks: Array<{
     sourceName: string;
-    documentTitle: string;
-    headingPath: string[];
-    summary: string;
-    matchedLabels: Array<{
-      kind: KnowledgeSemanticLabel["kind"];
-      text: string;
-      matchSource: "text" | "alias";
-      confidence: KnowledgeSemanticLabel["confidence"];
-    }>;
-    score: number;
-    tokenEstimate: number;
+    chunkId: string;
     inspectCommand: KnowledgeCommandInvocation & {
       name: "knowledge inspect";
     };
   }>;
+};
+
+export type BrainstormBlockKnowledgeContext = {
+  status: "available" | "empty";
+  block: KnowledgeSearchQuery["brainstormBlock"];
+  matchQuery: KnowledgeMatchQuery;
+  matchedSources: KnowledgeMatchCandidate[];
+  readPlan: KnowledgeBlockReadPlan;
+};
+
+export type BrainstormKnowledgeContextResult = {
+  context: BrainstormBlockKnowledgeContext;
 };
 
 export type KnowledgeInspectResult = {

@@ -6,9 +6,12 @@ import { tokenizeKnowledgeText } from "./lexical";
 import { knowledgeBuildRunFile } from "./paths";
 import {
   type KnowledgeBuildRun,
+  type BrainstormBlockKnowledgeContext,
   type KnowledgeChunkRecord,
   type KnowledgeInspectResult,
   type KnowledgeLexicalIndex,
+  type KnowledgeMatchCandidate,
+  type KnowledgeMatchQuery,
   type KnowledgeSearchQuery,
   type KnowledgeSearchResult,
   type KnowledgeSemanticIndex,
@@ -23,6 +26,11 @@ import {
 
 const DEFAULT_CHUNK_LIMIT = 8;
 const MAX_CHUNK_LIMIT = 20;
+const DEFAULT_MATCH_SOURCE_LIMIT = 2;
+const MAX_MATCH_SOURCE_LIMIT = 2;
+const DEFAULT_MATCH_CHUNK_LIMIT_PER_SOURCE = 3;
+const MAX_MATCH_CHUNK_LIMIT_PER_SOURCE = 3;
+const MAX_MATCH_CHUNKS_PER_BLOCK = 5;
 const K1 = 1.2;
 const B = 0.75;
 
@@ -39,6 +47,15 @@ type InspectInput = {
   source?: string;
   buildId?: string;
   chunkId?: string;
+};
+
+type BrainstormContextInput = {
+  queryFile?: string;
+  query?: string;
+  block?: string;
+  semanticFocus?: string[];
+  sourceLimit?: string;
+  chunkLimitPerSource?: string;
 };
 
 type LoadedSourceIndex = {
@@ -63,41 +80,41 @@ type ScoredChunk = {
 export async function searchKnowledge(input: SearchInput): Promise<KnowledgeSearchResult> {
   const query = await searchQueryFromInput(input);
   const sources = await loadSearchSources(input.source);
-  const scored: ScoredChunk[] = [];
-  for (const source of sources) {
-    scored.push(...scoreSourceChunks(source, query));
-  }
-  const maxLexicalScore = Math.max(0, ...scored.map((entry) => entry.lexicalScore));
-  const normalized = scored.map((entry) => {
-    const lexicalScore = maxLexicalScore > 0 ? entry.lexicalScore / maxLexicalScore : 0;
-    return {
-      ...entry,
-      lexicalScore,
-      finalScore: lexicalScore * 0.55 + entry.semanticScore * 0.30 + entry.blockScore * 0.15,
-    };
-  });
-  const selected = applyDocumentDiversity(normalized
+  const scored = scoreLoadedSources(sources, query);
+  const selected = applyDocumentDiversity(scored
     .filter((entry) => entry.finalScore > 0)
     .sort((a, b) => b.finalScore - a.finalScore), query.chunkLimit);
   return {
     query,
-    results: selected.map((entry) => {
-      const document = entry.source.buildRun.documents.find((candidate) => candidate.documentId === entry.chunk.documentId);
-      return {
-        chunkId: entry.chunk.chunkId,
-        sourceName: entry.source.source.name,
-        documentTitle: document?.title ?? entry.chunk.title,
-        headingPath: entry.chunk.headingPath,
-        summary: entry.chunk.retrievalFields.summary,
-        matchedLabels: entry.matchedLabels,
-        score: roundScore(entry.finalScore),
-        tokenEstimate: entry.chunk.tokenEstimate,
-        inspectCommand: {
-          name: "knowledge inspect",
-          argv: ["knowledge", "inspect", "--source", entry.source.source.name, "--chunk", entry.chunk.chunkId],
-        },
-      };
-    }),
+    results: selected.map(toChunkCard),
+  };
+}
+
+export async function buildBrainstormKnowledgeContext(input: BrainstormContextInput): Promise<BrainstormBlockKnowledgeContext> {
+  const matchQuery = await matchQueryFromInput(input);
+  const sources = await loadSearchSources(undefined);
+  const scored = scoreLoadedSources(sources, {
+    naturalLanguageQuery: matchQuery.naturalLanguageQuery,
+    brainstormBlock: matchQuery.brainstormBlock,
+    semanticFocus: matchQuery.semanticFocus,
+    chunkLimit: MAX_MATCH_CHUNKS_PER_BLOCK,
+  })
+    .filter((entry) => entry.finalScore > 0)
+    .sort((a, b) => b.finalScore - a.finalScore);
+  const matchedSources = aggregateMatchCandidates(scored, matchQuery);
+  return {
+    status: matchedSources.length > 0 ? "available" : "empty",
+    block: matchQuery.brainstormBlock,
+    matchQuery,
+    matchedSources,
+    readPlan: {
+      mode: "inspect_all_listed_chunks",
+      chunks: matchedSources.flatMap((source) => source.topChunks.map((chunk) => ({
+        sourceName: source.sourceName,
+        chunkId: chunk.chunkId,
+        inspectCommand: chunk.inspectCommand,
+      }))),
+    },
   };
 }
 
@@ -135,6 +152,130 @@ export async function inspectKnowledge(input: InspectInput): Promise<KnowledgeIn
   };
 }
 
+function scoreLoadedSources(sources: LoadedSourceIndex[], query: KnowledgeSearchQuery): ScoredChunk[] {
+  const scored: ScoredChunk[] = [];
+  for (const source of sources) {
+    scored.push(...scoreSourceChunks(source, query));
+  }
+  const maxLexicalScore = Math.max(0, ...scored.map((entry) => entry.lexicalScore));
+  return scored.map((entry) => {
+    const lexicalScore = maxLexicalScore > 0 ? entry.lexicalScore / maxLexicalScore : 0;
+    return {
+      ...entry,
+      lexicalScore,
+      finalScore: lexicalScore * 0.55 + entry.semanticScore * 0.30 + entry.blockScore * 0.15,
+    };
+  });
+}
+
+function aggregateMatchCandidates(scored: ScoredChunk[], query: KnowledgeMatchQuery): KnowledgeMatchCandidate[] {
+  const bySource = new Map<string, ScoredChunk[]>();
+  for (const entry of scored) {
+    const sourceId = entry.source.source.sourceId;
+    bySource.set(sourceId, [...(bySource.get(sourceId) ?? []), entry]);
+  }
+  const candidates = [...bySource.values()]
+    .map((entries) => buildMatchCandidate(entries, query))
+    .sort((a, b) => b.matchScore - a.matchScore);
+  const selected: KnowledgeMatchCandidate[] = [];
+  let remainingChunks = MAX_MATCH_CHUNKS_PER_BLOCK;
+  for (const candidate of candidates) {
+    if (selected.length >= query.sourceLimit || remainingChunks <= 0) {
+      break;
+    }
+    const topChunks = candidate.topChunks.slice(0, Math.min(query.chunkLimitPerSource, remainingChunks));
+    if (topChunks.length === 0) {
+      continue;
+    }
+    selected.push(recalculateCandidateWithChunks(candidate, topChunks, query));
+    remainingChunks -= topChunks.length;
+  }
+  return selected;
+}
+
+function buildMatchCandidate(entries: ScoredChunk[], query: KnowledgeMatchQuery): KnowledgeMatchCandidate {
+  const source = entries[0].source.source;
+  const sorted = [...entries].sort((a, b) => b.finalScore - a.finalScore);
+  const topChunks = sorted.slice(0, query.chunkLimitPerSource).map(toChunkCard);
+  return recalculateCandidateWithChunks({
+    sourceId: source.sourceId,
+    sourceName: source.name,
+    lastBuiltAt: source.index.lastBuiltAt ?? "",
+    documentCount: source.index.documentCount,
+    chunkCount: source.index.chunkCount,
+    matchScore: 0,
+    scoreBreakdown: {
+      bestChunkScore: 0,
+      averageTop3ChunkScore: 0,
+      matchedFocusCoverage: 0,
+    },
+    matchedFocus: [],
+    topChunks,
+  }, topChunks, query);
+}
+
+function recalculateCandidateWithChunks(
+  candidate: KnowledgeMatchCandidate,
+  topChunks: KnowledgeMatchCandidate["topChunks"],
+  query: KnowledgeMatchQuery,
+): KnowledgeMatchCandidate {
+  const scores = topChunks.map((chunk) => chunk.score);
+  const top3 = scores.slice(0, 3);
+  const bestChunkScore = scores[0] ?? 0;
+  const averageTop3ChunkScore = top3.length > 0
+    ? top3.reduce((sum, score) => sum + score, 0) / top3.length
+    : 0;
+  const matchedFocus = buildMatchedFocus(topChunks, query);
+  const matchedFocusCoverage = query.semanticFocus.length > 0
+    ? matchedFocus.length / query.semanticFocus.length
+    : 0;
+  const matchScore = bestChunkScore * 0.55 + averageTop3ChunkScore * 0.25 + matchedFocusCoverage * 0.20;
+  return {
+    ...candidate,
+    topChunks,
+    scoreBreakdown: {
+      bestChunkScore: roundScore(bestChunkScore),
+      averageTop3ChunkScore: roundScore(averageTop3ChunkScore),
+      matchedFocusCoverage: roundScore(matchedFocusCoverage),
+    },
+    matchedFocus,
+    matchScore: roundScore(matchScore),
+  };
+}
+
+function buildMatchedFocus(
+  topChunks: KnowledgeMatchCandidate["topChunks"],
+  query: KnowledgeMatchQuery,
+): KnowledgeMatchCandidate["matchedFocus"] {
+  return query.semanticFocus
+    .map((focus) => ({
+      kind: focus.kind,
+      text: focus.text,
+      matchedChunkIds: topChunks
+        .filter((chunk) => chunk.matchedLabels.some((label) => label.kind === focus.kind && label.text === focus.text))
+        .map((chunk) => chunk.chunkId),
+    }))
+    .filter((focus) => focus.matchedChunkIds.length > 0);
+}
+
+function toChunkCard(entry: ScoredChunk): KnowledgeSearchResult["results"][number] {
+  const document = entry.source.buildRun.documents.find((candidate) => candidate.documentId === entry.chunk.documentId);
+  return {
+    chunkId: entry.chunk.chunkId,
+    sourceName: entry.source.source.name,
+    documentTitle: document?.title ?? entry.chunk.title,
+    headingPath: entry.chunk.headingPath,
+    summary: entry.chunk.retrievalFields.summary,
+    matchedLabels: entry.matchedLabels,
+    score: roundScore(entry.finalScore),
+    tokenEstimate: entry.chunk.tokenEstimate,
+    inspectCommand: {
+      name: "knowledge inspect",
+      argv: ["knowledge", "inspect", "--source", entry.source.source.name, "--chunk", entry.chunk.chunkId],
+    },
+  };
+}
+
 async function searchQueryFromInput(input: SearchInput): Promise<KnowledgeSearchQuery> {
   if (input.queryFile) {
     const fromFile = asSearchQuery(await readJsonFile(path.resolve(input.queryFile)));
@@ -145,6 +286,20 @@ async function searchQueryFromInput(input: SearchInput): Promise<KnowledgeSearch
     brainstormBlock: normalizeBlock(input.block),
     semanticFocus: (input.semanticFocus ?? []).map(parseSemanticFocus),
     chunkLimit: parseLimit(input.limit),
+  });
+}
+
+async function matchQueryFromInput(input: BrainstormContextInput): Promise<KnowledgeMatchQuery> {
+  if (input.queryFile) {
+    const fromFile = asMatchQuery(await readJsonFile(path.resolve(input.queryFile)));
+    return normalizeMatchQuery(fromFile);
+  }
+  return normalizeMatchQuery({
+    naturalLanguageQuery: input.query ?? "",
+    brainstormBlock: normalizeBlock(input.block),
+    semanticFocus: (input.semanticFocus ?? []).map(parseSemanticFocus),
+    sourceLimit: parseLimit(input.sourceLimit),
+    chunkLimitPerSource: parseLimit(input.chunkLimitPerSource),
   });
 }
 
@@ -169,6 +324,22 @@ function normalizeSearchQuery(query: KnowledgeSearchQuery): KnowledgeSearchQuery
       return focus;
     }),
     chunkLimit: clampLimit(query.chunkLimit),
+  };
+}
+
+function normalizeMatchQuery(query: KnowledgeMatchQuery): KnowledgeMatchQuery {
+  const normalized = normalizeSearchQuery({
+    naturalLanguageQuery: query.naturalLanguageQuery,
+    brainstormBlock: normalizeBlock(query.brainstormBlock),
+    semanticFocus: query.semanticFocus,
+    chunkLimit: MAX_MATCH_CHUNKS_PER_BLOCK,
+  });
+  return {
+    naturalLanguageQuery: normalized.naturalLanguageQuery,
+    brainstormBlock: normalized.brainstormBlock,
+    semanticFocus: normalized.semanticFocus,
+    sourceLimit: clampMatchLimit(query.sourceLimit, DEFAULT_MATCH_SOURCE_LIMIT, MAX_MATCH_SOURCE_LIMIT),
+    chunkLimitPerSource: clampMatchLimit(query.chunkLimitPerSource, DEFAULT_MATCH_CHUNK_LIMIT_PER_SOURCE, MAX_MATCH_CHUNK_LIMIT_PER_SOURCE),
   };
 }
 
@@ -420,6 +591,13 @@ function clampLimit(value: number | undefined): number {
   return Math.max(1, Math.min(MAX_CHUNK_LIMIT, Math.floor(value as number)));
 }
 
+function clampMatchLimit(value: number | undefined, fallback: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(max, Math.floor(value as number)));
+}
+
 function requireString(value: string | undefined, optionName: string): string {
   const normalized = typeof value === "string" ? value.trim() : "";
   if (!normalized) {
@@ -441,6 +619,13 @@ function asSearchQuery(value: unknown): KnowledgeSearchQuery {
     throw invalidArgument("Knowledge search query file must contain a JSON object.", {});
   }
   return value as KnowledgeSearchQuery;
+}
+
+function asMatchQuery(value: unknown): KnowledgeMatchQuery {
+  if (!isRecord(value)) {
+    throw invalidArgument("Knowledge match query file must contain a JSON object.", {});
+  }
+  return value as KnowledgeMatchQuery;
 }
 
 function asBuildRun(value: unknown): KnowledgeBuildRun {
