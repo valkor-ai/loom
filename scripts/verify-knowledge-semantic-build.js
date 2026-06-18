@@ -84,6 +84,11 @@ assert.equal(build.actionRequired.autoContinue, true);
 assert.equal(build.actionRequired.mustRunImmediately, true);
 assert.equal(build.instruction.requestRef, build.data.firstRequestPath);
 assert.equal(build.instruction.resultFile, request.outputContract.resultFile);
+assert.match(
+  request.generationRules.blockAffinityGuidance.frontendExperience,
+  /target discovery/,
+  "Semantic build request must explain frontendExperience affinity using page-operation signals.",
+);
 assert.deepEqual(build.instruction.knowledgeSemantic, {
   sourceName: "funds-semantic",
   buildId: request.buildId,

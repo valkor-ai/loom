@@ -462,6 +462,7 @@ export type KnowledgeSemanticBuildRequest = {
     summaryRule: string;
     semanticLabelRule: string;
     blockAffinityRule: string;
+    blockAffinityGuidance: Record<keyof KnowledgeBlockAffinity, string>;
   };
   submitCommand: KnowledgeCommandInvocation;
   requestReadPlan: {

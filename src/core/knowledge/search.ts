@@ -35,6 +35,21 @@ const MAX_MATCH_CHUNKS_PER_BLOCK = 5;
 const K1 = 1.2;
 const B = 0.75;
 
+const BLOCK_RETRIEVAL_INTENT: Record<KnowledgeSearchQuery["brainstormBlock"], string> = {
+  phase_scope: [
+    "phase scope boundary include exclude defer dependency ordering next phase",
+    "阶段范围 边界 纳入 排除 延后 递延 依赖 顺序 下一阶段",
+  ].join(" "),
+  concept_grounding: [
+    "business object operation field state rule invariant precondition validation blocking outcome feedback",
+    "业务对象 操作 字段 状态 规则 不变量 前置条件 校验 阻断 成功结果 反馈",
+  ].join(" "),
+  frontend_experience: [
+    "page operation path workspace entry target discovery query filter pagination selection list detail action entry form input success feedback failure feedback business blocking loading empty state refresh readback",
+    "页面办理路径 页面操作路径 工作台 入口 目标定位 查询 筛选 分页 选择 列表 详情 操作入口 表单 输入 成功反馈 失败提示 业务阻断 加载中 空状态 刷新 回读",
+  ].join(" "),
+};
+
 type SearchInput = {
   query?: string;
   queryFile?: string;
@@ -336,12 +351,26 @@ function normalizeMatchQuery(query: KnowledgeMatchQuery): KnowledgeMatchQuery {
     chunkLimit: MAX_MATCH_CHUNKS_PER_BLOCK,
   });
   return {
-    naturalLanguageQuery: normalized.naturalLanguageQuery,
+    naturalLanguageQuery: withBlockRetrievalIntent(normalized.naturalLanguageQuery, normalized.brainstormBlock),
     brainstormBlock: normalized.brainstormBlock,
     semanticFocus: normalized.semanticFocus,
     sourceLimit: clampMatchLimit(query.sourceLimit, DEFAULT_MATCH_SOURCE_LIMIT, MAX_MATCH_SOURCE_LIMIT),
     chunkLimitPerSource: clampMatchLimit(query.chunkLimitPerSource, DEFAULT_MATCH_CHUNK_LIMIT_PER_SOURCE, MAX_MATCH_CHUNK_LIMIT_PER_SOURCE),
   };
+}
+
+function withBlockRetrievalIntent(
+  naturalLanguageQuery: string,
+  block: KnowledgeSearchQuery["brainstormBlock"],
+): string {
+  const intent = BLOCK_RETRIEVAL_INTENT[block];
+  if (!intent) {
+    return naturalLanguageQuery;
+  }
+  if (naturalLanguageQuery.includes(intent)) {
+    return naturalLanguageQuery;
+  }
+  return [naturalLanguageQuery, intent].filter((part) => part.trim().length > 0).join("\n");
 }
 
 async function loadSearchSources(sourceNames: string[] | undefined): Promise<LoadedSourceIndex[]> {

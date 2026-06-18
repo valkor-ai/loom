@@ -157,6 +157,8 @@ const contextEnvelope = run(["knowledge", "brainstorm-context", "--query-file", 
 const context = contextEnvelope.data.context;
 assert.equal(context.status, "available");
 assert.equal(context.block, "frontend_experience");
+assert.match(context.matchQuery.naturalLanguageQuery, /target discovery/);
+assert.match(context.matchQuery.naturalLanguageQuery, /页面办理路径/);
 assert.equal(context.matchedSources.length <= 2, true);
 assert.equal(context.readPlan.mode, "inspect_all_listed_chunks");
 assert.equal(context.readPlan.chunks.length > 0, true);
@@ -202,6 +204,24 @@ assert.deepEqual(brainstormRequest.knowledgeContextProtocol.appliesToBlocks, [
   "frontend_experience",
 ]);
 assert.deepEqual(brainstormRequest.knowledgeContextProtocol.excludedBlocks, ["final_summary"]);
+assert.equal(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.naturalLanguageQueryMustCombine.length,
+  2,
+);
+assert.deepEqual(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusPriorityKinds.slice(0, 2),
+  ["page", "flow"],
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.retrievalIntent,
+  "target discovery",
+  "Frontend knowledge query guidance must target page-operation paths.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.mustNotDo.join("\n"),
+  "Do not require users to register a separate frontend knowledge source",
+  "Frontend knowledge query guidance must not prescribe knowledge source organization.",
+);
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxSources, 2);
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxChunks, 5);
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxChunksPerSource, 3);

@@ -300,6 +300,12 @@ export type BrainstormKnowledgeContextProtocol = {
     sourceLimit: number;
     chunkLimitPerSource: number;
   };
+  blockQueryGuidance: Record<BrainstormKnowledgeBlock, {
+    retrievalIntent: string;
+    naturalLanguageQueryMustCombine: string[];
+    semanticFocusPriorityKinds: Array<"object" | "operation" | "state" | "rule" | "field" | "page" | "flow" | "other">;
+    mustNotDo: string[];
+  }>;
   perBlockLimits: {
     maxSources: number;
     maxChunks: number;
@@ -1833,6 +1839,45 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
       sourceLimit: 2,
       chunkLimitPerSource: 3,
     },
+    blockQueryGuidance: {
+      phase_scope: {
+        retrievalIntent: "Find knowledge that helps compare the current phase boundary, included scope, excluded scope, deferred work, dependency order, and next-phase handoff.",
+        naturalLanguageQueryMustCombine: [
+          "current requirement and current phase business or technical anchors",
+          "phase boundary intent such as include, exclude, defer, dependency, ordering, and next phase",
+        ],
+        semanticFocusPriorityKinds: ["object", "operation", "rule", "flow", "state"],
+        mustNotDo: [
+          "Do not turn knowledge-only adjacent capabilities into current scope without user-visible confirmation.",
+          "Do not use page-path or concept details as a substitute for presenting phase scope options.",
+        ],
+      },
+      concept_grounding: {
+        retrievalIntent: "Find knowledge that helps clarify business or technical objects, operations, fields, states, invariants, validation, blocking reasons, outcomes, and high-risk misunderstanding boundaries.",
+        naturalLanguageQueryMustCombine: [
+          "confirmed current phase scope items and their objects or operations",
+          "concept grounding intent such as object, field, state, rule, precondition, validation, blocking, success outcome, and feedback",
+        ],
+        semanticFocusPriorityKinds: ["object", "operation", "field", "state", "rule", "flow"],
+        mustNotDo: [
+          "Do not let page-operation guidance replace object, rule, state, or invariant clarification.",
+          "Do not write knowledge-derived rules into the candidate unless the user sees and confirms them in this block.",
+        ],
+      },
+      frontend_experience: {
+        retrievalIntent: "Find knowledge that helps clarify how the current phase is handled in a user-facing or staff-facing product surface: page or workspace entry, target discovery, query and selection, list or detail views, action entry points, form inputs, success feedback, validation or business-blocking feedback, empty/loading/error states, and refresh or readback.",
+        naturalLanguageQueryMustCombine: [
+          "current phase business anchors from confirmed scope and business understanding",
+          "page-operation anchors such as page entry, target discovery, query, pagination, selection, list, detail, action entry, form input, success feedback, failure feedback, business blocking, loading, empty state, and refresh/readback",
+        ],
+        semanticFocusPriorityKinds: ["page", "flow", "operation", "field", "state", "object"],
+        mustNotDo: [
+          "Do not query frontend_experience with only business object names or business rule terms.",
+          "Do not require users to register a separate frontend knowledge source; search all enabled published sources and rank matching page-operation chunks.",
+          "Do not introduce page paths into the candidate unless the user sees and confirms them in this block.",
+        ],
+      },
+    },
     perBlockLimits: {
       maxSources: 2,
       maxChunks: 5,
@@ -1840,6 +1885,7 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
     },
     blockRules: [
       "Before presenting phase_scope, concept_grounding, or frontend_experience, generate a KnowledgeMatchQuery for that exact block and run command.argv with the query file.",
+      "Use blockQueryGuidance for the current block when writing the KnowledgeMatchQuery. The query must combine the current phase anchors with the current block's retrieval intent instead of reusing a generic business-only query.",
       "Do not run knowledge brainstorm-context for final_summary.",
       "Do not ask the user to choose or name a knowledge source for Brainstorm; the command searches enabled published knowledge sources automatically.",
       "If the command returns context.status=empty, continue the block from the requirement, repository facts, confirmed prior blocks, and keyword hints without treating empty knowledge as a blocker.",

@@ -498,6 +498,12 @@ function createSemanticRequest(input: {
       summaryRule: "Write a concise summary of this chunk only. Do not add external knowledge.",
       semanticLabelRule: "Generate labels only from the chunk text, title, heading path, or local neighboring context. An empty label list is valid for low-signal chunks.",
       blockAffinityRule: "Score affinity from 0 to 1 for each Brainstorm block based only on this chunk.",
+      blockAffinityGuidance: {
+        phaseScope: "Score high when the chunk helps decide phase boundaries, included work, excluded work, deferred work, dependency order, or next-phase handoff.",
+        conceptGrounding: "Score high when the chunk explains objects, operations, fields, states, rules, invariants, preconditions, validation, blocking reasons, outcomes, or misunderstanding boundaries.",
+        frontendExperience: "Score high when the chunk explains a page or workspace surface, target discovery, query and selection, list or detail view, action entry point, form input, success feedback, error or business-blocking feedback, loading or empty state, or refresh/readback behavior for a user-facing or staff-facing workflow.",
+        finalSummary: "Score high only for concise overview chunks that help summarize confirmed conclusions; final_summary does not run knowledge recall during Brainstorm.",
+      },
     },
     submitCommand: {
       argv: ["knowledge", "semantic", "submit", "--request", input.requestPath, "--result-file", input.resultFile],
