@@ -179,7 +179,7 @@ Add a new knowledge source:
 @loom knowledge build product-rules
 ```
 
-`--name` is required and must be unique. A source can include one file, many files, one directory, many directories, or a mix of files and directories. The MVP supports `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.pdf`, and `.docx`.
+`--name` is required and must be unique. A source can include one file, many files, one directory, many directories, or a mix of files and directories. Currently supported formats are `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.pdf`, and `.docx`.
 
 Update an existing knowledge source's registered paths:
 
