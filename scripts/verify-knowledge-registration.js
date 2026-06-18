@@ -34,6 +34,29 @@ function run(args) {
   return envelope;
 }
 
+function runCompact(args) {
+  const output = execFileSync(process.execPath, [
+    cli,
+    ...args,
+    "--project-root",
+    projectRoot,
+    "--json",
+  ], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      LOOM_AGENT_PROFILE: "codex",
+      LOOM_COMPACT_OUTPUT: "1",
+      LOOM_HOME: loomHome,
+    },
+  });
+  const envelope = JSON.parse(output);
+  assert.equal(envelope.ok, true, output);
+  assert.equal(envelope.compact, true);
+  return envelope;
+}
+
 function runFailure(args) {
   const result = spawnSync(process.execPath, [
     cli,
@@ -120,6 +143,12 @@ assert.equal(listAfterAdd.data.sources[0].lastBuild, null);
 assert.equal(listAfterAdd.data.sources[0].lastBuildLocal, null);
 assert.equal(listAfterAdd.data.sources[0].pendingOperations, 1);
 assert.match(listAfterAdd.data.sources[0].updatedAtLocal, /^20\d\d-\d\d-\d\d \d\d:\d\d:\d\d UTC[+-]\d\d:\d\d$/);
+
+const compactListAfterAdd = runCompact(["knowledge", "list"]);
+assert.equal(compactListAfterAdd.data.timeZone, listAfterAdd.data.timeZone);
+assert.equal(compactListAfterAdd.data.sources.length, 1);
+assert.equal(compactListAfterAdd.data.sources[0].name, "funds-domain");
+assert.notDeepEqual(compactListAfterAdd.data, {}, "compact knowledge list must preserve user-facing source data");
 
 const pending = run(["knowledge", "pending", "funds-domain"]);
 assert.equal(pending.command, "knowledge.pending");

@@ -48,7 +48,9 @@ function compactEnvelope(envelope: CliEnvelope): Record<string, unknown> {
     ...(envelope.agentProfile ? { agentProfile: envelope.agentProfile } : {}),
     ...(envelope.actionRequired ? { actionRequired: envelope.actionRequired } : {}),
     instruction: compactInstruction(envelope.instruction),
-    data: envelope.command === "inspect" ? envelope.data : compactData(envelope.data),
+    data: envelope.command === "inspect" || envelope.command.startsWith("knowledge.")
+      ? envelope.data
+      : compactData(envelope.data),
     summary: envelope.summary,
     compact: true,
   };
