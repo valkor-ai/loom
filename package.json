@@ -9,7 +9,7 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json && chmod +x dist/cli.js",
-    "check": "npm run build",
+    "check": "npm run build && npm run verify:delivery-reference-sync",
     "verify:phase2-repository-context": "node scripts/verify-phase2-repository-context-flow.js",
     "verify:phase-handoff-git-advisory": "node scripts/verify-phase-handoff-git-advisory.js",
     "verify:next-phase-preview-routing": "node scripts/verify-next-phase-preview-routing.js",
@@ -38,6 +38,7 @@
     "verify:compact-output-contract": "node scripts/verify-auto-runnable-transition-contract.js",
     "verify:agent-facing-request-protocol": "node scripts/verify-agent-facing-request-protocol.js",
     "verify:agent-profile-adapters": "node scripts/verify-agent-profile-adapters.js",
+    "verify:delivery-reference-sync": "node scripts/verify-delivery-reference-sync.js",
     "verify:protocol-boundary-audit": "node scripts/verify-protocol-boundary-audit.js",
     "verify:read-plan-inspect": "node scripts/verify-read-plan-inspect.js",
     "verify:read-plan-size-audit": "node scripts/verify-read-plan-size-audit.js",
