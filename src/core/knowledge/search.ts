@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { invalidArgument } from "../errors";
-import { readJsonFile } from "../state/fs";
+import { pathExists, readJsonFile } from "../state/fs";
 import { tokenizeKnowledgeText } from "./lexical";
 import { knowledgeBuildRunFile } from "./paths";
 import {
@@ -21,6 +21,7 @@ import {
 import {
   findKnowledgeSource,
   readKnowledgeRegistry,
+  readPendingKnowledge,
   validateKnowledgeName,
 } from "./state";
 
@@ -489,8 +490,38 @@ function applyDocumentDiversity(scored: ScoredChunk[], limit: number): ScoredChu
 
 async function resolveInspectSource(input: InspectInput): Promise<KnowledgeSource> {
   if (input.source) {
-    const source = await findKnowledgeSource(validateKnowledgeName(input.source));
+    const sourceName = validateKnowledgeName(input.source);
+    const source = await findKnowledgeSource(sourceName);
     if (!source) {
+      const pending = await readPendingKnowledge(sourceName);
+      if (pending?.sourceId && input.buildId) {
+        const buildRunPath = knowledgeBuildRunFile(pending.sourceId, input.buildId);
+        if (await pathExists(buildRunPath)) {
+          const buildRun = asBuildRun(await readJsonFile(buildRunPath));
+          if (buildRun.name !== sourceName) {
+            throw invalidArgument("Knowledge build does not belong to the requested source.", {
+              source: sourceName,
+              buildId: input.buildId,
+              buildSourceName: buildRun.name,
+            });
+          }
+          return {
+            sourceId: pending.sourceId,
+            name: sourceName,
+            status: "enabled",
+            roots: buildRun.roots,
+            index: {
+              version: 0,
+              lastBuiltAt: null,
+              currentBuildId: input.buildId,
+              documentCount: buildRun.documents.length,
+              chunkCount: buildRun.chunks.length,
+            },
+            createdAt: pending.createdAt,
+            updatedAt: pending.updatedAt,
+          };
+        }
+      }
       throw invalidArgument(`Knowledge source "${input.source}" does not exist.`, { source: input.source });
     }
     return source;

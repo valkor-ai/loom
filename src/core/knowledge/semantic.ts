@@ -266,7 +266,16 @@ function createSemanticRequest(input: {
           tokenEstimate: chunk.tokenEstimate,
           textRef: path.join(input.runDir, chunk.textRef),
           readCommand: {
-            argv: ["knowledge", "inspect", "--build-id", input.buildRun.buildId, "--chunk", chunk.chunkId],
+            argv: [
+              "knowledge",
+              "inspect",
+              "--source",
+              input.buildRun.name,
+              "--build-id",
+              input.buildRun.buildId,
+              "--chunk",
+              chunk.chunkId,
+            ],
           },
           ...(previous ? { previousChunkTitle: previous.title } : {}),
           ...(next ? { nextChunkTitle: next.title } : {}),
