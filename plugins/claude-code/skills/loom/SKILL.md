@@ -21,7 +21,7 @@ When this skill mentions a command such as `loom continue`, treat it as a logica
 
 After an auto-runnable command response, your next action must be a tool call or file operation that follows `instruction`; do not send a progress summary first.
 
-Before sending any final/progress response during an auto-runnable loom route, run this guard: if `actionRequired.finalResponseGuard` exists, or `instruction.mode = "execute_task"` and its `resultFile` is missing or `submitCommand` has not succeeded, do not respond to the user yet. Continue executing the instruction. If the task cannot be completed, write a failed or blocked TaskResult and run `submitCommand` so loom can route the failure. A recovery command is not a normal final answer; only if the host forcibly ends the turn while tools cannot continue, tell the user to run `/loom continue`.
+Before sending any final/progress response during an auto-runnable loom route, run this guard: if `actionRequired.finalResponseGuard` exists, or `execute_task` lacks a submitted `resultFile`, keep executing. If completion is impossible, write a failed or blocked TaskResult and run `submitCommand`. If tools cannot continue, tell the user to run `/loom continue`.
 
 For `execute_task`, a task is complete only after the TaskResult exists at `instruction.resultFile` and `instruction.submitCommand` has succeeded. Passing tests, completed source edits, internal todos, or a visible next task are not completion.
 
@@ -34,18 +34,18 @@ For `/loom continue`, `/loom status`, `/loom deploy`, or `/loom deploy <subcomma
 - `/loom deploy`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`
 - `/loom deploy <subcommand>`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <subcommand> --project-root /abs/project`
 
-For deploy commands, if the first Bash tool call remains active, keep waiting on that same tool session. After one short "deploy is running" update, stay quiet while polling the original session. Do not run extra `deploy status`, `deploy inspect`, or `deploy logs` during the first 120 seconds unless the original command returns, the user asks for status, or a blocker appears. After 120 seconds, use read-only observation no more often than once every 60 seconds; prefer `deploy status`, and use `deploy logs` only after repeated unchanged status or explicit user request. If any envelope returns `mode: observe_active_deploy_operation`, obey `instruction.observationPolicy`. Do not send a final done/stuck/failed deploy response while `operationActive=true`.
+For deploy commands, keep waiting on the first Bash session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
 Do not run manual `init` before `status`, `continue`, or `plan`. `status` is read-only and may report `STATE_NOT_INITIALIZED`; `plan` initializes `.loom/` when needed for new delivery requests. Do not hijack ordinary non-loom work: treat natural-language "continue" as loom only when the current project root has initialized and recoverable loom state.
 
 ## Claude Tool Boundaries
-Use Claude Code's native file tools normally. If a file-read call fails because of tool arguments, retry with a valid native file-tool call or short field selector. Treat that as a tool-call retry, not as a loom protocol blocker.
+Use Claude Code's native file tools normally. If a file-read call fails because of tool arguments, retry with a valid native call or short selector. Treat that as a tool-call retry, not as a loom protocol blocker.
 
 Avoid multi-line shell scripts for read-only inspection. Prefer loom `inspect` readCommands, short single-purpose selectors, or native file reads that do not print full artifacts into chat.
 
 Do not use Claude Code Plan Mode, `ExitPlanMode`, or `.claude/plans/*` for any `/loom` workflow. Loom has already produced the executable request or user gate; replacing it with a Claude-internal plan approval breaks the delivery protocol. If Claude Code itself is already forced into Plan Mode and blocks Bash/Edit/Write, do not write a plan file and do not call `ExitPlanMode`; report that Claude Code must leave Plan Mode before `/loom` can execute.
 
-Claude Code's internal task/todo tools and subagents may be used as implementation aids for source inspection, coding, verification, and local reasoning. They must not replace Loom workflow state, decide whether a Loom task is complete, route to the next Loom node, or justify stopping before the returned instruction is complete. Loom state under `.loom/`, the CLI JSON envelope, and returned `instruction` / `actionRequired` fields are the only task source of truth. If Claude shows stale internal task reminders, ignore them for loom routing and continue from the latest loom CLI state or returned instruction. `TaskStop` is allowed only to stop a task-owned background Bash/runtime after readiness probing or cleanup; do not use it as Loom progress or todo state.
+Claude Code's internal task/todo tools and subagents may be used as implementation aids for source inspection, coding, verification, and local reasoning. They must not replace Loom workflow state, route nodes, decide completion, or justify stopping early. Loom state under `.loom/`, the CLI JSON envelope, and returned `instruction` / `actionRequired` fields are the only task source of truth. If Claude shows stale internal task reminders, ignore them for loom routing. `TaskStop` is allowed only to stop a task-owned background Bash/runtime after readiness probing or cleanup; do not use it as Loom progress.
 
 ## New Requests
 
@@ -70,7 +70,7 @@ Every loom JSON response may include top-level `actionRequired` and `instruction
 - If `actionRequired.autoContinue` or `actionRequired.mustRunImmediately` is `true`, do not summarize progress, ask whether to continue, or stop after the command.
 - Immediately execute top-level `instruction` according to its `mode`.
 - If top-level `instruction` and `data.instruction` both exist, use the top-level copy first.
-- If `instruction.continuationContract.kind = "auto_runnable_transition"`, the current turn is not complete. Do not stop with a recap, internal task/todo update, or progress summary. Read `continuationContract.agentObligation`, then immediately follow top-level `instruction`: use `inputRefs`, produce `outputRefs`, run the listed command/submit command, obey `requiredSteps`, and stop only under `stopOnlyWhen`.
+- If `instruction.continuationContract.kind = "auto_runnable_transition"`, the turn is not complete. Do not stop with recap/todo prose. Read `continuationContract.agentObligation`, then follow `instruction`: use `inputRefs`, produce `outputRefs`, run the listed command/submit command, obey `requiredSteps`, and stop only under `stopOnlyWhen`.
 - Stop only for `ask_user`, `manual_review`, `needs_user_decision`, `report_blocked`, `report_done`, or a non-repairable command failure.
 
 Supported instruction modes:
@@ -85,7 +85,7 @@ Supported instruction modes:
 - `observe_active_deploy_operation`: obey `instruction.observationPolicy`; prefer waiting on the original deploy command session, observe no more often than its interval, keep user-visible updates quiet, and do not send a final done/stuck/failed deploy response while `operationActive=true`.
 - `ask_user`, `manual_review`, `report_done`, `report_blocked`: handle only the returned gate or report.
 
-If a command response contains direct `data.instruction`, follow it the same way as top-level `instruction`. If `data.instruction.mode` is auto-runnable, run it now. If `data.nextAction.type` is `continue_execution`, first follow the returned `data.instruction`; when that instruction is already `execute_task`, do not run `next-task`. If any command returns an `execute_task` instruction with `continuationContract`, a summary like "the next task is ready" is not an allowed stopping point. `next-task` returns an execution request, not a stopping point.
+If a command response contains `data.instruction`, follow it like top-level `instruction`. If `data.instruction.mode` is auto-runnable, run it now. If `data.nextAction.type` is `continue_execution`, first follow `data.instruction`; when it is already `execute_task`, do not run `next-task`. `next-task` returns an execution request, not a stopping point.
 
 If an accept or record command returns `accepted:false`, `recorded:false`, top-level `instruction.mode=repair_candidate`, top-level `instruction.mode=repair_result_contract`, or a `repairInstruction`, follow that repair instruction first and resubmit the same accept/record command only when the issues are agent-repairable. Do not run `loom continue` until the repaired submit succeeds. After the repaired submit succeeds, immediately follow the successful response's `data.instruction`; do not stop to summarize if the next action is auto-runnable.
 
@@ -97,7 +97,7 @@ When a command returns `requestRef`, read it first. If root `requestReadPlan` ex
 
 Use `requestReadPlan` as primary request-field read map and `agentAction` as execution/write/submit map: `requestReadPlan.groups` for fields, `agentAction.read.fieldGroups` only as older-request fallback, `agentAction.write` for files, `agentAction.schema` for schema/enums, and `agentAction.submit` for submit commands. Do not invent shell selectors or infer submit arguments from older artifacts.
 
-When an `execute_task` request contains `executionRules.sourceEditPreparationContract`, follow that contract before any `Write`, `Edit`, `MultiEdit`, or quiet programmatic file write: form the required write plan with targetPath, writeKind, contentBasis, writeMethod, and writePayloadReady=true. If a native file-write tool rejects missing or invalid arguments before writing, return to that contract's write-plan sequence; do not repeat the malformed tool call. If the write boundary still cannot be determined after required request reads and source inspection, write the failed or blocked TaskResult described by that contract and run the submit command.
+When an `execute_task` request contains `executionRules.sourceEditPreparationContract`, follow it before `Write`, `Edit`, `MultiEdit`, or quiet programmatic writes: form targetPath, writeKind, contentBasis, writeMethod, and writePayloadReady=true. If a native file-write tool rejects missing/invalid arguments before writing, return to that contract; do not repeat the malformed tool call. If the write boundary remains unclear, write the failed/blocked TaskResult and submit.
 
 Candidate/result JSON under `.loom/` is machine-facing protocol data. Write or repair those files silently, then report only the artifact path, submit result, validation issues, and next action.
 
@@ -117,14 +117,15 @@ Keep chat output compact. Do not paste generated JSON candidates, result files, 
 
 ## Engineering Discipline
 
-Use loom artifacts to preserve the engineering reasoning, not only the next command.
+Load only the delivery reference that matches the current instruction:
 
-- During Brainstorm and candidate generation, resolve fuzzy or overloaded domain terms early. If code, docs, and user language disagree, surface the conflict at the next user gate instead of silently choosing.
-- Inside the returned loom task boundary, prefer a narrow end-to-end slice that can be verified on its own over horizontal layer-only edits, unless the TaskExecutionRequest explicitly asks for infrastructure-only work.
-- For bugs, repairs, and regressions, build or identify the tightest runnable feedback signal before speculative fixes when feasible: a focused test, CLI command, browser check, log window, fixture replay, or equivalent. Record the signal and result in TaskResult evidence.
-- Test observable behavior through the highest stable interface available. Avoid tests coupled to private implementation unless the request requires that seam.
-- Capture durable design choices in the candidate/result evidence or existing project docs when the task permits. Do not create new decision docs unless the request or repo convention calls for them.
-- For handoff and continuation, reference existing loom refs, result files, logs, commits, preview evidence, and verification evidence instead of restating large artifacts in chat.
+- [references/delivery/repair.md](references/delivery/repair.md): bug fixes, failed checks, regressions, repairs.
+- [references/delivery/testing.md](references/delivery/testing.md): tests and verification seams.
+- [references/delivery/domain.md](references/delivery/domain.md): concept conflicts.
+- [references/delivery/planning.md](references/delivery/planning.md): scope, slices, dependencies.
+- [references/delivery/design.md](references/delivery/design.md): modules, interfaces, seams.
+- [references/delivery/review.md](references/delivery/review.md): findings and repairable issues.
+- [references/delivery/handoff.md](references/delivery/handoff.md): final, blocked, handoff, continuation.
 
 ## Frontend UIX Delivery
 
