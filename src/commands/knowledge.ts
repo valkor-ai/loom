@@ -185,8 +185,9 @@ function knowledgeSemanticInstruction(input: {
     instructions: [
       "Read instruction.requestRef as a KnowledgeSemanticBuildRequest.",
       "For every chunk listed in request.chunkPack.chunks, read the chunk text through chunk.readCommand.",
-      "Write instruction.resultFile as KnowledgeSemanticPackResult with schemaVersion, buildId, packId, and one chunkResult per requested chunk.",
-      "For each chunkResult, provide status, concise summary, semanticLabels using allowed label kinds/confidence values, blockAffinity values from 0 to 1, and optional notes.",
+      "Copy request.outputContract.resultTemplate as the result file shape, then fill each existing chunkResult for its matching chunkId.",
+      "Do not inspect Loom source files, dist files, TypeScript type definitions, or old semantic result files to infer the KnowledgeSemanticPackResult schema; the request outputContract.resultTemplate is the schema authority.",
+      "For each chunkResult, fill status from generationRules.statusValues, concise summary, semanticLabels using generationRules.labelKinds/confidenceValues and semanticLabelFieldRules, blockAffinity values for every generationRules.blockAffinityFields entry, and notes when useful.",
       "Run instruction.submitCommand after writing the result.",
       "If the submit response returns another generate_knowledge_semantics instruction, continue immediately until the source is published or a non-repairable blocker appears.",
     ],
@@ -199,7 +200,7 @@ function knowledgeSemanticInstruction(input: {
     requiredSteps: [
       "read instruction.requestRef",
       "read every chunk body listed by the KnowledgeSemanticBuildRequest",
-      "write instruction.resultFile as KnowledgeSemanticPackResult",
+      "copy request.outputContract.resultTemplate and fill it as instruction.resultFile",
       "run instruction.submitCommand",
       "follow any returned generate_knowledge_semantics instruction immediately",
     ],
@@ -207,6 +208,7 @@ function knowledgeSemanticInstruction(input: {
       "do not stop after knowledge build reports semantic_pending",
       "do not ask the user whether to continue to the semantic pack",
       "do not summarize progress before instruction.submitCommand succeeds",
+      "do not read Loom source, dist, TypeScript definitions, or old results to infer the semantic result schema",
     ],
     stopOnlyWhen: [
       "the knowledge source is published",

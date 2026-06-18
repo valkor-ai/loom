@@ -455,13 +455,19 @@ export type KnowledgeSemanticBuildRequest = {
   outputContract: {
     resultFile: string;
     schema: "KnowledgeSemanticPackResult";
+    resultTemplate: KnowledgeSemanticPackResult;
   };
   generationRules: {
+    statusValues: KnowledgeSemanticChunkResult["status"][];
     labelKinds: KnowledgeSemanticLabel["kind"][];
     confidenceValues: KnowledgeSemanticLabel["confidence"][];
+    resultTemplateRule: string;
     summaryRule: string;
     semanticLabelRule: string;
+    semanticLabelFieldRules: string[];
     blockAffinityRule: string;
+    blockAffinityFields: Array<keyof KnowledgeBlockAffinity>;
+    blockAffinityValueRule: string;
     blockAffinityGuidance: Record<keyof KnowledgeBlockAffinity, string>;
   };
   submitCommand: KnowledgeCommandInvocation;

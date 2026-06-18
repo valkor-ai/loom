@@ -84,6 +84,19 @@ assert.equal(build.actionRequired.autoContinue, true);
 assert.equal(build.actionRequired.mustRunImmediately, true);
 assert.equal(build.instruction.requestRef, build.data.firstRequestPath);
 assert.equal(build.instruction.resultFile, request.outputContract.resultFile);
+assertResultTemplate(request);
+assert.deepEqual(request.generationRules.statusValues, ["completed", "low_signal", "unreadable"]);
+assert.deepEqual(request.generationRules.blockAffinityFields, ["phaseScope", "conceptGrounding", "frontendExperience", "finalSummary"]);
+assert.match(
+  request.generationRules.resultTemplateRule,
+  /outputContract\.resultTemplate/,
+  "Semantic build request must make resultTemplate the result shape authority.",
+);
+assert.match(
+  request.generationRules.resultTemplateRule,
+  /Do not infer the schema from Loom source files/,
+  "Semantic build request must forbid source-code schema guessing.",
+);
 assert.match(
   request.generationRules.blockAffinityGuidance.frontendExperience,
   /target discovery/,
@@ -115,6 +128,12 @@ legacyRequest.chunkPack.chunks = legacyRequest.chunkPack.chunks.map((chunk) => (
     argv: ["knowledge", "inspect", "--build-id", legacyRequest.buildId, "--chunk", chunk.chunkId],
   },
 }));
+delete legacyRequest.outputContract.resultTemplate;
+delete legacyRequest.generationRules.statusValues;
+delete legacyRequest.generationRules.resultTemplateRule;
+delete legacyRequest.generationRules.semanticLabelFieldRules;
+delete legacyRequest.generationRules.blockAffinityFields;
+delete legacyRequest.generationRules.blockAffinityValueRule;
 writeJson(build.data.firstRequestPath, legacyRequest);
 
 const initialResume = run(["knowledge", "resume", "funds-semantic"]);
@@ -133,6 +152,7 @@ assert.deepEqual(
   readJson(build.data.firstRequestPath).chunkPack.chunks[0].readCommand.argv.slice(0, 6),
   ["knowledge", "inspect", "--source", "funds-semantic", "--build-id", request.buildId],
 );
+assertResultTemplate(readJson(build.data.firstRequestPath));
 
 const firstChunkText = run(request.chunkPack.chunks[0].readCommand.argv);
 assert.equal(firstChunkText.command, "knowledge.inspect");
@@ -141,6 +161,14 @@ assert.equal(firstChunkText.data.buildId, request.buildId);
 assert.equal(firstChunkText.data.chunkId, request.chunkPack.chunks[0].chunkId);
 assert.match(firstChunkText.data.text, /Withdrawal requires a withdrawal password/);
 
+const legacySubmitRequest = readJson(build.data.firstRequestPath);
+delete legacySubmitRequest.outputContract.resultTemplate;
+delete legacySubmitRequest.generationRules.statusValues;
+delete legacySubmitRequest.generationRules.resultTemplateRule;
+delete legacySubmitRequest.generationRules.semanticLabelFieldRules;
+delete legacySubmitRequest.generationRules.blockAffinityFields;
+delete legacySubmitRequest.generationRules.blockAffinityValueRule;
+writeJson(build.data.firstRequestPath, legacySubmitRequest);
 writeJson(request.outputContract.resultFile, {
   schemaVersion: "1.0",
   buildId: request.buildId,
@@ -163,6 +191,12 @@ assert.equal(repair.instruction.mode, "generate_knowledge_semantics");
 assert.equal(repair.actionRequired.autoContinue, true);
 assert.equal(repair.instruction.requestRef, build.data.firstRequestPath);
 assert.equal(repair.instruction.resultFile, request.outputContract.resultFile);
+assert.match(
+  repair.instruction.instructions.join("\n"),
+  /outputContract\.resultTemplate/,
+  "Semantic repair instruction must tell the agent to use resultTemplate.",
+);
+assertResultTemplate(readJson(build.data.firstRequestPath));
 assert.equal(repair.instruction.repairRequestPath, repair.data.repairRequestPath);
 assert.equal(repair.instruction.issues.some((issue) => issue.code === "missing_chunk_result"), true);
 assert.equal(readJson(path.join(loomHome, "knowledge", "registry.json")).sources.length, 0);
@@ -280,28 +314,50 @@ function pad(value) {
   return String(value).padStart(2, "0");
 }
 
+function assertResultTemplate(packRequest) {
+  const template = packRequest.outputContract.resultTemplate;
+  assert.equal(template.schemaVersion, "1.0");
+  assert.equal(template.buildId, packRequest.buildId);
+  assert.equal(template.packId, packRequest.packId);
+  assert.equal(template.chunkResults.length, packRequest.chunkPack.chunks.length);
+  assert.deepEqual(
+    template.chunkResults.map((chunk) => chunk.chunkId),
+    packRequest.chunkPack.chunks.map((chunk) => chunk.chunkId),
+  );
+  for (const chunkResult of template.chunkResults) {
+    assert.equal(chunkResult.status, "completed");
+    assert.equal(chunkResult.summary, "");
+    assert.deepEqual(chunkResult.semanticLabels, []);
+    assert.deepEqual(chunkResult.blockAffinity, {
+      phaseScope: 0,
+      conceptGrounding: 0,
+      frontendExperience: 0,
+      finalSummary: 0,
+    });
+    assert.deepEqual(chunkResult.notes, []);
+  }
+}
+
 function writeSemanticResult(packRequest) {
-  writeJson(packRequest.outputContract.resultFile, {
-    schemaVersion: "1.0",
-    buildId: packRequest.buildId,
-    packId: packRequest.packId,
-    chunkResults: packRequest.chunkPack.chunks.map((chunk, index) => ({
-      chunkId: chunk.chunkId,
-      status: packRequest.packIndex === 1 && index === 0 ? "completed" : "low_signal",
-      summary: `Summary for ${chunk.chunkId}`,
-      semanticLabels: packRequest.packIndex === 1 && index === 0 ? [{
-        kind: "operation",
-        text: "Withdrawal",
-        normalizedText: "withdrawal",
-        aliases: ["cash out"],
-        confidence: "high",
-      }] : [],
-      blockAffinity: {
-        phaseScope: 0.2,
-        conceptGrounding: 0.8,
-        frontendExperience: 0.3,
-        finalSummary: 0.4,
-      },
-    })),
-  });
+  assertResultTemplate(packRequest);
+  const result = structuredClone(packRequest.outputContract.resultTemplate);
+  result.chunkResults = result.chunkResults.map((chunkResult, index) => ({
+    ...chunkResult,
+    status: packRequest.packIndex === 1 && index === 0 ? "completed" : "low_signal",
+    summary: `Summary for ${chunkResult.chunkId}`,
+    semanticLabels: packRequest.packIndex === 1 && index === 0 ? [{
+      kind: "operation",
+      text: "Withdrawal",
+      normalizedText: "withdrawal",
+      aliases: ["cash out"],
+      confidence: "high",
+    }] : [],
+    blockAffinity: {
+      phaseScope: 0.2,
+      conceptGrounding: 0.8,
+      frontendExperience: 0.3,
+      finalSummary: 0.4,
+    },
+  }));
+  writeJson(packRequest.outputContract.resultFile, result);
 }

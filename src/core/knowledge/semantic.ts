@@ -53,6 +53,21 @@ const LABEL_KINDS: KnowledgeSemanticLabel["kind"][] = [
 
 const CONFIDENCE_VALUES: KnowledgeSemanticLabel["confidence"][] = ["low", "medium", "high"];
 const CHUNK_RESULT_STATUSES: KnowledgeSemanticChunkResult["status"][] = ["completed", "low_signal", "unreadable"];
+const BLOCK_AFFINITY_FIELDS: Array<keyof KnowledgeBlockAffinity> = ["phaseScope", "conceptGrounding", "frontendExperience", "finalSummary"];
+const RESULT_TEMPLATE_RULE = "Copy outputContract.resultTemplate as the result file shape, then fill each chunkResult for the matching chunkId. Do not infer the schema from Loom source files, dist files, TypeScript types, or old semantic result files.";
+const SEMANTIC_LABEL_FIELD_RULES = [
+  "semanticLabels[].kind must be one of generationRules.labelKinds.",
+  "semanticLabels[].text is the label text from the chunk.",
+  "semanticLabels[].normalizedText is the normalized label text used for retrieval.",
+  "semanticLabels[].aliases is an array; use [] when there are no aliases.",
+  "semanticLabels[].confidence must be one of generationRules.confidenceValues.",
+];
+const BLOCK_AFFINITY_GUIDANCE: Record<keyof KnowledgeBlockAffinity, string> = {
+  phaseScope: "Score high when the chunk helps decide phase boundaries, included work, excluded work, deferred work, dependency order, or next-phase handoff.",
+  conceptGrounding: "Score high when the chunk explains objects, operations, fields, states, rules, invariants, preconditions, validation, blocking reasons, outcomes, or misunderstanding boundaries.",
+  frontendExperience: "Score high when the chunk explains a page or workspace surface, target discovery, query and selection, list or detail view, action entry point, form input, success feedback, error or business-blocking feedback, loading or empty state, or refresh/readback behavior for a user-facing or staff-facing workflow.",
+  finalSummary: "Score high only for concise overview chunks that help summarize confirmed conclusions; final_summary does not run knowledge recall during Brainstorm.",
+};
 
 export async function prepareSemanticBuildRequests(input: {
   buildRun: KnowledgeBuildRun;
@@ -122,7 +137,7 @@ export async function submitKnowledgeSemanticPack(input: {
 }): Promise<KnowledgeSemanticSubmitResult> {
   const requestPath = requirePath(input.requestFile, "--request");
   const resultPath = requirePath(input.resultFile, "--result-file");
-  const request = asSemanticBuildRequest(await readJsonFile(requestPath));
+  const request = await readNormalizedSemanticRequest(requestPath);
   const statePath = knowledgeSemanticStateFile(request.sourceId, request.buildId);
   const state = asSemanticBuildState(await readJsonFile(statePath));
   const rawResult = await readPackResultJson(resultPath);
@@ -164,7 +179,7 @@ export async function submitKnowledgeSemanticPack(input: {
         buildId: request.buildId,
       });
     }
-    const nextRequest = asSemanticBuildRequest(await readJsonFile(nextPack.requestPath));
+    const nextRequest = await readNormalizedSemanticRequest(nextPack.requestPath);
     return {
       status: "accepted",
       buildId: request.buildId,
@@ -354,10 +369,17 @@ async function cleanupObsoletePendingBuildRuns(input: {
 
 async function readNormalizedSemanticRequest(requestPath: string): Promise<KnowledgeSemanticBuildRequest> {
   const request = asSemanticBuildRequest(await readJsonFile(requestPath));
-  const normalized = normalizeSemanticRequestReadCommands(request);
+  const normalized = normalizeSemanticRequest(request);
   if (normalized !== request) {
     await writeJsonAtomic(requestPath, normalized);
   }
+  return normalized;
+}
+
+function normalizeSemanticRequest(request: KnowledgeSemanticBuildRequest): KnowledgeSemanticBuildRequest {
+  let normalized = normalizeSemanticRequestReadCommands(request);
+  normalized = normalizeSemanticRequestOutputContract(normalized);
+  normalized = normalizeSemanticRequestGenerationRules(normalized);
   return normalized;
 }
 
@@ -394,6 +416,74 @@ function normalizeSemanticRequestReadCommands(
         },
       }
     : request;
+}
+
+function normalizeSemanticRequestOutputContract(
+  request: KnowledgeSemanticBuildRequest,
+): KnowledgeSemanticBuildRequest {
+  const resultTemplate = semanticResultTemplate(
+    request.buildId,
+    request.packId,
+    request.chunkPack.chunks.map((chunk) => chunk.chunkId),
+  );
+  if (JSON.stringify(request.outputContract.resultTemplate) === JSON.stringify(resultTemplate)) {
+    return request;
+  }
+  return {
+    ...request,
+    outputContract: {
+      ...request.outputContract,
+      resultTemplate,
+    },
+  };
+}
+
+function normalizeSemanticRequestGenerationRules(
+  request: KnowledgeSemanticBuildRequest,
+): KnowledgeSemanticBuildRequest {
+  const generationRules = {
+    ...request.generationRules,
+    statusValues: CHUNK_RESULT_STATUSES,
+    labelKinds: LABEL_KINDS,
+    confidenceValues: CONFIDENCE_VALUES,
+    resultTemplateRule: RESULT_TEMPLATE_RULE,
+    semanticLabelFieldRules: SEMANTIC_LABEL_FIELD_RULES,
+    blockAffinityFields: BLOCK_AFFINITY_FIELDS,
+    blockAffinityValueRule: "Each blockAffinity value must be a finite number from 0 to 1, and all generationRules.blockAffinityFields must be present.",
+    blockAffinityGuidance: BLOCK_AFFINITY_GUIDANCE,
+  };
+  if (JSON.stringify(request.generationRules) === JSON.stringify(generationRules)) {
+    return request;
+  }
+  return {
+    ...request,
+    generationRules,
+  };
+}
+
+function semanticResultTemplate(
+  buildId: string,
+  packId: string,
+  chunkIds: string[],
+): KnowledgeSemanticPackResult {
+  return {
+    schemaVersion: KNOWLEDGE_SCHEMA_VERSION,
+    buildId,
+    packId,
+    chunkResults: chunkIds.map((chunkId) => ({
+      chunkId,
+      status: "completed",
+      summary: "",
+      semanticLabels: [],
+      blockAffinity: {
+        phaseScope: 0,
+        conceptGrounding: 0,
+        frontendExperience: 0,
+        finalSummary: 0,
+      },
+      notes: [],
+    })),
+  };
 }
 
 function packChunks(chunks: KnowledgeChunkRecord[]): KnowledgeChunkRecord[][] {
@@ -446,6 +536,36 @@ function createSemanticRequest(input: {
   const documents = new Map(input.buildRun.documents.map((document) => [document.documentId, document]));
   const chunkIndex = new Map(input.buildRun.chunks.map((chunk, index) => [chunk.chunkId, index]));
   const chunkRefs = input.chunks.map((chunk) => path.join(input.runDir, chunk.textRef));
+  const requestChunks = input.chunks.map((chunk) => {
+    const document = documents.get(chunk.documentId);
+    const index = chunkIndex.get(chunk.chunkId) ?? -1;
+    const previous = index > 0 ? input.buildRun.chunks[index - 1] : undefined;
+    const next = index >= 0 ? input.buildRun.chunks[index + 1] : undefined;
+    return {
+      chunkId: chunk.chunkId,
+      documentId: chunk.documentId,
+      documentTitle: document?.title ?? chunk.title,
+      relativePath: relativeDocumentPath(document?.path ?? chunk.title, input.buildRun.roots),
+      headingPath: chunk.headingPath,
+      tokenEstimate: chunk.tokenEstimate,
+      textRef: path.join(input.runDir, chunk.textRef),
+      readCommand: {
+        argv: [
+          "knowledge",
+          "inspect",
+          "--source",
+          input.buildRun.name,
+          "--build-id",
+          input.buildRun.buildId,
+          "--chunk",
+          chunk.chunkId,
+        ],
+      },
+      ...(previous ? { previousChunkTitle: previous.title } : {}),
+      ...(next ? { nextChunkTitle: next.title } : {}),
+      splitReason: chunk.splitReason,
+    };
+  });
   return {
     schemaVersion: KNOWLEDGE_SCHEMA_VERSION,
     requestId: `ksemreq_${input.buildRun.buildId}_${input.packId}`,
@@ -457,53 +577,29 @@ function createSemanticRequest(input: {
     packIndex: input.packIndex,
     packCount: input.packCount,
     chunkPack: {
-      chunks: input.chunks.map((chunk) => {
-        const document = documents.get(chunk.documentId);
-        const index = chunkIndex.get(chunk.chunkId) ?? -1;
-        const previous = index > 0 ? input.buildRun.chunks[index - 1] : undefined;
-        const next = index >= 0 ? input.buildRun.chunks[index + 1] : undefined;
-        return {
-          chunkId: chunk.chunkId,
-          documentId: chunk.documentId,
-          documentTitle: document?.title ?? chunk.title,
-          relativePath: relativeDocumentPath(document?.path ?? chunk.title, input.buildRun.roots),
-          headingPath: chunk.headingPath,
-          tokenEstimate: chunk.tokenEstimate,
-          textRef: path.join(input.runDir, chunk.textRef),
-          readCommand: {
-            argv: [
-              "knowledge",
-              "inspect",
-              "--source",
-              input.buildRun.name,
-              "--build-id",
-              input.buildRun.buildId,
-              "--chunk",
-              chunk.chunkId,
-            ],
-          },
-          ...(previous ? { previousChunkTitle: previous.title } : {}),
-          ...(next ? { nextChunkTitle: next.title } : {}),
-          splitReason: chunk.splitReason,
-        };
-      }),
+      chunks: requestChunks,
     },
     outputContract: {
       resultFile: input.resultFile,
       schema: "KnowledgeSemanticPackResult",
+      resultTemplate: semanticResultTemplate(
+        input.buildRun.buildId,
+        input.packId,
+        requestChunks.map((chunk) => chunk.chunkId),
+      ),
     },
     generationRules: {
+      statusValues: CHUNK_RESULT_STATUSES,
       labelKinds: LABEL_KINDS,
       confidenceValues: CONFIDENCE_VALUES,
+      resultTemplateRule: RESULT_TEMPLATE_RULE,
       summaryRule: "Write a concise summary of this chunk only. Do not add external knowledge.",
       semanticLabelRule: "Generate labels only from the chunk text, title, heading path, or local neighboring context. An empty label list is valid for low-signal chunks.",
+      semanticLabelFieldRules: SEMANTIC_LABEL_FIELD_RULES,
       blockAffinityRule: "Score affinity from 0 to 1 for each Brainstorm block based only on this chunk.",
-      blockAffinityGuidance: {
-        phaseScope: "Score high when the chunk helps decide phase boundaries, included work, excluded work, deferred work, dependency order, or next-phase handoff.",
-        conceptGrounding: "Score high when the chunk explains objects, operations, fields, states, rules, invariants, preconditions, validation, blocking reasons, outcomes, or misunderstanding boundaries.",
-        frontendExperience: "Score high when the chunk explains a page or workspace surface, target discovery, query and selection, list or detail view, action entry point, form input, success feedback, error or business-blocking feedback, loading or empty state, or refresh/readback behavior for a user-facing or staff-facing workflow.",
-        finalSummary: "Score high only for concise overview chunks that help summarize confirmed conclusions; final_summary does not run knowledge recall during Brainstorm.",
-      },
+      blockAffinityFields: BLOCK_AFFINITY_FIELDS,
+      blockAffinityValueRule: "Each blockAffinity value must be a finite number from 0 to 1, and all generationRules.blockAffinityFields must be present.",
+      blockAffinityGuidance: BLOCK_AFFINITY_GUIDANCE,
     },
     submitCommand: {
       argv: ["knowledge", "semantic", "submit", "--request", input.requestPath, "--result-file", input.resultFile],
@@ -714,9 +810,8 @@ function validateBlockAffinity(
     issues.push({ code: "block_affinity_invalid", message: "blockAffinity must be an object.", path: basePath, chunkId });
     return null;
   }
-  const fields: Array<keyof KnowledgeBlockAffinity> = ["phaseScope", "conceptGrounding", "frontendExperience", "finalSummary"];
   const result: Partial<KnowledgeBlockAffinity> = {};
-  for (const field of fields) {
+  for (const field of BLOCK_AFFINITY_FIELDS) {
     const fieldValue = value[field];
     if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue) || fieldValue < 0 || fieldValue > 1) {
       issues.push({
@@ -729,7 +824,7 @@ function validateBlockAffinity(
       result[field] = fieldValue;
     }
   }
-  return fields.every((field) => result[field] !== undefined) ? result as KnowledgeBlockAffinity : null;
+  return BLOCK_AFFINITY_FIELDS.every((field) => result[field] !== undefined) ? result as KnowledgeBlockAffinity : null;
 }
 
 async function writeRepairResult(input: {

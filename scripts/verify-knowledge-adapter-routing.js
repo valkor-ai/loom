@@ -45,6 +45,16 @@ expect(
 );
 expect(
   "codex",
+  "request.outputContract.resultTemplate",
+  "Codex adapter must use the semantic result template instead of guessing the schema.",
+);
+expect(
+  "codex",
+  "Do not inspect Loom source files",
+  "Codex adapter must forbid reading Loom source to infer semantic result schema.",
+);
+expect(
+  "codex",
   "build, resume",
   "Codex adapter must mention knowledge resume as a direct knowledge command.",
 );
@@ -73,6 +83,16 @@ expect(
   "claudeSkill",
   "`generate_knowledge_semantics`",
   "Claude skill must know how to complete semantic build packs returned by knowledge build.",
+);
+expect(
+  "claudeSkill",
+  "request.outputContract.resultTemplate",
+  "Claude skill must use the semantic result template instead of guessing the schema.",
+);
+expect(
+  "claudeSkill",
+  "Do not inspect Loom source files",
+  "Claude skill must forbid reading Loom source to infer semantic result schema.",
 );
 expect(
   "claudeSkill",
@@ -105,6 +125,16 @@ expect(
   "`knowledge build` and `knowledge resume` may return `generate_knowledge_semantics`",
   "Claude command wrapper must treat knowledge resume as semantic build recovery.",
 );
+expect(
+  "claudeCommand",
+  "request.outputContract.resultTemplate",
+  "Claude command wrapper must use the semantic result template instead of guessing the schema.",
+);
+expect(
+  "claudeCommand",
+  "do not inspect Loom source files",
+  "Claude command wrapper must forbid reading Loom source to infer semantic result schema.",
+);
 
 expect(
   "opencode",
@@ -130,6 +160,16 @@ expect(
   "opencode",
   "`generate_knowledge_semantics`",
   "OpenCode command must know how to complete semantic build packs returned by knowledge build.",
+);
+expect(
+  "opencode",
+  "request.outputContract.resultTemplate",
+  "OpenCode command must use the semantic result template instead of guessing the schema.",
+);
+expect(
+  "opencode",
+  "Do not inspect Loom source files",
+  "OpenCode command must forbid reading Loom source to infer semantic result schema.",
 );
 expect(
   "opencode",
