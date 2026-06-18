@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { invalidArgument } from "../errors";
-import { readJsonFile, writeJsonAtomic } from "../state/fs";
+import { pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
 import { buildLexicalIndex } from "./lexical";
 import {
+  knowledgeSourceDir,
   knowledgeSemanticRepairFile,
   knowledgeSemanticRequestFile,
   knowledgeSemanticResultFile,
@@ -22,13 +23,16 @@ import {
   type KnowledgeSemanticLabel,
   type KnowledgeSemanticPackInfo,
   type KnowledgeSemanticPackResult,
+  type KnowledgeSemanticResumeResult,
   type KnowledgeSemanticSubmitIssue,
   type KnowledgeSemanticSubmitResult,
 } from "./types";
 import {
   findKnowledgeSource,
+  readPendingKnowledge,
   removePendingKnowledge,
   upsertKnowledgeSource,
+  validateKnowledgeName,
 } from "./state";
 
 const MAX_PACK_INPUT_TOKENS = 7000;
@@ -189,6 +193,92 @@ export async function submitKnowledgeSemanticPack(input: {
     published,
     message: `Knowledge source "${published.name}" has been published.`,
   };
+}
+
+export async function resumeKnowledgeSemanticBuild(input: {
+  name: string | undefined;
+}): Promise<KnowledgeSemanticResumeResult> {
+  const name = validateKnowledgeName(input.name);
+  const source = await findKnowledgeSource(name);
+  const pending = await readPendingKnowledge(name);
+  const sourceId = pending?.sourceId ?? source?.sourceId ?? null;
+  if (!sourceId) {
+    return {
+      status: "not_started",
+      name,
+      sourceId,
+      message: `Knowledge source "${name}" has no semantic build to resume. Run knowledge build ${name} first.`,
+    };
+  }
+
+  const state = await findLatestPendingSemanticState(sourceId, name);
+  if (!state) {
+    return {
+      status: "already_published",
+      name,
+      sourceId,
+      message: `Knowledge source "${name}" has no unfinished semantic build.`,
+    };
+  }
+
+  const nextPack = state.packs.find((pack) => !state.acceptedPackIds.includes(pack.packId));
+  if (!nextPack) {
+    return {
+      status: "already_published",
+      name,
+      sourceId,
+      message: `Knowledge source "${name}" has no unfinished semantic pack.`,
+    };
+  }
+
+  const nextRequest = asSemanticBuildRequest(await readJsonFile(nextPack.requestPath));
+  return {
+    status: "semantic_pending",
+    name,
+    sourceId,
+    buildId: state.buildId,
+    acceptedPackIds: state.acceptedPackIds,
+    packCount: state.packCount,
+    nextRequestPath: nextPack.requestPath,
+    nextRequest,
+    message: `Knowledge source "${name}" semantic build is still pending. Resume with pack ${nextPack.packIndex}/${state.packCount}.`,
+  };
+}
+
+async function findLatestPendingSemanticState(
+  sourceId: string,
+  sourceName: string,
+): Promise<KnowledgeSemanticBuildState | null> {
+  const buildRunsDir = path.join(knowledgeSourceDir(sourceId), "build-runs");
+  if (!(await pathExists(buildRunsDir))) {
+    return null;
+  }
+  const entries = await fs.readdir(buildRunsDir, { withFileTypes: true });
+  const candidates: KnowledgeSemanticBuildState[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const statePath = knowledgeSemanticStateFile(sourceId, entry.name);
+    if (!(await pathExists(statePath))) {
+      continue;
+    }
+    const state = asSemanticBuildState(await readJsonFile(statePath));
+    if (
+      state.sourceName === sourceName &&
+      state.status === "pending" &&
+      state.acceptedPackIds.length < state.packCount
+    ) {
+      candidates.push(state);
+    }
+  }
+  candidates.sort((left, right) => timestampMs(right.updatedAt) - timestampMs(left.updatedAt));
+  return candidates[0] ?? null;
+}
+
+function timestampMs(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
 function packChunks(chunks: KnowledgeChunkRecord[]): KnowledgeChunkRecord[][] {

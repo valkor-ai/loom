@@ -35,6 +35,7 @@ import {
   createKnowledgeInspectHandler,
   createKnowledgePendingHandler,
   createKnowledgeRemoveHandler,
+  createKnowledgeResumeHandler,
   createKnowledgeSearchHandler,
   createKnowledgeSemanticSubmitHandler,
   createKnowledgeStatusHandler,
@@ -693,6 +694,16 @@ function registerKnowledgeCommands(program: Command): void {
     .addOption(compactOption())
     .action(async (name: string, options) => {
       await runCommand("knowledge.build", options, createKnowledgeBuildHandler({ name }));
+    });
+
+  knowledge
+    .command("resume <name>")
+    .description("Resume an unfinished knowledge semantic build")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.resume", options, createKnowledgeResumeHandler({ name }));
     });
 
   registerKnowledgeSimpleCommand(knowledge, "list", "List knowledge sources", handleKnowledgeList, "knowledge.list");

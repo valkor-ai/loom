@@ -43,6 +43,11 @@ expect(
   "`generate_knowledge_semantics`",
   "Codex adapter must know how to complete semantic build packs returned by knowledge build.",
 );
+expect(
+  "codex",
+  "build, resume",
+  "Codex adapter must mention knowledge resume as a direct knowledge command.",
+);
 
 expect(
   "claudeSkill",
@@ -69,6 +74,11 @@ expect(
   "`generate_knowledge_semantics`",
   "Claude skill must know how to complete semantic build packs returned by knowledge build.",
 );
+expect(
+  "claudeSkill",
+  "`knowledge build` and `knowledge resume` may return `generate_knowledge_semantics`",
+  "Claude skill must treat knowledge resume as semantic build recovery.",
+);
 
 expect(
   "claudeCommand",
@@ -89,6 +99,11 @@ expect(
   "claudeCommand",
   "For knowledge routes, parse the returned JSON envelope",
   "Claude command wrapper must keep knowledge responses out of delivery protocol loading.",
+);
+expect(
+  "claudeCommand",
+  "`knowledge build` and `knowledge resume` may return `generate_knowledge_semantics`",
+  "Claude command wrapper must treat knowledge resume as semantic build recovery.",
 );
 
 expect(
@@ -115,6 +130,11 @@ expect(
   "opencode",
   "`generate_knowledge_semantics`",
   "OpenCode command must know how to complete semantic build packs returned by knowledge build.",
+);
+expect(
+  "opencode",
+  "Build/resume may return `generate_knowledge_semantics`",
+  "OpenCode command must treat knowledge resume as semantic build recovery.",
 );
 
 assertOrder(

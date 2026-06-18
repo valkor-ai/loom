@@ -519,3 +519,22 @@ export type KnowledgeSemanticSubmitResult = {
   };
   message: string;
 };
+
+export type KnowledgeSemanticResumeResult =
+  | {
+      status: "semantic_pending";
+      name: string;
+      sourceId: string;
+      buildId: string;
+      acceptedPackIds: string[];
+      packCount: number;
+      nextRequestPath: string;
+      nextRequest: KnowledgeSemanticBuildRequest;
+      message: string;
+    }
+  | {
+      status: "not_started" | "already_published";
+      name: string;
+      sourceId: string | null;
+      message: string;
+    };

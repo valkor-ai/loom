@@ -9,7 +9,7 @@ import {
   updateKnowledgeSource,
 } from "../core/knowledge/operations";
 import { buildKnowledgeSource } from "../core/knowledge/build";
-import { submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
+import { resumeKnowledgeSemanticBuild, submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
 import { buildBrainstormKnowledgeContext, inspectKnowledge, searchKnowledge } from "../core/knowledge/search";
 import { withAutoRunnableTransition } from "../core/operations/routing-instructions";
 import { ok } from "./envelope";
@@ -81,6 +81,27 @@ export function createKnowledgeBuildHandler(input: {
         requestPath: result.firstRequestPath,
         request: result.firstRequest,
       }),
+    }, result.message);
+  };
+}
+
+export function createKnowledgeResumeHandler(input: {
+  name?: string;
+}): CommandHandler {
+  return async (ctx: CommandContext): Promise<CliEnvelope> => {
+    const result = await resumeKnowledgeSemanticBuild({ name: input.name });
+    return ok("knowledge.resume", ctx.projectRoot, {
+      ...result,
+      ...(result.status === "semantic_pending"
+        ? {
+            instruction: knowledgeSemanticInstruction({
+              sourceCommand: "knowledge.resume",
+              sourceSummary: result.message,
+              requestPath: result.nextRequestPath,
+              request: result.nextRequest,
+            }),
+          }
+        : {}),
     }, result.message);
   };
 }

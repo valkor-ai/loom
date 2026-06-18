@@ -109,6 +109,14 @@ assert.equal(firstChunkText.data.buildId, request.buildId);
 assert.equal(firstChunkText.data.chunkId, request.chunkPack.chunks[0].chunkId);
 assert.match(firstChunkText.data.text, /Withdrawal requires a withdrawal password/);
 
+const initialResume = run(["knowledge", "resume", "funds-semantic"]);
+assert.equal(initialResume.command, "knowledge.resume");
+assert.equal(initialResume.data.status, "semantic_pending");
+assert.equal(initialResume.instruction.mode, "generate_knowledge_semantics");
+assert.equal(initialResume.instruction.requestRef, build.data.firstRequestPath);
+assert.equal(initialResume.instruction.resultFile, request.outputContract.resultFile);
+assert.equal(initialResume.data.nextRequest.packId, request.packId);
+
 writeJson(request.outputContract.resultFile, {
   schemaVersion: "1.0",
   buildId: request.buildId,
@@ -162,6 +170,11 @@ for (let packNumber = 1; packNumber <= build.data.packCount; packNumber += 1) {
     assert.equal(response.instruction.requestRef, response.data.nextRequestPath);
     assert.equal(response.instruction.resultFile, response.data.nextRequest.outputContract.resultFile);
     assert.equal(response.data.nextRequest.packIndex, packNumber + 1);
+    const resumed = run(["knowledge", "resume", "funds-semantic"]);
+    assert.equal(resumed.data.status, "semantic_pending");
+    assert.equal(resumed.instruction.mode, "generate_knowledge_semantics");
+    assert.equal(resumed.instruction.requestRef, response.data.nextRequestPath);
+    assert.equal(resumed.data.nextRequest.packId, response.data.nextRequest.packId);
     currentRequestPath = response.data.nextRequestPath;
     currentRequest = response.data.nextRequest;
     continue;
@@ -176,6 +189,11 @@ assert.equal(accepted.data.acceptedPackIds.length, build.data.packCount);
 assert.equal("nextRequest" in accepted.data, false);
 assert.equal(accepted.instruction, null, "published semantic build must not return another auto-runnable instruction");
 assert.equal("actionRequired" in accepted, false, "published semantic build must not require another action");
+
+const publishedResume = run(["knowledge", "resume", "funds-semantic"]);
+assert.equal(publishedResume.data.status, "already_published");
+assert.equal(publishedResume.instruction, null);
+assert.equal("actionRequired" in publishedResume, false);
 
 const registry = readJson(path.join(loomHome, "knowledge", "registry.json"));
 assert.equal(registry.sources.length, 1);

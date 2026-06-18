@@ -36,7 +36,7 @@ For `/loom continue`, `/loom status`, `/loom knowledge`, `/loom knowledge <subco
 - `/loom deploy`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`
 - `/loom deploy <subcommand>`: run `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <subcommand> --project-root /abs/project`
 
-Knowledge commands are direct source commands, not delivery requests. For `/loom knowledge ...`, do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command. Parse its JSON envelope; follow returned CLI instruction or report the result compactly.
+Knowledge commands are direct source commands, not delivery requests. For `/loom knowledge ...`, do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command. Parse its JSON envelope; follow returned CLI instruction or report the result compactly. `knowledge build` and `knowledge resume` may return `generate_knowledge_semantics`; complete that workflow immediately.
 
 For deploy commands, keep waiting on the first Bash session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
