@@ -6,50 +6,43 @@ const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "..");
 const referenceNames = ["repair.md", "testing.md", "domain.md", "planning.md", "design.md", "review.md", "handoff.md"];
+const sharedReferenceRoot = "plugins/shared/loom/references/delivery";
 const adapterRoots = [
   {
     name: "codex",
     entrypoint: "plugins/codex/skills/loom/SKILL.md",
-    referenceRoot: "plugins/codex/skills/loom/references/delivery",
+    localReferenceRoot: "plugins/codex/skills/loom/references/delivery",
     linkPrefix: "references/delivery",
   },
   {
     name: "claude",
     entrypoint: "plugins/claude-code/skills/loom/SKILL.md",
-    referenceRoot: "plugins/claude-code/skills/loom/references/delivery",
+    localReferenceRoot: "plugins/claude-code/skills/loom/references/delivery",
     linkPrefix: "references/delivery",
   },
   {
     name: "opencode",
     entrypoint: "plugins/opencode/.opencode/commands/loom.md",
-    referenceRoot: "plugins/opencode/.opencode/references/loom/delivery",
+    localReferenceRoot: "plugins/opencode/.opencode/references/loom/delivery",
     linkPrefix: "../references/loom/delivery",
   },
 ];
 
-const baselineRoot = adapterRoots[0].referenceRoot;
 let failed = false;
 
 for (const referenceName of referenceNames) {
-  const baselinePath = path.join(repoRoot, baselineRoot, referenceName);
-  const baseline = readRequired(baselinePath);
-  for (const adapter of adapterRoots.slice(1)) {
-    const candidatePath = path.join(repoRoot, adapter.referenceRoot, referenceName);
-    const candidate = readRequired(candidatePath);
-    if (candidate !== baseline) {
-      failed = true;
-      console.error(
-        [
-          `Delivery reference drift: ${referenceName}`,
-          `  baseline: ${path.relative(repoRoot, baselinePath)}`,
-          `  candidate: ${path.relative(repoRoot, candidatePath)}`,
-        ].join("\n"),
-      );
-    }
-  }
+  readRequired(path.join(repoRoot, sharedReferenceRoot, referenceName));
 }
 
 for (const adapter of adapterRoots) {
+  const localReferencePath = path.join(repoRoot, adapter.localReferenceRoot);
+  if (fs.existsSync(localReferencePath)) {
+    failed = true;
+    console.error(
+      `${adapter.localReferenceRoot}: delivery references must be installed from ${sharedReferenceRoot}, not maintained as adapter-local copies`,
+    );
+  }
+
   const entrypointPath = path.join(repoRoot, adapter.entrypoint);
   const entrypoint = readRequired(entrypointPath);
   for (const referenceName of referenceNames) {
@@ -59,6 +52,41 @@ for (const adapter of adapterRoots) {
       console.error(
         `Missing ${adapter.name} delivery reference link in ${adapter.entrypoint}: ${expectedLink}`,
       );
+    }
+  }
+}
+
+for (const expectation of [
+  {
+    file: "scripts/refresh-local-codex-plugin.js",
+    snippets: [
+      "sharedDeliveryReferenceSourceRoot",
+      "\"plugins\", \"shared\", \"loom\", \"references\", \"delivery\"",
+      "\"skills\", \"loom\", \"references\", \"delivery\"",
+    ],
+  },
+  {
+    file: "scripts/refresh-local-claude-plugin.js",
+    snippets: [
+      "sharedDeliveryReferenceSourceRoot",
+      "\"plugins\", \"shared\", \"loom\", \"references\", \"delivery\"",
+      "\"skills\", \"loom\", \"references\", \"delivery\"",
+    ],
+  },
+  {
+    file: "scripts/refresh-local-opencode-plugin.js",
+    snippets: [
+      "deliveryReferenceSourceRoot",
+      "\"plugins\", \"shared\", \"loom\", \"references\", \"delivery\"",
+      "\"loom\", \"delivery\"",
+    ],
+  },
+]) {
+  const script = readRequired(path.join(repoRoot, expectation.file));
+  for (const snippet of expectation.snippets) {
+    if (!script.includes(snippet)) {
+      failed = true;
+      console.error(`${expectation.file}: missing delivery reference install snippet: ${snippet}`);
     }
   }
 }
