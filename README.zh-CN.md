@@ -76,6 +76,7 @@ Loom 就是为弥合这条鸿沟而存在的。
 Dynamic workflows | 把每个交付目标变成一条可自适应的循环：澄清、规划、执行、验证、修复和交接。
 Delivery harness | 把需求澄清、规划、构建、检查、预览、review、修复和报告变成稳定流程。
 Requirement intelligence | 把需求澄清从普通聊天确认变成交付质量门：将已确认的阶段范围、业务规则、生命周期覆盖和页面办理路径沉淀为结构化上下文，让后续规划、编码和 review 必须承接。
+Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段，提升业务理解质量，同时避免把知识库变成隐藏需求来源。
 Token-saving context | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，减少 agent 反复读取全仓库。
 Task contracts | 将宽泛目标拆成有边界的任务，并带上 source refs、验收意图、结果文件和 continuation rules。
 Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 CLI 命令。
@@ -166,6 +167,65 @@ npm run plugin:install-adapters
 ```
 
 ## 如何使用
+
+### 使用知识库
+
+知识库是可选能力，适合在交付工作依赖产品规则、业务文档、设计规范、操作手册或其他本地参考资料时使用。
+
+Loom 会把知识库当作需求澄清辅助，而不是把它当成需求本身。需求澄清时，Loom 会搜索已启用且已成功构建的知识库索引，只读取当前澄清步骤匹配到的片段，并把有用信息转成对用户可见的问题或确认点。
+
+以下命令使用 adapter 安装脚本写入的稳定 launcher：
+
+```bash
+LOOM="$HOME/.loom/bin/loom-cli"
+PROJECT=/path/to/project
+```
+
+新增知识库：
+
+```bash
+"$LOOM" knowledge add --name product-rules ~/Documents/product-rules --project-root "$PROJECT"
+"$LOOM" knowledge build product-rules --project-root "$PROJECT"
+```
+
+`--name` 必填且必须全局唯一。一个知识库可以包含单个文件、多个文件、单个目录、多个目录，或文件与目录混合。MVP 支持 `.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.pdf`、`.docx`。
+
+更新已有知识库的路径集合：
+
+```bash
+"$LOOM" knowledge update product-rules --add-path ~/Documents/new-rules.md --project-root "$PROJECT"
+"$LOOM" knowledge update product-rules --remove-path ~/Documents/old-rules.md --project-root "$PROJECT"
+"$LOOM" knowledge update product-rules --replace-paths ~/Documents/current-rules --project-root "$PROJECT"
+"$LOOM" knowledge build product-rules --project-root "$PROJECT"
+```
+
+如果只是已注册路径里的文件内容发生变化，直接重新执行 `build`。只有知识库包含的路径集合发生变化时，才需要先执行 `update`。
+
+查看和管理已有知识库：
+
+```bash
+"$LOOM" knowledge list --project-root "$PROJECT"
+"$LOOM" knowledge status product-rules --project-root "$PROJECT"
+"$LOOM" knowledge pending product-rules --project-root "$PROJECT"
+"$LOOM" knowledge discard product-rules --project-root "$PROJECT"
+```
+
+临时停用或重新启用某个知识库：
+
+```bash
+"$LOOM" knowledge disable product-rules --project-root "$PROJECT"
+"$LOOM" knowledge enable product-rules --project-root "$PROJECT"
+```
+
+删除知识库注册和 Loom 本地索引：
+
+```bash
+"$LOOM" knowledge remove product-rules --project-root "$PROJECT"
+```
+
+`remove` 不会删除你的原始文档，只会删除 Loom 对这个知识库的注册信息、待构建队列和已构建索引。
+
+### 运行交付
 
 在 coding agent 中使用对应的 Loom 命令入口启动：
 
