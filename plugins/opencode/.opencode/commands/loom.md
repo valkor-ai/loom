@@ -114,6 +114,17 @@ If the request is a deploy-sourced synthetic execution repair, treat it as an `e
 
 Keep chat output compact. Do not paste generated JSON candidates, result files, source diffs, full patches, full source files, full `.loom` JSON artifacts, historical TaskResult files, full TaskPlan files, full request files, this command file, or large command outputs unless the user explicitly asks to inspect them.
 
+## Engineering Discipline
+
+Use loom artifacts to preserve the engineering reasoning, not only the next command.
+
+- During Brainstorm and candidate generation, resolve fuzzy or overloaded domain terms early. If code, docs, and user language disagree, surface the conflict at the next user gate instead of silently choosing.
+- Inside the returned loom task boundary, prefer a narrow end-to-end slice that can be verified on its own over horizontal layer-only edits, unless the TaskExecutionRequest explicitly asks for infrastructure-only work.
+- For bugs, repairs, and regressions, build or identify the tightest runnable feedback signal before speculative fixes when feasible: a focused test, CLI command, browser check, log window, fixture replay, or equivalent. Record the signal and result in TaskResult evidence.
+- Test observable behavior through the highest stable interface available. Avoid tests coupled to private implementation unless the request requires that seam.
+- Capture durable design choices in the candidate/result evidence or existing project docs when the task permits. Do not create new decision docs unless the request or repo convention calls for them.
+- For handoff and continuation, reference existing loom refs, result files, logs, commits, preview evidence, and verification evidence instead of restating large artifacts in chat.
+
 ## Frontend UIX Delivery
 
 Keep UIX knowledge modular. When a request includes `frontend_experience`, `frontendExperienceRequirement`, frontend review signals, or user-visible UI work, load only the relevant references:
