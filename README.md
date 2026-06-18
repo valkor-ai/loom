@@ -74,6 +74,7 @@ Capability | What it changes
 Dynamic workflows | Turn each delivery goal into an adaptive loop for clarification, planning, execution, verification, repair, and handoff.
 Delivery harness | Route work through requirement clarification, planning, building, checking, previewing, reviewing, repairing, and reporting.
 Requirement intelligence | Turns clarification from a chat step into a delivery-quality gate: confirmed scope, business rules, lifecycle coverage, and UI operation paths become structured context that planning, execution, and review must preserve.
+Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and let requirement clarification pull only matching chunks into the right step without making the knowledge base a hidden requirement source.
 Token-saving context | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents do not reread the whole repository every turn.
 Task contracts | Turn broad goals into bounded tasks with source refs, acceptance intent, result files, and continuation rules.
 Executable tools | Give agents CLI commands for context collection, task routing, result recording, deployment checks, and delivery evidence.
@@ -164,6 +165,65 @@ You normally do not need to run `loom init` by hand. Starting a delivery from an
 ```
 
 ## How to Use
+
+### Use Knowledge Sources
+
+Knowledge sources are optional, but they are useful when your delivery work depends on product rules, domain notes, design standards, operating procedures, or other local reference material.
+
+Loom treats knowledge sources as clarification aids, not as requirements by themselves. During requirement clarification, Loom searches enabled and successfully built knowledge indexes, reads only matching chunks for the current clarification step, and turns useful findings into user-visible questions or confirmation points.
+
+Use the stable launcher installed by the adapter scripts:
+
+```bash
+LOOM="$HOME/.loom/bin/loom-cli"
+PROJECT=/path/to/project
+```
+
+Add a new knowledge source:
+
+```bash
+"$LOOM" knowledge add --name product-rules ~/Documents/product-rules --project-root "$PROJECT"
+"$LOOM" knowledge build product-rules --project-root "$PROJECT"
+```
+
+`--name` is required and must be unique. A source can include one file, many files, one directory, many directories, or a mix of files and directories. The MVP supports `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.pdf`, and `.docx`.
+
+Update an existing knowledge source's registered paths:
+
+```bash
+"$LOOM" knowledge update product-rules --add-path ~/Documents/new-rules.md --project-root "$PROJECT"
+"$LOOM" knowledge update product-rules --remove-path ~/Documents/old-rules.md --project-root "$PROJECT"
+"$LOOM" knowledge update product-rules --replace-paths ~/Documents/current-rules --project-root "$PROJECT"
+"$LOOM" knowledge build product-rules --project-root "$PROJECT"
+```
+
+If the files inside an already registered path changed, run `build` again. You do not need `update` unless the path set changes.
+
+Review and manage existing knowledge sources:
+
+```bash
+"$LOOM" knowledge list --project-root "$PROJECT"
+"$LOOM" knowledge status product-rules --project-root "$PROJECT"
+"$LOOM" knowledge pending product-rules --project-root "$PROJECT"
+"$LOOM" knowledge discard product-rules --project-root "$PROJECT"
+```
+
+Disable a source without deleting it:
+
+```bash
+"$LOOM" knowledge disable product-rules --project-root "$PROJECT"
+"$LOOM" knowledge enable product-rules --project-root "$PROJECT"
+```
+
+Remove a source registration and its local Loom index:
+
+```bash
+"$LOOM" knowledge remove product-rules --project-root "$PROJECT"
+```
+
+`remove` does not delete your original documents. It only removes Loom's registration, pending queue, and built index for that knowledge source.
+
+### Run Delivery
 
 Start from your coding agent with its Loom command surface:
 
