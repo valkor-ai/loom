@@ -211,7 +211,9 @@ export async function resumeKnowledgeSemanticBuild(input: {
     };
   }
 
-  const state = await findLatestPendingSemanticState(sourceId, name);
+  const state = await findLatestPendingSemanticState(sourceId, name, {
+    lastPublishedAt: source?.index.lastBuiltAt ?? null,
+  });
   if (!state) {
     return {
       status: "already_published",
@@ -231,7 +233,7 @@ export async function resumeKnowledgeSemanticBuild(input: {
     };
   }
 
-  const nextRequest = asSemanticBuildRequest(await readJsonFile(nextPack.requestPath));
+  const nextRequest = await readNormalizedSemanticRequest(nextPack.requestPath);
   return {
     status: "semantic_pending",
     name,
@@ -248,6 +250,9 @@ export async function resumeKnowledgeSemanticBuild(input: {
 async function findLatestPendingSemanticState(
   sourceId: string,
   sourceName: string,
+  options: {
+    lastPublishedAt: string | null;
+  },
 ): Promise<KnowledgeSemanticBuildState | null> {
   const buildRunsDir = path.join(knowledgeSourceDir(sourceId), "build-runs");
   if (!(await pathExists(buildRunsDir))) {
@@ -267,7 +272,8 @@ async function findLatestPendingSemanticState(
     if (
       state.sourceName === sourceName &&
       state.status === "pending" &&
-      state.acceptedPackIds.length < state.packCount
+      state.acceptedPackIds.length < state.packCount &&
+      !isObsoletePendingState(state, options.lastPublishedAt)
     ) {
       candidates.push(state);
     }
@@ -279,6 +285,61 @@ async function findLatestPendingSemanticState(
 function timestampMs(value: string): number {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function isObsoletePendingState(state: KnowledgeSemanticBuildState, lastPublishedAt: string | null): boolean {
+  if (!lastPublishedAt) {
+    return false;
+  }
+  const publishedAt = timestampMs(lastPublishedAt);
+  if (publishedAt <= 0) {
+    return false;
+  }
+  return timestampMs(state.createdAt) <= publishedAt && timestampMs(state.updatedAt) <= publishedAt;
+}
+
+async function readNormalizedSemanticRequest(requestPath: string): Promise<KnowledgeSemanticBuildRequest> {
+  const request = asSemanticBuildRequest(await readJsonFile(requestPath));
+  const normalized = normalizeSemanticRequestReadCommands(request);
+  if (normalized !== request) {
+    await writeJsonAtomic(requestPath, normalized);
+  }
+  return normalized;
+}
+
+function normalizeSemanticRequestReadCommands(
+  request: KnowledgeSemanticBuildRequest,
+): KnowledgeSemanticBuildRequest {
+  let changed = false;
+  const chunks = request.chunkPack.chunks.map((chunk) => {
+    const argv = [
+      "knowledge",
+      "inspect",
+      "--source",
+      request.sourceName,
+      "--build-id",
+      request.buildId,
+      "--chunk",
+      chunk.chunkId,
+    ];
+    if (JSON.stringify(chunk.readCommand.argv) === JSON.stringify(argv)) {
+      return chunk;
+    }
+    changed = true;
+    return {
+      ...chunk,
+      readCommand: { argv },
+    };
+  });
+  return changed
+    ? {
+        ...request,
+        chunkPack: {
+          ...request.chunkPack,
+          chunks,
+        },
+      }
+    : request;
 }
 
 function packChunks(chunks: KnowledgeChunkRecord[]): KnowledgeChunkRecord[][] {

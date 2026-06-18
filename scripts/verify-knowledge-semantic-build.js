@@ -69,8 +69,13 @@ const doc = writeFixture("knowledge/fund.md", [
 ].join("\n"));
 
 run(["knowledge", "add", "--name", "funds-semantic", doc]);
+const staleBuild = run(["knowledge", "build", "funds-semantic"]);
+const staleResume = run(["knowledge", "resume", "funds-semantic"]);
+assert.equal(staleResume.data.status, "semantic_pending");
+assert.equal(staleResume.instruction.requestRef, staleBuild.data.firstRequestPath);
+
 const build = run(["knowledge", "build", "funds-semantic"]);
-const request = build.data.firstRequest;
+let request = build.data.firstRequest;
 assert.equal(build.compact, true, "semantic build must remain executable in compact output mode");
 assert.equal(build.data.packCount > 1, true, "fixture must exercise multi-pack semantic continuation");
 assert.equal(build.instruction.mode, "generate_knowledge_semantics");
@@ -97,8 +102,30 @@ assert.deepEqual(build.instruction.submitCommand.argv, [
   "--result-file",
   request.outputContract.resultFile,
 ]);
+
+const legacyRequest = readJson(build.data.firstRequestPath);
+legacyRequest.chunkPack.chunks = legacyRequest.chunkPack.chunks.map((chunk) => ({
+  ...chunk,
+  readCommand: {
+    argv: ["knowledge", "inspect", "--build-id", legacyRequest.buildId, "--chunk", chunk.chunkId],
+  },
+}));
+writeJson(build.data.firstRequestPath, legacyRequest);
+
+const initialResume = run(["knowledge", "resume", "funds-semantic"]);
+assert.equal(initialResume.command, "knowledge.resume");
+assert.equal(initialResume.data.status, "semantic_pending");
+assert.equal(initialResume.instruction.mode, "generate_knowledge_semantics");
+assert.equal(initialResume.instruction.requestRef, build.data.firstRequestPath);
+assert.equal(initialResume.instruction.resultFile, request.outputContract.resultFile);
+assert.equal(initialResume.data.nextRequest.packId, request.packId);
+request = initialResume.data.nextRequest;
 assert.deepEqual(
   request.chunkPack.chunks[0].readCommand.argv.slice(0, 6),
+  ["knowledge", "inspect", "--source", "funds-semantic", "--build-id", request.buildId],
+);
+assert.deepEqual(
+  readJson(build.data.firstRequestPath).chunkPack.chunks[0].readCommand.argv.slice(0, 6),
   ["knowledge", "inspect", "--source", "funds-semantic", "--build-id", request.buildId],
 );
 
@@ -108,14 +135,6 @@ assert.equal(firstChunkText.data.sourceName, "funds-semantic");
 assert.equal(firstChunkText.data.buildId, request.buildId);
 assert.equal(firstChunkText.data.chunkId, request.chunkPack.chunks[0].chunkId);
 assert.match(firstChunkText.data.text, /Withdrawal requires a withdrawal password/);
-
-const initialResume = run(["knowledge", "resume", "funds-semantic"]);
-assert.equal(initialResume.command, "knowledge.resume");
-assert.equal(initialResume.data.status, "semantic_pending");
-assert.equal(initialResume.instruction.mode, "generate_knowledge_semantics");
-assert.equal(initialResume.instruction.requestRef, build.data.firstRequestPath);
-assert.equal(initialResume.instruction.resultFile, request.outputContract.resultFile);
-assert.equal(initialResume.data.nextRequest.packId, request.packId);
 
 writeJson(request.outputContract.resultFile, {
   schemaVersion: "1.0",
