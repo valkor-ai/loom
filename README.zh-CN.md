@@ -15,6 +15,8 @@
     ·
     <a href="#省-token-的上下文方案">省 Token</a>
     ·
+    <a href="#相关工作">相关工作</a>
+    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
@@ -279,6 +281,13 @@ npm run plugin:uninstall-adapters
 卸载脚本只会删除用户级 adapter 安装产物，例如 Codex plugin source/cache entry、Claude Code commands/skills、OpenCode commands/plugins/references，以及 `~/.loom/adapters/<agent>` 元数据。它不会删除任何项目目录里的 `.loom/` 交付状态。只有当 `~/.loom/adapters/` 下已经没有其他 Loom adapter 元数据时，共享 launcher `~/.loom/bin/loom-cli` 才会被删除。
 
 卸载 adapter 后，请打开新的 agent 会话，让对应 agent 重新加载本地 command/plugin 状态。
+
+## 相关工作
+
+Loom 关注 coding-agent skills、agentic engineering workflows 和软件工程评测方向的相关工作：
+
+- [Matt Pocock's Skills](https://github.com/mattpocock/skills) - 面向需求澄清、领域语言、调试、TDD 和交接纪律的实用 agent skills。
+- [SWE-bench](https://github.com/SWE-bench/SWE-bench) - 用于评测 coding agents 的真实软件工程任务。
 
 ## 支持方
 

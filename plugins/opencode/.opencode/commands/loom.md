@@ -19,7 +19,7 @@ Do not run bare `loom` or depend on shell `PATH`. When this command file mention
 
 After an auto-runnable command response, your next action must be a tool call or file operation that follows `instruction`; do not send a progress summary first.
 
-Before sending any final/progress response during an auto-runnable loom route, run this guard: if `actionRequired.finalResponseGuard` exists, or `instruction.mode = "execute_task"` and its `resultFile` is missing or `submitCommand` has not succeeded, do not respond to the user yet. Continue executing the instruction. If the task cannot be completed, write a failed or blocked TaskResult and run `submitCommand` so loom can route the failure. A recovery command is not a normal final answer; only if the host forcibly ends the turn while tools cannot continue, tell the user to run `/loom continue`.
+Before sending any final/progress response during an auto-runnable loom route, run this guard: if `actionRequired.finalResponseGuard` exists, or `execute_task` lacks a submitted `resultFile`, keep executing. If completion is impossible, write a failed or blocked TaskResult and run `submitCommand`. If tools cannot continue, tell the user to run `/loom continue`.
 
 For `execute_task`, a task is complete only after the TaskResult exists at `instruction.resultFile` and `instruction.submitCommand` has succeeded. Passing tests, completed source edits, or a visible next task are not completion.
 
@@ -39,7 +39,7 @@ Use these invocation facts to choose the entrypoint. Dispatch by the first token
 - If `First token = deploy` and `Second token` is non-empty, run exactly `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <Second token and remaining deploy arguments> --project-root /abs/project`.
 - After a deploy command returns, follow only the deploy-specific boundaries in this command file. Do not route back into phase planning or Brainstorm unless the deploy response explicitly returns a deploy-sourced execution repair request and that repair submit later routes there.
 
-For deploy commands, if the first tool call remains active, keep waiting on that same tool session. After one short "deploy is running" update, stay quiet while polling the original session. Do not run extra `deploy status`, `deploy inspect`, or `deploy logs` during the first 120 seconds unless the original command returns, the user asks for status, or a blocker appears. After 120 seconds, use read-only observation no more often than once every 60 seconds; prefer `deploy status`, and use `deploy logs` only after repeated unchanged status or explicit user request. If any envelope returns `mode: observe_active_deploy_operation`, obey `instruction.observationPolicy`. Do not send a final done/stuck/failed deploy response while `operationActive=true`.
+For deploy commands, keep waiting on the first tool session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
 For non-deploy commands:
 
@@ -67,7 +67,7 @@ Every loom JSON response may include top-level `actionRequired` and `instruction
 - If `actionRequired.autoContinue` or `actionRequired.mustRunImmediately` is `true`, do not summarize progress, ask whether to continue, or stop after the command.
 - Immediately execute top-level `instruction` according to its `mode`.
 - If top-level `instruction` and `data.instruction` both exist, use the top-level copy first.
-- If `instruction.continuationContract.kind = "auto_runnable_transition"`, the current turn is not complete. Do not stop with a recap or progress summary. Read `continuationContract.agentObligation`, then immediately follow top-level `instruction`: use `inputRefs`, produce `outputRefs`, run the listed command/submit command, obey `requiredSteps`, and stop only under `stopOnlyWhen`.
+- If `instruction.continuationContract.kind = "auto_runnable_transition"`, the turn is not complete. Do not stop with recap/progress prose. Read `continuationContract.agentObligation`, then follow `instruction`: use `inputRefs`, produce `outputRefs`, run the listed command/submit command, obey `requiredSteps`, and stop only under `stopOnlyWhen`.
 - Stop only for `ask_user`, `manual_review`, `needs_user_decision`, `report_blocked`, `report_done`, or a non-repairable command failure.
 
 Supported instruction modes:
@@ -82,7 +82,7 @@ Supported instruction modes:
 - `observe_active_deploy_operation`: obey `instruction.observationPolicy`; prefer waiting on the original deploy command session, observe no more often than its interval, keep user-visible updates quiet, and do not send a final done/stuck/failed deploy response while `operationActive=true`.
 - `ask_user`, `manual_review`, `report_done`, `report_blocked`: handle only the returned gate or report.
 
-If a command response contains direct `data.instruction`, follow it the same way as top-level `instruction`. If `data.instruction.mode` is auto-runnable, run it now. If `data.nextAction.type` is `continue_execution`, first follow the returned `data.instruction`; when that instruction is already `execute_task`, do not run `next-task`. If any command returns an `execute_task` instruction with `continuationContract`, a summary like "the next task is ready" is not an allowed stopping point. `next-task` returns an execution request, not a stopping point.
+If a command response contains `data.instruction`, follow it like top-level `instruction`. If `data.instruction.mode` is auto-runnable, run it now. If `data.nextAction.type` is `continue_execution`, first follow `data.instruction`; when it is already `execute_task`, do not run `next-task`. `next-task` returns an execution request, not a stopping point.
 
 If an accept or record command returns `accepted:false`, `recorded:false`, top-level `instruction.mode=repair_candidate`, top-level `instruction.mode=repair_result_contract`, or a `repairInstruction`, follow that repair instruction first and resubmit the same accept/record command only when the issues are agent-repairable. Do not run `loom continue` until the repaired submit succeeds. After the repaired submit succeeds, immediately follow the successful response's `data.instruction`; do not stop to summarize if the next action is auto-runnable.
 
@@ -96,7 +96,7 @@ Use native file tools normally for source files, project docs, and small text ar
 
 Use `requestReadPlan` as the primary request-field read map and `agentAction` as the execution/write/submit map: `requestReadPlan.groups` for complete request fields, `agentAction.read.fieldGroups` only as older-request fallback, `agentAction.write` for output files, `agentAction.schema` for schema/enum locations, and `agentAction.submit` for exact submit commands. Do not invent shell selectors or infer submit arguments from older artifacts when `requestReadPlan` or `agentAction` exists.
 
-During `execute_task`, source and result writes are governed by `executionRules.sourceEditPreparationContract` when present. Do not start a file-write/edit operation until the contract's write plan is complete. If a write/edit operation is rejected for missing or invalid path/content/edit arguments before writing, return to that contract's write-plan sequence and do not repeat the malformed write. If the write boundary still cannot be determined after required request reads and source inspection, write the failed or blocked TaskResult described by that contract and run the submit command.
+During `execute_task`, source/result writes are governed by `executionRules.sourceEditPreparationContract` when present. Do not write before its plan is complete. If a write/edit operation is rejected for missing or invalid path/content/edit arguments before writing, return to that contract and do not repeat the malformed write. If the boundary remains unclear, write the failed/blocked TaskResult and submit.
 
 Candidate/result JSON under `.loom/` is machine-facing protocol data. Write or repair those files silently, then report only the artifact path, submit result, validation issues, and next action.
 
@@ -113,6 +113,18 @@ If the request includes `taskConceptGrounding`, satisfy the listed concept respo
 If the request is a deploy-sourced synthetic execution repair, treat it as an `execute_task` request that may edit application code/scripts but must not mutate the original TaskPlan, AAC, RuntimeDeliveryContract, generated Dockerfile/Compose/dockerignore, ReviewResult, or deploy state. Submit it with the returned repair submit command and immediately follow the returned deploy retry instruction.
 
 Keep chat output compact. Do not paste generated JSON candidates, result files, source diffs, full patches, full source files, full `.loom` JSON artifacts, historical TaskResult files, full TaskPlan files, full request files, this command file, or large command outputs unless the user explicitly asks to inspect them.
+
+## Engineering Discipline
+
+Load only the delivery reference that matches the current instruction:
+
+- [../references/loom/delivery/repair.md](../references/loom/delivery/repair.md): bug fixes, failed checks, regressions, repairs.
+- [../references/loom/delivery/testing.md](../references/loom/delivery/testing.md): tests and verification seams.
+- [../references/loom/delivery/domain.md](../references/loom/delivery/domain.md): concept conflicts.
+- [../references/loom/delivery/planning.md](../references/loom/delivery/planning.md): scope, slices, dependencies.
+- [../references/loom/delivery/design.md](../references/loom/delivery/design.md): modules, interfaces, seams.
+- [../references/loom/delivery/review.md](../references/loom/delivery/review.md): findings and repairable issues.
+- [../references/loom/delivery/handoff.md](../references/loom/delivery/handoff.md): final, blocked, handoff, continuation.
 
 ## Frontend UIX Delivery
 

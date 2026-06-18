@@ -15,6 +15,8 @@
     ·
     <a href="#token-saving-context">Token Saving</a>
     ·
+    <a href="#related-work">Related Work</a>
+    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
@@ -277,6 +279,13 @@ npm run plugin:uninstall-adapters
 The uninstall scripts remove only user-level adapter install artifacts, such as Codex plugin source/cache entries, Claude Code commands/skills, OpenCode commands/plugins/references, and `~/.loom/adapters/<agent>` metadata. They do not delete project-local `.loom/` delivery state. The shared launcher `~/.loom/bin/loom-cli` is removed only when no Loom adapter metadata remains under `~/.loom/adapters/`.
 
 After uninstalling an adapter, open a new agent session so that agent reloads its local command/plugin state.
+
+## Related Work
+
+Loom is informed by adjacent work in coding-agent skills, agentic engineering workflows, and software engineering evaluation:
+
+- [Matt Pocock's Skills](https://github.com/mattpocock/skills) - Practical agent skills for requirement clarification, domain language, debugging, TDD, and handoff discipline.
+- [SWE-bench](https://github.com/SWE-bench/SWE-bench) - Real-world software engineering tasks used to evaluate coding agents.
 
 ## Supported By
 
