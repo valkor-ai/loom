@@ -12,6 +12,7 @@ import {
   writeKnowledgeRegistry,
   writePendingKnowledge,
 } from "./state";
+import { formatLocalTimestamp, localTimeZoneName } from "./local-time";
 import {
   DEFAULT_MAX_KNOWLEDGE_FILE_BYTES,
   KNOWLEDGE_SCHEMA_VERSION,
@@ -20,9 +21,12 @@ import {
   type KnowledgeDiscardResult,
   type KnowledgeListResult,
   type KnowledgePendingResult,
+  type KnowledgePendingSourceView,
   type KnowledgePendingSource,
   type KnowledgeRemoveResult,
   type KnowledgeStatusResult,
+  type KnowledgeSource,
+  type KnowledgeSourceView,
   type KnowledgeToggleResult,
   type KnowledgeUpdateResult,
   type KnowledgeValidationSummary,
@@ -141,9 +145,15 @@ export async function listKnowledgePending(name?: string): Promise<KnowledgePend
   if (name) {
     const normalizedName = validateKnowledgeName(name);
     const pending = await readPendingKnowledge(normalizedName);
-    return { pending: pending ? [pending] : [] };
+    return {
+      timeZone: localTimeZoneName(),
+      pending: pending ? [withPendingLocalTimes(pending)] : [],
+    };
   }
-  return { pending: await listPendingKnowledge() };
+  return {
+    timeZone: localTimeZoneName(),
+    pending: (await listPendingKnowledge()).map((entry) => withPendingLocalTimes(entry)),
+  };
 }
 
 export async function discardKnowledgePending(name: string | undefined): Promise<KnowledgeDiscardResult> {
@@ -168,7 +178,12 @@ export async function listKnowledgeSources(): Promise<KnowledgeListResult> {
       name: source.name,
       status: source.status,
       docs: source.index.documentCount,
+      createdAt: source.createdAt,
+      createdAtLocal: formatLocalTimestamp(source.createdAt),
+      updatedAt: source.updatedAt,
+      updatedAtLocal: formatLocalTimestamp(source.updatedAt),
       lastBuild: source.index.lastBuiltAt,
+      lastBuildLocal: formatLocalTimestamp(source.index.lastBuiltAt),
       pendingOperations: pendingByName.get(source.name)?.operations.length ?? 0,
     }));
   const pendingRows = pending
@@ -178,10 +193,16 @@ export async function listKnowledgeSources(): Promise<KnowledgeListResult> {
       name: entry.name,
       status: "pending" as const,
       docs: null,
+      createdAt: entry.createdAt,
+      createdAtLocal: formatLocalTimestamp(entry.createdAt),
+      updatedAt: entry.updatedAt,
+      updatedAtLocal: formatLocalTimestamp(entry.updatedAt),
       lastBuild: null,
+      lastBuildLocal: null,
       pendingOperations: entry.operations.length,
     }));
   return {
+    timeZone: localTimeZoneName(),
     sources: [...sourceRows, ...pendingRows],
   };
 }
@@ -190,8 +211,9 @@ export async function getKnowledgeStatus(name: string | undefined): Promise<Know
   const normalizedName = validateKnowledgeName(name);
   return {
     name: normalizedName,
-    source: await findKnowledgeSource(normalizedName),
-    pending: await readPendingKnowledge(normalizedName),
+    timeZone: localTimeZoneName(),
+    source: withSourceLocalTimes(await findKnowledgeSource(normalizedName)),
+    pending: withPendingLocalTimes(await readPendingKnowledge(normalizedName)),
   };
 }
 
@@ -206,6 +228,30 @@ export async function removeKnowledge(name: string | undefined): Promise<Knowled
     message: removedSource || removedPending
       ? `Removed knowledge source state for "${normalizedName}". Original source documents were not deleted.`
       : `No knowledge source or pending queue found for "${normalizedName}".`,
+  };
+}
+
+function withSourceLocalTimes(source: KnowledgeSource | null): KnowledgeSourceView | null {
+  if (!source) return null;
+  return {
+    ...source,
+    index: {
+      ...source.index,
+      lastBuiltAtLocal: formatLocalTimestamp(source.index.lastBuiltAt),
+    },
+    createdAtLocal: formatLocalTimestamp(source.createdAt),
+    updatedAtLocal: formatLocalTimestamp(source.updatedAt),
+  };
+}
+
+function withPendingLocalTimes(pending: KnowledgePendingSource): KnowledgePendingSourceView;
+function withPendingLocalTimes(pending: KnowledgePendingSource | null): KnowledgePendingSourceView | null;
+function withPendingLocalTimes(pending: KnowledgePendingSource | null): KnowledgePendingSourceView | null {
+  if (!pending) return null;
+  return {
+    ...pending,
+    createdAtLocal: formatLocalTimestamp(pending.createdAt),
+    updatedAtLocal: formatLocalTimestamp(pending.updatedAt),
   };
 }
 

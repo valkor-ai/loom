@@ -65,6 +65,19 @@ export type KnowledgePendingSource = {
   updatedAt: string;
 };
 
+export type KnowledgePendingSourceView = KnowledgePendingSource & {
+  createdAtLocal: string | null;
+  updatedAtLocal: string | null;
+};
+
+export type KnowledgeSourceView = Omit<KnowledgeSource, "index"> & {
+  index: KnowledgeSource["index"] & {
+    lastBuiltAtLocal: string | null;
+  };
+  createdAtLocal: string | null;
+  updatedAtLocal: string | null;
+};
+
 export type KnowledgeValidationWarning = {
   path: string;
   reason: "unsupported_file_type" | "file_too_large" | "unreadable_path";
@@ -99,7 +112,8 @@ export type KnowledgeUpdateResult = {
 };
 
 export type KnowledgePendingResult = {
-  pending: KnowledgePendingSource[];
+  timeZone: string;
+  pending: KnowledgePendingSourceView[];
 };
 
 export type KnowledgeDiscardResult = {
@@ -109,19 +123,26 @@ export type KnowledgeDiscardResult = {
 };
 
 export type KnowledgeListResult = {
+  timeZone: string;
   sources: Array<{
     name: string;
     status: KnowledgeSourceStatus | "pending";
     docs: number | null;
+    createdAt: string | null;
+    createdAtLocal: string | null;
+    updatedAt: string | null;
+    updatedAtLocal: string | null;
     lastBuild: string | null;
+    lastBuildLocal: string | null;
     pendingOperations: number;
   }>;
 };
 
 export type KnowledgeStatusResult = {
   name: string;
-  source: KnowledgeSource | null;
-  pending: KnowledgePendingSource | null;
+  timeZone: string;
+  source: KnowledgeSourceView | null;
+  pending: KnowledgePendingSourceView | null;
 };
 
 export type KnowledgeRemoveResult = {

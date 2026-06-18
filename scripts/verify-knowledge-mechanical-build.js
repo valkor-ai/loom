@@ -154,13 +154,15 @@ assert.equal(pending.data.pending.length, 1);
 assert.equal(pending.data.pending[0].sourceId, build.data.sourceId);
 
 const list = run(["knowledge", "list"]);
-assert.deepEqual(list.data.sources, [{
-  name: "funds-build",
-  status: "pending",
-  docs: null,
-  lastBuild: null,
-  pendingOperations: 1,
-}]);
+assert.equal(typeof list.data.timeZone, "string");
+assert.equal(list.data.sources.length, 1);
+assert.equal(list.data.sources[0].name, "funds-build");
+assert.equal(list.data.sources[0].status, "pending");
+assert.equal(list.data.sources[0].docs, null);
+assert.equal(list.data.sources[0].lastBuild, null);
+assert.equal(list.data.sources[0].lastBuildLocal, null);
+assert.equal(list.data.sources[0].pendingOperations, 1);
+assert.match(list.data.sources[0].updatedAtLocal, /^20\d\d-\d\d-\d\d \d\d:\d\d:\d\d UTC[+-]\d\d:\d\d$/);
 
 fs.rmSync(fixtureRoot, { recursive: true, force: true });
 fs.rmSync(loomHome, { recursive: true, force: true });

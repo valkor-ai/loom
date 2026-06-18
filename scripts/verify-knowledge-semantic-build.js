@@ -25,6 +25,7 @@ function run(args) {
     encoding: "utf8",
     env: {
       ...process.env,
+      TZ: "Asia/Shanghai",
       LOOM_AGENT_PROFILE: "codex",
       LOOM_HOME: loomHome,
     },
@@ -130,6 +131,19 @@ assert.equal(registry.sources[0].index.currentBuildId, build.data.buildId);
 assert.equal(registry.sources[0].index.documentCount, 1);
 assert.equal(registry.sources[0].index.chunkCount, build.data.chunkCount);
 
+const list = run(["knowledge", "list"]);
+assert.equal(list.data.timeZone, "Asia/Shanghai");
+assert.equal(list.data.sources.length, 1);
+assert.equal(list.data.sources[0].lastBuild, registry.sources[0].index.lastBuiltAt);
+assert.equal(list.data.sources[0].lastBuildLocal, formatShanghai(registry.sources[0].index.lastBuiltAt));
+assert.equal(list.data.sources[0].updatedAtLocal, formatShanghai(registry.sources[0].updatedAt));
+
+const status = run(["knowledge", "status", "funds-semantic"]);
+assert.equal(status.data.timeZone, "Asia/Shanghai");
+assert.equal(status.data.source.index.lastBuiltAt, registry.sources[0].index.lastBuiltAt);
+assert.equal(status.data.source.index.lastBuiltAtLocal, formatShanghai(registry.sources[0].index.lastBuiltAt));
+assert.equal(status.data.source.updatedAtLocal, formatShanghai(registry.sources[0].updatedAt));
+
 const pending = run(["knowledge", "pending", "funds-semantic"]);
 assert.deepEqual(pending.data.pending, [], "published semantic build must clear pending changes");
 
@@ -154,3 +168,16 @@ fs.rmSync(loomHome, { recursive: true, force: true });
 fs.rmSync(projectRoot, { recursive: true, force: true });
 
 console.log("Knowledge semantic build verification passed.");
+
+function formatShanghai(isoTimestamp) {
+  const shifted = new Date(new Date(isoTimestamp).getTime() + 8 * 60 * 60 * 1000);
+  return [
+    `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`,
+    `${pad(shifted.getUTCHours())}:${pad(shifted.getUTCMinutes())}:${pad(shifted.getUTCSeconds())}`,
+    "UTC+08:00",
+  ].join(" ");
+}
+
+function pad(value) {
+  return String(value).padStart(2, "0");
+}

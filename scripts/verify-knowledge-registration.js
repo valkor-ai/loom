@@ -111,18 +111,22 @@ assert.equal(
 );
 
 const listAfterAdd = run(["knowledge", "list"]);
-assert.deepEqual(listAfterAdd.data.sources, [{
-  name: "funds-domain",
-  status: "pending",
-  docs: null,
-  lastBuild: null,
-  pendingOperations: 1,
-}]);
+assert.equal(typeof listAfterAdd.data.timeZone, "string");
+assert.equal(listAfterAdd.data.sources.length, 1);
+assert.equal(listAfterAdd.data.sources[0].name, "funds-domain");
+assert.equal(listAfterAdd.data.sources[0].status, "pending");
+assert.equal(listAfterAdd.data.sources[0].docs, null);
+assert.equal(listAfterAdd.data.sources[0].lastBuild, null);
+assert.equal(listAfterAdd.data.sources[0].lastBuildLocal, null);
+assert.equal(listAfterAdd.data.sources[0].pendingOperations, 1);
+assert.match(listAfterAdd.data.sources[0].updatedAtLocal, /^20\d\d-\d\d-\d\d \d\d:\d\d:\d\d UTC[+-]\d\d:\d\d$/);
 
 const pending = run(["knowledge", "pending", "funds-domain"]);
 assert.equal(pending.command, "knowledge.pending");
+assert.equal(typeof pending.data.timeZone, "string");
 assert.equal(pending.data.pending.length, 1);
 assert.equal(pending.data.pending[0].operations[0].type, "add_paths");
+assert.match(pending.data.pending[0].updatedAtLocal, /^20\d\d-\d\d-\d\d \d\d:\d\d:\d\d UTC[+-]\d\d:\d\d$/);
 
 const update = run(["knowledge", "update", "funds-domain", "--add-path", jsonDoc]);
 assert.equal(update.command, "knowledge.update");
@@ -149,8 +153,10 @@ assert.match(updateMissing.envelope?.error.message ?? "", /does not exist/);
 
 run(["knowledge", "add", "--name", "funds-domain", mainDoc]);
 const status = run(["knowledge", "status", "funds-domain"]);
+assert.equal(typeof status.data.timeZone, "string");
 assert.equal(status.data.source, null);
 assert.equal(status.data.pending.name, "funds-domain");
+assert.match(status.data.pending.createdAtLocal, /^20\d\d-\d\d-\d\d \d\d:\d\d:\d\d UTC[+-]\d\d:\d\d$/);
 
 const remove = run(["knowledge", "remove", "funds-domain"]);
 assert.equal(remove.data.removedSource, false);
