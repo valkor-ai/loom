@@ -194,6 +194,14 @@ Update an existing knowledge source's registered paths:
 
 If the files inside an already registered path changed, run `build` again. You do not need `update` unless the path set changes.
 
+Resume an unfinished semantic knowledge build:
+
+```text
+@loom knowledge resume product-rules
+```
+
+Use `resume` when a knowledge build stopped before publishing, for example after reopening a coding-agent session or when a multi-pack semantic build did not finish. It does not rebuild the source; it finds the next unfinished semantic pack and lets the agent continue until the index is published.
+
 Review and manage existing knowledge sources:
 
 ```text
