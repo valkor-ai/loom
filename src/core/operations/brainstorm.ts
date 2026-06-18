@@ -208,6 +208,7 @@ export type BrainstormSessionRequest = {
     mayUseForConceptGroundingCandidates: true;
     ignoreWhenIrrelevant: true;
   };
+  knowledgeContextProtocol: BrainstormKnowledgeContextProtocol;
   clarificationGuidance: Record<string, unknown>;
   conceptGroundingRequest: Record<string, unknown>;
   firstClarificationGate: {
@@ -272,6 +273,37 @@ const PROGRESSIVE_CLARIFICATION_BLOCKS: Array<"phase_scope" | "concept_grounding
   "frontend_experience",
   "final_summary",
 ];
+
+type BrainstormKnowledgeBlock = "phase_scope" | "concept_grounding" | "frontend_experience";
+
+export type BrainstormKnowledgeContextProtocol = {
+  status: "enabled";
+  purpose: string;
+  appliesToBlocks: BrainstormKnowledgeBlock[];
+  excludedBlocks: ["final_summary"];
+  command: {
+    name: "knowledge brainstorm-context";
+    argv: string[];
+    placeholderRules: Record<string, string>;
+  };
+  matchQueryShape: {
+    naturalLanguageQuery: string;
+    brainstormBlock: BrainstormKnowledgeBlock;
+    semanticFocus: Array<{
+      kind: "object" | "operation" | "state" | "rule" | "field" | "page" | "flow" | "other";
+      text: string;
+    }>;
+    sourceLimit: number;
+    chunkLimitPerSource: number;
+  };
+  perBlockLimits: {
+    maxSources: number;
+    maxChunks: number;
+    maxChunksPerSource: number;
+  };
+  blockRules: string[];
+  candidateBoundaryRules: string[];
+};
 
 export type AcceptBrainstormCandidateInput = {
   projectRoot: string;
@@ -1395,6 +1427,7 @@ function buildBrainstormSessionRequest(input: {
       mayUseForConceptGroundingCandidates: true,
       ignoreWhenIrrelevant: true,
     },
+    knowledgeContextProtocol: brainstormKnowledgeContextProtocol(),
     clarificationGuidance: {
       choiceFirstClarification: true,
       preferredOptionCount: { min: 3, max: 5 },
@@ -1489,6 +1522,9 @@ function buildBrainstormSessionRequest(input: {
         "Do not merge required clarification blocks.",
         "Each required block must be presented as its own user-visible step or a clearly separated section before it can be marked confirmed.",
         "A phase_scope option may mention concept or frontend context, but those mentions are context only and do not satisfy concept_grounding or frontend_experience.",
+        "For phase_scope, concept_grounding, and frontend_experience, follow knowledgeContextProtocol before presenting the block: generate a current-block KnowledgeMatchQuery, run knowledge brainstorm-context, inspect all chunks in the returned readPlan when context.status=available, then convert any useful knowledge into user-visible clarification points.",
+        "Do not run or use knowledge context for final_summary; final_summary may only summarize prior user-confirmed blocks and corrections.",
+        "Knowledge context is reference material only. It cannot directly add scope, remove scope, decide recommendations, write confirmed rules, or set page paths without user-visible confirmation in the owning block.",
         ...phaseScopeOptionComparisonRules(),
         ...phaseScopeSelfCheckRules(),
         "Do not set clarificationProgress.confirmedBlocks for a block until the user has seen that block's dedicated question or summary and confirmed or corrected it.",
@@ -1754,6 +1790,53 @@ function brainstormEnumRefs(): Record<string, string[]> {
     frontendActionEntryPoint: ["result_row_action", "detail_button", "form_submit", "bulk_action", "inline_action", "navigation_entry"],
     frontendResultObservationMode: ["list_refresh", "detail_refresh", "inline_status_update", "response_message", "not_applicable"],
     frontendInteractionState: ["loading", "success", "error", "empty", "business_blocking"],
+  };
+}
+
+function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtocol {
+  return {
+    status: "enabled",
+    purpose: "Optional block-scoped knowledge context for Brainstorm clarification. It helps the agent discover clarification points, but only user-confirmed conclusions may enter BrainstormCandidate.",
+    appliesToBlocks: ["phase_scope", "concept_grounding", "frontend_experience"],
+    excludedBlocks: ["final_summary"],
+    command: {
+      name: "knowledge brainstorm-context",
+      argv: ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
+      placeholderRules: {
+        "{queryFile}": "Write a temporary KnowledgeMatchQuery JSON file for the current Brainstorm block, then pass its path here. Do not use outputContract.candidateFile as the query file.",
+      },
+    },
+    matchQueryShape: {
+      naturalLanguageQuery: "Short natural-language query derived from the current requirement, confirmed prior blocks, and the current Brainstorm block objective.",
+      brainstormBlock: "phase_scope",
+      semanticFocus: [{
+        kind: "object",
+        text: "A concrete object, operation, state, rule, field, page, or flow phrase that appears in the requirement or confirmed prior blocks.",
+      }],
+      sourceLimit: 2,
+      chunkLimitPerSource: 3,
+    },
+    perBlockLimits: {
+      maxSources: 2,
+      maxChunks: 5,
+      maxChunksPerSource: 3,
+    },
+    blockRules: [
+      "Before presenting phase_scope, concept_grounding, or frontend_experience, generate a KnowledgeMatchQuery for that exact block and run command.argv with the query file.",
+      "Do not run knowledge brainstorm-context for final_summary.",
+      "Do not ask the user to choose or name a knowledge source for Brainstorm; the command searches enabled published knowledge sources automatically.",
+      "If the command returns context.status=empty, continue the block from the requirement, repository facts, confirmed prior blocks, and keyword hints without treating empty knowledge as a blocker.",
+      "If the command returns context.status=available, inspect every chunk listed in context.readPlan.chunks before using knowledge for that block.",
+      "Use inspected knowledge only as reference context for deciding what to ask or confirm. Knowledge cannot directly decide scope, business rules, page paths, recommendation, or exclusions.",
+      "Any knowledge-inspired point that affects scope, objects, rules, fields, states, blockers, feedback, or page path must be visible in the current user-facing clarification block and must be confirmed by the user before it becomes a Brainstorm result.",
+      "Use only the current block's context for the current block. Do not carry phase_scope chunk cards into concept_grounding or frontend_experience unless the later block runs its own knowledge context command and matches them again.",
+    ],
+    candidateBoundaryRules: [
+      "Do not write knowledge source ids, knowledge source names, knowledge chunk ids, knowledge chunk cards, inspect command output, or inspected chunk text into BrainstormCandidate.sources.",
+      "Do not write knowledge source ids, knowledge source names, knowledge chunk ids, knowledge chunk cards, inspect command output, or inspected chunk text into any BrainstormCandidate sourceRefs field.",
+      "BrainstormCandidate must contain only user-confirmed requirement conclusions. Knowledge may influence the clarification question, but not appear as a formal candidate source.",
+      "final_summary summarizes confirmed prior blocks only; it must not introduce new points from knowledge context.",
+    ],
   };
 }
 
@@ -2054,6 +2137,8 @@ function brainstormCandidateSchemaShape(input: {
       "Before setting conceptConfirmation.shownToUser=true, concept_grounding must show a scope-item coverage summary for every confirmed scope.included item. Each item must be covered, explicitly unresolved, or explicitly deferred; do not silently omit included scope.",
       "Set conceptConfirmation.shownToUser=true only after a dedicated concept_grounding block showed scope-item coverage plus applicable objects or subjects, actions or behaviors, inputs or fields, preconditions, validation or blocking reasons, success state/data/UI/API/result changes, visible or returned feedback, source refs, unresolved notes, and must-not-misinterpret-as guards.",
       "When deriving sources from RequirementContext, read sourceFieldAccessHints: input sources use sourceItems[].itemId/kind, while BrainstormCandidate output sources use sources[].sourceId/type.",
+      "Do not add knowledge source ids, knowledge source names, knowledge chunk ids, knowledge chunk cards, inspect command output, or inspected chunk text to BrainstormCandidate.sources or any sourceRefs field.",
+      "Knowledge context may shape user-visible clarification, but the candidate must preserve only the user's confirmed conclusion, not the knowledge source metadata.",
       "Required clarification blocks must not be merged: phase_scope mentions are context only and do not satisfy concept_grounding or frontend_experience.",
       "Set frontend_experience confirmed only after a dedicated frontend_experience block showed the UI target or skip reason to the user.",
       "Set finalSummaryConfirmed=true only after a dedicated final_summary block presented one user-facing pre-submit coverage checklist with concrete scope coverage, business-rule coverage or skip reason, page-operation coverage or skip reason, next phase preview in user language, deferred/not-done boundaries, and explicit corrections.",
@@ -2321,6 +2406,7 @@ function validateBrainstormCandidate(
   validateMandatoryClarificationGate(candidate, issues);
   validateConceptGrounding(candidate, phaseId, issues);
   validateFrontendExperienceConfirmation(candidate, issues);
+  validateNoKnowledgeRefsInCandidate(candidate, issues);
   if (candidate.handoff.ready !== true) {
     issues.push({ code: "HANDOFF_NOT_READY", path: "handoff.ready", message: "Confirmed BrainstormCandidate must be ready for handoff." });
   }
@@ -2377,6 +2463,74 @@ function validateBrainstormCandidate(
     }
   }
   return issues;
+}
+
+function validateNoKnowledgeRefsInCandidate(
+  candidate: BrainstormCandidate,
+  issues: Array<{ code: string; path: string; message: string }>,
+): void {
+  (candidate.sources ?? []).forEach((source, index) => {
+    visitKnowledgeRefStrings(source, `sources.${index}`, issues);
+  });
+  visitSourceRefs(candidate, "candidate", issues);
+}
+
+function visitSourceRefs(
+  value: unknown,
+  pathPrefix: string,
+  issues: Array<{ code: string; path: string; message: string }>,
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => visitSourceRefs(item, `${pathPrefix}.${index}`, issues));
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${pathPrefix}.${key}`;
+    if (key === "sourceRefs") {
+      visitKnowledgeRefStrings(child, childPath, issues);
+      continue;
+    }
+    visitSourceRefs(child, childPath, issues);
+  }
+}
+
+function visitKnowledgeRefStrings(
+  value: unknown,
+  pathPrefix: string,
+  issues: Array<{ code: string; path: string; message: string }>,
+): void {
+  if (typeof value === "string") {
+    if (isKnowledgeReferenceString(value)) {
+      issues.push({
+        code: "KNOWLEDGE_REF_NOT_CANDIDATE_SOURCE",
+        path: pathPrefix,
+        message: "Knowledge source ids, chunk ids, inspect commands, and knowledge index paths must not be written into BrainstormCandidate sources or sourceRefs.",
+      });
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => visitKnowledgeRefStrings(item, `${pathPrefix}.${index}`, issues));
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    visitKnowledgeRefStrings(child, `${pathPrefix}.${key}`, issues);
+  }
+}
+
+function isKnowledgeReferenceString(value: string): boolean {
+  return /^ksrc[_-]/.test(value) ||
+    /^kchunk[_-]/.test(value) ||
+    value.includes("/knowledge/sources/") ||
+    value.includes("\\knowledge\\sources\\") ||
+    value.includes("knowledge inspect") ||
+    value.includes("knowledge brainstorm-context");
 }
 
 function validateNextPhasePreviewConsistency(

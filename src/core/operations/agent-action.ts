@@ -132,6 +132,7 @@ export function brainstormSessionAgentActionContract(input: {
         "originalRequest",
         "contextRefs",
         "sourceFieldAccessHints",
+        "knowledgeContextProtocol",
         "firstClarificationGate",
         "clarificationConversationProtocol",
         "conceptGroundingRequest",
@@ -668,6 +669,17 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
     "riskGuidance",
     "confirmationRules",
   ], hasField);
+  const knowledgeContextProtocolFields = filterAvailable([
+    "knowledgeContextProtocol.status",
+    "knowledgeContextProtocol.purpose",
+    "knowledgeContextProtocol.appliesToBlocks",
+    "knowledgeContextProtocol.excludedBlocks",
+    "knowledgeContextProtocol.command",
+    "knowledgeContextProtocol.matchQueryShape",
+    "knowledgeContextProtocol.perBlockLimits",
+    "knowledgeContextProtocol.blockRules",
+    "knowledgeContextProtocol.candidateBoundaryRules",
+  ], hasField);
   const phaseScopeAuthorityFields = [
     ...filterAvailable([
       "phaseContinuationContext",
@@ -760,6 +772,7 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
   const groups: AgentActionReadGroup[] = [];
   pushGroup(groups, actionKind, "phase_scope_core", true, phaseScopeCoreFields);
   pushGroup(groups, actionKind, "phase_scope_authority", true, phaseScopeAuthorityFields);
+  pushGroup(groups, actionKind, "knowledge_context_protocol", true, knowledgeContextProtocolFields);
   pushGroup(groups, actionKind, "concept_grounding_context", false, conceptGroundingFields);
   pushGroup(groups, actionKind, "frontend_experience_context", false, frontendExperienceFields);
   pushGroup(groups, actionKind, "keyword_hints_advisory", false, keywordHintFields);
@@ -993,6 +1006,7 @@ function isReadField(value: unknown): value is Record<string, unknown> & { field
 function purposeForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_phase_scope_core") return "Brainstorm phase_scope gate controls, request refs, conversation rules, and root user request fields needed before asking the current phase scope question.";
   if (groupId === "brainstorm_session_phase_scope_authority") return "Source-grounded phase_scope authority fields: original requirements, prior confirmed requirement decisions, current phase seed, and narrow repository fact selectors.";
+  if (groupId === "brainstorm_session_knowledge_context_protocol") return "Block-scoped knowledge matching protocol for Brainstorm clarification; reference-only context that must not be written as candidate sources.";
   if (groupId === "brainstorm_session_concept_grounding_context") return "Brainstorm concept-grounding context to read only when presenting or writing the concept confirmation block.";
   if (groupId === "brainstorm_session_frontend_experience_context") return "Brainstorm frontend-experience context to read only when presenting or writing the frontend experience block.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Advisory keyword hints for Brainstorm concept discovery and clarification only; never use this group as scope or acceptance authority.";
@@ -1031,6 +1045,7 @@ function purposeForFieldGroup(groupId: string, fields: string[]): string {
 function whenToReadForFieldGroup(groupId: string, fields: string[]): string {
   if (groupId === "brainstorm_session_phase_scope_core") return "First read before asking the phase_scope question.";
   if (groupId === "brainstorm_session_phase_scope_authority") return "Read with phase_scope_core for source-grounded scope options.";
+  if (groupId === "brainstorm_session_knowledge_context_protocol") return "Read before each phase_scope, concept_grounding, or frontend_experience block; do not read or run knowledge context for final_summary.";
   if (groupId === "brainstorm_session_concept_grounding_context") return "Only for concept_grounding or candidate concept fields.";
   if (groupId === "brainstorm_session_frontend_experience_context") return "Only for frontend_experience or frontend candidate fields.";
   if (groupId === "brainstorm_session_keyword_hints_advisory") return "Only when concept extraction, terminology ambiguity, or candidate discovery needs advisory hints. Do not read this group by default for phase_scope, and never use keywordHints as scope or acceptance authority.";
@@ -1114,6 +1129,7 @@ function purposeForField(field: string): string {
   if (field === "originalRequest") return "User-provided requirement text and input refs for Brainstorm clarification.";
   if (field === "contextRefs") return "External context refs available to this request, such as requirement, delivery, repository, glossary, frontend, and keyword refs.";
   if (field === "sourceFieldAccessHints") return "Selector and field-name rules for reading source facts and writing BrainstormCandidate.sources without guessing schemas.";
+  if (field === "knowledgeContextProtocol") return "Block-scoped knowledge matching protocol for Brainstorm; reference-only and never a BrainstormCandidate source.";
   if (field === "firstClarificationGate") return "Required Brainstorm confirmation gate before a candidate may be submitted.";
   if (field === "clarificationConversationProtocol") return "Required progressive clarification block order and confirmation rules.";
   if (field === "conceptGroundingRequest") return "Business concept extraction, presentation, and confirmation requirements for Brainstorm.";
