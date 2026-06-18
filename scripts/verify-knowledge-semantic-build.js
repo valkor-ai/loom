@@ -208,6 +208,7 @@ assert.equal(accepted.data.acceptedPackIds.length, build.data.packCount);
 assert.equal("nextRequest" in accepted.data, false);
 assert.equal(accepted.instruction, null, "published semantic build must not return another auto-runnable instruction");
 assert.equal("actionRequired" in accepted, false, "published semantic build must not require another action");
+assert.equal(fs.existsSync(staleBuild.data.buildRunPath), false, "publishing a newer build must remove stale pending build-runs for the same knowledge source");
 
 const publishedResume = run(["knowledge", "resume", "funds-semantic"]);
 assert.equal(publishedResume.data.status, "already_published");

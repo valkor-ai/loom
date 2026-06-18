@@ -215,6 +215,12 @@ export async function resumeKnowledgeSemanticBuild(input: {
     lastPublishedAt: source?.index.lastBuiltAt ?? null,
   });
   if (!state) {
+    await cleanupObsoletePendingBuildRuns({
+      sourceId,
+      sourceName: name,
+      keepBuildId: source?.index.currentBuildId ?? null,
+      lastPublishedAt: source?.index.lastBuiltAt ?? null,
+    });
     return {
       status: "already_published",
       name,
@@ -225,6 +231,12 @@ export async function resumeKnowledgeSemanticBuild(input: {
 
   const nextPack = state.packs.find((pack) => !state.acceptedPackIds.includes(pack.packId));
   if (!nextPack) {
+    await cleanupObsoletePendingBuildRuns({
+      sourceId,
+      sourceName: name,
+      keepBuildId: source?.index.currentBuildId ?? null,
+      lastPublishedAt: source?.index.lastBuiltAt ?? null,
+    });
     return {
       status: "already_published",
       name,
@@ -296,6 +308,48 @@ function isObsoletePendingState(state: KnowledgeSemanticBuildState, lastPublishe
     return false;
   }
   return timestampMs(state.createdAt) <= publishedAt && timestampMs(state.updatedAt) <= publishedAt;
+}
+
+async function cleanupObsoletePendingBuildRuns(input: {
+  sourceId: string;
+  sourceName: string;
+  keepBuildId: string | null | undefined;
+  lastPublishedAt: string | null;
+}): Promise<string[]> {
+  if (!input.lastPublishedAt) {
+    return [];
+  }
+  const buildRunsDir = path.join(knowledgeSourceDir(input.sourceId), "build-runs");
+  if (!(await pathExists(buildRunsDir))) {
+    return [];
+  }
+  const removed: string[] = [];
+  const entries = await fs.readdir(buildRunsDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === input.keepBuildId) {
+      continue;
+    }
+    const runDir = path.join(buildRunsDir, entry.name);
+    const buildRunPath = path.join(runDir, "build-run.json");
+    const statePath = knowledgeSemanticStateFile(input.sourceId, entry.name);
+    if (!(await pathExists(buildRunPath)) || !(await pathExists(statePath))) {
+      continue;
+    }
+    const buildRun = asBuildRun(await readJsonFile(buildRunPath));
+    const state = asSemanticBuildState(await readJsonFile(statePath));
+    if (
+      buildRun.name !== input.sourceName ||
+      buildRun.status !== "semantic_pending" ||
+      state.sourceName !== input.sourceName ||
+      state.status !== "pending" ||
+      !isObsoletePendingState(state, input.lastPublishedAt)
+    ) {
+      continue;
+    }
+    await fs.rm(runDir, { recursive: true, force: true });
+    removed.push(entry.name);
+  }
+  return removed;
 }
 
 async function readNormalizedSemanticRequest(requestPath: string): Promise<KnowledgeSemanticBuildRequest> {
@@ -766,6 +820,12 @@ async function publishSemanticBuild(input: {
     updatedAt: now,
   });
   await removePendingKnowledge(buildRun.name);
+  await cleanupObsoletePendingBuildRuns({
+    sourceId: buildRun.sourceId,
+    sourceName: buildRun.name,
+    keepBuildId: buildRun.buildId,
+    lastPublishedAt: now,
+  });
 
   return {
     name: buildRun.name,
