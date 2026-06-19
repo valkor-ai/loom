@@ -142,6 +142,16 @@ assert.match(
   "Semantic build request must keep semantic aliases grounded in chunk wording.",
 );
 assert.match(
+  request.generationRules.semanticLabelRule,
+  /compact wording without a connector/,
+  "Semantic build request must ask agents to include safe compact aliases for combined process labels.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
+  /do not use aliases to cross from one business object or object relationship to another/,
+  "Semantic build request must forbid aliases that cross business object boundaries.",
+);
+assert.match(
   request.generationRules.blockAffinityRule,
   /chunk's meaning/,
   "Semantic build request must require block affinity to come from chunk meaning.",

@@ -62,7 +62,8 @@ const SEMANTIC_LABEL_RULE = [
   "Generate labels only from the chunk text, title, heading path, or local neighboring context.",
   "Decide labels per chunk from meaning.",
   "When a chunk describes multiple operations on the same object or a tightly related object relationship as a connected process, lifecycle transition, replacement, migration, recovery, or other ordered sequence, emit labels for both the individual operations and the combined process or flow using wording supported by the chunk.",
-  "Put only chunk-supported wording variants into aliases; do not invent business aliases from outside knowledge.",
+  "For combined process or flow labels, include chunk-supported aliases for wording variants that preserve the same object relationship and operation set, such as connector-preserving wording, compact wording without a connector, or wording without explanatory suffixes like process, flow, lifecycle, transition, or migration.",
+  "Put only chunk-supported wording variants into aliases; do not invent business aliases from outside knowledge, and do not use aliases to cross from one business object or object relationship to another.",
   "Do not use regex rules, keyword tables, or script-generated label factories as semantic judgment; scripts may only serialize already-decided JSON.",
   "An empty label list is valid for low-signal chunks.",
 ].join(" ");

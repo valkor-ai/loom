@@ -218,9 +218,24 @@ includes(
   "Concept knowledge query guidance must tell agents to build semantically complete focus anchors.",
 );
 includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  "each identifiable component operation as separate operation focus entries",
+  "Phase scope knowledge query guidance must split connected processes into component operation focus anchors.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
+  "single compound operation focus",
+  "Concept knowledge query guidance must not collapse lifecycle processes into one compound operation focus.",
+);
+includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
   "page or flow focus",
   "Frontend knowledge query guidance must prefer page or flow focus anchors.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
+  "do not rely on a compound operation focus alone",
+  "Frontend knowledge query guidance must not rely on a compound operation focus for workflows.",
 );
 includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.retrievalIntent,
@@ -250,6 +265,8 @@ includes(protocolRules, "Do not run knowledge brainstorm-context for final_summa
 includes(protocolRules, "inspect every chunk listed in context.readPlan.chunks", "available knowledge context must be inspected.");
 includes(protocolRules, "Do not ask the user to choose or name a knowledge source", "Brainstorm must not support manual knowledge source selection.");
 includes(protocolRules, "semanticFocus should include them explicitly", "Brainstorm must instruct agents to provide concrete semanticFocus anchors when available.");
+includes(protocolRules, "do not collapse it into a single compound operation semanticFocus", "Brainstorm must split connected-process semanticFocus anchors when possible.");
+includes(protocolRules, "do not move lifecycle, replacement, recovery, or relationship focus to an adjacent business object", "Brainstorm must preserve object boundaries when creating semanticFocus.");
 includes(protocolRules, "instead of inventing labels", "Brainstorm must forbid invented semanticFocus labels.");
 
 const blockRules = brainstormRequest.clarificationConversationProtocol.blockExecutionRules.join("\n");

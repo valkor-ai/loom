@@ -1851,6 +1851,8 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         semanticFocusRules: [
           "Prefer the current phase's primary business or technical object as object focus.",
           "Add operation, rule, state, or flow focus for the scope boundary being compared when those anchors are present.",
+          "For connected processes, lifecycle transitions, replacements, migrations, recoveries, or ordered operation sequences, include the primary object plus each identifiable component operation as separate operation focus entries; add a flow focus for the combined process when the whole-process wording is explicit.",
+          "Do not collapse a connected sequence into only one compound operation focus; if component operations cannot be identified, keep the compound wording in naturalLanguageQuery instead of inventing operation focus labels.",
           "Do not use only generic scope words such as include, exclude, defer, or next phase as semanticFocus.",
         ],
         mustNotDo: [
@@ -1868,6 +1870,8 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         semanticFocusRules: [
           "Prefer object focus for each current-phase business object that must be understood.",
           "Pair object focus with the most relevant operation, rule, state, field, or flow focus when those anchors are present.",
+          "For connected processes, lifecycle transitions, replacements, migrations, recoveries, or ordered operation sequences, include the object plus each identifiable component operation as separate operation focus entries; add state, rule, field, or flow focus only when those anchors are explicit in the current requirement or confirmed context.",
+          "Do not use a single compound operation focus as a substitute for the component operations of a lifecycle or process; if the components are unclear, leave the compound phrase in naturalLanguageQuery for user-visible clarification rather than inventing labels.",
           "Do not query only with broad intent words such as rule, field, validation, or blocking when a concrete object or operation is available.",
         ],
         mustNotDo: [
@@ -1885,6 +1889,8 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         semanticFocusRules: [
           "Prefer page or flow focus for the user-visible or staff-visible path being clarified.",
           "Pair page or flow focus with operation, field, or state focus for action entry, inputs, feedback, blocking, loading, empty, refresh, or readback behavior when those anchors are present.",
+          "For multi-step page paths or operation workflows, include page or flow focus plus the concrete operation, field, or state anchors that drive the user path; do not rely on a compound operation focus alone.",
+          "If the workflow components are not explicit enough to name safely, keep the phrase in naturalLanguageQuery instead of inventing page, flow, or operation focus labels.",
           "Use object focus only as supporting context; do not let object-only focus drive frontend_experience retrieval.",
         ],
         mustNotDo: [
@@ -1903,6 +1909,8 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
       "Before presenting phase_scope, concept_grounding, or frontend_experience, generate a KnowledgeMatchQuery for that exact block and run command.argv with the query file.",
       "Use blockQueryGuidance for the current block when writing the KnowledgeMatchQuery. The query must combine the current phase anchors with the current block's retrieval intent instead of reusing a generic business-only query.",
       "When concrete anchors are available, semanticFocus should include them explicitly so retrieval can prefer semantically complete chunks. For phase_scope and concept_grounding, prefer object plus operation/rule/state/field/flow anchors. For frontend_experience, prefer page/flow plus operation/field/state anchors; object focus is supporting context only.",
+      "When the current anchor is a connected process, lifecycle transition, replacement, migration, recovery, or ordered sequence, do not collapse it into a single compound operation semanticFocus. Use separate operation focus entries for identifiable component operations and add flow focus only when the whole-process wording is explicit.",
+      "Preserve the current requirement's object or tightly related object relationship when creating semanticFocus; do not move lifecycle, replacement, recovery, or relationship focus to an adjacent business object.",
       "If no concrete semanticFocus anchor is available, leave semanticFocus empty and continue with naturalLanguageQuery instead of inventing labels.",
       "Do not run knowledge brainstorm-context for final_summary.",
       "Do not ask the user to choose or name a knowledge source for Brainstorm; the command searches enabled published knowledge sources automatically.",
