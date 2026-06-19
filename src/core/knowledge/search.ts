@@ -95,6 +95,18 @@ type ScoredChunk = {
   matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"];
 };
 
+type SemanticFocusLookup = {
+  focus: KnowledgeSearchQuery["semanticFocus"][number];
+  lookupText: string;
+  matchMode: "exact" | "contains";
+  requiredText?: string;
+};
+
+type SemanticChunkMatch = {
+  focusScores: Map<string, number>;
+  matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"];
+};
+
 export async function searchKnowledge(input: SearchInput): Promise<KnowledgeSearchResult> {
   const query = await searchQueryFromInput(input);
   const sources = await loadSearchSources(input.source);
@@ -562,34 +574,222 @@ function scoreSemantic(
   score: number;
   matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"];
 }> {
-  const result = new Map<string, {
-    score: number;
-    matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"];
-  }>();
-  for (const focus of query.semanticFocus) {
-    const key = normalizeSemanticText(focus.text);
-    const entry = source.semanticIndex.labels[key];
-    if (!entry) {
-      continue;
-    }
-    for (const posting of entry.postings) {
-      if (posting.kind !== focus.kind) {
+  const matches = new Map<string, SemanticChunkMatch>();
+  for (const lookup of semanticFocusLookups(query.semanticFocus, source.semanticIndex)) {
+    for (const [, posting] of semanticLookupPostings(source.semanticIndex, lookup)) {
+      if (!semanticPostingMatchesFocus(posting.kind, lookup.focus.kind)) {
         continue;
       }
       const base = posting.source === "label" ? 1.0 : 0.8;
       const confidence = confidenceMultiplier(posting.confidence);
-      const previous = result.get(posting.chunkId) ?? { score: 0, matchedLabels: [] };
-      previous.score = Math.min(1, previous.score + base * confidence);
-      previous.matchedLabels.push({
-        kind: posting.kind,
-        text: focus.text,
+      const previous = matches.get(posting.chunkId) ?? { focusScores: new Map(), matchedLabels: [] };
+      const focusKey = semanticFocusKey(lookup.focus.kind, lookup.focus.text);
+      previous.focusScores.set(focusKey, Math.max(previous.focusScores.get(focusKey) ?? 0, base * confidence));
+      pushMatchedLabel(previous.matchedLabels, {
+        kind: lookup.focus.kind,
+        text: lookup.focus.text,
         matchSource: posting.source === "label" ? "text" : "alias",
         confidence: posting.confidence,
       });
-      result.set(posting.chunkId, previous);
+      matches.set(posting.chunkId, previous);
+    }
+  }
+  const result = new Map<string, {
+    score: number;
+    matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"];
+  }>();
+  for (const [chunkId, match] of matches) {
+    result.set(chunkId, {
+      score: Math.min(1, [...match.focusScores.values()].reduce((sum, score) => sum + score, 0)),
+      matchedLabels: match.matchedLabels,
+    });
+  }
+  return result;
+}
+
+function semanticPostingMatchesFocus(
+  postingKind: KnowledgeSemanticLabel["kind"],
+  focusKind: KnowledgeSemanticLabel["kind"],
+): boolean {
+  if (postingKind === focusKind) {
+    return true;
+  }
+  if (
+    (postingKind === "flow" && focusKind === "operation") ||
+    (postingKind === "operation" && focusKind === "flow")
+  ) {
+    return true;
+  }
+  if (
+    (postingKind === "state" && focusKind === "rule") ||
+    (postingKind === "rule" && focusKind === "state")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function semanticLookupPostings(
+  semanticIndex: KnowledgeSemanticIndex,
+  lookup: SemanticFocusLookup,
+): Array<[string, KnowledgeSemanticIndex["labels"][string]["postings"][number]]> {
+  const normalized = normalizeSemanticText(lookup.lookupText);
+  const required = lookup.requiredText ? normalizeSemanticText(lookup.requiredText) : "";
+  if (!normalized) {
+    return [];
+  }
+  if (lookup.matchMode === "exact") {
+    const entry = semanticIndex.labels[normalized];
+    return entry ? entry.postings.map((posting) => [normalized, posting]) : [];
+  }
+  return Object.entries(semanticIndex.labels)
+    .filter(([labelText]) => labelText.includes(normalized) && (!required || labelText.includes(required)))
+    .flatMap(([labelText, entry]) => entry.postings.map((posting): [string, typeof posting] => [labelText, posting]));
+}
+
+function semanticFocusLookups(
+  semanticFocus: KnowledgeSearchQuery["semanticFocus"],
+  semanticIndex: KnowledgeSemanticIndex,
+): SemanticFocusLookup[] {
+  const subjects = dedupeSemanticFocus(semanticFocus.filter((focus) => isSubjectFocusKind(focus.kind)));
+  const sourceSubjects = semanticIndexSubjectTexts(semanticIndex);
+  const result: SemanticFocusLookup[] = [];
+  const seen = new Set<string>();
+  for (const focus of semanticFocus) {
+    pushSemanticFocusLookup(result, seen, focus, focus.text);
+    if (!isAttributiveFocusKind(focus.kind)) {
+      continue;
+    }
+    for (const subject of subjects) {
+      if (!subject.text || semanticFocusKey(subject.kind, subject.text) === semanticFocusKey(focus.kind, focus.text)) {
+        continue;
+      }
+      for (const combined of combineSemanticAnchorTexts(subject.text, focus.text)) {
+        pushSemanticFocusLookup(result, seen, focus, combined);
+        pushSemanticFocusLookup(result, seen, focus, combined, "contains");
+      }
+      pushSemanticFocusLookup(result, seen, focus, focus.text, "contains", subject.text);
+      const stripped = stripSemanticAnchorQualifier(focus.text, subject.text);
+      if (stripped) {
+        pushSemanticFocusTextAndParts(result, seen, focus, stripped);
+      }
+    }
+    for (const subjectText of sourceSubjects) {
+      const stripped = stripSemanticAnchorQualifier(focus.text, subjectText);
+      if (stripped) {
+        pushSemanticFocusTextAndParts(result, seen, focus, stripped);
+      }
     }
   }
   return result;
+}
+
+function semanticIndexSubjectTexts(semanticIndex: KnowledgeSemanticIndex): string[] {
+  return Object.entries(semanticIndex.labels)
+    .filter(([, entry]) => entry.postings.some((posting) => isSubjectFocusKind(posting.kind)))
+    .map(([text]) => text)
+    .filter((text) => text.length > 0);
+}
+
+function pushSemanticFocusLookup(
+  result: SemanticFocusLookup[],
+  seen: Set<string>,
+  focus: KnowledgeSearchQuery["semanticFocus"][number],
+  lookupText: string,
+  matchMode: SemanticFocusLookup["matchMode"] = "exact",
+  requiredText?: string,
+): void {
+  const normalized = normalizeSemanticText(lookupText);
+  if (!normalized) {
+    return;
+  }
+  const required = requiredText ? normalizeSemanticText(requiredText) : "";
+  const key = `${semanticFocusKey(focus.kind, focus.text)}=>${matchMode}:${required}:${normalized}`;
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  result.push({ focus, lookupText, matchMode, ...(requiredText ? { requiredText } : {}) });
+}
+
+function pushSemanticFocusTextAndParts(
+  result: SemanticFocusLookup[],
+  seen: Set<string>,
+  focus: KnowledgeSearchQuery["semanticFocus"][number],
+  lookupText: string,
+): void {
+  pushSemanticFocusLookup(result, seen, focus, lookupText);
+  for (const part of splitSemanticCompoundText(lookupText)) {
+    pushSemanticFocusLookup(result, seen, focus, part);
+  }
+}
+
+function splitSemanticCompoundText(value: string): string[] {
+  return value
+    .split(/\s*(?:与|及|和|、|,|，|\/|／|&|\+|\band\b)\s*/iu)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && normalizeSemanticText(part) !== normalizeSemanticText(value));
+}
+
+function pushMatchedLabel(
+  labels: KnowledgeSearchResult["results"][number]["matchedLabels"],
+  label: KnowledgeSearchResult["results"][number]["matchedLabels"][number],
+): void {
+  const existingIndex = labels.findIndex((existing) =>
+    existing.kind === label.kind && normalizeSemanticText(existing.text) === normalizeSemanticText(label.text)
+  );
+  if (existingIndex < 0) {
+    labels.push(label);
+    return;
+  }
+  const existing = labels[existingIndex];
+  if (matchedLabelPriority(label) > matchedLabelPriority(existing)) {
+    labels[existingIndex] = label;
+  }
+}
+
+function matchedLabelPriority(label: KnowledgeSearchResult["results"][number]["matchedLabels"][number]): number {
+  return (label.matchSource === "text" ? 10 : 0) + confidenceMultiplier(label.confidence);
+}
+
+function isSubjectFocusKind(kind: KnowledgeSemanticLabel["kind"]): boolean {
+  return kind === "object" || kind === "page" || kind === "flow";
+}
+
+function isAttributiveFocusKind(kind: KnowledgeSemanticLabel["kind"]): boolean {
+  return kind === "operation" || kind === "rule" || kind === "state" || kind === "field";
+}
+
+function combineSemanticAnchorTexts(subjectText: string, focusText: string): string[] {
+  const subject = subjectText.trim();
+  const focus = focusText.trim();
+  if (!subject || !focus) {
+    return [];
+  }
+  const variants = [`${subject} ${focus}`];
+  if (containsCjk(subject) || containsCjk(focus)) {
+    variants.push(`${subject}${focus}`);
+  }
+  return variants;
+}
+
+function stripSemanticAnchorQualifier(focusText: string, subjectText: string): string | null {
+  const focus = focusText.trim();
+  const subject = subjectText.trim();
+  if (!focus || !subject) {
+    return null;
+  }
+  const lowerFocus = focus.toLowerCase();
+  const lowerSubject = subject.toLowerCase();
+  if (!lowerFocus.startsWith(lowerSubject)) {
+    return null;
+  }
+  const stripped = focus.slice(subject.length).replace(/^[\s:：/／,，\-–—_]+/, "").trim();
+  return stripped.length > 0 ? stripped : null;
+}
+
+function containsCjk(value: string): boolean {
+  return /[\u3400-\u9fff]/u.test(value);
 }
 
 function applyDocumentDiversity(scored: ScoredChunk[], limit: number): ScoredChunk[] {

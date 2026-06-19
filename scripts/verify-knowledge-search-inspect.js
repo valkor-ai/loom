@@ -97,13 +97,20 @@ const securitiesCloseDoc = writeFixture("knowledge/securities-close.md", [
   "",
   "Close close close close close close close close close close close close close close close close close close close close.",
 ].join("\n"));
+const memberRepairDoc = writeFixture("knowledge/member-repair.md", [
+  "# 会员账户挂失与补办",
+  "",
+  "会员账户挂失与补办需要先冻结原卡，再核验身份并签发新卡。",
+  "",
+  "补办完成后，账户关系应恢复到可继续办理业务的状态。",
+].join("\n"));
 const pageDoc = writeFixture("knowledge/staff-page.md", [
   "# Staff workspace operation path",
   "",
   "A staff workspace page operation path should provide search, pagination, row action entry, form inputs, success feedback, business-blocking feedback, and refresh readback.",
 ].join("\n"));
 
-run(["knowledge", "add", "--name", "funds-search", fundDoc, fundCloseDoc, securitiesCloseDoc, pageDoc]);
+run(["knowledge", "add", "--name", "funds-search", fundDoc, fundCloseDoc, securitiesCloseDoc, memberRepairDoc, pageDoc]);
 const build = run(["knowledge", "build", "funds-search"]);
 const request = build.data.firstRequest;
 
@@ -200,6 +207,62 @@ assert.deepEqual(
   ["object:Fund account", "operation:Close"],
 );
 
+const qualifiedToBareSearch = run([
+  "knowledge",
+  "search",
+  "--source",
+  "funds-search",
+  "--query",
+  "securities account close identity card",
+  "--block",
+  "concept_grounding",
+  "--semantic-focus",
+  "operation:Securities account close",
+  "--limit",
+  "5",
+]);
+assert.equal(qualifiedToBareSearch.data.results.length > 0, true);
+assertScoresDescending(qualifiedToBareSearch.data.results, "qualified operation search results must remain ordered by displayed score.");
+assert.match(
+  qualifiedToBareSearch.data.results[0].headingPath.join(" / "),
+  /Securities account close/,
+  "object-qualified operation focus must match chunks that use separate object and operation labels",
+);
+assert.deepEqual(
+  qualifiedToBareSearch.data.results[0].matchedLabels.map((label) => `${label.kind}:${label.text}`).sort(),
+  ["operation:Securities account close"],
+);
+
+const compoundOperationSearch = run([
+  "knowledge",
+  "search",
+  "--source",
+  "funds-search",
+  "--query",
+  "会员账户 补办 冻结 新卡",
+  "--block",
+  "concept_grounding",
+  "--semantic-focus",
+  "object:会员账户",
+  "--semantic-focus",
+  "operation:补办",
+  "--semantic-focus",
+  "rule:恢复办理条件",
+  "--limit",
+  "5",
+]);
+assert.equal(compoundOperationSearch.data.results.length > 0, true);
+assertScoresDescending(compoundOperationSearch.data.results, "compound operation search results must remain ordered by displayed score.");
+assert.match(
+  compoundOperationSearch.data.results[0].headingPath.join(" / "),
+  /会员账户挂失与补办/,
+  "bare operation focus plus object focus must match object-qualified compound operation labels",
+);
+assert.deepEqual(
+  compoundOperationSearch.data.results[0].matchedLabels.map((label) => `${label.kind}:${label.text}`).sort(),
+  ["operation:补办", "rule:恢复办理条件"],
+);
+
 const fallbackSearch = run([
   "knowledge",
   "search",
@@ -284,8 +347,8 @@ function semanticForChunk(chunk) {
         },
         {
           kind: "operation",
-          text: "Close",
-          normalizedText: "close",
+          text: "Fund account close",
+          normalizedText: "fund account close",
           aliases: [],
           confidence: "high",
         },
@@ -320,6 +383,33 @@ function semanticForChunk(chunk) {
       blockAffinity: {
         phaseScope: 0.3,
         conceptGrounding: 0.8,
+        frontendExperience: 0.1,
+        finalSummary: 0.1,
+      },
+    };
+  }
+  if (title.includes("会员账户挂失与补办")) {
+    return {
+      summary: "会员账户挂失与补办需要冻结原卡、核验身份并签发新卡。",
+      semanticLabels: [
+        {
+          kind: "flow",
+          text: "会员账户挂失与补办",
+          normalizedText: "会员账户挂失与补办",
+          aliases: [],
+          confidence: "high",
+        },
+        {
+          kind: "state",
+          text: "恢复办理条件",
+          normalizedText: "恢复办理条件",
+          aliases: [],
+          confidence: "medium",
+        },
+      ],
+      blockAffinity: {
+        phaseScope: 0.3,
+        conceptGrounding: 0.9,
         frontendExperience: 0.1,
         finalSummary: 0.1,
       },
