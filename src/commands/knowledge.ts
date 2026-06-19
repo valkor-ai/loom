@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   addKnowledgeSource,
   discardKnowledgePending,
@@ -11,6 +12,10 @@ import {
 import { buildKnowledgeSource } from "../core/knowledge/build";
 import { resumeKnowledgeSemanticBuild, submitKnowledgeSemanticPack } from "../core/knowledge/semantic";
 import { buildBrainstormKnowledgeContext, inspectKnowledge, searchKnowledge } from "../core/knowledge/search";
+import { invalidArgument } from "../core/errors";
+import { loadDeliveryIndex, loadProjectStatus } from "../core/state/delivery";
+import { ensureDir, readJsonFile } from "../core/state/fs";
+import { brainstormKnowledgeQueryDir } from "../core/state/paths";
 import { withAutoRunnableTransition } from "../core/operations/routing-instructions";
 import { ok } from "./envelope";
 import type { CliEnvelope, CommandContext, CommandHandler } from "./types";
@@ -243,7 +248,12 @@ export function createKnowledgeBrainstormContextHandler(input: {
   chunkLimitPerSource?: string;
 }): CommandHandler {
   return async (ctx: CommandContext): Promise<CliEnvelope> => {
-    const context = await buildBrainstormKnowledgeContext(input);
+    const scopedInput = {
+      ...input,
+      queryFile: input.queryFile ? resolveProjectFile(ctx.projectRoot, input.queryFile) : input.queryFile,
+    };
+    await enforceCurrentBrainstormQueryWorkspace(ctx, scopedInput.queryFile);
+    const context = await buildBrainstormKnowledgeContext(scopedInput);
     return ok(
       "knowledge.brainstorm_context",
       ctx.projectRoot,
@@ -253,6 +263,115 @@ export function createKnowledgeBrainstormContextHandler(input: {
         : `No matching Brainstorm knowledge context for ${context.block}.`,
     );
   };
+}
+
+async function enforceCurrentBrainstormQueryWorkspace(ctx: CommandContext, queryFile: string | undefined): Promise<void> {
+  if (!queryFile) {
+    return;
+  }
+  const scope = await currentBrainstormKnowledgeQueryScope(ctx.projectRoot);
+  if (!scope) {
+    return;
+  }
+
+  await ensureDir(scope.allowedDirectory);
+  const queryPath = path.resolve(queryFile);
+  if (isInsidePath(queryPath, scope.allowedDirectory)) {
+    return;
+  }
+
+  throw invalidArgument("Brainstorm knowledge query file must be written inside the current Brainstorm request query workspace.", {
+    queryFile: queryPath,
+    allowedDirectory: scope.allowedDirectory,
+    deliveryId: scope.deliveryId,
+    phaseId: scope.phaseId,
+    requestId: scope.requestId,
+    reason: "Active Brainstorm sessions do not accept project tmp/loom files, previous request files, or old query files as knowledge query input.",
+  });
+}
+
+async function currentBrainstormKnowledgeQueryScope(projectRoot: string): Promise<{
+  deliveryId: string;
+  phaseId: string;
+  requestId: string;
+  allowedDirectory: string;
+} | null> {
+  let status: Awaited<ReturnType<typeof loadProjectStatus>>;
+  try {
+    status = await loadProjectStatus(projectRoot);
+  } catch {
+    return null;
+  }
+
+  const deliveryId = status.activeDeliveryId;
+  if (!deliveryId) {
+    return null;
+  }
+
+  let index: Awaited<ReturnType<typeof loadDeliveryIndex>>;
+  try {
+    index = await loadDeliveryIndex(projectRoot, deliveryId);
+  } catch {
+    return null;
+  }
+  if (index.status !== "brainstorming") {
+    return null;
+  }
+
+  const phaseId = index.activePhaseId;
+  const phase = index.phases.find((item) => item.phaseId === phaseId);
+  const requestId = phase?.latestRefs.brainstormRequestId;
+  const requestRef = phase?.latestRefs.brainstormRequest;
+  if (!requestId || !requestRef) {
+    return null;
+  }
+
+  let requestWorkspace: string | null = null;
+  try {
+    const request = await readJsonFile(path.resolve(projectRoot, requestRef));
+    if (!isRecord(request) || request.requestType !== "brainstorm_session") {
+      return null;
+    }
+    requestWorkspace = readQueryWorkspaceDirectory(request);
+  } catch {
+    requestWorkspace = null;
+  }
+
+  return {
+    deliveryId,
+    phaseId,
+    requestId,
+    allowedDirectory: requestWorkspace
+      ? path.resolve(projectRoot, requestWorkspace)
+      : brainstormKnowledgeQueryDir(projectRoot, deliveryId, phaseId, requestId),
+  };
+}
+
+function readQueryWorkspaceDirectory(request: Record<string, unknown>): string | null {
+  const protocol = request.knowledgeContextProtocol;
+  if (!isRecord(protocol)) {
+    return null;
+  }
+  const workspace = protocol.queryWorkspace;
+  if (!isRecord(workspace) || typeof workspace.directory !== "string" || workspace.directory.trim().length === 0) {
+    return null;
+  }
+  return workspace.directory;
+}
+
+function isInsidePath(childPath: string, parentPath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === "" || (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveProjectFile(projectRoot: string, fileRef: string): string {
+  return path.isAbsolute(fileRef)
+    ? fileRef
+    : path.resolve(projectRoot, fileRef);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function createKnowledgeInspectHandler(input: {

@@ -101,6 +101,10 @@ export function brainstormRequestCandidatePath(projectRoot: string, deliveryId: 
   return path.join(deliveryDir(projectRoot, deliveryId), "tmp", "brainstorm", phaseId, requestId, "candidate.json");
 }
 
+export function brainstormKnowledgeQueryDir(projectRoot: string, deliveryId: string, phaseId: string, requestId: string): string {
+  return path.join(deliveryDir(projectRoot, deliveryId), "tmp", "brainstorm", phaseId, requestId, "knowledge-queries");
+}
+
 export function brainstormPhaseCandidatePath(projectRoot: string, deliveryId: string, phaseId: string): string {
   return path.join(deliveryDir(projectRoot, deliveryId), "tmp", "brainstorm", phaseId, "candidate.json");
 }

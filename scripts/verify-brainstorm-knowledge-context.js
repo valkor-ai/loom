@@ -377,6 +377,36 @@ assert.deepEqual(
   brainstormRequest.knowledgeContextProtocol.command.argv,
   ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
 );
+assert.equal(
+  brainstormRequest.knowledgeContextProtocol.queryWorkspace.scope,
+  "current_brainstorm_request",
+  "Brainstorm knowledge query workspace must be scoped to the current request.",
+);
+assert.equal(
+  brainstormRequest.knowledgeContextProtocol.queryWorkspace.requiredForCommand,
+  true,
+  "Brainstorm knowledge context must require query files from the request workspace.",
+);
+assert.match(
+  brainstormRequest.knowledgeContextProtocol.queryWorkspace.directory,
+  /^\.loom\/deliveries\/[^/]+\/tmp\/brainstorm\/phase-1\/brainstorm-session-[^/]+\/knowledge-queries$/,
+  "Brainstorm knowledge query workspace must live under the current delivery/phase/request tmp directory.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.command.placeholderRules["{queryFile}"],
+  "queryWorkspace.directory",
+  "Brainstorm queryFile placeholder must point agents to the request-scoped query workspace.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.command.placeholderRules["{queryFile}"],
+  "project-root tmp/loom",
+  "Brainstorm queryFile placeholder must forbid old project tmp/loom query files.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.queryWorkspace.rules.join("\n"),
+  "another requestId",
+  "Brainstorm query workspace rules must forbid previous request query files.",
+);
 
 const readPlanGroups = brainstormRequest.requestReadPlan.groups;
 assert.ok(
@@ -399,6 +429,8 @@ assert.ok(
 );
 const protocolRules = brainstormRequest.knowledgeContextProtocol.blockRules.join("\n");
 includes(protocolRules, "follow knowledgeQueryPlan", "Brainstorm must make knowledgeQueryPlan the execution sequence authority.");
+includes(protocolRules, "queryWorkspace.directory", "Brainstorm protocol must require request-scoped query files for every knowledge step.");
+includes(protocolRules, "CLI rejects", "Brainstorm protocol must tell agents the CLI enforces query workspace isolation.");
 includes(protocolRules, "Do not run knowledge brainstorm-context for final_summary", "final_summary must not run knowledge recall.");
 includes(protocolRules, "inspect every chunk listed in context.readPlan.chunks", "available knowledge context must be inspected.");
 includes(protocolRules, "Self-check each returned context", "Brainstorm must self-check knowledge coverage before presenting the block.");
@@ -419,6 +451,44 @@ includes(candidateRules, "Do not add knowledge source ids", "BrainstormCandidate
 includes(candidateRules, "candidate must preserve only the user's confirmed conclusion", "Candidate must keep confirmed conclusions instead of knowledge metadata.");
 assert.equal("knowledgeContext" in brainstormRequest.outputContract.schemaShape, false);
 assert.equal("knowledgeContextProtocol" in brainstormRequest.outputContract.schemaShape, false);
+
+const staleQueryFile = path.join(projectRoot, "tmp", "loom", "phase-scope-stale.json");
+writeJson(staleQueryFile, {
+  naturalLanguageQuery: "stale query outside the current request workspace",
+  brainstormBlock: "phase_scope",
+  semanticFocus: [{ kind: "object", text: "stale object" }],
+  sourceLimit: 2,
+  chunkLimitPerSource: 5,
+});
+const staleFailure = runFailure(["knowledge", "brainstorm-context", "--query-file", staleQueryFile]);
+assert.equal(staleFailure.ok, false);
+assert.equal(staleFailure.error.code, "INVALID_ARGUMENT");
+assert.match(
+  staleFailure.error.message,
+  /current Brainstorm request query workspace/,
+  "Brainstorm knowledge context must reject stale project tmp query files while a Brainstorm session is active.",
+);
+assert.match(
+  staleFailure.error.details.allowedDirectory,
+  /knowledge-queries$/,
+  "Brainstorm knowledge query guard must report the allowed request workspace.",
+);
+
+const allowedQueryDir = path.join(projectRoot, brainstormRequest.knowledgeContextProtocol.queryWorkspace.directory);
+const allowedQueryFile = path.join(allowedQueryDir, "phase_scope-phase_scope_dependency_order-1.json");
+const allowedQueryRef = path.join(
+  brainstormRequest.knowledgeContextProtocol.queryWorkspace.directory,
+  "phase_scope-phase_scope_dependency_order-1.json",
+);
+writeJson(allowedQueryFile, {
+  naturalLanguageQuery: "operator lifecycle dependency order and phase boundary",
+  brainstormBlock: "phase_scope",
+  semanticFocus: [{ kind: "operation", text: "clarify lifecycle rules" }],
+  sourceLimit: 2,
+  chunkLimitPerSource: 5,
+});
+const allowedContext = run(["knowledge", "brainstorm-context", "--query-file", allowedQueryRef]).data.context;
+assert.equal(allowedContext.block, "phase_scope");
 
 fs.rmSync(fixtureRoot, { recursive: true, force: true });
 fs.rmSync(loomHome, { recursive: true, force: true });

@@ -26,7 +26,7 @@ import {
   type RequirementSourceType,
   type UserFacingLanguageConstraint,
 } from "../schemas";
-import { pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
+import { ensureDir, pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
 import {
   getLocatorForBrainstormRun,
   loadDeliveryIndex,
@@ -40,6 +40,7 @@ import {
   brainstormContractPath,
   brainstormDecisionPath,
   brainstormDecisionsIndexPath,
+  brainstormKnowledgeQueryDir,
   brainstormRequestCandidatePath,
   brainstormSessionRequestPath,
   brainstormLatestPath,
@@ -322,6 +323,13 @@ export type BrainstormKnowledgeContextProtocol = {
     argv: string[];
     placeholderRules: Record<string, string>;
   };
+  queryWorkspace: {
+    directory: string;
+    fileNamePattern: string;
+    scope: "current_brainstorm_request";
+    requiredForCommand: true;
+    rules: string[];
+  };
   matchQueryShape: {
     naturalLanguageQuery: string;
     brainstormBlock: BrainstormKnowledgeBlock;
@@ -498,6 +506,7 @@ export async function startBrainstorm(input: StartBrainstormInput): Promise<Brai
     userFacingLanguage,
     now,
   });
+  await ensureDir(brainstormKnowledgeQueryDir(paths.root, deliveryId, phaseId, requestId));
   const requestPath = brainstormSessionRequestPath(paths.root, deliveryId, requestId);
   await writeRequestManifestAtomic(paths.root, requestPath, request);
   await attachBrainstormRequestRefs(paths.root, deliveryId, phaseId, {
@@ -1378,6 +1387,7 @@ function buildBrainstormSessionRequest(input: {
 }): BrainstormSessionRequest {
   const candidateFile = toProjectRelative(input.projectRoot, brainstormRequestCandidatePath(input.projectRoot, input.deliveryId, input.phaseId, input.requestId));
   const blockedFile = candidateFile.replace(/candidate\.json$/, "blocked.json");
+  const knowledgeQueryWorkspace = toProjectRelative(input.projectRoot, brainstormKnowledgeQueryDir(input.projectRoot, input.deliveryId, input.phaseId, input.requestId));
   const requestTextRef = input.requirementContext.normalizedTextRef;
   const submitCommand: BrainstormSessionRequest["submitCommand"] = {
     name: "brainstorm accept",
@@ -1472,7 +1482,7 @@ function buildBrainstormSessionRequest(input: {
       mayUseForConceptGroundingCandidates: true,
       ignoreWhenIrrelevant: true,
     },
-    knowledgeContextProtocol: brainstormKnowledgeContextProtocol(),
+    knowledgeContextProtocol: brainstormKnowledgeContextProtocol(knowledgeQueryWorkspace),
     knowledgeQueryPlan: brainstormKnowledgeQueryPlan(),
     clarificationGuidance: {
       choiceFirstClarification: true,
@@ -1987,7 +1997,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
   };
 }
 
-function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtocol {
+function brainstormKnowledgeContextProtocol(queryWorkspaceDirectory: string): BrainstormKnowledgeContextProtocol {
   return {
     status: "enabled",
     purpose: "Optional block-scoped knowledge context for Brainstorm clarification. Follow knowledgeQueryPlan to decide query order and subjects. Knowledge helps the agent discover clarification points, but only user-confirmed conclusions may enter BrainstormCandidate.",
@@ -1997,8 +2007,20 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
       name: "knowledge brainstorm-context",
       argv: ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
       placeholderRules: {
-        "{queryFile}": "Write a temporary KnowledgeMatchQuery JSON file for the current Brainstorm block, then pass its path here. Do not use outputContract.candidateFile as the query file.",
+        "{queryFile}": "Write a fresh KnowledgeMatchQuery JSON file inside queryWorkspace.directory for the current Brainstorm step, then pass that path here. Do not use outputContract.candidateFile, project-root tmp/loom files, previous delivery/request files, chat-memory paths, or old query files.",
       },
+    },
+    queryWorkspace: {
+      directory: queryWorkspaceDirectory,
+      fileNamePattern: "{block}-{stepId}-{index}.json",
+      scope: "current_brainstorm_request",
+      requiredForCommand: true,
+      rules: [
+        "Create or overwrite one query JSON file in this directory for each knowledgeQueryPlan step execution.",
+        "The file must represent the current Brainstorm block, current stepId, and current step subject only.",
+        "Do not reuse query files from project-root tmp/loom, another requestId, another deliveryId, another phaseId, or an earlier chat turn.",
+        "The knowledge brainstorm-context command must receive a query file path under this directory.",
+      ],
     },
     matchQueryShape: {
       naturalLanguageQuery: "Short natural-language query derived from the current requirement, confirmed prior blocks, and the current Brainstorm block objective.",
@@ -2017,6 +2039,7 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
     },
     blockRules: [
       "Before presenting phase_scope, concept_grounding, or frontend_experience, follow knowledgeQueryPlan.blocks[block].executionOrder rather than inventing one broad query.",
+      "For each knowledgeQueryPlan step, write the KnowledgeMatchQuery file under queryWorkspace.directory; the CLI rejects current Brainstorm knowledge queries from project-root tmp/loom or another request.",
       "For each knowledgeQueryPlan step, write a separate KnowledgeMatchQuery for that step subject, run command.argv with the query file, and inspect all chunks in the returned readPlan when context.status=available.",
       "Use knowledgeQueryPlan step queryConstructionRules as the construction guidance and execution sequence authority.",
       "Self-check each returned context before presenting the block: if available knowledge does not cover that step subject's key anchors, revise that step query once with narrower anchors before falling back to requirement text.",
