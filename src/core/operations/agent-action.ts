@@ -134,6 +134,7 @@ export function brainstormSessionAgentActionContract(input: {
         "contextRefs",
         "sourceFieldAccessHints",
         "knowledgeContextProtocol",
+        "knowledgeQueryPlan",
         "firstClarificationGate",
         "clarificationConversationProtocol",
         "conceptGroundingRequest",
@@ -685,6 +686,7 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
     "knowledgeContextProtocol.perBlockLimits",
     "knowledgeContextProtocol.blockRules",
     "knowledgeContextProtocol.candidateBoundaryRules",
+    "knowledgeQueryPlan",
   ], hasField);
   const phaseScopeAuthorityFields = [
     ...filterAvailable([
@@ -1137,6 +1139,7 @@ function purposeForField(field: string): string {
   if (field === "contextRefs") return "External context refs available to this request, such as requirement, delivery, repository, glossary, frontend, and keyword refs.";
   if (field === "sourceFieldAccessHints") return "Selector and field-name rules for reading source facts and writing BrainstormCandidate.sources without guessing schemas.";
   if (field === "knowledgeContextProtocol") return "Block-scoped knowledge matching protocol for Brainstorm; reference-only and never a BrainstormCandidate source.";
+  if (field === "knowledgeQueryPlan") return "Execution sequence for Brainstorm knowledge queries; follow it before presenting phase_scope, concept_grounding, or frontend_experience.";
   if (field === "firstClarificationGate") return "Required Brainstorm confirmation gate before a candidate may be submitted.";
   if (field === "clarificationConversationProtocol") return "Required progressive clarification block order and confirmation rules.";
   if (field === "conceptGroundingRequest") return "Business concept extraction, presentation, and confirmation requirements for Brainstorm.";

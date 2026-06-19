@@ -65,6 +65,8 @@ During `phase_scope`, follow the request's `phaseScopeOptionComparison` guidance
 
 For Brainstorm `ask_user` gates, read `requestRef` and follow root `requestReadPlan.groups` inspect commands when present; otherwise use `agentAction.read.fieldGroups` inspect commands. Do this before presenting phase_scope, concept_grounding, frontend_experience, or final_summary. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block as a concrete user-facing question or confirmation summary. Do not infer Brainstorm scope, sources, concepts, frontend target, candidateFile, output schema, or submit command from guessed legacy root fields such as `.objective`, `.scope`, or `.outputContract`.
 
+Follow Brainstorm `knowledgeQueryPlan`; do not merge its steps into one query.
+
 ## Instruction Priority
 
 Every loom JSON response may include top-level `actionRequired` and `instruction`. These fields are the highest-priority routing signal.

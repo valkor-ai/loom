@@ -213,6 +213,7 @@ export type BrainstormSessionRequest = {
     ignoreWhenIrrelevant: true;
   };
   knowledgeContextProtocol: BrainstormKnowledgeContextProtocol;
+  knowledgeQueryPlan: BrainstormKnowledgeQueryPlan;
   clarificationGuidance: Record<string, unknown>;
   conceptGroundingRequest: Record<string, unknown>;
   firstClarificationGate: {
@@ -279,6 +280,36 @@ const PROGRESSIVE_CLARIFICATION_BLOCKS: Array<"phase_scope" | "concept_grounding
 ];
 
 type BrainstormKnowledgeBlock = "phase_scope" | "concept_grounding" | "frontend_experience";
+
+type BrainstormKnowledgeQueryPlanStep = {
+  stepId: string;
+  queryKind: "dependency_order" | "capability_closure" | "scope_item_grounding" | "page_operation_path";
+  actor: "agent_fills_query_and_runs_cli";
+  timing: string;
+  repeat: string;
+  querySubjectRule: string;
+  queryConstructionRules: string[];
+  runCommand: {
+    name: "knowledge brainstorm-context";
+    argv: string[];
+  };
+  inspectRule: string;
+  useOfResults: string;
+};
+
+export type BrainstormKnowledgeQueryPlan = {
+  schemaVersion: "1.0";
+  status: "enabled";
+  purpose: string;
+  cliResponsibilities: string[];
+  agentResponsibilities: string[];
+  sharedRules: string[];
+  blocks: Record<BrainstormKnowledgeBlock, {
+    goal: string;
+    executionOrder: BrainstormKnowledgeQueryPlanStep[];
+    beforeUserOutputChecklist: string[];
+  }>;
+};
 
 export type BrainstormKnowledgeContextProtocol = {
   status: "enabled";
@@ -1448,6 +1479,7 @@ function buildBrainstormSessionRequest(input: {
       ignoreWhenIrrelevant: true,
     },
     knowledgeContextProtocol: brainstormKnowledgeContextProtocol(),
+    knowledgeQueryPlan: brainstormKnowledgeQueryPlan(),
     clarificationGuidance: {
       choiceFirstClarification: true,
       preferredOptionCount: { min: 3, max: 5 },
@@ -1542,7 +1574,7 @@ function buildBrainstormSessionRequest(input: {
         "Do not merge required clarification blocks.",
         "Each required block must be presented as its own user-visible step or a clearly separated section before it can be marked confirmed.",
         "A phase_scope option may mention concept or frontend context, but those mentions are context only and do not satisfy concept_grounding or frontend_experience.",
-        "For phase_scope, concept_grounding, and frontend_experience, follow knowledgeContextProtocol before presenting the block: generate a current-block KnowledgeMatchQuery, run knowledge brainstorm-context, inspect all chunks in the returned readPlan when context.status=available, then convert any useful knowledge into user-visible clarification points.",
+        "For phase_scope, concept_grounding, and frontend_experience, follow knowledgeQueryPlan before presenting the block: run the block's planned knowledge queries in order, inspect all chunks in each returned readPlan when context.status=available, then convert useful knowledge into user-visible clarification points.",
         "Do not run or use knowledge context for final_summary; final_summary may only summarize prior user-confirmed blocks and corrections.",
         "Knowledge context is reference material only. It cannot directly add scope, remove scope, decide recommendations, write confirmed rules, or set page paths without user-visible confirmation in the owning block.",
         userFacingLanguageRule(input.userFacingLanguage),
@@ -1817,10 +1849,143 @@ function brainstormEnumRefs(): Record<string, string[]> {
   };
 }
 
+function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
+  const runCommand = {
+    name: "knowledge brainstorm-context" as const,
+    argv: ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
+  };
+  return {
+    schemaVersion: "1.0",
+    status: "enabled",
+    purpose: "Execution sequence for block-scoped knowledge use during Brainstorm. The CLI provides the query workflow and runs retrieval; the Agent fills business anchors from the requirement, executes each planned query, inspects returned chunks, and turns useful references into user-visible clarification points.",
+    cliResponsibilities: [
+      "Provide this query sequence and the knowledge brainstorm-context command shape.",
+      "Search enabled published knowledge sources and return chunk cards plus inspect commands.",
+      "Keep knowledge context out of BrainstormCandidate formal sources.",
+      "Do not decide the recommended phase, business rules, or page path.",
+    ],
+    agentResponsibilities: [
+      "Identify candidate capability units, confirmed scope items, or page-operation paths from the requirement and prior confirmed blocks.",
+      "Fill each planned query with concrete anchors from only the subject named by that step.",
+      "Run every planned query that applies before presenting the owning Brainstorm block.",
+      "Inspect every chunk in each available context readPlan before using it.",
+      "Use knowledge as reference material only; show any knowledge-influenced scope, rule, field, state, blocker, or page-path point to the user for confirmation.",
+    ],
+    sharedRules: [
+      "Do not combine sibling or downstream capability units into one capability_closure, scope_item_grounding, or page_operation_path query.",
+      "Use dependency_order only for upstream/downstream sequencing, deferred boundaries, and next-phase context.",
+      "Use one semanticFocus entry per concrete object, operation, field, state, rule, page, or flow; do not write a space-separated, slash-separated, comma-separated, or conjunction-joined list inside one focus entry.",
+      "If an anchor is not clear enough to name as one focus entry, keep it in naturalLanguageQuery instead of inventing a semantic label.",
+      "If a planned query returns available knowledge but misses the step subject's key anchors, revise that specific query once with narrower anchors before presenting the block.",
+    ],
+    blocks: {
+      phase_scope: {
+        goal: "Use knowledge to compare phase cuts without letting a broad system-chain query crowd out the current phase's own closure evidence.",
+        executionOrder: [
+          {
+            stepId: "phase_scope_dependency_order",
+            queryKind: "dependency_order",
+            actor: "agent_fills_query_and_runs_cli",
+            timing: "Run first, before composing phase options.",
+            repeat: "Run once for the overall requirement or current phase continuation context.",
+            querySubjectRule: "The subject is the overall dependency order across candidate capability units, not one module's closure.",
+            queryConstructionRules: [
+              "naturalLanguageQuery may mention multiple upstream and downstream capability units to understand sequencing.",
+              "semanticFocus should prefer capability unit objects or high-level flows; avoid downstream execution operations unless they are needed to compare dependency order.",
+              "Do not use this query as proof that any adjacent capability belongs in the current phase.",
+            ],
+            runCommand,
+            inspectRule: "Inspect every chunk in the returned readPlan when context.status=available.",
+            useOfResults: "Use only to inform option ordering, deferred boundaries, and next-phase preview.",
+          },
+          {
+            stepId: "phase_scope_capability_closure",
+            queryKind: "capability_closure",
+            actor: "agent_fills_query_and_runs_cli",
+            timing: "Run after identifying 2-3 candidate phase cuts and before presenting A/B/C.",
+            repeat: "Run once per candidate capability unit that could define a phase option or recommended phase.",
+            querySubjectRule: "The subject is exactly one candidate capability unit such as one module, object lifecycle, workflow, backend capability, or page-operation set.",
+            queryConstructionRules: [
+              "naturalLanguageQuery should ask for the subject's closure: required objects, operations, fields, states, rules, blockers, outcomes, and adjacent boundaries.",
+              "semanticFocus must use anchors from this one subject only.",
+              "Do not include sibling, downstream, or next-phase capability units in semanticFocus.",
+              "Use separate operation focus entries for separate operations; never combine multiple operations into one operation focus.",
+              "For lifecycle, replacement, recovery, or ordered flows, include the primary object plus component operations and a flow focus only when the whole flow wording is explicit.",
+            ],
+            runCommand,
+            inspectRule: "Inspect every chunk in the returned readPlan when context.status=available.",
+            useOfResults: "Use to decide whether each option is a closed current phase, a narrower cut, or a broader adjacent-workflow cut.",
+          },
+        ],
+        beforeUserOutputChecklist: [
+          "Dependency-order knowledge, if available, has been inspected.",
+          "Each recommended or competing capability unit has its own capability_closure query or an explicit reason why no matching knowledge was available.",
+          "The recommended option is not based only on the dependency_order query.",
+          "No phase option uses knowledge-only adjacent capability as current scope without showing it to the user for confirmation.",
+        ],
+      },
+      concept_grounding: {
+        goal: "Use knowledge to clarify confirmed current-phase objects, operations, fields, states, invariants, validations, blockers, outcomes, and high-risk misunderstandings.",
+        executionOrder: [
+          {
+            stepId: "concept_grounding_scope_item",
+            queryKind: "scope_item_grounding",
+            actor: "agent_fills_query_and_runs_cli",
+            timing: "Run after the user confirms phase_scope and before presenting business understanding.",
+            repeat: "Run once per confirmed scope item, or once per tight group of confirmed items that share the same object and operation flow.",
+            querySubjectRule: "The subject is one confirmed scope item or a tight group from the user's confirmed phase scope.",
+            queryConstructionRules: [
+              "naturalLanguageQuery should ask for the subject's objects, fields, rules, states, validations, blockers, outcomes, feedback, and misunderstanding boundaries.",
+              "semanticFocus must stay inside the confirmed scope item or tight group.",
+              "Do not re-query the whole system or every deferred module.",
+              "Use separate operation focus entries for separate actions and lifecycle steps.",
+            ],
+            runCommand,
+            inspectRule: "Inspect every chunk in the returned readPlan when context.status=available.",
+            useOfResults: "Use to prepare user-visible business understanding and rule confirmation; do not write knowledge-derived rules into the candidate until the user confirms them.",
+          },
+        ],
+        beforeUserOutputChecklist: [
+          "Every confirmed scope item is covered by a query, grouped query, or explicit no-knowledge note.",
+          "Business rules, fields, state changes, blockers, and success outcomes in the user-facing block are traceable to requirements, inspected knowledge, or explicit unresolved notes.",
+          "Deferred or excluded items are not presented as current-phase rules.",
+        ],
+      },
+      frontend_experience: {
+        goal: "Use knowledge to clarify page or staff/user operation paths for confirmed operations without requiring a separate frontend knowledge source.",
+        executionOrder: [
+          {
+            stepId: "frontend_experience_page_operation_path",
+            queryKind: "page_operation_path",
+            actor: "agent_fills_query_and_runs_cli",
+            timing: "Run after concept_grounding confirmation and before presenting the page-operation path block.",
+            repeat: "Run once per main page-operation path, or once per tight group of operations sharing target discovery, action entry, feedback, and readback.",
+            querySubjectRule: "The subject is one confirmed user/staff-visible operation path or a tight group sharing one surface pattern.",
+            queryConstructionRules: [
+              "naturalLanguageQuery should ask for entry surface, target discovery, query/list/detail selection, action entry, form inputs, success feedback, validation or business-blocking feedback, loading/empty/error states, and refresh/readback.",
+              "Prefer page or flow focus when those labels are explicit; otherwise use operation, field, state, and object anchors from confirmed scope.",
+              "Do not invent page labels just to satisfy semanticFocus.",
+              "Do not query only with business object names when operation, field, or state anchors are available.",
+            ],
+            runCommand,
+            inspectRule: "Inspect every chunk in the returned readPlan when context.status=available.",
+            useOfResults: "Use to shape a user-visible page-path recommendation. If knowledge lacks page-specific content, say the path is inferred from confirmed operations rather than sourced from page knowledge.",
+          },
+        ],
+        beforeUserOutputChecklist: [
+          "Each main operation path is covered by a query, grouped query, or explicit no-knowledge note.",
+          "Page-specific claims are not attributed to knowledge when only business-operation chunks were available.",
+          "The user-facing block covers entry, target finding, action inputs, feedback, blocking, and readback when UI applies.",
+        ],
+      },
+    },
+  };
+}
+
 function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtocol {
   return {
     status: "enabled",
-    purpose: "Optional block-scoped knowledge context for Brainstorm clarification. It helps the agent discover clarification points, but only user-confirmed conclusions may enter BrainstormCandidate.",
+    purpose: "Optional block-scoped knowledge context for Brainstorm clarification. Follow knowledgeQueryPlan to decide query order and subjects. Knowledge helps the agent discover clarification points, but only user-confirmed conclusions may enter BrainstormCandidate.",
     appliesToBlocks: ["phase_scope", "concept_grounding", "frontend_experience"],
     excludedBlocks: ["final_summary"],
     command: {
@@ -1913,9 +2078,10 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
       maxChunksPerSource: 5,
     },
     blockRules: [
-      "Before presenting phase_scope, concept_grounding, or frontend_experience, generate a KnowledgeMatchQuery for that exact block and run command.argv with the query file.",
-      "Use blockQueryGuidance for the current block when writing the KnowledgeMatchQuery. The query must combine the current phase anchors with the current block's retrieval intent instead of reusing a generic business-only query.",
-      "Self-check the returned context before presenting the block: if available knowledge does not cover the current block's key confirmed or candidate anchors, revise the KnowledgeMatchQuery once with more specific anchors for the current block before falling back to requirement text.",
+      "Before presenting phase_scope, concept_grounding, or frontend_experience, follow knowledgeQueryPlan.blocks[block].executionOrder rather than inventing one broad query.",
+      "For each knowledgeQueryPlan step, write a separate KnowledgeMatchQuery for that step subject, run command.argv with the query file, and inspect all chunks in the returned readPlan when context.status=available.",
+      "Use blockQueryGuidance as supporting construction guidance; knowledgeQueryPlan is the execution sequence authority.",
+      "Self-check each returned context before presenting the block: if available knowledge does not cover that step subject's key anchors, revise that step query once with narrower anchors before falling back to requirement text.",
       "When concrete anchors are available, semanticFocus should include them explicitly so retrieval can prefer semantically complete chunks. For phase_scope and concept_grounding, prefer object plus operation/rule/state/field/flow anchors. For frontend_experience, prefer page/flow plus operation/field/state anchors; object focus is supporting context only.",
       "When the current anchor is a connected process, lifecycle transition, replacement, migration, recovery, or ordered sequence, do not collapse it into a single compound operation semanticFocus. Use separate operation focus entries for identifiable component operations and add flow focus only when the whole-process wording is explicit.",
       "Preserve the current requirement's object or tightly related object relationship when creating semanticFocus; do not move lifecycle, replacement, recovery, or relationship focus to an adjacent business object.",

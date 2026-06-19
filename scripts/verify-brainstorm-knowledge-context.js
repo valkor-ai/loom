@@ -225,6 +225,52 @@ const started = run([
 const brainstormRequest = hydrateRequest(readProjectJson(started.data.requestPath ?? started.data.requestRef));
 assert.equal(brainstormRequest.requestType, "brainstorm_session");
 assert.equal(brainstormRequest.knowledgeContextProtocol.status, "enabled");
+assert.equal(brainstormRequest.knowledgeQueryPlan.status, "enabled");
+assert.equal(
+  brainstormRequest.knowledgeQueryPlan.blocks.phase_scope.executionOrder.length,
+  2,
+  "Phase scope knowledge query plan must require dependency and capability-closure steps.",
+);
+assert.deepEqual(
+  brainstormRequest.knowledgeQueryPlan.blocks.phase_scope.executionOrder.map((step) => step.queryKind),
+  ["dependency_order", "capability_closure"],
+  "Phase scope knowledge query plan must separate dependency order from capability closure.",
+);
+assert.equal(
+  brainstormRequest.knowledgeQueryPlan.blocks.phase_scope.executionOrder[1].repeat,
+  "Run once per candidate capability unit that could define a phase option or recommended phase.",
+  "Capability closure query must run per candidate capability unit.",
+);
+includes(
+  brainstormRequest.knowledgeQueryPlan.blocks.phase_scope.executionOrder[1].querySubjectRule,
+  "exactly one candidate capability unit",
+  "Capability closure query must have a single-subject rule.",
+);
+includes(
+  brainstormRequest.knowledgeQueryPlan.blocks.phase_scope.executionOrder[1].queryConstructionRules.join("\n"),
+  "Do not include sibling, downstream, or next-phase capability units in semanticFocus",
+  "Capability closure query must not mix adjacent capability units.",
+);
+includes(
+  brainstormRequest.knowledgeQueryPlan.sharedRules.join("\n"),
+  "Do not combine sibling or downstream capability units",
+  "Knowledge query plan must forbid mixed capability queries.",
+);
+includes(
+  brainstormRequest.knowledgeQueryPlan.sharedRules.join("\n"),
+  "one semanticFocus entry per concrete",
+  "Knowledge query plan must forbid compound semanticFocus entries.",
+);
+assert.deepEqual(
+  brainstormRequest.knowledgeQueryPlan.blocks.concept_grounding.executionOrder.map((step) => step.queryKind),
+  ["scope_item_grounding"],
+  "Concept grounding must query confirmed scope items rather than the whole system.",
+);
+assert.deepEqual(
+  brainstormRequest.knowledgeQueryPlan.blocks.frontend_experience.executionOrder.map((step) => step.queryKind),
+  ["page_operation_path"],
+  "Frontend experience must query page-operation paths.",
+);
 assert.deepEqual(brainstormRequest.knowledgeContextProtocol.appliesToBlocks, [
   "phase_scope",
   "concept_grounding",
@@ -318,10 +364,17 @@ assert.ok(
     .fields.includes("knowledgeContextProtocol.blockQueryGuidance"),
   "Brainstorm requestReadPlan must explicitly expose blockQueryGuidance.",
 );
+assert.ok(
+  readPlanGroups
+    .find((group) => group.groupId === "brainstorm_session_knowledge_context_protocol")
+    .fields.includes("knowledgeQueryPlan"),
+  "Brainstorm requestReadPlan must explicitly expose knowledgeQueryPlan.",
+);
 const protocolRules = brainstormRequest.knowledgeContextProtocol.blockRules.join("\n");
+includes(protocolRules, "follow knowledgeQueryPlan", "Brainstorm must make knowledgeQueryPlan the execution sequence authority.");
 includes(protocolRules, "Do not run knowledge brainstorm-context for final_summary", "final_summary must not run knowledge recall.");
 includes(protocolRules, "inspect every chunk listed in context.readPlan.chunks", "available knowledge context must be inspected.");
-includes(protocolRules, "Self-check the returned context", "Brainstorm must self-check knowledge coverage before presenting the block.");
+includes(protocolRules, "Self-check each returned context", "Brainstorm must self-check knowledge coverage before presenting the block.");
 includes(protocolRules, "Do not ask the user to choose or name a knowledge source", "Brainstorm must not support manual knowledge source selection.");
 includes(protocolRules, "semanticFocus should include them explicitly", "Brainstorm must instruct agents to provide concrete semanticFocus anchors when available.");
 includes(protocolRules, "do not collapse it into a single compound operation semanticFocus", "Brainstorm must split connected-process semanticFocus anchors when possible.");
@@ -329,7 +382,7 @@ includes(protocolRules, "do not move lifecycle, replacement, recovery, or relati
 includes(protocolRules, "instead of inventing labels", "Brainstorm must forbid invented semanticFocus labels.");
 
 const blockRules = brainstormRequest.clarificationConversationProtocol.blockExecutionRules.join("\n");
-includes(blockRules, "follow knowledgeContextProtocol before presenting the block", "Brainstorm blocks must invoke knowledge protocol before presentation.");
+includes(blockRules, "follow knowledgeQueryPlan before presenting the block", "Brainstorm blocks must invoke the planned knowledge query sequence before presentation.");
 includes(blockRules, "Do not run or use knowledge context for final_summary", "Brainstorm execution rules must exclude final_summary.");
 includes(blockRules, "Knowledge context is reference material only", "Knowledge must not become direct scope/rule/page authority.");
 
