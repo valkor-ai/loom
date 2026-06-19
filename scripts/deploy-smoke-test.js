@@ -1910,9 +1910,10 @@ async function verifyRuntimeContractBuildFailureRoutesToDeliveryRepair(projectRo
   assert.equal(repair.ok, true);
   assert.equal(repair.data.operation, "deploy_execution_repair_request_created");
   const repairRequest = JSON.parse(await readFile(join(projectRoot, repair.data.requestRef), "utf8"));
+  const repairExecutionRules = await readManifestField(projectRoot, repair.data.requestRef, repairRequest, "executionRules");
   assert.equal(repairRequest.syntheticTask.mutatesOriginalTaskPlan, false);
   assert.equal(repairRequest.syntheticTask.writeBoundary.forbiddenPaths.includes(".loom"), true);
-  assert.equal(repairRequest.executionRules.evidenceReadPolicy.firstRead, "deploymentFailureRef#.evidence.errorWindow");
+  assert.equal(repairExecutionRules.evidenceReadPolicy.firstRead, "deploymentFailureRef#.evidence.errorWindow");
   assert.equal(repair.instruction.mode, "execute_task");
   assert.match(repair.data.requestRef, /^\.loom\/deployment\/repairs\/deploy-exec-repair-/);
 
@@ -2823,6 +2824,18 @@ async function fileExists(filePath) {
   } catch {
     return false;
   }
+}
+
+async function readManifestField(projectRoot, requestRef, request, field) {
+  if (request && Object.prototype.hasOwnProperty.call(request, field)) {
+    return request[field];
+  }
+  const refKey = `${field}Ref`;
+  const directRef = typeof request?.[refKey] === "string" ? request[refKey] : null;
+  const manifestRef = request?.requestManifest?.refs?.[field]?.ref;
+  const ref = directRef ?? (typeof manifestRef === "string" ? manifestRef : null);
+  assert.ok(ref, `${requestRef} must expose ${field} or ${refKey}`);
+  return JSON.parse(await readFile(join(projectRoot, ref), "utf8"));
 }
 
 function stopHealthServer(child) {

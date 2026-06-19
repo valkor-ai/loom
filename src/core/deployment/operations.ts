@@ -289,6 +289,8 @@ async function deployPrepareInternal(input: {
     projectRoot: input.projectRoot,
     stack: contractStack,
     technicalBaseline,
+    provider: strategy.provider,
+    runtimeContract,
   });
   const codeEvidence = await writeDeploymentCodeEvidence(input.projectRoot, rawCodeEvidence);
   assertDeploymentCodeEvidenceReady(input.projectRoot, rawCodeEvidence, codeEvidence.ref);

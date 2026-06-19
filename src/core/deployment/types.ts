@@ -210,7 +210,7 @@ export type DeployConflict = {
 
 export type DeployMissingFact = {
   factId: string;
-  type: "database_kind" | "build_command" | "start_command" | "probe" | "external_config";
+  type: "database_kind" | "build_command" | "start_command" | "probe" | "external_config" | "deployment_shape";
   message: string;
   evidence: DeploymentEvidenceRef[];
   resolution: "ask_user" | "execution_repair";
