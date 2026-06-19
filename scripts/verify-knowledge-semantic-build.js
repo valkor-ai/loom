@@ -84,6 +84,11 @@ assert.equal(build.actionRequired.autoContinue, true);
 assert.equal(build.actionRequired.mustRunImmediately, true);
 assert.equal(build.instruction.requestRef, build.data.firstRequestPath);
 assert.equal(build.instruction.resultFile, request.outputContract.resultFile);
+assert.equal(
+  fs.existsSync(path.dirname(request.outputContract.resultFile)),
+  true,
+  "knowledge build must pre-create the semantic result directory before returning the agent write path.",
+);
 assertResultTemplate(request);
 assert.deepEqual(request.generationRules.statusValues, ["completed", "low_signal", "unreadable"]);
 assert.deepEqual(request.generationRules.blockAffinityFields, ["phaseScope", "conceptGrounding", "frontendExperience", "finalSummary"]);

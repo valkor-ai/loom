@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { invalidArgument } from "../errors";
-import { pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
+import { ensureDir, pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
 import { buildLexicalIndex } from "./lexical";
 import {
   knowledgeSourceDir,
@@ -93,6 +93,7 @@ export async function prepareSemanticBuildRequests(input: {
     const packId = `kpack_${String(packIndex).padStart(4, "0")}`;
     const requestPath = knowledgeSemanticRequestFile(input.buildRun.sourceId, input.buildRun.buildId, packId);
     const resultFile = knowledgeSemanticResultFile(input.buildRun.sourceId, input.buildRun.buildId, packId);
+    await ensureDir(path.dirname(resultFile));
     const request = createSemanticRequest({
       buildRun: input.buildRun,
       buildRunPath: input.buildRunPath,
