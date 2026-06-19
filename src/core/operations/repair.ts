@@ -340,7 +340,7 @@ export async function submitDeployExecutionRepairResult(input: {
   await requireInitialized(input.projectRoot);
   const root = path.resolve(input.projectRoot);
   const request = await readDeployExecutionRepairRequest(root, input.repairId);
-  const result = await readDeployExecutionRepairTaskResult(root, input.resultFile);
+  const result = await readDeployExecutionRepairTaskResult(root, input.resultFile, request);
   if (result.repairId !== request.repairId) {
     throw invalidArgument("Deploy execution repair result repairId does not match request.", {
       expected: request.repairId,
@@ -388,6 +388,7 @@ export async function submitDeployExecutionRepairResult(input: {
       },
     };
   }
+  validateDeployExecutionRepairRuntimeEvidence(result, request);
 
   return {
     accepted: true,
@@ -397,6 +398,47 @@ export async function submitDeployExecutionRepairResult(input: {
     nextAction: "deploy_retry",
     instruction: deployRetryInstruction(),
   };
+}
+
+function validateDeployExecutionRepairRuntimeEvidence(
+  result: Awaited<ReturnType<typeof readDeployExecutionRepairTaskResult>>,
+  request: DeployExecutionRepairRequest,
+): void {
+  const requirement = request.syntheticTask.runtimeDeliveryRequirement;
+  const addressedFields = new Set(result.runtimeDeliveryEvidence.addressedFailedContractFields);
+  const missingFields = requirement.affectedContractFields.filter((field) => !addressedFields.has(field));
+  if (missingFields.length > 0) {
+    throw invalidArgument("Deploy execution repair result did not address every failed runtime contract field.", {
+      repairId: request.repairId,
+      missingFields,
+    });
+  }
+
+  const allowedCheckIds = new Set(requirement.requiredCodeLevelChecks.map((check) => check.checkId));
+  const resultCheckIds = new Set(result.runtimeDeliveryEvidence.codeLevelChecks.map((check) => check.checkId));
+  const invalidCheckIds = result.runtimeDeliveryEvidence.codeLevelChecks
+    .map((check) => check.checkId)
+    .filter((checkId) => !allowedCheckIds.has(checkId));
+  const missingCheckIds = requirement.requiredCodeLevelChecks
+    .map((check) => check.checkId)
+    .filter((checkId) => !resultCheckIds.has(checkId));
+  if (invalidCheckIds.length > 0 || missingCheckIds.length > 0) {
+    throw invalidArgument("Deploy execution repair result runtime code-level checks do not match the repair request.", {
+      repairId: request.repairId,
+      invalidCheckIds,
+      missingCheckIds,
+    });
+  }
+
+  const failedChecks = result.runtimeDeliveryEvidence.codeLevelChecks.filter((check) =>
+    check.status === "failed" || check.status === "blocked"
+  );
+  if ((result.status === "completed" || result.status === "completed_with_notes") && failedChecks.length > 0) {
+    throw invalidArgument("Deploy execution repair completed result cannot contain failed or blocked runtime checks.", {
+      repairId: request.repairId,
+      failedCheckIds: failedChecks.map((check) => check.checkId),
+    });
+  }
 }
 
 function repairRequestGenerationInstruction(input: {

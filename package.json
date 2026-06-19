@@ -35,6 +35,7 @@
     "verify:frontend-runtime-severity": "node scripts/verify-frontend-runtime-severity-protocol.js",
     "verify:frontend-execution-guidance": "node scripts/verify-frontend-execution-guidance.js",
     "verify:workflow-closure-protocol": "node scripts/verify-workflow-closure-protocol.js",
+    "verify:task-result-machine-owned-normalization": "npm run build && node scripts/verify-task-result-machine-owned-normalization.js",
     "verify:compact-output-contract": "node scripts/verify-auto-runnable-transition-contract.js",
     "verify:agent-facing-request-protocol": "node scripts/verify-agent-facing-request-protocol.js",
     "verify:agent-profile-adapters": "node scripts/verify-agent-profile-adapters.js",

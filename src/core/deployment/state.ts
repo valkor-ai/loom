@@ -794,10 +794,11 @@ export async function writeDeployExecutionRepairRequest(
 export async function readDeployExecutionRepairTaskResult(
   projectRoot: string,
   resultFile: string,
+  request?: DeployExecutionRepairRequest,
 ): Promise<DeployExecutionRepairTaskResult> {
   try {
     const raw = await readJsonFile(path.resolve(projectRoot, resultFile));
-    return deployExecutionRepairTaskResultSchema.parse(raw);
+    return deployExecutionRepairTaskResultSchema.parse(normalizeDeployExecutionRepairMachineOwnedFields(raw, request));
   } catch (error) {
     if (error instanceof ZodError) {
       throw stateCorrupted("Deploy execution repair task result does not match schema.", {
@@ -809,6 +810,73 @@ export async function readDeployExecutionRepairTaskResult(
     }
     throw error;
   }
+}
+
+function normalizeDeployExecutionRepairMachineOwnedFields(
+  raw: unknown,
+  request?: DeployExecutionRepairRequest,
+): unknown {
+  if (!request || !isPlainRecord(raw)) {
+    return raw;
+  }
+  const normalized: Record<string, unknown> = {
+    ...raw,
+    schemaVersion: "1.0",
+    repairId: request.repairId,
+    deploymentFailureRef: request.deploymentFailureRef,
+  };
+  if (!Array.isArray(normalized.changedFiles)) {
+    normalized.changedFiles = [];
+  }
+  if (!Array.isArray(normalized.notes)) {
+    normalized.notes = [];
+  }
+  if (!isPlainRecord(normalized.selfRepairSummary)) {
+    normalized.selfRepairSummary = {
+      attempted: false,
+      attemptCount: 0,
+      stopReason: "not_attempted",
+      progressObserved: false,
+    };
+  }
+  const rawRuntime = isPlainRecord(normalized.runtimeDeliveryEvidence) ? normalized.runtimeDeliveryEvidence : {};
+  const requiredChecks = request.syntheticTask.runtimeDeliveryRequirement.requiredCodeLevelChecks;
+  const rawChecks = Array.isArray(rawRuntime.codeLevelChecks) ? rawRuntime.codeLevelChecks.filter(isPlainRecord) : [];
+  const usedIndexes = new Set<number>();
+  const codeLevelChecks = requiredChecks
+    .map((check, index) => {
+      const matchingIndex = rawChecks.findIndex((item, itemIndex) =>
+        !usedIndexes.has(itemIndex) && (
+          item.checkId === check.checkId ||
+          item.contractField === check.contractField
+        )
+      );
+      const rawIndex = matchingIndex >= 0 ? matchingIndex : index;
+      const rawCheck = rawChecks[rawIndex];
+      if (!rawCheck) {
+        return null;
+      }
+      usedIndexes.add(rawIndex);
+      return {
+        ...rawCheck,
+        checkId: check.checkId,
+      };
+    })
+    .filter((item) => item !== null);
+  const extraChecks = rawChecks.filter((_, index) => !usedIndexes.has(index));
+  normalized.runtimeDeliveryEvidence = {
+    ...rawRuntime,
+    source: "deploy_failure_repair",
+    addressedFailedContractFields: request.syntheticTask.runtimeDeliveryRequirement.affectedContractFields,
+    codeLevelChecks: [...codeLevelChecks, ...extraChecks],
+    commandsRun: Array.isArray(rawRuntime.commandsRun) ? rawRuntime.commandsRun : [],
+    unverifiedItems: Array.isArray(rawRuntime.unverifiedItems) ? rawRuntime.unverifiedItems : [],
+  };
+  return normalized;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function appendDeploymentLog(projectRoot: string, content: string): Promise<void> {
