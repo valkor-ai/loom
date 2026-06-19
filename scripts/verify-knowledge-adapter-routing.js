@@ -55,11 +55,6 @@ expect(
 );
 expect(
   "codex",
-  "script-generated label/affinity factories",
-  "Codex adapter must forbid scripts from replacing semantic judgment.",
-);
-expect(
-  "codex",
   "build, resume",
   "Codex adapter must mention knowledge resume as a direct knowledge command.",
 );
@@ -98,11 +93,6 @@ expect(
   "claudeSkill",
   "Do not inspect Loom source files",
   "Claude skill must forbid reading Loom source to infer semantic result schema.",
-);
-expect(
-  "claudeSkill",
-  "script-generated label/affinity factories",
-  "Claude skill must forbid scripts from replacing semantic judgment.",
 );
 expect(
   "claudeSkill",
@@ -146,12 +136,6 @@ expect(
   "Claude command wrapper must forbid reading Loom source to infer semantic result schema.",
 );
 expect(
-  "claudeCommand",
-  "script-generated label/affinity factories",
-  "Claude command wrapper must forbid scripts from replacing semantic judgment.",
-);
-
-expect(
   "opencode",
   'argument-hint: "<request> | plan <request> | continue | knowledge [subcommand] | deploy [subcommand] | status"',
   "OpenCode command must advertise knowledge in the slash-command hint.",
@@ -188,13 +172,21 @@ expect(
 );
 expect(
   "opencode",
-  "script-generated label/affinity factories",
-  "OpenCode command must forbid scripts from replacing semantic judgment.",
-);
-expect(
-  "opencode",
   "Build/resume may return `generate_knowledge_semantics`",
   "OpenCode command must treat knowledge resume as semantic build recovery.",
+);
+
+forbidInAdapters(
+  "script-generated label/affinity factories",
+  "Adapter routing files must not carry semantic field-generation rules; request/instruction contracts own them.",
+);
+forbidInAdapters(
+  "Decide summary, semantic labels",
+  "Adapter routing files must not decide semantic fields.",
+);
+forbidInAdapters(
+  "Use chunk meaning for summary/labels/affinity",
+  "Adapter routing files must not carry chunk semantic-generation guidance.",
 );
 
 assertOrder(
@@ -237,6 +229,16 @@ function expect(fileKey, snippet, message) {
     failed = true;
     console.error(`${files[fileKey]}: ${message}`);
     console.error(`Missing snippet: ${snippet}`);
+  }
+}
+
+function forbidInAdapters(snippet, message) {
+  for (const [fileKey, content] of Object.entries(contents)) {
+    if (content.includes(snippet)) {
+      failed = true;
+      console.error(`${files[fileKey]}: ${message}`);
+      console.error(`Forbidden snippet: ${snippet}`);
+    }
   }
 }
 

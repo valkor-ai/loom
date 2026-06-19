@@ -213,8 +213,13 @@ assert.match(
 );
 assert.match(
   repair.instruction.instructions.join("\n"),
-  /Do not use regex rules, keyword tables/,
-  "Semantic repair instruction must forbid rule-script semantic generation.",
+  /request\.generationRules/,
+  "Semantic repair instruction must point agents back to request generation rules.",
+);
+assert.match(
+  repair.instruction.instructions.join("\n"),
+  /script-generated semantic heuristics/,
+  "Semantic repair instruction must forbid replacing request rules with script heuristics.",
 );
 assertResultTemplate(readJson(build.data.firstRequestPath));
 assert.equal(repair.instruction.repairRequestPath, repair.data.repairRequestPath);
