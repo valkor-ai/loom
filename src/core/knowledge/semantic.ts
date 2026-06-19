@@ -55,6 +55,8 @@ const CONFIDENCE_VALUES: KnowledgeSemanticLabel["confidence"][] = ["low", "mediu
 const CHUNK_RESULT_STATUSES: KnowledgeSemanticChunkResult["status"][] = ["completed", "low_signal", "unreadable"];
 const BLOCK_AFFINITY_FIELDS: Array<keyof KnowledgeBlockAffinity> = ["phaseScope", "conceptGrounding", "frontendExperience", "finalSummary"];
 const RESULT_TEMPLATE_RULE = "Copy outputContract.resultTemplate as the result file shape, then fill each chunkResult for the matching chunkId. Do not infer the schema from Loom source files, dist files, TypeScript types, or old semantic result files.";
+const SUMMARY_RULE = "Write a concise summary of this chunk only. Decide the summary from the read chunk text; do not use external knowledge, regex rules, keyword tables, filename heuristics, or bulk scripts to generate semantic content.";
+const SEMANTIC_LABEL_RULE = "Generate labels only from the chunk text, title, heading path, or local neighboring context. Decide labels per chunk from meaning. Do not use regex rules, keyword tables, or script-generated label factories as semantic judgment; scripts may only serialize already-decided JSON. An empty label list is valid for low-signal chunks.";
 const SEMANTIC_LABEL_FIELD_RULES = [
   "semanticLabels[].kind must be one of generationRules.labelKinds.",
   "semanticLabels[].text is the label text from the chunk.",
@@ -62,6 +64,7 @@ const SEMANTIC_LABEL_FIELD_RULES = [
   "semanticLabels[].aliases is an array; use [] when there are no aliases.",
   "semanticLabels[].confidence must be one of generationRules.confidenceValues.",
 ];
+const BLOCK_AFFINITY_RULE = "Score affinity from 0 to 1 for each Brainstorm block based only on this chunk. Decide affinity from the chunk's meaning, not from regex rules, keyword counts, or script-generated heuristics.";
 const BLOCK_AFFINITY_GUIDANCE: Record<keyof KnowledgeBlockAffinity, string> = {
   phaseScope: "Score high when the chunk helps decide phase boundaries, included work, excluded work, deferred work, dependency order, or next-phase handoff.",
   conceptGrounding: "Score high when the chunk explains objects, operations, fields, states, rules, invariants, preconditions, validation, blocking reasons, outcomes, or misunderstanding boundaries.",
@@ -447,7 +450,10 @@ function normalizeSemanticRequestGenerationRules(
     labelKinds: LABEL_KINDS,
     confidenceValues: CONFIDENCE_VALUES,
     resultTemplateRule: RESULT_TEMPLATE_RULE,
+    summaryRule: SUMMARY_RULE,
+    semanticLabelRule: SEMANTIC_LABEL_RULE,
     semanticLabelFieldRules: SEMANTIC_LABEL_FIELD_RULES,
+    blockAffinityRule: BLOCK_AFFINITY_RULE,
     blockAffinityFields: BLOCK_AFFINITY_FIELDS,
     blockAffinityValueRule: "Each blockAffinity value must be a finite number from 0 to 1, and all generationRules.blockAffinityFields must be present.",
     blockAffinityGuidance: BLOCK_AFFINITY_GUIDANCE,
@@ -593,10 +599,10 @@ function createSemanticRequest(input: {
       labelKinds: LABEL_KINDS,
       confidenceValues: CONFIDENCE_VALUES,
       resultTemplateRule: RESULT_TEMPLATE_RULE,
-      summaryRule: "Write a concise summary of this chunk only. Do not add external knowledge.",
-      semanticLabelRule: "Generate labels only from the chunk text, title, heading path, or local neighboring context. An empty label list is valid for low-signal chunks.",
+      summaryRule: SUMMARY_RULE,
+      semanticLabelRule: SEMANTIC_LABEL_RULE,
       semanticLabelFieldRules: SEMANTIC_LABEL_FIELD_RULES,
-      blockAffinityRule: "Score affinity from 0 to 1 for each Brainstorm block based only on this chunk.",
+      blockAffinityRule: BLOCK_AFFINITY_RULE,
       blockAffinityFields: BLOCK_AFFINITY_FIELDS,
       blockAffinityValueRule: "Each blockAffinity value must be a finite number from 0 to 1, and all generationRules.blockAffinityFields must be present.",
       blockAffinityGuidance: BLOCK_AFFINITY_GUIDANCE,

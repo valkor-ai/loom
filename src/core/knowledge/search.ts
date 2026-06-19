@@ -88,6 +88,8 @@ type ScoredChunk = {
   chunk: KnowledgeChunkRecord;
   lexicalScore: number;
   semanticScore: number;
+  semanticCompleteness: number;
+  semanticTier: number;
   blockScore: number;
   finalScore: number;
   matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"];
@@ -99,7 +101,7 @@ export async function searchKnowledge(input: SearchInput): Promise<KnowledgeSear
   const scored = scoreLoadedSources(sources, query);
   const selected = applyDocumentDiversity(scored
     .filter((entry) => entry.finalScore > 0)
-    .sort((a, b) => b.finalScore - a.finalScore), query.chunkLimit);
+    .sort(compareScoredChunks), query.chunkLimit);
   return {
     query,
     results: selected.map(toChunkCard),
@@ -116,7 +118,7 @@ export async function buildBrainstormKnowledgeContext(input: BrainstormContextIn
     chunkLimit: MAX_MATCH_CHUNKS_PER_BLOCK,
   })
     .filter((entry) => entry.finalScore > 0)
-    .sort((a, b) => b.finalScore - a.finalScore);
+    .sort(compareScoredChunks);
   const matchedSources = aggregateMatchCandidates(scored, matchQuery);
   return {
     status: matchedSources.length > 0 ? "available" : "empty",
@@ -176,10 +178,13 @@ function scoreLoadedSources(sources: LoadedSourceIndex[], query: KnowledgeSearch
   const maxLexicalScore = Math.max(0, ...scored.map((entry) => entry.lexicalScore));
   return scored.map((entry) => {
     const lexicalScore = maxLexicalScore > 0 ? entry.lexicalScore / maxLexicalScore : 0;
+    const semanticCoverage = semanticCompleteness(entry.matchedLabels, query);
     return {
       ...entry,
       lexicalScore,
-      finalScore: lexicalScore * 0.55 + entry.semanticScore * 0.30 + entry.blockScore * 0.15,
+      semanticCompleteness: semanticCoverage.score,
+      semanticTier: semanticCoverage.tier,
+      finalScore: lexicalScore * 0.40 + entry.semanticScore * 0.25 + semanticCoverage.score * 0.20 + entry.blockScore * 0.15,
     };
   });
 }
@@ -211,7 +216,7 @@ function aggregateMatchCandidates(scored: ScoredChunk[], query: KnowledgeMatchQu
 
 function buildMatchCandidate(entries: ScoredChunk[], query: KnowledgeMatchQuery): KnowledgeMatchCandidate {
   const source = entries[0].source.source;
-  const sorted = [...entries].sort((a, b) => b.finalScore - a.finalScore);
+  const sorted = [...entries].sort(compareScoredChunks);
   const topChunks = sorted.slice(0, query.chunkLimitPerSource).map(toChunkCard);
   return recalculateCandidateWithChunks({
     sourceId: source.sourceId,
@@ -434,12 +439,96 @@ function scoreSourceChunks(source: LoadedSourceIndex, query: KnowledgeSearchQuer
       chunk,
       lexicalScore: lexicalScores.get(chunkId) ?? 0,
       semanticScore: semantic?.score ?? 0,
+      semanticCompleteness: 0,
+      semanticTier: 0,
       blockScore: blockAffinityScore(chunk, query.brainstormBlock),
       finalScore: 0,
       matchedLabels: semantic?.matchedLabels ?? [],
     });
   }
   return results;
+}
+
+function compareScoredChunks(a: ScoredChunk, b: ScoredChunk): number {
+  if (a.semanticTier !== b.semanticTier) {
+    return b.semanticTier - a.semanticTier;
+  }
+  if (a.semanticCompleteness !== b.semanticCompleteness) {
+    return b.semanticCompleteness - a.semanticCompleteness;
+  }
+  return b.finalScore - a.finalScore;
+}
+
+function semanticCompleteness(
+  matchedLabels: KnowledgeSearchResult["results"][number]["matchedLabels"],
+  query: KnowledgeSearchQuery,
+): { score: number; tier: number } {
+  if (query.semanticFocus.length === 0 || matchedLabels.length === 0) {
+    return { score: 0, tier: 0 };
+  }
+
+  const matchedKeys = new Set(matchedLabels.map((label) => semanticFocusKey(label.kind, label.text)));
+  const focusItems = dedupeSemanticFocus(query.semanticFocus);
+  const matchedFocus = focusItems.filter((focus) => matchedKeys.has(semanticFocusKey(focus.kind, focus.text)));
+  if (matchedFocus.length === 0) {
+    return { score: 0, tier: 0 };
+  }
+
+  const coverageRatio = matchedFocus.length / focusItems.length;
+  const focusGroups = semanticFocusGroups(query.brainstormBlock);
+  const activeGroups = focusGroups
+    .map((group) => focusItems.some((focus) => group.includes(focus.kind)) ? group : [])
+    .filter((group) => group.length > 0);
+  if (activeGroups.length < 2) {
+    return {
+      score: coverageRatio,
+      tier: coverageRatio >= 1 ? 2 : 1,
+    };
+  }
+
+  const matchedGroupCount = activeGroups.filter((group) => (
+    matchedFocus.some((focus) => group.includes(focus.kind))
+  )).length;
+  const groupCoverage = matchedGroupCount / activeGroups.length;
+  return {
+    score: coverageRatio * 0.45 + groupCoverage * 0.55,
+    tier: matchedGroupCount === activeGroups.length ? 2 : 1,
+  };
+}
+
+function dedupeSemanticFocus(
+  semanticFocus: KnowledgeSearchQuery["semanticFocus"],
+): KnowledgeSearchQuery["semanticFocus"] {
+  const seen = new Set<string>();
+  const result: KnowledgeSearchQuery["semanticFocus"] = [];
+  for (const focus of semanticFocus) {
+    const key = semanticFocusKey(focus.kind, focus.text);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(focus);
+  }
+  return result;
+}
+
+function semanticFocusKey(kind: KnowledgeSemanticLabel["kind"], text: string): string {
+  return `${kind}:${normalizeSemanticText(text)}`;
+}
+
+function semanticFocusGroups(
+  block: KnowledgeSearchQuery["brainstormBlock"],
+): KnowledgeSemanticLabel["kind"][][] {
+  if (block === "frontend_experience") {
+    return [
+      ["page", "flow"],
+      ["operation", "field", "state"],
+    ];
+  }
+  return [
+    ["object"],
+    ["operation", "rule", "state", "field", "flow"],
+  ];
 }
 
 function scoreLexical(index: KnowledgeLexicalIndex, naturalLanguageQuery: string): Map<string, number> {

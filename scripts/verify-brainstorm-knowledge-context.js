@@ -213,6 +213,16 @@ assert.deepEqual(
   ["page", "flow"],
 );
 includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
+  "Pair object focus with the most relevant operation",
+  "Concept knowledge query guidance must tell agents to build semantically complete focus anchors.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
+  "page or flow focus",
+  "Frontend knowledge query guidance must prefer page or flow focus anchors.",
+);
+includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.retrievalIntent,
   "target discovery",
   "Frontend knowledge query guidance must target page-operation paths.",
@@ -239,6 +249,8 @@ const protocolRules = brainstormRequest.knowledgeContextProtocol.blockRules.join
 includes(protocolRules, "Do not run knowledge brainstorm-context for final_summary", "final_summary must not run knowledge recall.");
 includes(protocolRules, "inspect every chunk listed in context.readPlan.chunks", "available knowledge context must be inspected.");
 includes(protocolRules, "Do not ask the user to choose or name a knowledge source", "Brainstorm must not support manual knowledge source selection.");
+includes(protocolRules, "semanticFocus should include them explicitly", "Brainstorm must instruct agents to provide concrete semanticFocus anchors when available.");
+includes(protocolRules, "instead of inventing labels", "Brainstorm must forbid invented semanticFocus labels.");
 
 const blockRules = brainstormRequest.clarificationConversationProtocol.blockExecutionRules.join("\n");
 includes(blockRules, "follow knowledgeContextProtocol before presenting the block", "Brainstorm blocks must invoke knowledge protocol before presentation.");

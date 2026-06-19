@@ -304,6 +304,7 @@ export type BrainstormKnowledgeContextProtocol = {
     retrievalIntent: string;
     naturalLanguageQueryMustCombine: string[];
     semanticFocusPriorityKinds: Array<"object" | "operation" | "state" | "rule" | "field" | "page" | "flow" | "other">;
+    semanticFocusRules: string[];
     mustNotDo: string[];
   }>;
   perBlockLimits: {
@@ -1834,7 +1835,7 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
       brainstormBlock: "phase_scope",
       semanticFocus: [{
         kind: "object",
-        text: "A concrete object, operation, state, rule, field, page, or flow phrase that appears in the requirement or confirmed prior blocks.",
+        text: "A concrete object, operation, state, rule, field, page, or flow phrase from the current requirement or confirmed prior blocks. Prefer specific object-operation, object-rule, or page-flow anchors over generic topic words.",
       }],
       sourceLimit: 2,
       chunkLimitPerSource: 3,
@@ -1847,6 +1848,11 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
           "phase boundary intent such as include, exclude, defer, dependency, ordering, and next phase",
         ],
         semanticFocusPriorityKinds: ["object", "operation", "rule", "flow", "state"],
+        semanticFocusRules: [
+          "Prefer the current phase's primary business or technical object as object focus.",
+          "Add operation, rule, state, or flow focus for the scope boundary being compared when those anchors are present.",
+          "Do not use only generic scope words such as include, exclude, defer, or next phase as semanticFocus.",
+        ],
         mustNotDo: [
           "Do not turn knowledge-only adjacent capabilities into current scope without user-visible confirmation.",
           "Do not use page-path or concept details as a substitute for presenting phase scope options.",
@@ -1859,6 +1865,11 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
           "concept grounding intent such as object, field, state, rule, precondition, validation, blocking, success outcome, and feedback",
         ],
         semanticFocusPriorityKinds: ["object", "operation", "field", "state", "rule", "flow"],
+        semanticFocusRules: [
+          "Prefer object focus for each current-phase business object that must be understood.",
+          "Pair object focus with the most relevant operation, rule, state, field, or flow focus when those anchors are present.",
+          "Do not query only with broad intent words such as rule, field, validation, or blocking when a concrete object or operation is available.",
+        ],
         mustNotDo: [
           "Do not let page-operation guidance replace object, rule, state, or invariant clarification.",
           "Do not write knowledge-derived rules into the candidate unless the user sees and confirms them in this block.",
@@ -1871,6 +1882,11 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
           "page-operation anchors such as page entry, target discovery, query, pagination, selection, list, detail, action entry, form input, success feedback, failure feedback, business blocking, loading, empty state, and refresh/readback",
         ],
         semanticFocusPriorityKinds: ["page", "flow", "operation", "field", "state", "object"],
+        semanticFocusRules: [
+          "Prefer page or flow focus for the user-visible or staff-visible path being clarified.",
+          "Pair page or flow focus with operation, field, or state focus for action entry, inputs, feedback, blocking, loading, empty, refresh, or readback behavior when those anchors are present.",
+          "Use object focus only as supporting context; do not let object-only focus drive frontend_experience retrieval.",
+        ],
         mustNotDo: [
           "Do not query frontend_experience with only business object names or business rule terms.",
           "Do not require users to register a separate frontend knowledge source; search all enabled published sources and rank matching page-operation chunks.",
@@ -1886,6 +1902,8 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
     blockRules: [
       "Before presenting phase_scope, concept_grounding, or frontend_experience, generate a KnowledgeMatchQuery for that exact block and run command.argv with the query file.",
       "Use blockQueryGuidance for the current block when writing the KnowledgeMatchQuery. The query must combine the current phase anchors with the current block's retrieval intent instead of reusing a generic business-only query.",
+      "When concrete anchors are available, semanticFocus should include them explicitly so retrieval can prefer semantically complete chunks. For phase_scope and concept_grounding, prefer object plus operation/rule/state/field/flow anchors. For frontend_experience, prefer page/flow plus operation/field/state anchors; object focus is supporting context only.",
+      "If no concrete semanticFocus anchor is available, leave semanticFocus empty and continue with naturalLanguageQuery instead of inventing labels.",
       "Do not run knowledge brainstorm-context for final_summary.",
       "Do not ask the user to choose or name a knowledge source for Brainstorm; the command searches enabled published knowledge sources automatically.",
       "If the command returns context.status=empty, continue the block from the requirement, repository facts, confirmed prior blocks, and keyword hints without treating empty knowledge as a blocker.",

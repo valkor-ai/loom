@@ -98,6 +98,21 @@ assert.match(
   "Semantic build request must forbid source-code schema guessing.",
 );
 assert.match(
+  request.generationRules.summaryRule,
+  /regex rules/,
+  "Semantic build request must forbid script or keyword summary generation.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
+  /semantic judgment/,
+  "Semantic build request must require labels to be semantic judgments.",
+);
+assert.match(
+  request.generationRules.blockAffinityRule,
+  /chunk's meaning/,
+  "Semantic build request must require block affinity to come from chunk meaning.",
+);
+assert.match(
   request.generationRules.blockAffinityGuidance.frontendExperience,
   /target discovery/,
   "Semantic build request must explain frontendExperience affinity using page-operation signals.",
@@ -195,6 +210,11 @@ assert.match(
   repair.instruction.instructions.join("\n"),
   /outputContract\.resultTemplate/,
   "Semantic repair instruction must tell the agent to use resultTemplate.",
+);
+assert.match(
+  repair.instruction.instructions.join("\n"),
+  /Do not use regex rules, keyword tables/,
+  "Semantic repair instruction must forbid rule-script semantic generation.",
 );
 assertResultTemplate(readJson(build.data.firstRequestPath));
 assert.equal(repair.instruction.repairRequestPath, repair.data.repairRequestPath);

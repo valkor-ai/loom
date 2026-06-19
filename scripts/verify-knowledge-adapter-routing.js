@@ -55,6 +55,11 @@ expect(
 );
 expect(
   "codex",
+  "script-generated label/affinity factories",
+  "Codex adapter must forbid scripts from replacing semantic judgment.",
+);
+expect(
+  "codex",
   "build, resume",
   "Codex adapter must mention knowledge resume as a direct knowledge command.",
 );
@@ -93,6 +98,11 @@ expect(
   "claudeSkill",
   "Do not inspect Loom source files",
   "Claude skill must forbid reading Loom source to infer semantic result schema.",
+);
+expect(
+  "claudeSkill",
+  "script-generated label/affinity factories",
+  "Claude skill must forbid scripts from replacing semantic judgment.",
 );
 expect(
   "claudeSkill",
@@ -135,6 +145,11 @@ expect(
   "do not inspect Loom source files",
   "Claude command wrapper must forbid reading Loom source to infer semantic result schema.",
 );
+expect(
+  "claudeCommand",
+  "script-generated label/affinity factories",
+  "Claude command wrapper must forbid scripts from replacing semantic judgment.",
+);
 
 expect(
   "opencode",
@@ -170,6 +185,11 @@ expect(
   "opencode",
   "Do not inspect Loom source files",
   "OpenCode command must forbid reading Loom source to infer semantic result schema.",
+);
+expect(
+  "opencode",
+  "script-generated label/affinity factories",
+  "OpenCode command must forbid scripts from replacing semantic judgment.",
 );
 expect(
   "opencode",
