@@ -2628,6 +2628,12 @@ export function inferArchitectureRepairSections(issues: ArchitectureAcceptResult
       sections.add("runtime_delivery");
     } else if (pointer.includes("/frontendExperience")) {
       sections.add("frontend_experience");
+    } else if (
+      pointer.includes("/detailCoverage") ||
+      issue.code === "DETAIL_COVERAGE_INVALID" ||
+      issue.code === "DETAIL_REF_INVALID"
+    ) {
+      sections.add("coverage");
     } else if (pointer.includes("/acceptanceMatrix") || pointer.includes("/risksAndDecisions") || issue.code === "AAC_COVERAGE_TYPE_MISMATCH") {
       sections.add("coverage");
     } else if (pointer.includes("/userFlows") || pointer.includes("/stateMachines")) {
