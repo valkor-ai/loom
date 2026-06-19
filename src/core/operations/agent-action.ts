@@ -682,7 +682,6 @@ function buildBrainstormFieldGroups(actionKind: string, requiredFields: string[]
     "knowledgeContextProtocol.excludedBlocks",
     "knowledgeContextProtocol.command",
     "knowledgeContextProtocol.matchQueryShape",
-    "knowledgeContextProtocol.blockQueryGuidance",
     "knowledgeContextProtocol.perBlockLimits",
     "knowledgeContextProtocol.blockRules",
     "knowledgeContextProtocol.candidateBoundaryRules",

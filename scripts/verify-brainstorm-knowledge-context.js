@@ -277,73 +277,68 @@ assert.deepEqual(brainstormRequest.knowledgeContextProtocol.appliesToBlocks, [
   "frontend_experience",
 ]);
 assert.deepEqual(brainstormRequest.knowledgeContextProtocol.excludedBlocks, ["final_summary"]);
-assert.equal(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.naturalLanguageQueryMustCombine.length,
-  2,
-);
-assert.deepEqual(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusPriorityKinds.slice(0, 2),
-  ["page", "flow"],
+const phaseClosureRules = brainstormRequest.knowledgeQueryPlan.blocks.phase_scope.executionOrder[1].queryConstructionRules.join("\n");
+const conceptGroundingRules = brainstormRequest.knowledgeQueryPlan.blocks.concept_grounding.executionOrder[0].queryConstructionRules.join("\n");
+const frontendPathRules = brainstormRequest.knowledgeQueryPlan.blocks.frontend_experience.executionOrder[0].queryConstructionRules.join("\n");
+includes(
+  conceptGroundingRules,
+  "pairing object focus with relevant operation",
+  "Concept knowledge query plan must tell agents to build semantically complete focus anchors.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
-  "Pair object focus with the relevant operations",
-  "Concept knowledge query guidance must tell agents to build semantically complete focus anchors.",
-);
-includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  phaseClosureRules,
   "candidate phase capability units",
-  "Phase scope knowledge query guidance must tell agents to derive candidate phase anchors before composing options.",
+  "Phase scope knowledge query plan must tell agents to derive candidate phase anchors before composing options.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  phaseClosureRules,
   "closed phase",
-  "Phase scope knowledge query guidance must target current-phase closure coverage.",
+  "Phase scope knowledge query plan must target current-phase closure coverage.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  phaseClosureRules,
   "each identifiable component operation as separate operation focus entries",
-  "Phase scope knowledge query guidance must split connected processes into component operation focus anchors.",
+  "Phase scope knowledge query plan must split connected processes into component operation focus anchors.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  phaseClosureRules,
   "downstream execution operations",
   "Phase scope semanticFocus must avoid being diluted by downstream modules unless they are competing current-phase options.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
+  conceptGroundingRules,
   "every confirmed current-phase included item",
-  "Concept knowledge query guidance must cover all confirmed current-phase scope items.",
+  "Concept knowledge query plan must cover all confirmed current-phase scope items.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
+  conceptGroundingRules,
   "single compound operation focus",
-  "Concept knowledge query guidance must not collapse lifecycle processes into one compound operation focus.",
+  "Concept knowledge query plan must not collapse lifecycle processes into one compound operation focus.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
+  frontendPathRules,
   "no explicit page labels",
-  "Frontend knowledge query guidance must handle knowledge sources without page labels.",
+  "Frontend knowledge query plan must handle knowledge sources without page labels.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
+  frontendPathRules,
   "page or flow focus",
-  "Frontend knowledge query guidance must prefer page or flow focus anchors.",
+  "Frontend knowledge query plan must prefer page or flow focus anchors.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
+  frontendPathRules,
   "do not rely on a compound operation focus alone",
-  "Frontend knowledge query guidance must not rely on a compound operation focus for workflows.",
+  "Frontend knowledge query plan must not rely on a compound operation focus for workflows.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.retrievalIntent,
+  frontendPathRules,
   "target discovery",
-  "Frontend knowledge query guidance must target page-operation paths.",
+  "Frontend knowledge query plan must target page-operation paths.",
 );
 includes(
-  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.mustNotDo.join("\n"),
-  "Do not require users to register a separate frontend knowledge source",
-  "Frontend knowledge query guidance must not prescribe knowledge source organization.",
+  frontendPathRules,
+  "Do not query only with business object names",
+  "Frontend knowledge query plan must not prescribe object-only matching.",
 );
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxSources, 2);
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxChunks, 5);
@@ -358,11 +353,13 @@ assert.ok(
   readPlanGroups.some((group) => group.groupId === "brainstorm_session_knowledge_context_protocol"),
   "Brainstorm requestReadPlan must expose knowledge context protocol as a grouped read.",
 );
-assert.ok(
+const retiredKnowledgeGuidanceField = ["knowledgeContextProtocol", "block" + "QueryGuidance"].join(".");
+assert.equal(
   readPlanGroups
     .find((group) => group.groupId === "brainstorm_session_knowledge_context_protocol")
-    .fields.includes("knowledgeContextProtocol.blockQueryGuidance"),
-  "Brainstorm requestReadPlan must explicitly expose blockQueryGuidance.",
+    .fields.includes(retiredKnowledgeGuidanceField),
+  false,
+  "Brainstorm requestReadPlan must not expose retired knowledge query guidance fields.",
 );
 assert.ok(
   readPlanGroups
