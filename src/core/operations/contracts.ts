@@ -2608,43 +2608,70 @@ function architectureRepairHintForIssue(issue: ArchitectureAcceptResult["issues"
   return issue.repairHint;
 }
 
-export function inferArchitectureRepairSections(issues: ArchitectureAcceptResult["issues"]): Array<"foundation" | "domain_contract" | "behavior" | "frontend_experience" | "runtime_delivery" | "coverage"> {
-  const sections = new Set<"foundation" | "domain_contract" | "behavior" | "frontend_experience" | "runtime_delivery" | "coverage">();
+type ArchitectureSectionName = ArchitectureSectionCandidate["section"];
+
+const ARCHITECTURE_SECTION_NAMES = new Set<ArchitectureSectionName>([
+  "foundation",
+  "domain_contract",
+  "behavior",
+  "frontend_experience",
+  "runtime_delivery",
+  "coverage",
+]);
+
+const AAC_TOP_LEVEL_SECTION_OWNER: Record<string, ArchitectureSectionName> = {
+  source: "foundation",
+  engineeringBoundary: "foundation",
+  modules: "foundation",
+  dataModel: "domain_contract",
+  interfaces: "domain_contract",
+  userFlows: "behavior",
+  stateMachines: "behavior",
+  frontendExperience: "frontend_experience",
+  runtimeDelivery: "runtime_delivery",
+  acceptanceMatrix: "coverage",
+  detailCoverage: "coverage",
+  risksAndDecisions: "coverage",
+  handoff: "coverage",
+};
+
+const AAC_ISSUE_CODE_SECTION_OWNER: Partial<Record<ArchitectureAcceptResult["issues"][number]["code"], ArchitectureSectionName>> = {
+  AAC_COVERAGE_TYPE_MISMATCH: "coverage",
+  DETAIL_COVERAGE_INVALID: "coverage",
+  DETAIL_REF_INVALID: "coverage",
+};
+
+export function inferArchitectureRepairSections(issues: ArchitectureAcceptResult["issues"]): ArchitectureSectionName[] {
+  const sections = new Set<ArchitectureSectionName>();
   for (const issue of issues) {
-    const pointer = issue.path;
-    if (pointer.includes("/sections/foundation")) {
-      sections.add("foundation");
-    } else if (pointer.includes("/sections/domain_contract")) {
-      sections.add("domain_contract");
-    } else if (pointer.includes("/sections/behavior")) {
-      sections.add("behavior");
-    } else if (pointer.includes("/sections/frontend_experience")) {
-      sections.add("frontend_experience");
-    } else if (pointer.includes("/sections/runtime_delivery")) {
-      sections.add("runtime_delivery");
-    } else if (pointer.includes("/sections/coverage")) {
-      sections.add("coverage");
-    } else if (pointer.includes("/runtimeDelivery")) {
-      sections.add("runtime_delivery");
-    } else if (pointer.includes("/frontendExperience")) {
-      sections.add("frontend_experience");
-    } else if (
-      pointer.includes("/detailCoverage") ||
-      issue.code === "DETAIL_COVERAGE_INVALID" ||
-      issue.code === "DETAIL_REF_INVALID"
-    ) {
-      sections.add("coverage");
-    } else if (pointer.includes("/acceptanceMatrix") || pointer.includes("/risksAndDecisions") || issue.code === "AAC_COVERAGE_TYPE_MISMATCH") {
-      sections.add("coverage");
-    } else if (pointer.includes("/userFlows") || pointer.includes("/stateMachines")) {
-      sections.add("behavior");
-    } else if (pointer.includes("/dataModel") || pointer.includes("/interfaces")) {
-      sections.add("domain_contract");
-    } else if (pointer.includes("/engineeringBoundary") || pointer.includes("/modules")) {
-      sections.add("foundation");
-    }
+    const section = inferArchitectureRepairSection(issue);
+    if (section) sections.add(section);
   }
   return [...sections];
+}
+
+function inferArchitectureRepairSection(issue: ArchitectureAcceptResult["issues"][number]): ArchitectureSectionName | null {
+  const segments = jsonPointerSegments(issue.path);
+  if (segments[0] === "sections") {
+    const section = segments[1];
+    return isArchitectureSectionName(section) ? section : null;
+  }
+  const owner = AAC_TOP_LEVEL_SECTION_OWNER[segments[0] ?? ""];
+  if (owner) return owner;
+  return AAC_ISSUE_CODE_SECTION_OWNER[issue.code] ?? null;
+}
+
+function jsonPointerSegments(pointer: string): string[] {
+  if (!pointer.startsWith("/")) return [];
+  return pointer
+    .slice(1)
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+function isArchitectureSectionName(value: string | undefined): value is ArchitectureSectionName {
+  return typeof value === "string" && ARCHITECTURE_SECTION_NAMES.has(value as ArchitectureSectionName);
 }
 
 function requireCandidateFile(candidateFile: string | undefined): string {

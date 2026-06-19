@@ -28,9 +28,15 @@ function main() {
   assert.deepEqual(inferArchitectureRepairSections([issue("UNKNOWN_ARTIFACT_REF", "/interfaces/interface-x")]), ["domain_contract"]);
   assert.deepEqual(inferArchitectureRepairSections([issue("UNKNOWN_ARTIFACT_REF", "/userFlows/flow-x")]), ["behavior"]);
   assert.deepEqual(inferArchitectureRepairSections([issue("UNKNOWN_ARTIFACT_REF", "/stateMachines/sm-x")]), ["behavior"]);
+  assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/frontendExperience/dataViews/0/viewId")]), ["frontend_experience"]);
+  assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/runtimeDelivery/basis/previousRuntimeDeliveryRef")]), ["runtime_delivery"]);
   assert.deepEqual(inferArchitectureRepairSections([issue("AAC_COVERAGE_TYPE_MISMATCH", "/acceptanceMatrix/AC-001/coverage/data_constraint/rule-x")]), ["coverage"]);
+  assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/detailCoverage/0/artifactRefs/modules")]), ["coverage"]);
+  assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/detailCoverage/0/artifactRefs/interfaces")]), ["coverage"]);
   assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/detailCoverage/0/artifactRefs/userFlows")]), ["coverage"]);
+  assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/detailCoverage/0/artifactRefs/stateMachines")]), ["coverage"]);
   assert.deepEqual(inferArchitectureRepairSections([issue("DETAIL_COVERAGE_INVALID", "/detailCoverage/detail-x/artifactRefs")]), ["coverage"]);
+  assert.deepEqual(inferArchitectureRepairSections([issue("SCHEMA_INVALID", "/sections/behavior/content/userFlows/0/steps/0/action")]), ["behavior"]);
   assert.deepEqual(
     inferArchitectureRepairSections([
       issue("UNKNOWN_ARTIFACT_REF", "/modules/module-x"),
