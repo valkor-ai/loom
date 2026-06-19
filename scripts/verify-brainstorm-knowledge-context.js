@@ -90,13 +90,40 @@ const doc = writeFixture("knowledge/operations.md", [
   "",
   "Internal operators should clarify object lifecycle rules before implementation.",
   "",
+  "## Scope boundary",
+  "",
+  "The current phase boundary should be checked against dependency order and closed capability coverage.",
+  "",
+  "## Object lifecycle",
+  "",
+  "A lifecycle flow should keep the object, operations, states, and blocking rules together.",
+  "",
+  "## Business rules",
+  "",
+  "Business rules should identify validation, blocking result, success outcome, and state change.",
+  "",
+  "## Page operation path",
+  "",
   "A page operation path should identify target discovery, action entry, success feedback, blocking feedback, and refresh behavior.",
+  "",
+  "## Readback",
+  "",
+  "After an operation succeeds, the page should show the latest state rather than only a transient message.",
+  "",
+  "## Adjacent modules",
+  "",
+  "Adjacent downstream capabilities can explain dependency order without becoming current scope.",
 ].join("\n"));
 
 run(["init"]);
 run(["knowledge", "add", "--name", "ops-context", doc]);
 const build = run(["knowledge", "build", "ops-context"]);
 const request = build.data.firstRequest;
+assert.equal(
+  request.chunkPack.chunks.length >= 5,
+  true,
+  "Knowledge brainstorm context fixture must create enough chunks to verify single-source recall coverage.",
+);
 
 writeJson(request.outputContract.resultFile, {
   schemaVersion: "1.0",
@@ -150,7 +177,7 @@ writeJson(queryFile, {
     { kind: "operation", text: "clarify lifecycle rules" },
   ],
   sourceLimit: 2,
-  chunkLimitPerSource: 3,
+  chunkLimitPerSource: 5,
 });
 
 const contextEnvelope = run(["knowledge", "brainstorm-context", "--query-file", queryFile]);
@@ -162,8 +189,8 @@ assert.match(context.matchQuery.naturalLanguageQuery, /页面办理路径/);
 assert.equal(context.matchedSources.length <= 2, true);
 assert.equal(context.readPlan.mode, "inspect_all_listed_chunks");
 assert.equal(context.readPlan.chunks.length > 0, true);
-assert.equal(context.readPlan.chunks.length <= 5, true);
-assert.equal(context.matchedSources[0].topChunks.length <= 3, true);
+assert.equal(context.readPlan.chunks.length, 5, "Brainstorm context should be able to return the full five-chunk block budget from a single source.");
+assert.equal(context.matchedSources[0].topChunks.length <= 5, true);
 assert.equal("text" in context.matchedSources[0].topChunks[0], false, "Brainstorm knowledge context must not inline chunk body text.");
 assert.deepEqual(
   context.readPlan.chunks[0].inspectCommand.argv.slice(0, 4),
@@ -214,8 +241,18 @@ assert.deepEqual(
 );
 includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
-  "Pair object focus with the most relevant operation",
+  "Pair object focus with the relevant operations",
   "Concept knowledge query guidance must tell agents to build semantically complete focus anchors.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  "candidate phase capability units",
+  "Phase scope knowledge query guidance must tell agents to derive candidate phase anchors before composing options.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  "closed phase",
+  "Phase scope knowledge query guidance must target current-phase closure coverage.",
 );
 includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
@@ -223,9 +260,24 @@ includes(
   "Phase scope knowledge query guidance must split connected processes into component operation focus anchors.",
 );
 includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.phase_scope.semanticFocusRules.join("\n"),
+  "downstream execution operations",
+  "Phase scope semanticFocus must avoid being diluted by downstream modules unless they are competing current-phase options.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
+  "every confirmed current-phase included item",
+  "Concept knowledge query guidance must cover all confirmed current-phase scope items.",
+);
+includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.concept_grounding.semanticFocusRules.join("\n"),
   "single compound operation focus",
   "Concept knowledge query guidance must not collapse lifecycle processes into one compound operation focus.",
+);
+includes(
+  brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
+  "no explicit page labels",
+  "Frontend knowledge query guidance must handle knowledge sources without page labels.",
 );
 includes(
   brainstormRequest.knowledgeContextProtocol.blockQueryGuidance.frontend_experience.semanticFocusRules.join("\n"),
@@ -249,7 +301,7 @@ includes(
 );
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxSources, 2);
 assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxChunks, 5);
-assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxChunksPerSource, 3);
+assert.equal(brainstormRequest.knowledgeContextProtocol.perBlockLimits.maxChunksPerSource, 5);
 assert.deepEqual(
   brainstormRequest.knowledgeContextProtocol.command.argv,
   ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
@@ -260,9 +312,16 @@ assert.ok(
   readPlanGroups.some((group) => group.groupId === "brainstorm_session_knowledge_context_protocol"),
   "Brainstorm requestReadPlan must expose knowledge context protocol as a grouped read.",
 );
+assert.ok(
+  readPlanGroups
+    .find((group) => group.groupId === "brainstorm_session_knowledge_context_protocol")
+    .fields.includes("knowledgeContextProtocol.blockQueryGuidance"),
+  "Brainstorm requestReadPlan must explicitly expose blockQueryGuidance.",
+);
 const protocolRules = brainstormRequest.knowledgeContextProtocol.blockRules.join("\n");
 includes(protocolRules, "Do not run knowledge brainstorm-context for final_summary", "final_summary must not run knowledge recall.");
 includes(protocolRules, "inspect every chunk listed in context.readPlan.chunks", "available knowledge context must be inspected.");
+includes(protocolRules, "Self-check the returned context", "Brainstorm must self-check knowledge coverage before presenting the block.");
 includes(protocolRules, "Do not ask the user to choose or name a knowledge source", "Brainstorm must not support manual knowledge source selection.");
 includes(protocolRules, "semanticFocus should include them explicitly", "Brainstorm must instruct agents to provide concrete semanticFocus anchors when available.");
 includes(protocolRules, "do not collapse it into a single compound operation semanticFocus", "Brainstorm must split connected-process semanticFocus anchors when possible.");

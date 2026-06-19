@@ -1838,19 +1838,22 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         text: "A concrete object, operation, state, rule, field, page, or flow phrase from the current requirement or confirmed prior blocks. Prefer specific object-operation, object-rule, or page-flow anchors over generic topic words.",
       }],
       sourceLimit: 2,
-      chunkLimitPerSource: 3,
+      chunkLimitPerSource: 5,
     },
     blockQueryGuidance: {
       phase_scope: {
-        retrievalIntent: "Find knowledge that helps compare the current phase boundary, included scope, excluded scope, deferred work, dependency order, and next-phase handoff.",
+        retrievalIntent: "Find knowledge that helps compare the current phase boundary, included scope, excluded scope, deferred work, dependency order, current-phase closure, and next-phase handoff.",
         naturalLanguageQueryMustCombine: [
-          "current requirement and current phase business or technical anchors",
+          "current requirement, candidate phase capability units, and current-phase business or technical anchors",
           "phase boundary intent such as include, exclude, defer, dependency, ordering, and next phase",
+          "closure intent such as required operations, required rules, required states, required fields, and adjacent-module boundaries",
         ],
         semanticFocusPriorityKinds: ["object", "operation", "rule", "flow", "state"],
         semanticFocusRules: [
-          "Prefer the current phase's primary business or technical object as object focus.",
-          "Add operation, rule, state, or flow focus for the scope boundary being compared when those anchors are present.",
+          "Before composing scope options, identify the candidate phase capability units from the requirement and dependency order; this is internal reasoning, not user-facing wording.",
+          "For the capability unit that may become the recommended scope, semanticFocus must emphasize its primary object plus the operations, rules, states, fields, or flows needed to judge whether that unit is a closed phase.",
+          "Use broad upstream/downstream dependency context in naturalLanguageQuery, but do not put downstream execution operations into semanticFocus unless they are themselves a competing current-phase option.",
+          "When comparing narrower and broader options, ensure semanticFocus still covers the required closure anchors of the likely recommended option instead of being diluted by every adjacent module.",
           "For connected processes, lifecycle transitions, replacements, migrations, recoveries, or ordered operation sequences, include the primary object plus each identifiable component operation as separate operation focus entries; add a flow focus for the combined process when the whole-process wording is explicit.",
           "Do not collapse a connected sequence into only one compound operation focus; if component operations cannot be identified, keep the compound wording in naturalLanguageQuery instead of inventing operation focus labels.",
           "Do not use only generic scope words such as include, exclude, defer, or next phase as semanticFocus.",
@@ -1858,6 +1861,7 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         mustNotDo: [
           "Do not turn knowledge-only adjacent capabilities into current scope without user-visible confirmation.",
           "Do not use page-path or concept details as a substitute for presenting phase scope options.",
+          "Do not let a broad system-chain query replace current-phase closure coverage.",
         ],
       },
       concept_grounding: {
@@ -1868,8 +1872,9 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         ],
         semanticFocusPriorityKinds: ["object", "operation", "field", "state", "rule", "flow"],
         semanticFocusRules: [
+          "Start from every confirmed current-phase included item. The query should cover the objects and operations that the user just accepted as in scope, not only the easiest or highest-level object.",
           "Prefer object focus for each current-phase business object that must be understood.",
-          "Pair object focus with the most relevant operation, rule, state, field, or flow focus when those anchors are present.",
+          "Pair object focus with the relevant operations, rules, states, fields, or flows needed to explain inputs, validation, blocking results, state transitions, success outcomes, and high-risk misunderstanding boundaries.",
           "For connected processes, lifecycle transitions, replacements, migrations, recoveries, or ordered operation sequences, include the object plus each identifiable component operation as separate operation focus entries; add state, rule, field, or flow focus only when those anchors are explicit in the current requirement or confirmed context.",
           "Do not use a single compound operation focus as a substitute for the component operations of a lifecycle or process; if the components are unclear, leave the compound phrase in naturalLanguageQuery for user-visible clarification rather than inventing labels.",
           "Do not query only with broad intent words such as rule, field, validation, or blocking when a concrete object or operation is available.",
@@ -1887,7 +1892,9 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
         ],
         semanticFocusPriorityKinds: ["page", "flow", "operation", "field", "state", "object"],
         semanticFocusRules: [
-          "Prefer page or flow focus for the user-visible or staff-visible path being clarified.",
+          "Start from the confirmed current-phase operations and business blockers, then translate them into page-operation retrieval anchors for how a user or staff member finds the target, starts the action, enters data, sees feedback, and reads back the updated state.",
+          "Prefer page or flow focus for the user-visible or staff-visible path being clarified when such anchors are available.",
+          "When the knowledge source has no explicit page labels, use the page-operation intent in naturalLanguageQuery and use operation, field, state, or object semanticFocus anchors from the confirmed scope instead of inventing page labels.",
           "Pair page or flow focus with operation, field, or state focus for action entry, inputs, feedback, blocking, loading, empty, refresh, or readback behavior when those anchors are present.",
           "For multi-step page paths or operation workflows, include page or flow focus plus the concrete operation, field, or state anchors that drive the user path; do not rely on a compound operation focus alone.",
           "If the workflow components are not explicit enough to name safely, keep the phrase in naturalLanguageQuery instead of inventing page, flow, or operation focus labels.",
@@ -1903,11 +1910,12 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
     perBlockLimits: {
       maxSources: 2,
       maxChunks: 5,
-      maxChunksPerSource: 3,
+      maxChunksPerSource: 5,
     },
     blockRules: [
       "Before presenting phase_scope, concept_grounding, or frontend_experience, generate a KnowledgeMatchQuery for that exact block and run command.argv with the query file.",
       "Use blockQueryGuidance for the current block when writing the KnowledgeMatchQuery. The query must combine the current phase anchors with the current block's retrieval intent instead of reusing a generic business-only query.",
+      "Self-check the returned context before presenting the block: if available knowledge does not cover the current block's key confirmed or candidate anchors, revise the KnowledgeMatchQuery once with more specific anchors for the current block before falling back to requirement text.",
       "When concrete anchors are available, semanticFocus should include them explicitly so retrieval can prefer semantically complete chunks. For phase_scope and concept_grounding, prefer object plus operation/rule/state/field/flow anchors. For frontend_experience, prefer page/flow plus operation/field/state anchors; object focus is supporting context only.",
       "When the current anchor is a connected process, lifecycle transition, replacement, migration, recovery, or ordered sequence, do not collapse it into a single compound operation semanticFocus. Use separate operation focus entries for identifiable component operations and add flow focus only when the whole-process wording is explicit.",
       "Preserve the current requirement's object or tightly related object relationship when creating semanticFocus; do not move lifecycle, replacement, recovery, or relationship focus to an adjacent business object.",
