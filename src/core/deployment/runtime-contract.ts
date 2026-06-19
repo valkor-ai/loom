@@ -4,7 +4,7 @@ import { architectureArtifactContractSchema } from "../contracts";
 import { getActiveLocator, loadDeliveryIndex } from "../state/delivery";
 import { readJsonFile } from "../state/fs";
 import { architectureContractPath, architectureLatestPath, toProjectRelative } from "../state/paths";
-import type { DependencyService, DeploymentRuntimeContract, DetectedStack } from "./types";
+import type { DependencyService, DeploymentRuntimeContract, DeploymentCodeProbe } from "./types";
 import {
   dedupeDependencyServices,
   dependencyServiceKindsFromRuntimeSignals,
@@ -16,7 +16,7 @@ import {
 
 export function deploymentRuntimeContractFromAac(
   aac: ArchitectureArtifactContract | null,
-  fallbackStack: DetectedStack,
+  fallbackStack: DeploymentCodeProbe,
   ref: string | null,
 ): DeploymentRuntimeContract {
   const runtime = aac?.runtimeDelivery;
@@ -36,6 +36,7 @@ export function deploymentRuntimeContractFromAac(
     ref,
     status: runtime.status,
     dependencyServicePolicy: "contract_only",
+    deploymentShape: deploymentShapeFor(runtime),
     runtimeKind: runtime.runtimeKind,
     buildCommand: runtime.build?.command ?? null,
     startCommand: runtime.start?.command ?? null,
@@ -49,16 +50,38 @@ export function deploymentRuntimeContractFromAac(
       required: [...(runtime.environment?.required ?? [])],
       optional: [...(runtime.environment?.optional ?? [])],
     },
+    frontend: runtime.frontend
+      ? {
+          required: runtime.frontend.required,
+          kind: runtime.frontend.kind ?? null,
+          buildCommand: runtime.frontend.buildCommand ?? null,
+          sourceRoot: runtime.frontend.sourceRoot ?? null,
+          outputDir: runtime.frontend.outputDir ?? null,
+          servedBy: runtime.frontend.servedBy ?? null,
+          servedByRef: runtime.frontend.servedByRef ?? null,
+        }
+      : null,
+    api: runtime.api
+      ? {
+          required: runtime.api.required,
+          kind: runtime.api.kind ?? null,
+          buildCommand: runtime.api.buildCommand ?? null,
+          entry: runtime.api.entry ?? null,
+          basePath: runtime.api.basePath ?? null,
+          probePaths: [...runtime.api.probePaths],
+        }
+      : null,
     dependencyServices: contractDependencyServices(runtime),
   };
 }
 
-export function heuristicRuntimeContract(stack: DetectedStack, ref: string | null = null): DeploymentRuntimeContract {
+export function heuristicRuntimeContract(stack: DeploymentCodeProbe, ref: string | null = null): DeploymentRuntimeContract {
   return {
     source: "heuristic",
     ref,
     status: "heuristic",
     dependencyServicePolicy: "heuristic",
+    deploymentShape: "single-service",
     runtimeKind: stack.framework ?? stack.kind,
     buildCommand: stack.buildCommand,
     startCommand: stack.startCommand,
@@ -72,11 +95,27 @@ export function heuristicRuntimeContract(stack: DetectedStack, ref: string | nul
       required: [],
       optional: [],
     },
+    frontend: null,
+    api: null,
     dependencyServices: [],
   };
 }
 
-export async function loadDeploymentRuntimeContract(projectRoot: string, stack: DetectedStack): Promise<DeploymentRuntimeContract> {
+function deploymentShapeFor(
+  runtime: NonNullable<ArchitectureArtifactContract["runtimeDelivery"]>,
+): DeploymentRuntimeContract["deploymentShape"] {
+  const normalized = runtime.runtimeKind.toLowerCase();
+  if (
+    runtime.frontend?.required &&
+    runtime.api?.required &&
+    !/(serves|serve|served)[_\-\s]?(vite|react|frontend|web|static)?[_\-\s]?static/.test(normalized)
+  ) {
+    return "frontend-and-backend";
+  }
+  return "single-service";
+}
+
+export async function loadDeploymentRuntimeContract(projectRoot: string, stack: DeploymentCodeProbe): Promise<DeploymentRuntimeContract> {
   try {
     const locator = await getActiveLocator(projectRoot);
     const current = await loadDeploymentRuntimeContractForLocator(projectRoot, stack, locator);
@@ -103,7 +142,7 @@ export async function loadDeploymentRuntimeContract(projectRoot: string, stack: 
 
 async function loadDeploymentRuntimeContractForLocator(
   projectRoot: string,
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   locator: { deliveryId: string; phaseId: string },
 ): Promise<DeploymentRuntimeContract> {
   try {
@@ -123,9 +162,9 @@ async function loadDeploymentRuntimeContractForLocator(
 }
 
 export function applyRuntimeContractToStack(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   runtimeContract: DeploymentRuntimeContract,
-): DetectedStack {
+): DeploymentCodeProbe {
   const inferredKind = inferRuntimeContractStackKind(stack, runtimeContract);
   const inferredPackageManager = inferRuntimeContractPackageManager(stack, runtimeContract, inferredKind);
   return {
@@ -187,9 +226,9 @@ function contractDependencyServices(
 }
 
 function inferRuntimeContractStackKind(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   runtimeContract: DeploymentRuntimeContract,
-): DetectedStack["kind"] {
+): DeploymentCodeProbe["kind"] {
   if (stack.kind !== "unknown" || runtimeContract.source === "heuristic") {
     return stack.kind;
   }
@@ -223,10 +262,10 @@ function inferRuntimeContractStackKind(
 }
 
 function inferRuntimeContractPackageManager(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   runtimeContract: DeploymentRuntimeContract,
-  kind: DetectedStack["kind"],
-): DetectedStack["packageManager"] {
+  kind: DeploymentCodeProbe["kind"],
+): DeploymentCodeProbe["packageManager"] {
   if (stack.packageManager || runtimeContract.source === "heuristic") {
     return stack.packageManager;
   }
@@ -255,7 +294,7 @@ function inferRuntimeContractPackageManager(
 
 function inferRuntimeContractFramework(
   runtimeContract: DeploymentRuntimeContract,
-  kind: DetectedStack["kind"],
+  kind: DeploymentCodeProbe["kind"],
 ): string | null {
   if (runtimeContract.source === "heuristic") {
     return null;
@@ -348,7 +387,7 @@ function serviceWithRuntimeContractConnectionEnv(
 }
 
 function deploymentStartCommand(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   runtimeContract: DeploymentRuntimeContract,
 ): string | null {
   const contractCommand = runtimeContract.startCommand;
@@ -368,7 +407,7 @@ function isLongLivedDevCommand(command: string): boolean {
 
 function ensureStartCommandPort(
   command: string | null,
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   port: number,
 ): string | null {
   if (!command || stack.framework !== "vite" || !/\bpreview\b/i.test(command) || /\s--port(?:=|\s)/.test(command)) {

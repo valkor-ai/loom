@@ -22,19 +22,14 @@ import { getDeploymentPaths } from "./paths";
 import type {
   DeploymentCodeEvidence,
   DeploymentCodeEvidenceSummary,
-  DeploymentEvidenceRef,
-  DeploymentRuntimeContract,
-  DeployProvider,
-  DetectedStack,
+  DeploymentCodeProbe,
 } from "./types";
 export { loadDeploymentTechnicalBaseline } from "./baseline-evidence";
 
 export async function buildDeploymentCodeEvidence(input: {
   projectRoot: string;
-  stack: DetectedStack;
+  stack: DeploymentCodeProbe;
   technicalBaseline: BaselineInfo | null;
-  provider?: DeployProvider;
-  runtimeContract?: DeploymentRuntimeContract;
 }): Promise<DeploymentCodeEvidence> {
   const files = await indexProjectFiles(input.projectRoot);
   const signals = await readFileSignals(files);
@@ -54,19 +49,11 @@ export async function buildDeploymentCodeEvidence(input: {
     .filter((signal) => signal.file.kind === "deploy_asset")
     .map((signal) => evidence(signal.file.relativePath, "Existing deployment asset found."));
   const conflicts = conflictFacts(baselineExpectation, dependencyServices.services, embeddedStores);
-  const missingFacts = [
-    ...missingFactsFor({
-      baselineExpectation,
-      dependencyServices,
-      databaseRuntimeEvidence,
-    }),
-    ...deploymentSourceModelMissingFacts({
-      provider: input.provider ?? null,
-      stack: input.stack,
-      runtimeContract: input.runtimeContract ?? null,
-      existingDeployAssets,
-    }),
-  ];
+  const missingFacts = missingFactsFor({
+    baselineExpectation,
+    dependencyServices,
+    databaseRuntimeEvidence,
+  });
   const warnings = warningsFor(baselineExpectation, dependencyServices.services, embeddedStores);
   const generatedAt = new Date().toISOString();
   const evidenceId = `deploy-code-evidence-${Date.now()}`;
@@ -100,88 +87,6 @@ export async function buildDeploymentCodeEvidence(input: {
     ...partial,
     fingerprint: fingerprintEvidence(partial),
   };
-}
-
-function deploymentSourceModelMissingFacts(input: {
-  provider: DeployProvider | null;
-  stack: DetectedStack;
-  runtimeContract: DeploymentRuntimeContract | null;
-  existingDeployAssets: DeploymentEvidenceRef[];
-}): DeploymentCodeEvidence["missingFacts"] {
-  if (input.provider !== "dockerfile-template") {
-    return [];
-  }
-  if (!input.runtimeContract || input.runtimeContract.source === "heuristic") {
-    return [];
-  }
-  if (!requiresCompositeDeploymentShape(input.runtimeContract, input.stack)) {
-    return [];
-  }
-
-  return [{
-    factId: "composite-runtime-deployment-shape-required",
-    type: "deployment_shape",
-    message: "RuntimeDelivery describes separate frontend and backend capabilities, but generated dockerfile-template can only safely generate a single runnable stack. Deploy needs an explicit composite deployment shape before generating Dockerfile or Compose assets.",
-    evidence: [
-      evidence(input.runtimeContract.ref ?? "RuntimeDeliveryContract", `runtimeKind=${input.runtimeContract.runtimeKind ?? "unknown"}`),
-      evidence("RuntimeDeliveryContract.buildCommand", input.runtimeContract.buildCommand ?? "No build command declared."),
-      evidence("RuntimeDeliveryContract.startCommand", input.runtimeContract.startCommand ?? "No start command declared."),
-      ...(input.runtimeContract.frontendOutputDir
-        ? [evidence("RuntimeDeliveryContract.frontendOutputDir", input.runtimeContract.frontendOutputDir)]
-        : []),
-      evidence("detectedStack", `kind=${input.stack.kind}; framework=${input.stack.framework ?? "unknown"}`),
-      ...(input.existingDeployAssets.length > 0
-        ? input.existingDeployAssets.map((ref) => evidence(ref.path, `Existing deployment asset was detected but generated template provider is selected: ${ref.reason}`))
-        : [evidence("deployment.provider", "No reusable root-level deployment asset selected for this composite runtime.")]),
-    ],
-    resolution: "ask_user",
-  }];
-}
-
-function requiresCompositeDeploymentShape(
-  runtimeContract: DeploymentRuntimeContract,
-  stack: DetectedStack,
-): boolean {
-  const signals = [
-    runtimeContract.runtimeKind,
-    runtimeContract.buildCommand,
-    runtimeContract.startCommand,
-    runtimeContract.frontendOutputDir,
-    stack.kind,
-    stack.framework,
-    stack.buildCommand,
-    stack.startCommand,
-    stack.outputDirectory,
-    ...runtimeContract.apiPaths,
-    ...runtimeContract.environment.required,
-    ...runtimeContract.environment.optional,
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .join("\n")
-    .toLowerCase();
-
-  if (hasExplicitSingleServiceStaticShape(signals)) {
-    return false;
-  }
-
-  const hasFrontend = Boolean(runtimeContract.frontendOutputDir) ||
-    hasAnySignal(signals, ["vite", "react", "vue", "svelte", "astro", "frontend", "web-admin"]);
-  const hasBackend = runtimeContract.apiPaths.length > 0 ||
-    hasAnySignal(signals, ["spring", "spring-boot", "java", "maven", "gradle", "backend", "api", "mvn", "gradlew"]);
-
-  return hasFrontend && hasBackend;
-}
-
-function hasExplicitSingleServiceStaticShape(signals: string): boolean {
-  return /(^|[_\-\s])(serves|serve|served)[_\-\s]?(?:vite|react|frontend|web|static)?[_\-\s]?static($|[_\-\s])/.test(signals) ||
-    /(^|[_\-\s])(?:express|spring|spring-boot|rails|django|laravel)[_\-\s]?static($|[_\-\s])/.test(signals);
-}
-
-function hasAnySignal(signals: string, terms: string[]): boolean {
-  return terms.some((term) => {
-    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(^|[^a-z0-9])${escaped}($|[^a-z0-9])`).test(signals);
-  });
 }
 
 export async function writeDeploymentCodeEvidence(
@@ -220,9 +125,9 @@ export function summarizeDeploymentCodeEvidence(
 }
 
 export function applyDeploymentCodeEvidenceToStack(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   evidenceValue: DeploymentCodeEvidence,
-): DetectedStack {
+): DeploymentCodeProbe {
   return {
     ...stack,
     services: evidenceValue.dependencyFacts.services.map((service) => service.value),

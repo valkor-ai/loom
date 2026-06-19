@@ -11,51 +11,8 @@ async function main() {
 
   await verifySourceInsufficientBlocker(join(root, "source-insufficient"));
   await verifyConflictBlocker(join(root, "baseline-conflict"));
-  await verifyCompositeRuntimeShapeBlocker(join(root, "composite-runtime-shape"));
 
   console.log(`deploy structured blocker verification passed in ${root}`);
-}
-
-async function verifyCompositeRuntimeShapeBlocker(projectRoot) {
-  await mkdir(join(projectRoot, "apps/web-admin"), { recursive: true });
-  await mkdir(join(projectRoot, "apps/backend"), { recursive: true });
-  await writeFile(join(projectRoot, "apps/web-admin/package.json"), `${JSON.stringify({
-    scripts: {
-      build: "vite build",
-    },
-    dependencies: {
-      "@vitejs/plugin-react": "^4.3.1",
-      vite: "^5.3.4",
-      react: "^18.3.1",
-    },
-  }, null, 2)}\n`, "utf8");
-  await writeFile(join(projectRoot, "apps/backend/pom.xml"), [
-    "<project>",
-    "  <modelVersion>4.0.0</modelVersion>",
-    "  <groupId>com.example</groupId>",
-    "  <artifactId>backend</artifactId>",
-    "  <version>1.0.0</version>",
-    "</project>",
-    "",
-  ].join("\n"), "utf8");
-  await writeCompositeRuntimeDelivery(projectRoot);
-
-  const envelope = runDeployPrepare(projectRoot, [2]);
-
-  assert.equal(envelope.ok, false);
-  assert.equal(envelope.error.code, "DEPLOY_SOURCE_INSUFFICIENT");
-  assert.equal(envelope.error.details.code, "DEPLOY_SOURCE_INSUFFICIENT");
-  assert.equal(envelope.error.details.status, "blocked");
-  assert.equal(envelope.error.details.nextAction, "ask_user");
-  assert.ok(envelope.error.details.missingFacts.some((fact) => (
-    fact.factId === "composite-runtime-deployment-shape-required" &&
-    fact.type === "deployment_shape" &&
-    fact.resolution === "ask_user"
-  )));
-  assertNoAgentRunnableRepair(envelope, "composite runtime shape");
-  assert.ok(await fileExists(join(projectRoot, ".loom/deployment/evidence/latest-code-evidence.json")));
-  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile")), false);
-  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml")), false);
 }
 
 async function verifySourceInsufficientBlocker(projectRoot) {
@@ -339,89 +296,6 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
     createdAt: now,
     updatedAt: now,
   }, null, 2)}\n`, "utf8");
-}
-
-async function writeCompositeRuntimeDelivery(projectRoot) {
-  await writeAcceptedRuntimeDelivery(projectRoot, {
-    buildCommand: "npm run build --prefix apps/web-admin && mvn -o -f apps/backend/pom.xml package",
-    startCommand: "mvn -o -f apps/backend/pom.xml spring-boot:run",
-    startPort: 4173,
-    previewPath: "/",
-    healthPath: "/",
-    frontendOutputDir: "apps/web-admin/dist",
-  });
-
-  const deliveryId = "delivery-runtime";
-  const phaseId = "phase-1";
-  const architecturePath = join(projectRoot, ".loom/deliveries", deliveryId, "artifacts/architecture", phaseId, "aac.json");
-  const aac = JSON.parse(await readFile(architecturePath, "utf8"));
-  aac.architectureArtifactContractId = "aac-composite-runtime";
-  aac.engineeringBoundary.applications = [
-    { appId: "web-admin", type: "web_app", root: "apps/web-admin" },
-    { appId: "backend", type: "api_service", root: "apps/backend" },
-  ];
-  aac.runtimeDelivery = {
-      status: "modified",
-      contractVersion: "phase-1-v1",
-      runtimeKind: "react_vite_admin_plus_spring_boot_api",
-      basis: {
-        technicalBaselineRef: "technical-baseline",
-        repositoryContextRef: "repository-context",
-        planningGenerationContractRef: "planning-contract",
-        previousRuntimeDeliveryRef: null,
-        reason: "Composite runtime verifier fixture.",
-      },
-      build: {
-        command: "npm run build --prefix apps/web-admin && mvn -o -f apps/backend/pom.xml package",
-        workingDirectory: ".",
-        outputs: ["apps/web-admin/dist", "apps/backend/target/*.jar"],
-        codeLevelExpectations: ["Frontend and backend build independently."],
-      },
-      start: {
-        command: "mvn -o -f apps/backend/pom.xml spring-boot:run",
-        workingDirectory: ".",
-        entry: "apps/backend/src/main/java/com/example/Application.java",
-        host: "0.0.0.0",
-        port: 4173,
-        portEnv: "PORT",
-        codeLevelExpectations: ["Spring Boot serves API traffic."],
-      },
-      runtimeSurfaces: [{ surfaceId: "preview-root", kind: "http", probe: { type: "http_path", target: "/", expected: "2xx_or_3xx" } }],
-      deliveryMechanics: {
-        staticAssets: { required: true, source: "apps/web-admin/src", output: "apps/web-admin/dist", servedBy: "vite_preview" },
-        api: { required: true, entry: "apps/backend/src/main/java/com/example/Application.java", basePath: "/api", probePaths: ["/api/security-accounts"] },
-        codegen: { required: "no", commands: [], codeLevelExpectations: [] },
-      },
-      httpProbes: { previewPath: "/", healthPath: "/", apiPaths: ["/api/security-accounts"], expectedStatus: "2xx_or_3xx" },
-      frontend: {
-        required: true,
-        kind: "vite_react",
-        buildCommand: "npm run build --prefix apps/web-admin",
-        sourceRoot: "apps/web-admin/src",
-        outputDir: "apps/web-admin/dist",
-        servedBy: "vite_preview",
-        servedByRef: "apps/web-admin",
-        codeLevelExpectations: ["Frontend is a Vite React staff UI."],
-      },
-      api: {
-        required: true,
-        kind: "spring_boot",
-        buildCommand: "mvn -o -f apps/backend/pom.xml package",
-        entry: "apps/backend/src/main/java/com/example/Application.java",
-        basePath: "/api",
-        probePaths: ["/api/security-accounts"],
-        codeLevelExpectations: ["Backend exposes Spring Boot API routes."],
-      },
-      environment: { required: ["PORT"], optional: [] },
-      taskPlanningGuidance: {
-        requireRuntimeDeliveryRequirementWhenTaskTouches: ["build_or_packaging", "runtime_entry", "serving_or_routing", "configuration_or_environment", "generated_artifacts", "runtime_surface"],
-        doNotRequireForTaskKinds: ["domain_only_validation", "copy_only_documentation", "pure_unit_test_additions"],
-        verificationBoundary: "code_level_only",
-        doNotRequireCleanInstallOrContainerBuild: true,
-      },
-      deployability: { localDocker: "unknown", notes: ["Composite deploy shape must be explicit before generated Dockerfile assets are safe."] },
-    };
-  await writeFile(architecturePath, `${JSON.stringify(aac, null, 2)}\n`, "utf8");
 }
 
 function runDeployPrepare(projectRoot, expectedStatuses) {

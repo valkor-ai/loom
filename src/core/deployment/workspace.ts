@@ -3,12 +3,12 @@ import path from "node:path";
 import { invalidArgument } from "../errors";
 import { pathExists } from "../state/fs";
 import { toProjectRelative } from "../state/paths";
-import { detectStack } from "./detect";
+import { detectDeploymentCodeProbe } from "./detect";
 import { findExistingDeploymentFiles } from "./existing";
 import type {
   DeploymentWorkspace,
   DeploymentWorkspaceCandidate,
-  DetectedStack,
+  DeploymentCodeProbe,
 } from "./types";
 
 type PackageJson = {
@@ -62,7 +62,7 @@ const IGNORED_DIRECTORIES = new Set([
 export async function resolveDeploymentWorkspace(projectRoot: string): Promise<{
   deploymentRoot: string;
   workspace: DeploymentWorkspace;
-  detectedStack: DetectedStack;
+  codeProbe: DeploymentCodeProbe;
 }> {
   return resolveDeploymentWorkspaceForApp(projectRoot, null);
 }
@@ -85,18 +85,18 @@ export async function resolveDeploymentWorkspaceForApp(
 ): Promise<{
   deploymentRoot: string;
   workspace: DeploymentWorkspace;
-  detectedStack: DetectedStack;
+  codeProbe: DeploymentCodeProbe;
 }> {
   if (appPath) {
     return resolveExplicitDeploymentWorkspace(projectRoot, appPath);
   }
 
-  const rootStack = await detectStack(projectRoot);
+  const rootCodeProbe = await detectDeploymentCodeProbe(projectRoot);
   const rootExisting = await findExistingDeploymentFiles(projectRoot);
-  if (rootExisting.composePath || rootExisting.dockerfilePath || isDirectDeployable(rootStack)) {
+  if (rootExisting.composePath || rootExisting.dockerfilePath || isDirectDeployable(rootCodeProbe)) {
     return {
       deploymentRoot: projectRoot,
-      detectedStack: rootStack,
+      codeProbe: rootCodeProbe,
       workspace: {
         appPath: ".",
         isWorkspace: await hasWorkspaceRootSignals(projectRoot),
@@ -110,8 +110,8 @@ export async function resolveDeploymentWorkspaceForApp(
           toWorkspaceCandidate({
             projectRoot,
             candidateRoot: projectRoot,
-            stack: rootStack,
-            score: directDeployableScore(rootStack),
+            codeProbe: rootCodeProbe,
+            score: directDeployableScore(rootCodeProbe),
             signals: rootExisting.composePath || rootExisting.dockerfilePath
               ? ["existing-deployment-assets"]
               : ["direct-project-root"],
@@ -125,7 +125,7 @@ export async function resolveDeploymentWorkspaceForApp(
   if (rootSignals.length === 0) {
     return {
       deploymentRoot: projectRoot,
-      detectedStack: rootStack,
+      codeProbe: rootCodeProbe,
       workspace: {
         appPath: ".",
         isWorkspace: false,
@@ -141,7 +141,7 @@ export async function resolveDeploymentWorkspaceForApp(
   if (!selected) {
     return {
       deploymentRoot: projectRoot,
-      detectedStack: rootStack,
+      codeProbe: rootCodeProbe,
       workspace: {
         appPath: ".",
         isWorkspace: true,
@@ -154,7 +154,7 @@ export async function resolveDeploymentWorkspaceForApp(
 
   return {
     deploymentRoot: path.resolve(projectRoot, selected.path),
-    detectedStack: await detectStack(path.resolve(projectRoot, selected.path)),
+    codeProbe: await detectDeploymentCodeProbe(path.resolve(projectRoot, selected.path)),
     workspace: {
       appPath: selected.path,
       isWorkspace: true,
@@ -171,7 +171,7 @@ async function resolveExplicitDeploymentWorkspace(
 ): Promise<{
   deploymentRoot: string;
   workspace: DeploymentWorkspace;
-  detectedStack: DetectedStack;
+  codeProbe: DeploymentCodeProbe;
 }> {
   const normalizedAppPath = normalizeAppPath(appPath);
   const deploymentRoot = path.resolve(projectRoot, normalizedAppPath);
@@ -189,19 +189,19 @@ async function resolveExplicitDeploymentWorkspace(
     });
   }
 
-  const detectedStack = await detectStack(deploymentRoot);
+  const codeProbe = await detectDeploymentCodeProbe(deploymentRoot);
   const existing = await findExistingDeploymentFiles(deploymentRoot);
   const candidate = toWorkspaceCandidate({
     projectRoot,
     candidateRoot: deploymentRoot,
-    stack: detectedStack,
-    score: scoreCandidate(detectedStack, existing, normalizedAppPath, ["explicit-app-path"]),
-    signals: candidateSignals(detectedStack, existing, normalizedAppPath, ["explicit-app-path"]),
+    codeProbe,
+    score: scoreCandidate(codeProbe, existing, normalizedAppPath, ["explicit-app-path"]),
+    signals: candidateSignals(codeProbe, existing, normalizedAppPath, ["explicit-app-path"]),
   });
 
   return {
     deploymentRoot,
-    detectedStack,
+    codeProbe,
     workspace: {
       appPath: normalizedAppPath,
       isWorkspace: normalizedAppPath !== ".",
@@ -232,10 +232,10 @@ async function findWorkspaceCandidates(
   const candidates: DeploymentWorkspaceCandidate[] = [];
   for (const candidatePath of [...candidatePaths].sort(comparePaths)) {
     const candidateRoot = path.resolve(projectRoot, candidatePath);
-    const stack = await detectStack(candidateRoot);
+    const codeProbe = await detectDeploymentCodeProbe(candidateRoot);
     const existing = await findExistingDeploymentFiles(candidateRoot);
-    const signals = candidateSignals(stack, existing, candidatePath, rootSignals);
-    const score = scoreCandidate(stack, existing, candidatePath, signals);
+    const signals = candidateSignals(codeProbe, existing, candidatePath, rootSignals);
+    const score = scoreCandidate(codeProbe, existing, candidatePath, signals);
     if (score <= 0) {
       continue;
     }
@@ -243,7 +243,7 @@ async function findWorkspaceCandidates(
     candidates.push(toWorkspaceCandidate({
       projectRoot,
       candidateRoot,
-      stack,
+      codeProbe,
       score,
       signals,
     }));
@@ -450,28 +450,28 @@ async function hasWorkspaceRootSignals(projectRoot: string): Promise<boolean> {
   return (await workspaceRootSignals(projectRoot)).length > 0;
 }
 
-function isDirectDeployable(stack: DetectedStack): boolean {
-  if (stack.kind === "unknown") {
+function isDirectDeployable(codeProbe: DeploymentCodeProbe): boolean {
+  if (codeProbe.kind === "unknown") {
     return false;
   }
-  if (stack.kind === "node" && stack.framework === "node-cli" && !stack.startCommand) {
+  if (codeProbe.kind === "node" && codeProbe.framework === "node-cli" && !codeProbe.startCommand) {
     return false;
   }
   return true;
 }
 
-function directDeployableScore(stack: DetectedStack): number {
-  return isDirectDeployable(stack) ? 100 : 0;
+function directDeployableScore(codeProbe: DeploymentCodeProbe): number {
+  return isDirectDeployable(codeProbe) ? 100 : 0;
 }
 
 function scoreCandidate(
-  stack: DetectedStack,
+  codeProbe: DeploymentCodeProbe,
   existing: Awaited<ReturnType<typeof findExistingDeploymentFiles>>,
   candidatePath: string,
   signals: string[],
 ): number {
   const hasExistingDeploymentAssets = Boolean(existing.composePath || existing.dockerfilePath);
-  if (!hasExistingDeploymentAssets && !isDirectDeployable(stack)) {
+  if (!hasExistingDeploymentAssets && !isDirectDeployable(codeProbe)) {
     return 0;
   }
 
@@ -482,20 +482,20 @@ function scoreCandidate(
   if (existing.dockerfilePath) {
     score += 80;
   }
-  if (isDirectDeployable(stack)) {
+  if (isDirectDeployable(codeProbe)) {
     score += 50;
   }
-  if (stack.startCommand) {
+  if (codeProbe.startCommand) {
     score += 20;
   }
-  if (stack.buildCommand) {
+  if (codeProbe.buildCommand) {
     score += 10;
   }
-  if (stack.framework && !["node-cli", "unknown"].includes(stack.framework)) {
+  if (codeProbe.framework && !["node-cli", "unknown"].includes(codeProbe.framework)) {
     score += 10;
   }
-  if (stack.services.length > 0) {
-    score += Math.min(stack.services.length * 3, 9);
+  if (codeProbe.services.length > 0) {
+    score += Math.min(codeProbe.services.length * 3, 9);
   }
   if (candidatePath.startsWith("apps/")) {
     score += 8;
@@ -514,7 +514,7 @@ function scoreCandidate(
 }
 
 function candidateSignals(
-  stack: DetectedStack,
+  codeProbe: DeploymentCodeProbe,
   existing: Awaited<ReturnType<typeof findExistingDeploymentFiles>>,
   candidatePath: string,
   rootSignals: string[],
@@ -524,9 +524,9 @@ function candidateSignals(
     ...rootSignals,
     ...(existing.composePath ? ["compose"] : []),
     ...(existing.dockerfilePath ? ["dockerfile"] : []),
-    stack.kind,
-    ...(stack.framework ? [stack.framework] : []),
-    ...(stack.packageManager ? [stack.packageManager] : []),
+    codeProbe.kind,
+    ...(codeProbe.framework ? [codeProbe.framework] : []),
+    ...(codeProbe.packageManager ? [codeProbe.packageManager] : []),
     ...(candidatePath.startsWith("apps/") ? ["apps-directory"] : []),
     ...(candidatePath.startsWith("services/") ? ["services-directory"] : []),
   ].filter((signal) => signal && signal !== "unknown"));
@@ -535,16 +535,16 @@ function candidateSignals(
 function toWorkspaceCandidate(input: {
   projectRoot: string;
   candidateRoot: string;
-  stack: DetectedStack;
+  codeProbe: DeploymentCodeProbe;
   score: number;
   signals: string[];
 }): DeploymentWorkspaceCandidate {
   return {
     path: toProjectRelative(input.projectRoot, input.candidateRoot) || ".",
     score: input.score,
-    stackKind: input.stack.kind,
-    framework: input.stack.framework,
-    packageManager: input.stack.packageManager,
+    runtimeKind: input.codeProbe.kind,
+    framework: input.codeProbe.framework,
+    packageManager: input.codeProbe.packageManager,
     signals: input.signals,
   };
 }

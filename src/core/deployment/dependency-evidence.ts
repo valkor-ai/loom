@@ -28,7 +28,7 @@ import type {
   DeploymentEvidenceValue,
   DeployConflict,
   DeployMissingFact,
-  DetectedStack,
+  DeploymentCodeProbe,
 } from "./types";
 
 type ServiceCandidate = {
@@ -37,7 +37,7 @@ type ServiceCandidate = {
   evidence: DeploymentEvidenceRef[];
 };
 
-export function runtimeFactsFor(stack: DetectedStack, signals: FileSignal[]): DeploymentCodeEvidence["runtimeFacts"] {
+export function runtimeFactsFor(stack: DeploymentCodeProbe, signals: FileSignal[]): DeploymentCodeEvidence["runtimeFacts"] {
   const framework = stack.framework ?? stack.kind;
   const evidenceRefs = signalsForRuntime(stack, signals);
   const backend = ["java", "python", "go", "dotnet", "php", "ruby"].includes(stack.kind) ||
@@ -55,8 +55,8 @@ export function runtimeFactsFor(stack: DetectedStack, signals: FileSignal[]): De
   };
 }
 
-export function buildStartFactsFor(stack: DetectedStack): DeploymentCodeEvidence["buildStartFacts"] {
-  const baseEvidence = [evidence("detectedStack", "Derived from current project runtime detection.")];
+export function buildStartFactsFor(stack: DeploymentCodeProbe): DeploymentCodeEvidence["buildStartFacts"] {
+  const baseEvidence = [evidence("codeProbe", "Derived from current project runtime detection.")];
   return {
     buildCommand: stack.buildCommand ? valueEvidence(stack.buildCommand, "medium", baseEvidence) : null,
     startCommand: stack.startCommand ? valueEvidence(stack.startCommand, "medium", baseEvidence) : null,
@@ -132,7 +132,7 @@ export function resolveDependencyServices(input: {
   serviceCandidates: ServiceCandidate[];
   embeddedStores: Array<DeploymentEvidenceValue<"sqlite" | "file">>;
   databaseRuntimeEvidence: DeploymentEvidenceRef[];
-  stack: DetectedStack;
+  stack: DeploymentCodeProbe;
 }): {
   services: Array<DeploymentEvidenceValue<DependencyService>>;
   ambiguous: DeploymentCodeEvidence["dependencyFacts"]["ambiguous"];
@@ -282,7 +282,7 @@ function baselinePersistenceServiceKind(track: DeploymentCodeEvidenceTrack | nul
   return track ? persistenceServiceKindFromSelection(track) : null;
 }
 
-function signalsForRuntime(stack: DetectedStack, signals: FileSignal[]): DeploymentEvidenceRef[] {
+function signalsForRuntime(stack: DeploymentCodeProbe, signals: FileSignal[]): DeploymentEvidenceRef[] {
   const refs = signals
     .filter((signal) => {
       const lower = signal.lower;
@@ -295,5 +295,5 @@ function signalsForRuntime(stack: DetectedStack, signals: FileSignal[]): Deploym
     })
     .slice(0, 5)
     .map((signal) => evidence(signal.file.relativePath, "Runtime declaration signal."));
-  return refs.length > 0 ? refs : [evidence("detectedStack", "Derived from current project runtime detection.")];
+  return refs.length > 0 ? refs : [evidence("codeProbe", "Derived from current project runtime detection.")];
 }

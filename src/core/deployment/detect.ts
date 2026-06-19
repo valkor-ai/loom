@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { DetectedStack } from "./types";
+import type { DeploymentCodeProbe } from "./types";
 import { pathExists } from "../state/fs";
 import {
   dedupeDependencyServices,
@@ -31,7 +31,7 @@ type ComposerJson = {
 const DEFAULT_NODE_MAJOR_VERSION = 22;
 const PREFERRED_NODE_MAJOR_VERSIONS = [24, 22, 20, 18, 16, 14] as const;
 
-export async function detectStack(projectRoot: string): Promise<DetectedStack> {
+export async function detectDeploymentCodeProbe(projectRoot: string): Promise<DeploymentCodeProbe> {
   if (await hasPhpSignals(projectRoot)) {
     return detectPhpStack(projectRoot);
   }
@@ -95,7 +95,7 @@ export async function detectStack(projectRoot: string): Promise<DetectedStack> {
   };
 }
 
-async function detectNodeStack(projectRoot: string, packageJsonPath: string): Promise<DetectedStack> {
+async function detectNodeStack(projectRoot: string, packageJsonPath: string): Promise<DeploymentCodeProbe> {
   const pkg = await readPackageJson(packageJsonPath);
   const scripts = pkg.scripts ?? {};
   const deps = {
@@ -127,7 +127,7 @@ async function detectNodeStack(projectRoot: string, packageJsonPath: string): Pr
   };
 }
 
-async function detectPythonStack(projectRoot: string): Promise<DetectedStack> {
+async function detectPythonStack(projectRoot: string): Promise<DeploymentCodeProbe> {
   const signals = await readPythonSignals(projectRoot);
   const framework = detectPythonFramework(signals);
   const packageManager = await detectPythonPackageManager(projectRoot);
@@ -151,7 +151,7 @@ async function detectPythonStack(projectRoot: string): Promise<DetectedStack> {
   };
 }
 
-async function detectGoStack(projectRoot: string): Promise<DetectedStack> {
+async function detectGoStack(projectRoot: string): Promise<DeploymentCodeProbe> {
   const signals = await readProjectSignals(projectRoot, [
     "go.mod",
     "go.sum",
@@ -177,7 +177,7 @@ async function detectGoStack(projectRoot: string): Promise<DetectedStack> {
   };
 }
 
-async function detectJavaStack(projectRoot: string): Promise<DetectedStack> {
+async function detectJavaStack(projectRoot: string): Promise<DeploymentCodeProbe> {
   const signals = await readProjectSignals(projectRoot, [
     "pom.xml",
     "build.gradle",
@@ -214,7 +214,7 @@ async function detectJavaStack(projectRoot: string): Promise<DetectedStack> {
   };
 }
 
-async function detectDotnetStack(projectRoot: string): Promise<DetectedStack> {
+async function detectDotnetStack(projectRoot: string): Promise<DeploymentCodeProbe> {
   const projectFile = await findDotnetProjectFile(projectRoot);
   const signals = await readProjectSignals(projectRoot, [
     projectFile ?? "",
@@ -245,7 +245,7 @@ async function detectDotnetStack(projectRoot: string): Promise<DetectedStack> {
   };
 }
 
-async function detectPhpStack(projectRoot: string): Promise<DetectedStack> {
+async function detectPhpStack(projectRoot: string): Promise<DeploymentCodeProbe> {
   const composerPath = path.join(projectRoot, "composer.json");
   const composer = await readComposerJson(composerPath);
   const deps = {
@@ -271,7 +271,7 @@ async function detectPhpStack(projectRoot: string): Promise<DetectedStack> {
   };
 }
 
-async function detectRubyStack(projectRoot: string): Promise<DetectedStack> {
+async function detectRubyStack(projectRoot: string): Promise<DeploymentCodeProbe> {
   const signals = await readProjectSignals(projectRoot, [
     "Gemfile",
     "Gemfile.lock",
@@ -436,7 +436,7 @@ function engineRangeAlternativeCanUseMajor(value: string, targetMajor: number): 
 }
 
 async function detectPackageManager(projectRoot: string): Promise<{
-  name: NonNullable<DetectedStack["packageManager"]>;
+  name: NonNullable<DeploymentCodeProbe["packageManager"]>;
   hasLockfile: boolean;
 }> {
   if ((await pathExists(path.join(projectRoot, "pnpm-lock.yaml"))) || (await pathExistsInWorkspaceAncestor(projectRoot, "pnpm-lock.yaml"))) {
@@ -638,7 +638,7 @@ function detectOutputDirectory(framework: string): string | null {
 }
 
 function detectStartCommand(
-  packageManager: NonNullable<DetectedStack["packageManager"]>,
+  packageManager: NonNullable<DeploymentCodeProbe["packageManager"]>,
   scripts: Record<string, string>,
   framework: string,
   port: number,
@@ -694,7 +694,7 @@ async function detectDependencyServices(
   projectRoot: string,
   depsOrSignals: Record<string, string> | string,
   scripts: Record<string, string> = {},
-): Promise<DetectedStack["services"]> {
+): Promise<DeploymentCodeProbe["services"]> {
   const signals = typeof depsOrSignals === "string"
     ? `${depsOrSignals}\n${await readEnvSignals(projectRoot)}`.toLowerCase()
     : `${Object.keys(depsOrSignals).join("\n")}\n${Object.values(scripts).join("\n")}\n${await readEnvSignals(projectRoot)}`.toLowerCase();
@@ -1186,7 +1186,7 @@ async function hasWorkspaceMarker(projectRoot: string): Promise<boolean> {
   }
 }
 
-function packageManagerRun(packageManager: NonNullable<DetectedStack["packageManager"]>, script: string): string {
+function packageManagerRun(packageManager: NonNullable<DeploymentCodeProbe["packageManager"]>, script: string): string {
   switch (packageManager) {
     case "npm":
       return `npm run ${script}`;
@@ -1210,7 +1210,7 @@ function packageManagerRun(packageManager: NonNullable<DetectedStack["packageMan
 }
 
 function packageManagerRunWithArgs(
-  packageManager: NonNullable<DetectedStack["packageManager"]>,
+  packageManager: NonNullable<DeploymentCodeProbe["packageManager"]>,
   script: string,
   args: string[],
 ): string {
