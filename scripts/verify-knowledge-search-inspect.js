@@ -66,6 +66,12 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function assertScoresDescending(results, message) {
+  for (let index = 1; index < results.length; index += 1) {
+    assert.equal(results[index - 1].score >= results[index].score, true, message);
+  }
+}
+
 const fundDoc = writeFixture("knowledge/fund.md", [
   "# Fund account operations",
   "",
@@ -139,6 +145,7 @@ const search = run([
 
 assert.equal(search.command, "knowledge.search");
 assert.equal(search.data.results.length > 0, true);
+assertScoresDescending(search.data.results, "knowledge search results must be ordered by displayed score.");
 const top = search.data.results[0];
 assert.equal(top.sourceName, "funds-search");
 assert.equal(top.matchedLabels[0].kind, "operation");
@@ -182,6 +189,7 @@ const rerankedSearch = run([
   "5",
 ]);
 assert.equal(rerankedSearch.data.results.length >= 2, true);
+assertScoresDescending(rerankedSearch.data.results, "semantic rerank results must remain ordered by displayed score.");
 assert.match(
   rerankedSearch.data.results[0].headingPath.join(" / "),
   /Fund account close/,
@@ -229,6 +237,7 @@ assert.match(
   /Staff workspace operation path/,
   "frontend search must prefer page/flow plus operation-path matches over generic business chunks",
 );
+assertScoresDescending(frontendSearch.data.results, "frontend search results must be ordered by displayed score.");
 
 const finalSummarySearch = runFailure([
   "knowledge",

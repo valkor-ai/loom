@@ -425,6 +425,7 @@ export type KnowledgeSemanticBuildState = {
   packs: KnowledgeSemanticPackInfo[];
   createdAt: string;
   updatedAt: string;
+  publishedAt?: string;
 };
 
 export type KnowledgeSemanticBuildRequest = {
@@ -445,7 +446,7 @@ export type KnowledgeSemanticBuildRequest = {
       relativePath: string;
       headingPath: string[];
       tokenEstimate: number;
-      textRef: string;
+      summaryLanguage: "zh-CN" | "en" | "und";
       readCommand: KnowledgeCommandInvocation;
       previousChunkTitle?: string;
       nextChunkTitle?: string;
@@ -463,6 +464,7 @@ export type KnowledgeSemanticBuildRequest = {
     confidenceValues: KnowledgeSemanticLabel["confidence"][];
     resultTemplateRule: string;
     summaryRule: string;
+    summaryLanguageRule: string;
     semanticLabelRule: string;
     semanticLabelFieldRules: string[];
     blockAffinityRule: string;
@@ -473,7 +475,11 @@ export type KnowledgeSemanticBuildRequest = {
   submitCommand: KnowledgeCommandInvocation;
   requestReadPlan: {
     mustReadChunkText: boolean;
-    chunkTextRefs: string[];
+    readMode: "chunk_read_command_only";
+    chunkReadCommands: Array<{
+      chunkId: string;
+      readCommand: KnowledgeCommandInvocation;
+    }>;
   };
 };
 

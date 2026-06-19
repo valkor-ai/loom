@@ -103,6 +103,20 @@ assert.match(
   "Semantic build request must forbid script or keyword summary generation.",
 );
 assert.match(
+  request.generationRules.summaryLanguageRule,
+  /summaryLanguage/,
+  "Semantic build request must make summary language explicit.",
+);
+assert.equal(request.chunkPack.chunks[0].summaryLanguage, "en");
+assert.equal("textRef" in request.chunkPack.chunks[0], false, "Semantic build request must not expose direct chunk file paths.");
+assert.equal(request.requestReadPlan.readMode, "chunk_read_command_only");
+assert.deepEqual(
+  request.requestReadPlan.chunkReadCommands.map((entry) => entry.chunkId),
+  request.chunkPack.chunks.map((chunk) => chunk.chunkId),
+  "Semantic request read plan must point agents to chunk read commands only.",
+);
+assert.equal("chunkTextRefs" in request.requestReadPlan, false, "Semantic request read plan must not expose direct chunk text refs.");
+assert.match(
   request.generationRules.semanticLabelRule,
   /semantic judgment/,
   "Semantic build request must require labels to be semantic judgments.",
@@ -146,9 +160,15 @@ legacyRequest.chunkPack.chunks = legacyRequest.chunkPack.chunks.map((chunk) => (
 delete legacyRequest.outputContract.resultTemplate;
 delete legacyRequest.generationRules.statusValues;
 delete legacyRequest.generationRules.resultTemplateRule;
+delete legacyRequest.generationRules.summaryLanguageRule;
 delete legacyRequest.generationRules.semanticLabelFieldRules;
 delete legacyRequest.generationRules.blockAffinityFields;
 delete legacyRequest.generationRules.blockAffinityValueRule;
+legacyRequest.chunkPack.chunks = legacyRequest.chunkPack.chunks.map((chunk) => ({
+  ...chunk,
+  textRef: `/tmp/legacy-${chunk.chunkId}.txt`,
+}));
+legacyRequest.requestReadPlan.chunkTextRefs = legacyRequest.chunkPack.chunks.map((chunk) => chunk.textRef);
 writeJson(build.data.firstRequestPath, legacyRequest);
 
 const initialResume = run(["knowledge", "resume", "funds-semantic"]);
@@ -168,6 +188,8 @@ assert.deepEqual(
   ["knowledge", "inspect", "--source", "funds-semantic", "--build-id", request.buildId],
 );
 assertResultTemplate(readJson(build.data.firstRequestPath));
+assert.equal("textRef" in readJson(build.data.firstRequestPath).chunkPack.chunks[0], false);
+assert.equal("chunkTextRefs" in readJson(build.data.firstRequestPath).requestReadPlan, false);
 
 const firstChunkText = run(request.chunkPack.chunks[0].readCommand.argv);
 assert.equal(firstChunkText.command, "knowledge.inspect");
@@ -180,6 +202,7 @@ const legacySubmitRequest = readJson(build.data.firstRequestPath);
 delete legacySubmitRequest.outputContract.resultTemplate;
 delete legacySubmitRequest.generationRules.statusValues;
 delete legacySubmitRequest.generationRules.resultTemplateRule;
+delete legacySubmitRequest.generationRules.summaryLanguageRule;
 delete legacySubmitRequest.generationRules.semanticLabelFieldRules;
 delete legacySubmitRequest.generationRules.blockAffinityFields;
 delete legacySubmitRequest.generationRules.blockAffinityValueRule;
@@ -225,6 +248,32 @@ assertResultTemplate(readJson(build.data.firstRequestPath));
 assert.equal(repair.instruction.repairRequestPath, repair.data.repairRequestPath);
 assert.equal(repair.instruction.issues.some((issue) => issue.code === "missing_chunk_result"), true);
 assert.equal(readJson(path.join(loomHome, "knowledge", "registry.json")).sources.length, 0);
+
+const languageRequest = readJson(build.data.firstRequestPath);
+languageRequest.chunkPack.chunks[0].summaryLanguage = "zh-CN";
+writeJson(build.data.firstRequestPath, languageRequest);
+const languageResult = structuredClone(languageRequest.outputContract.resultTemplate);
+languageResult.chunkResults = languageResult.chunkResults.map((chunkResult) => ({
+  ...chunkResult,
+  summary: `English summary for ${chunkResult.chunkId}`,
+}));
+writeJson(languageRequest.outputContract.resultFile, languageResult);
+const languageRepair = run([
+  "knowledge",
+  "semantic",
+  "submit",
+  "--request",
+  build.data.firstRequestPath,
+  "--result-file",
+  languageRequest.outputContract.resultFile,
+]);
+assert.equal(languageRepair.data.status, "needs_repair");
+assert.equal(
+  languageRepair.data.repairRequest.issues.some((issue) => issue.code === "summary_language_mismatch"),
+  true,
+  "Chinese semantic chunks must reject all-English summaries.",
+);
+writeJson(build.data.firstRequestPath, request);
 
 let currentRequestPath = build.data.firstRequestPath;
 let currentRequest = request;
@@ -307,6 +356,9 @@ assert.deepEqual(pending.data.pending, [], "published semantic build must clear 
 const buildRun = readJson(build.data.buildRunPath);
 assert.equal(buildRun.status, "published");
 assert.ok(buildRun.refs.semanticIndex.endsWith("semantic-index.json"));
+const semanticState = readJson(path.join(path.dirname(build.data.buildRunPath), "semantic-state.json"));
+assert.equal(semanticState.status, "published");
+assert.equal(typeof semanticState.publishedAt, "string", "published semantic state must record publishedAt.");
 
 const chunks = readJson(build.data.chunksPath).chunks;
 assert.equal(chunks[0].retrievalFields.summary, `Summary for ${chunks[0].chunkId}`);

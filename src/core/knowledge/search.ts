@@ -450,13 +450,16 @@ function scoreSourceChunks(source: LoadedSourceIndex, query: KnowledgeSearchQuer
 }
 
 function compareScoredChunks(a: ScoredChunk, b: ScoredChunk): number {
+  if (a.finalScore !== b.finalScore) {
+    return b.finalScore - a.finalScore;
+  }
   if (a.semanticTier !== b.semanticTier) {
     return b.semanticTier - a.semanticTier;
   }
   if (a.semanticCompleteness !== b.semanticCompleteness) {
     return b.semanticCompleteness - a.semanticCompleteness;
   }
-  return b.finalScore - a.finalScore;
+  return 0;
 }
 
 function semanticCompleteness(

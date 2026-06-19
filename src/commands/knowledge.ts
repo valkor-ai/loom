@@ -184,7 +184,7 @@ function knowledgeSemanticInstruction(input: {
     routingRule: "Generate the requested knowledge semantic pack now. Do not ask the user whether to continue between knowledge build, semantic pack generation, and semantic submit.",
     instructions: [
       "Read instruction.requestRef as a KnowledgeSemanticBuildRequest.",
-      "For every chunk listed in request.chunkPack.chunks, read the chunk text through chunk.readCommand.",
+      "For every chunk listed in request.chunkPack.chunks, read the chunk text through chunk.readCommand; direct chunk file paths are not part of the agent-facing request contract.",
       "Copy request.outputContract.resultTemplate as the result file shape, then fill each existing chunkResult for its matching chunkId.",
       "Do not inspect Loom source files, dist files, TypeScript type definitions, or old semantic result files to infer the KnowledgeSemanticPackResult schema; the request outputContract.resultTemplate is the schema authority.",
       "Follow request.generationRules as the semantic generation authority; do not replace those rules with script-generated semantic heuristics.",
@@ -200,7 +200,7 @@ function knowledgeSemanticInstruction(input: {
     completionCondition: "The semantic pack result has been written and submitted; if another pack is returned, it has also been generated and submitted until publish or blocker.",
     requiredSteps: [
       "read instruction.requestRef",
-      "read every chunk body listed by the KnowledgeSemanticBuildRequest",
+      "read every chunk body through request.chunkPack.chunks[].readCommand",
       "copy request.outputContract.resultTemplate and fill it as instruction.resultFile",
       "run instruction.submitCommand",
       "follow any returned generate_knowledge_semantics instruction immediately",

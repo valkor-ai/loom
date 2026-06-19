@@ -34,6 +34,7 @@ import {
   upsertKnowledgeSource,
   validateKnowledgeName,
 } from "./state";
+import { inferUserFacingLanguageFromText } from "../requirements/user-facing-language";
 
 const MAX_PACK_INPUT_TOKENS = 7000;
 const FIXED_REQUEST_OVERHEAD_ESTIMATE = 1000;
@@ -56,6 +57,7 @@ const CHUNK_RESULT_STATUSES: KnowledgeSemanticChunkResult["status"][] = ["comple
 const BLOCK_AFFINITY_FIELDS: Array<keyof KnowledgeBlockAffinity> = ["phaseScope", "conceptGrounding", "frontendExperience", "finalSummary"];
 const RESULT_TEMPLATE_RULE = "Copy outputContract.resultTemplate as the result file shape, then fill each chunkResult for the matching chunkId. Do not infer the schema from Loom source files, dist files, TypeScript types, or old semantic result files.";
 const SUMMARY_RULE = "Write a concise summary of this chunk only. Decide the summary from the read chunk text; do not use external knowledge, regex rules, keyword tables, filename heuristics, or bulk scripts to generate semantic content.";
+const SUMMARY_LANGUAGE_RULE = "Write each summary in the chunk's summaryLanguage. For summaryLanguage=zh-CN, write Simplified Chinese; for summaryLanguage=en, write English; for summaryLanguage=und, follow the chunk text and heading language.";
 const SEMANTIC_LABEL_RULE = "Generate labels only from the chunk text, title, heading path, or local neighboring context. Decide labels per chunk from meaning. Do not use regex rules, keyword tables, or script-generated label factories as semantic judgment; scripts may only serialize already-decided JSON. An empty label list is valid for low-signal chunks.";
 const SEMANTIC_LABEL_FIELD_RULES = [
   "semanticLabels[].kind must be one of generationRules.labelKinds.",
@@ -401,22 +403,43 @@ function normalizeSemanticRequestReadCommands(
       "--chunk",
       chunk.chunkId,
     ];
-    if (JSON.stringify(chunk.readCommand.argv) === JSON.stringify(argv)) {
+    const summaryLanguage = chunk.summaryLanguage ?? inferSummaryLanguageFromChunkMetadata(chunk);
+    const normalizedChunk = {
+      chunkId: chunk.chunkId,
+      documentId: chunk.documentId,
+      documentTitle: chunk.documentTitle,
+      relativePath: chunk.relativePath,
+      headingPath: chunk.headingPath,
+      tokenEstimate: chunk.tokenEstimate,
+      summaryLanguage,
+      readCommand: { argv },
+      ...(chunk.previousChunkTitle ? { previousChunkTitle: chunk.previousChunkTitle } : {}),
+      ...(chunk.nextChunkTitle ? { nextChunkTitle: chunk.nextChunkTitle } : {}),
+      ...(chunk.splitReason ? { splitReason: chunk.splitReason } : {}),
+    };
+    if (JSON.stringify(chunk) === JSON.stringify(normalizedChunk)) {
       return chunk;
     }
     changed = true;
-    return {
-      ...chunk,
-      readCommand: { argv },
-    };
+    return normalizedChunk;
   });
-  return changed
+  const requestReadPlan = {
+    mustReadChunkText: true,
+    readMode: "chunk_read_command_only" as const,
+    chunkReadCommands: chunks.map((chunk) => ({
+      chunkId: chunk.chunkId,
+      readCommand: chunk.readCommand,
+    })),
+  };
+  const readPlanChanged = JSON.stringify(request.requestReadPlan) !== JSON.stringify(requestReadPlan);
+  return changed || readPlanChanged
     ? {
         ...request,
         chunkPack: {
           ...request.chunkPack,
           chunks,
         },
+        requestReadPlan,
       }
     : request;
 }
@@ -451,6 +474,7 @@ function normalizeSemanticRequestGenerationRules(
     confidenceValues: CONFIDENCE_VALUES,
     resultTemplateRule: RESULT_TEMPLATE_RULE,
     summaryRule: SUMMARY_RULE,
+    summaryLanguageRule: SUMMARY_LANGUAGE_RULE,
     semanticLabelRule: SEMANTIC_LABEL_RULE,
     semanticLabelFieldRules: SEMANTIC_LABEL_FIELD_RULES,
     blockAffinityRule: BLOCK_AFFINITY_RULE,
@@ -541,7 +565,6 @@ function createSemanticRequest(input: {
 }): KnowledgeSemanticBuildRequest {
   const documents = new Map(input.buildRun.documents.map((document) => [document.documentId, document]));
   const chunkIndex = new Map(input.buildRun.chunks.map((chunk, index) => [chunk.chunkId, index]));
-  const chunkRefs = input.chunks.map((chunk) => path.join(input.runDir, chunk.textRef));
   const requestChunks = input.chunks.map((chunk) => {
     const document = documents.get(chunk.documentId);
     const index = chunkIndex.get(chunk.chunkId) ?? -1;
@@ -554,7 +577,7 @@ function createSemanticRequest(input: {
       relativePath: relativeDocumentPath(document?.path ?? chunk.title, input.buildRun.roots),
       headingPath: chunk.headingPath,
       tokenEstimate: chunk.tokenEstimate,
-      textRef: path.join(input.runDir, chunk.textRef),
+      summaryLanguage: inferSummaryLanguageFromChunk(chunk),
       readCommand: {
         argv: [
           "knowledge",
@@ -600,6 +623,7 @@ function createSemanticRequest(input: {
       confidenceValues: CONFIDENCE_VALUES,
       resultTemplateRule: RESULT_TEMPLATE_RULE,
       summaryRule: SUMMARY_RULE,
+      summaryLanguageRule: SUMMARY_LANGUAGE_RULE,
       semanticLabelRule: SEMANTIC_LABEL_RULE,
       semanticLabelFieldRules: SEMANTIC_LABEL_FIELD_RULES,
       blockAffinityRule: BLOCK_AFFINITY_RULE,
@@ -612,7 +636,11 @@ function createSemanticRequest(input: {
     },
     requestReadPlan: {
       mustReadChunkText: true,
-      chunkTextRefs: chunkRefs,
+      readMode: "chunk_read_command_only",
+      chunkReadCommands: requestChunks.map((chunk) => ({
+        chunkId: chunk.chunkId,
+        readCommand: chunk.readCommand,
+      })),
     },
   };
 }
@@ -660,6 +688,7 @@ function validatePackResult(request: KnowledgeSemanticBuildRequest, value: unkno
   }
 
   const requestChunkIds = new Set(request.chunkPack.chunks.map((chunk) => chunk.chunkId));
+  const requestChunkById = new Map(request.chunkPack.chunks.map((chunk) => [chunk.chunkId, chunk]));
   const seen = new Set<string>();
   const chunkResults: KnowledgeSemanticChunkResult[] = [];
   for (let index = 0; index < value.chunkResults.length; index += 1) {
@@ -684,6 +713,10 @@ function validatePackResult(request: KnowledgeSemanticBuildRequest, value: unkno
         path: `${basePath}.chunkId`,
         chunkId: result.chunkId,
       });
+    }
+    const requestChunk = requestChunkById.get(result.chunkId);
+    if (requestChunk) {
+      validateSummaryLanguage(result, requestChunk.summaryLanguage, basePath, issues);
     }
     seen.add(result.chunkId);
     chunkResults.push(result);
@@ -751,6 +784,25 @@ function validateChunkResult(
     blockAffinity,
     ...(notes ? { notes } : {}),
   };
+}
+
+function validateSummaryLanguage(
+  result: KnowledgeSemanticChunkResult,
+  expected: "zh-CN" | "en" | "und",
+  basePath: string,
+  issues: KnowledgeSemanticSubmitIssue[],
+): void {
+  if (result.status === "unreadable" || expected !== "zh-CN") {
+    return;
+  }
+  if (!hasHanText(result.summary)) {
+    issues.push({
+      code: "summary_language_mismatch",
+      message: "summary must use Simplified Chinese because the request chunk summaryLanguage is zh-CN.",
+      path: `${basePath}.summary`,
+      chunkId: result.chunkId,
+    });
+  }
 }
 
 function validateSemanticLabels(
@@ -924,6 +976,7 @@ async function publishSemanticBuild(input: {
   await writeJsonAtomic(statePath, {
     ...input.state,
     status: "published",
+    publishedAt: now,
     updatedAt: now,
   });
   await removePendingKnowledge(buildRun.name);
@@ -1030,6 +1083,33 @@ function addSemanticPosting(
 
 function normalizeSemanticText(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function inferSummaryLanguageFromChunk(chunk: KnowledgeChunkRecord): "zh-CN" | "en" | "und" {
+  return inferSummaryLanguage([
+    chunk.title,
+    chunk.headingPath.join("\n"),
+    chunk.contextPrefix,
+  ].join("\n"));
+}
+
+function inferSummaryLanguageFromChunkMetadata(chunk: KnowledgeSemanticBuildRequest["chunkPack"]["chunks"][number]): "zh-CN" | "en" | "und" {
+  return inferSummaryLanguage([
+    chunk.documentTitle,
+    chunk.relativePath,
+    chunk.headingPath.join("\n"),
+    chunk.previousChunkTitle ?? "",
+    chunk.nextChunkTitle ?? "",
+  ].join("\n"));
+}
+
+function inferSummaryLanguage(text: string): "zh-CN" | "en" | "und" {
+  const locale = inferUserFacingLanguageFromText(text).defaultLocale;
+  return locale === "zh-CN" || locale === "en" ? locale : "und";
+}
+
+function hasHanText(text: string): boolean {
+  return /[\p{Script=Han}]/u.test(text);
 }
 
 function relativeDocumentPath(filePath: string, roots: KnowledgeRoot[]): string {
