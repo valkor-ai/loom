@@ -53,6 +53,7 @@ import {
 } from "../state/paths";
 import { createRequirementContext, type RequirementContextResult } from "../requirements/context";
 import { inferUserFacingLanguage, userFacingLanguageRule } from "../requirements/user-facing-language";
+import { KNOWLEDGE_SEMANTIC_ANCHOR_RULES } from "../knowledge/semantic-anchor-rules";
 import { brainstormSessionAgentActionContract, type AgentActionContract } from "./agent-action";
 import { referencedArtifactReadGuide, type ReferencedArtifactReadGuideEntry } from "./artifact-read-guide";
 import { repairSubmitRouting } from "./repair-routing";
@@ -1868,6 +1869,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
       "Do not combine sibling or downstream capability units into one capability_closure, scope_item_grounding, or page_operation_path query.",
       "Use dependency_order only for upstream/downstream sequencing, deferred boundaries, and next-phase context.",
       "Use one semanticFocus entry per concrete object, operation, field, state, rule, page, or flow; do not write a space-separated, slash-separated, comma-separated, or conjunction-joined list inside one focus entry.",
+      ...KNOWLEDGE_SEMANTIC_ANCHOR_RULES,
       "If an anchor is not clear enough to name as one focus entry, keep it in naturalLanguageQuery instead of inventing a semantic label.",
       "If a planned query returns available knowledge but misses the step subject's key anchors, revise that specific query once with narrower anchors before presenting the block.",
     ],
@@ -1902,6 +1904,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
               "Before composing scope options, identify the candidate phase capability units from the requirement and dependency order; this is internal reasoning, not user-facing wording.",
               "naturalLanguageQuery should ask for the subject's closure: required objects, operations, fields, states, rules, blockers, outcomes, and adjacent boundaries.",
               "semanticFocus must emphasize this one subject's primary object plus the operations, rules, states, fields, or flows needed to judge whether that unit is a closed phase.",
+              ...KNOWLEDGE_SEMANTIC_ANCHOR_RULES,
               "Do not include sibling, downstream, or next-phase capability units in semanticFocus.",
               "Do not include downstream execution operations in semanticFocus unless that subject is itself a competing current-phase option.",
               "Use separate operation focus entries for separate operations; never combine multiple operations into one operation focus.",
@@ -1934,6 +1937,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
               "Start from every confirmed current-phase included item; do not query only the easiest or highest-level object.",
               "naturalLanguageQuery should ask for the subject's objects, fields, rules, states, validations, blockers, outcomes, feedback, and misunderstanding boundaries.",
               "semanticFocus must stay inside the confirmed scope item or tight group, pairing object focus with relevant operation, rule, state, field, or flow anchors when those anchors are explicit.",
+              ...KNOWLEDGE_SEMANTIC_ANCHOR_RULES,
               "Do not re-query the whole system or every deferred module.",
               "Use separate operation focus entries for separate actions and lifecycle steps; do not use a single compound operation focus as a substitute for lifecycle or process component operations.",
             ],
@@ -1963,6 +1967,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
               "Start from confirmed current-phase operations and blockers, then translate them into page-operation retrieval anchors for how a user or staff member finds the target, starts the action, enters data, sees feedback, and reads back updated state.",
               "Prefer page or flow focus when those labels are explicit; otherwise use operation, field, state, and object anchors from confirmed scope.",
               "When the knowledge source has no explicit page labels, use the page-operation intent in naturalLanguageQuery and use operation, field, state, or object semanticFocus anchors from confirmed scope.",
+              ...KNOWLEDGE_SEMANTIC_ANCHOR_RULES,
               "For multi-step page paths or operation workflows, include page or flow focus plus concrete operation, field, or state anchors; do not rely on a compound operation focus alone.",
               "Do not invent page labels just to satisfy semanticFocus.",
               "Do not query only with business object names when operation, field, or state anchors are available.",
@@ -2016,6 +2021,7 @@ function brainstormKnowledgeContextProtocol(): BrainstormKnowledgeContextProtoco
       "Use knowledgeQueryPlan step queryConstructionRules as the construction guidance and execution sequence authority.",
       "Self-check each returned context before presenting the block: if available knowledge does not cover that step subject's key anchors, revise that step query once with narrower anchors before falling back to requirement text.",
       "When concrete anchors are available, semanticFocus should include them explicitly so retrieval can prefer semantically complete chunks. For phase_scope and concept_grounding, prefer object plus operation/rule/state/field/flow anchors. For frontend_experience, prefer page/flow plus operation/field/state anchors; object focus is supporting context only.",
+      ...KNOWLEDGE_SEMANTIC_ANCHOR_RULES,
       "When the current anchor is a connected process, lifecycle transition, replacement, migration, recovery, or ordered sequence, do not collapse it into a single compound operation semanticFocus. Use separate operation focus entries for identifiable component operations and add flow focus only when the whole-process wording is explicit.",
       "Preserve the current requirement's object or tightly related object relationship when creating semanticFocus; do not move lifecycle, replacement, recovery, or relationship focus to an adjacent business object.",
       "If no concrete semanticFocus anchor is available, leave semanticFocus empty and continue with naturalLanguageQuery instead of inventing labels.",

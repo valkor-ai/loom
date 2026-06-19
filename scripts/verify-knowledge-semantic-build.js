@@ -128,6 +128,21 @@ assert.match(
 );
 assert.match(
   request.generationRules.semanticLabelRule,
+  /self-contained/,
+  "Semantic build request must require self-contained semantic labels.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
+  /Do not rely on a separate object focus entry to qualify a bare operation word/,
+  "Semantic build request must align operation label granularity with Brainstorm semanticFocus.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
+  /complete business rule or state-change phrase/,
+  "Semantic build request must require complete rule and state labels.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
   /multiple operations on the same object or a tightly related object relationship/,
   "Semantic build request must cover connected multi-operation semantics.",
 );

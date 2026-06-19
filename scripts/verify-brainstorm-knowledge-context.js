@@ -261,6 +261,16 @@ includes(
   "one semanticFocus entry per concrete",
   "Knowledge query plan must forbid compound semanticFocus entries.",
 );
+includes(
+  brainstormRequest.knowledgeQueryPlan.sharedRules.join("\n"),
+  "self-contained",
+  "Knowledge query plan must align semanticFocus granularity with semantic labels.",
+);
+includes(
+  brainstormRequest.knowledgeQueryPlan.sharedRules.join("\n"),
+  "Do not rely on a separate object focus entry to qualify a bare operation word",
+  "Knowledge query plan must require object-qualified operation focus text.",
+);
 assert.deepEqual(
   brainstormRequest.knowledgeQueryPlan.blocks.concept_grounding.executionOrder.map((step) => step.queryKind),
   ["scope_item_grounding"],
@@ -297,6 +307,16 @@ includes(
 );
 includes(
   phaseClosureRules,
+  "self-contained",
+  "Phase scope capability closure must use self-contained focus anchors.",
+);
+includes(
+  phaseClosureRules,
+  "Do not rely on a separate object focus entry to qualify a bare operation word",
+  "Phase scope capability closure must not use bare operation focus text when the subject qualifier is available.",
+);
+includes(
+  phaseClosureRules,
   "each identifiable component operation as separate operation focus entries",
   "Phase scope knowledge query plan must split connected processes into component operation focus anchors.",
 );
@@ -312,6 +332,11 @@ includes(
 );
 includes(
   conceptGroundingRules,
+  "self-contained",
+  "Concept grounding must use self-contained focus anchors.",
+);
+includes(
+  conceptGroundingRules,
   "single compound operation focus",
   "Concept knowledge query plan must not collapse lifecycle processes into one compound operation focus.",
 );
@@ -324,6 +349,11 @@ includes(
   frontendPathRules,
   "page or flow focus",
   "Frontend knowledge query plan must prefer page or flow focus anchors.",
+);
+includes(
+  frontendPathRules,
+  "self-contained",
+  "Frontend knowledge query plan must use self-contained focus anchors.",
 );
 includes(
   frontendPathRules,
@@ -372,6 +402,7 @@ includes(protocolRules, "follow knowledgeQueryPlan", "Brainstorm must make knowl
 includes(protocolRules, "Do not run knowledge brainstorm-context for final_summary", "final_summary must not run knowledge recall.");
 includes(protocolRules, "inspect every chunk listed in context.readPlan.chunks", "available knowledge context must be inspected.");
 includes(protocolRules, "Self-check each returned context", "Brainstorm must self-check knowledge coverage before presenting the block.");
+includes(protocolRules, "self-contained", "Brainstorm protocol must carry the shared semantic anchor specificity rule.");
 includes(protocolRules, "Do not ask the user to choose or name a knowledge source", "Brainstorm must not support manual knowledge source selection.");
 includes(protocolRules, "semanticFocus should include them explicitly", "Brainstorm must instruct agents to provide concrete semanticFocus anchors when available.");
 includes(protocolRules, "do not collapse it into a single compound operation semanticFocus", "Brainstorm must split connected-process semanticFocus anchors when possible.");

@@ -35,6 +35,7 @@ import {
   validateKnowledgeName,
 } from "./state";
 import { inferUserFacingLanguageFromText } from "../requirements/user-facing-language";
+import { KNOWLEDGE_SEMANTIC_ANCHOR_RULE_TEXT } from "./semantic-anchor-rules";
 
 const MAX_PACK_INPUT_TOKENS = 7000;
 const FIXED_REQUEST_OVERHEAD_ESTIMATE = 1000;
@@ -61,6 +62,7 @@ const SUMMARY_LANGUAGE_RULE = "Write each summary in the chunk's summaryLanguage
 const SEMANTIC_LABEL_RULE = [
   "Generate labels only from the chunk text, title, heading path, or local neighboring context.",
   "Decide labels per chunk from meaning.",
+  KNOWLEDGE_SEMANTIC_ANCHOR_RULE_TEXT,
   "When a chunk describes multiple operations on the same object or a tightly related object relationship as a connected process, lifecycle transition, replacement, migration, recovery, or other ordered sequence, emit labels for both the individual operations and the combined process or flow using wording supported by the chunk.",
   "For combined process or flow labels, include chunk-supported aliases for wording variants that preserve the same object relationship and operation set, such as connector-preserving wording, compact wording without a connector, or wording without explanatory suffixes like process, flow, lifecycle, transition, or migration.",
   "Put only chunk-supported wording variants into aliases; do not invent business aliases from outside knowledge, and do not use aliases to cross from one business object or object relationship to another.",
