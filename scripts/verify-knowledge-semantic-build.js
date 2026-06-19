@@ -127,6 +127,21 @@ assert.match(
   "Semantic build request must require labels to be semantic judgments.",
 );
 assert.match(
+  request.generationRules.semanticLabelRule,
+  /multiple operations on the same object or a tightly related object relationship/,
+  "Semantic build request must cover connected multi-operation semantics.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
+  /individual operations and the combined process or flow/,
+  "Semantic build request must ask agents to emit component labels and combined flow labels.",
+);
+assert.match(
+  request.generationRules.semanticLabelRule,
+  /chunk-supported wording variants/,
+  "Semantic build request must keep semantic aliases grounded in chunk wording.",
+);
+assert.match(
   request.generationRules.blockAffinityRule,
   /chunk's meaning/,
   "Semantic build request must require block affinity to come from chunk meaning.",

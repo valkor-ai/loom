@@ -58,7 +58,14 @@ const BLOCK_AFFINITY_FIELDS: Array<keyof KnowledgeBlockAffinity> = ["phaseScope"
 const RESULT_TEMPLATE_RULE = "Copy outputContract.resultTemplate as the result file shape, then fill each chunkResult for the matching chunkId. Do not infer the schema from Loom source files, dist files, TypeScript types, or old semantic result files.";
 const SUMMARY_RULE = "Write a concise summary of this chunk only. Decide the summary from the read chunk text; do not use external knowledge, regex rules, keyword tables, filename heuristics, or bulk scripts to generate semantic content.";
 const SUMMARY_LANGUAGE_RULE = "Write each summary in the chunk's summaryLanguage. For summaryLanguage=zh-CN, write Simplified Chinese; for summaryLanguage=en, write English; for summaryLanguage=und, follow the chunk text and heading language.";
-const SEMANTIC_LABEL_RULE = "Generate labels only from the chunk text, title, heading path, or local neighboring context. Decide labels per chunk from meaning. Do not use regex rules, keyword tables, or script-generated label factories as semantic judgment; scripts may only serialize already-decided JSON. An empty label list is valid for low-signal chunks.";
+const SEMANTIC_LABEL_RULE = [
+  "Generate labels only from the chunk text, title, heading path, or local neighboring context.",
+  "Decide labels per chunk from meaning.",
+  "When a chunk describes multiple operations on the same object or a tightly related object relationship as a connected process, lifecycle transition, replacement, migration, recovery, or other ordered sequence, emit labels for both the individual operations and the combined process or flow using wording supported by the chunk.",
+  "Put only chunk-supported wording variants into aliases; do not invent business aliases from outside knowledge.",
+  "Do not use regex rules, keyword tables, or script-generated label factories as semantic judgment; scripts may only serialize already-decided JSON.",
+  "An empty label list is valid for low-signal chunks.",
+].join(" ");
 const SEMANTIC_LABEL_FIELD_RULES = [
   "semanticLabels[].kind must be one of generationRules.labelKinds.",
   "semanticLabels[].text is the label text from the chunk.",
