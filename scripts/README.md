@@ -1,6 +1,6 @@
 # Loom Scripts
 
-Local development helpers for the Loom CLI and local agent plugins.
+Local maintenance helpers for Loom agent plugins. Verification code lives under `tests/`.
 
 ## Refresh Local Plugins
 
@@ -50,4 +50,11 @@ For adapter-specific installs:
 npm run plugin:install-codex
 npm run plugin:install-claude
 npm run plugin:install-opencode
+```
+
+Agent E2E support tools live outside this directory:
+
+```bash
+npm run agent:e2e-guard -- /abs/e2e/project-root
+npm run audit:claude-log -- --project-root /abs/project --json
 ```
