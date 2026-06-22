@@ -39,7 +39,7 @@ assert.equal(
   "Brainstorm agentAction must require reading userFacingLanguage",
 );
 
-const phaseScopeCoreGroup = request.agentAction.read.fieldGroups.find((group) => group.groupId === "brainstorm_session_phase_scope_core");
+const phaseScopeCoreGroup = request.requestReadPlan.groups.find((group) => group.groupId === "brainstorm_session_phase_scope_core");
 assert.ok(phaseScopeCoreGroup, "Brainstorm read plan must include phase_scope core group");
 assert.equal(
   phaseScopeCoreGroup.fields.includes("userFacingLanguage"),

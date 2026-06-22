@@ -58,7 +58,7 @@ assert.equal(request.keywordHintsPolicy.status, "advisory_only");
 assert.equal(request.keywordHintsPolicy.mustNotTreatAsScope, true);
 assert.equal(request.keywordHintsPolicy.mustNotTreatAsAcceptance, true);
 assert.equal(request.keywordHintsPolicy.mustNotTreatAsConfirmedConcept, true);
-const brainstormFieldGroups = request.agentAction.read.fieldGroups;
+const brainstormFieldGroups = request.requestReadPlan.groups;
 const phaseScopeCoreGroup = brainstormFieldGroups.find((group) => group.groupId === "brainstorm_session_phase_scope_core");
 const phaseScopeAuthorityGroup = brainstormFieldGroups.find((group) => group.groupId === "brainstorm_session_phase_scope_authority");
 const conceptGroundingGroup = brainstormFieldGroups.find((group) => group.groupId === "brainstorm_session_concept_grounding_context");

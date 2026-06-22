@@ -299,6 +299,9 @@ function createRepositoryContextCandidate(requestData, root) {
     },
     requestLens: {
       projectKind: request.projectKind,
+      baselineProjectKind: request.projectKind,
+      repositoryMode: request.repositoryMode,
+      phaseDevelopmentMode: request.phaseDevelopmentMode,
       scanPurpose: "phase_start_repository_snapshot",
       primaryConsumer: "phase_brainstorm",
       laterConsumers: ["PGC", "AAC", "TaskPlan"],

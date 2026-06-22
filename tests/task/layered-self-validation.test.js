@@ -109,8 +109,8 @@ function collectRequestOutputRefs(value, refs) {
   }
 }
 
-function allReadFields(agentAction) {
-  return (agentAction?.read?.fieldGroups ?? []).flatMap((group) => group.fields ?? []);
+function allReadFields(request) {
+  return (request?.requestReadPlan?.groups ?? request?.agentAction?.read?.fieldGroups ?? []).flatMap((group) => group.fields ?? []);
 }
 
 function assertStatusRoutesToActiveRequest(root, deliveryId, phaseId, expected) {
@@ -251,8 +251,10 @@ function assertBrainstormRequestReadPlan(request, label) {
   assert.equal(request?.agentAction?.actionKind, "brainstorm_session", `${label}: Brainstorm request must expose agentAction`);
   assert.equal(request?.agentAction?.read?.primaryMethod, "inspect", `${label}: Brainstorm request must prefer inspect reads`);
   assert.equal(request?.agentAction?.read?.fields, undefined, `${label}: Brainstorm request must not expose legacy read.fields`);
-  const groups = request?.agentAction?.read?.fieldGroups ?? [];
-  assert.ok(Array.isArray(groups) && groups.length > 0, `${label}: Brainstorm read plan must expose fieldGroups`);
+  assert.equal(request?.agentAction?.read?.planAuthority, "requestReadPlan.groups", `${label}: Brainstorm agentAction must point to root requestReadPlan`);
+  assert.equal(request?.agentAction?.read?.fieldGroups, undefined, `${label}: Brainstorm agentAction must not duplicate root requestReadPlan groups`);
+  const groups = request?.requestReadPlan?.groups ?? [];
+  assert.ok(Array.isArray(groups) && groups.length > 0, `${label}: Brainstorm requestReadPlan must expose groups`);
   assert.ok(
     request?.agentAction?.stopConditions?.some((condition) => condition.includes("after presenting the next required Brainstorm block")),
     `${label}: Brainstorm stopConditions must stop only after presenting the current user-facing block`,
@@ -281,7 +283,7 @@ function assertBrainstormRequestReadPlan(request, label) {
     assert.equal(fields.has("latestConfirmedRequirementDecision"), false, `${label}: initial Brainstorm read plan must not include phase-continuation-only decision history`);
   }
   assert.ok(
-    groups.every((group) => group.readCommand?.argv?.[0] === "inspect" && group.readCommand.argv[2] === "{requestRef}" && Array.isArray(group.fields)),
+    groups.every((group) => group.readCommand?.argv?.[0] === "inspect" && group.readCommand.argv[2] === request.requestReadPlan.requestRef && Array.isArray(group.fields)),
     `${label}: every Brainstorm read fieldGroup must provide an inspect command`,
   );
   assert.ok(
@@ -1406,6 +1408,9 @@ function repositoryContextCandidate(data, root) {
     },
     requestLens: {
       projectKind: "existing_project",
+      baselineProjectKind: "existing_project",
+      repositoryMode: request.repositoryMode,
+      phaseDevelopmentMode: request.phaseDevelopmentMode,
       scanPurpose: "phase_start_repository_snapshot",
       primaryConsumer: "phase_brainstorm",
       laterConsumers: ["PGC", "AAC", "TaskPlan"],
@@ -2064,7 +2069,7 @@ function main() {
     assertRequestProtocol(baselineRequestBody, "TechnicalBaselineRequest");
     assertRequestOutputParentDirsExist(root, baselineRequestBody, "TechnicalBaselineRequest");
     {
-      const baselineReadFields = baselineRequestBody.agentAction.read.fieldGroups.flatMap((group) => group.fields);
+      const baselineReadFields = baselineRequestBody.requestReadPlan.groups.flatMap((group) => group.fields);
       assert.equal(baselineReadFields.includes("contextRefs.latestRepositoryContextRef"), false, "TechnicalBaselineRequest must not read absent optional latestRepositoryContextRef.");
       assert.equal(baselineReadFields.includes("contextRefs.previousTechnicalBaselineRef"), false, "TechnicalBaselineRequest must not read absent optional previousTechnicalBaselineRef.");
     }
@@ -2215,7 +2220,7 @@ function main() {
     const refreshedArchRequest = requestFromCommand({ requestPath: arch.instruction.requestRef }, root);
     assertRequestOutputParentDirsExist(root, refreshedArchRequest, "refreshed ArchitectureSectionsGenerationRequest");
     assert.equal(refreshedArchRequest.agentAction.schema.enumLocation, "agentAction.write.currentTarget.enumRefs", "ArchitectureSections current target enum authority must not fall back to broad enumRefs");
-    assert.equal(allReadFields(refreshedArchRequest.agentAction).includes("enumRefs"), false, "ArchitectureSections single-section read plan must not read broad enumRefs when currentTarget is present");
+    assert.equal(allReadFields(refreshedArchRequest).includes("enumRefs"), false, "ArchitectureSections single-section read plan must not read broad enumRefs when currentTarget is present");
     assert.equal(decision.instruction.submitCommand, undefined, "ArchitectureSections single-section instruction must not expose submitCommand before submit_existing_candidate");
     assert.ok(
       decision.instruction.routingRule.includes("completionBarrier.followUpCommand.commandInvocation"),
@@ -2625,7 +2630,7 @@ function main() {
     assert.equal(phase2BrainstormGate.instruction.expectedResponse.submitCommand, undefined);
     assert.equal(phase2BrainstormRequest.outputContract.candidateFile, expectedCandidateFile);
     assert.ok(
-      phase2BrainstormRequest.agentAction.read.fieldGroups
+      phase2BrainstormRequest.requestReadPlan.groups
         .find((group) => group.groupId === "brainstorm_session_candidate_write_controls")
         ?.whenToRead.includes("final_summary"),
       "Brainstorm request must keep candidate path in delayed final_summary write contract",

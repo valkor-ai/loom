@@ -16,6 +16,7 @@ import {
   brainstormContractPath,
   brainstormDecisionPath,
   brainstormDecisionsIndexPath,
+  brainstormKnowledgeQueryDir,
   brainstormRequestCandidatePath,
   brainstormSessionRequestPath,
   fromProjectRelative,
@@ -68,6 +69,7 @@ import {
   scopeItemCoverageClarificationRules,
 } from "./brainstorm-rules";
 import { writeRequestManifestAtomic } from "./request-manifest";
+import { brainstormKnowledgeContextProtocol, brainstormKnowledgeQueryPlan } from "./brainstorm";
 
 const execFileAsync = promisify(execFile);
 
@@ -87,6 +89,8 @@ export type AcceptRepositoryContextInput = {
 
 const repositoryContextEnumRefs = {
   projectKind: ["greenfield", "existing_project", "unknown"],
+  repositoryMode: ["empty_project", "existing_project", "unknown"],
+  phaseDevelopmentMode: ["initial_delivery", "incremental_delivery", "unknown"],
   relevantSurfaceKind: ["entrypoint", "module", "service", "controller", "data_access", "ui", "config", "test", "script", "documentation", "unknown"],
   capabilityStatus: ["implemented", "partial", "missing", "unknown"],
   recommendedReadReason: ["implemented_capability", "dependency_context", "integration_boundary", "test_or_validation", "risk_review", "extension_point"],
@@ -94,6 +98,45 @@ const repositoryContextEnumRefs = {
   surfaceRelevance: ["implemented_capability", "architecture_boundary", "extension_point", "validation_surface", "delivery_context", "unrelated"],
   surfaceSuggestedUse: ["inspect_only", "inspect_or_extend", "reuse_existing_pattern", "avoid_modifying"],
 };
+
+type RepositoryMode = "empty_project" | "existing_project" | "unknown";
+type PhaseDevelopmentMode = "initial_delivery" | "incremental_delivery" | "unknown";
+
+function phaseRepositoryLens(input: {
+  baselineProjectKind: string;
+  completedPhaseCount: number;
+}): {
+  baselineProjectKind: string;
+  repositoryMode: RepositoryMode;
+  phaseDevelopmentMode: PhaseDevelopmentMode;
+} {
+  if (input.completedPhaseCount > 0) {
+    return {
+      baselineProjectKind: input.baselineProjectKind,
+      repositoryMode: "existing_project",
+      phaseDevelopmentMode: "incremental_delivery",
+    };
+  }
+  if (input.baselineProjectKind === "existing_project") {
+    return {
+      baselineProjectKind: input.baselineProjectKind,
+      repositoryMode: "existing_project",
+      phaseDevelopmentMode: "initial_delivery",
+    };
+  }
+  if (input.baselineProjectKind === "greenfield") {
+    return {
+      baselineProjectKind: input.baselineProjectKind,
+      repositoryMode: "empty_project",
+      phaseDevelopmentMode: "initial_delivery",
+    };
+  }
+  return {
+    baselineProjectKind: input.baselineProjectKind,
+    repositoryMode: "unknown",
+    phaseDevelopmentMode: "unknown",
+  };
+}
 
 const repositoryContextReferenceRules = {
   relevantSurfaces: {
@@ -158,6 +201,11 @@ export async function createRepositoryContextRequest(input: CreateRepositoryCont
   if (!phase) {
     throw invalidArgument("Active phase does not exist.", locator);
   }
+  const completedPhases = completedPhaseSummaries(delivery, locator.phaseId);
+  const repositoryLens = phaseRepositoryLens({
+    baselineProjectKind: baseline.projectKind,
+    completedPhaseCount: completedPhases.length,
+  });
   const brainstormContractRef = toProjectRelative(root, brainstormContractPath(root, locator.deliveryId));
   const requestId = createId("repoctx-req");
   const candidateFile = toProjectRelative(root, repositoryContextCandidatePath(root, locator, requestId));
@@ -216,6 +264,8 @@ export async function createRepositoryContextRequest(input: CreateRepositoryCont
     status: "pending",
     purpose: "generate_phase_start_repository_snapshot",
     projectKind: baseline.projectKind,
+    repositoryMode: repositoryLens.repositoryMode,
+    phaseDevelopmentMode: repositoryLens.phaseDevelopmentMode,
     source: {
       brainstormContractRef,
       technicalBaselineRef: toProjectRelative(root, technicalBaselinePath(root, locator.deliveryId)),
@@ -232,9 +282,14 @@ export async function createRepositoryContextRequest(input: CreateRepositoryCont
         phaseId: locator.phaseId,
         name: phase.name,
       },
-      completedPhases: completedPhaseSummaries(delivery, locator.phaseId),
+      baselineProjectKind: repositoryLens.baselineProjectKind,
+      repositoryMode: repositoryLens.repositoryMode,
+      phaseDevelopmentMode: repositoryLens.phaseDevelopmentMode,
+      completedPhases,
       rules: [
         "This request is generated before current phase scope confirmation.",
+        "projectKind is the original delivery baseline; repositoryMode and phaseDevelopmentMode describe the current repository snapshot for this phase.",
+        "When phaseDevelopmentMode is incremental_delivery, inspect and report already implemented prior-phase code facts instead of treating the repository as a blank greenfield start.",
         "Do not infer current phase included scope, excluded scope, deferred scope, or acceptance refs.",
         "Do not use nextPhasePreview or future roadmap scope in this request.",
         "Produce repository facts only; Brainstorm confirms phase scope later.",
@@ -278,6 +333,8 @@ export async function createRepositoryContextRequest(input: CreateRepositoryCont
         brainstormContractRef,
         technicalBaselineRef: toProjectRelative(root, technicalBaselinePath(root, locator.deliveryId)),
         projectKind: baseline.projectKind,
+        repositoryMode: repositoryLens.repositoryMode,
+        phaseDevelopmentMode: repositoryLens.phaseDevelopmentMode,
       }),
     },
     submitCommand,
@@ -423,6 +480,8 @@ export async function acceptRepositoryContext(input: AcceptRepositoryContextInpu
           brainstormContractRef: toProjectRelative(root, brainstormContractPath(root, locator.deliveryId)),
           technicalBaselineRef: toProjectRelative(root, technicalBaselinePath(root, locator.deliveryId)),
           projectKind: "existing_project | greenfield | unknown",
+          repositoryMode: "empty_project | existing_project | unknown",
+          phaseDevelopmentMode: "initial_delivery | incremental_delivery | unknown",
         }),
         repairSubmitRouting: repairSubmitRouting({
           kind: "candidate",
@@ -492,7 +551,6 @@ export async function acceptRepositoryContext(input: AcceptRepositoryContextInpu
   });
   const brainstormPlan = await maybePreparePhaseBrainstormAfterRepositoryContext(root, locator, contextFile);
   if (brainstormPlan) {
-    await writeJsonAtomic(brainstormPlan.contractPath, brainstormPlan.contract);
     await writeRequestManifestAtomic(root, brainstormPlan.requestPath, brainstormPlan.request);
     await updateRouteState({
       projectRoot: root,
@@ -597,6 +655,8 @@ function repositoryContextSchemaShape(input: {
   brainstormContractRef: string;
   technicalBaselineRef: string;
   projectKind: string;
+  repositoryMode: string;
+  phaseDevelopmentMode: string;
 }): Record<string, unknown> {
   const warningExample = {
     code: "LOW_CONFIDENCE_REPOSITORY_SCAN",
@@ -615,6 +675,9 @@ function repositoryContextSchemaShape(input: {
     },
     requestLens: {
       projectKind: input.projectKind,
+      baselineProjectKind: input.projectKind,
+      repositoryMode: input.repositoryMode,
+      phaseDevelopmentMode: input.phaseDevelopmentMode,
       scanPurpose: "phase_start_repository_snapshot",
       primaryConsumer: "phase_brainstorm",
       laterConsumers: ["PGC", "AAC", "TaskPlan"],
@@ -709,6 +772,8 @@ function repositoryContextRepairInstruction(
       brainstormContractRef: toProjectRelative(root, brainstormContractPath(root, locator.deliveryId)),
       technicalBaselineRef: toProjectRelative(root, technicalBaselinePath(root, locator.deliveryId)),
       projectKind: "existing_project | greenfield | unknown",
+      repositoryMode: "empty_project | existing_project | unknown",
+      phaseDevelopmentMode: "initial_delivery | incremental_delivery | unknown",
     }),
     repairSubmitRouting: repairSubmitRouting({
       kind: "candidate",
@@ -745,8 +810,6 @@ async function maybePreparePhaseBrainstormAfterRepositoryContext(
   locator: { deliveryId: string; phaseId: string },
   repositoryContextFile: string,
 ): Promise<{
-  contract: BrainstormContract;
-  contractPath: string;
   request: Record<string, unknown>;
   requestPath: string;
   refs: Record<string, string>;
@@ -760,48 +823,49 @@ async function maybePreparePhaseBrainstormAfterRepositoryContext(
       expectedRef: toProjectRelative(projectRoot, contractPath),
     });
   }
-  const contract = brainstormContractSchema.parse(await readJsonFile(contractPath));
+  const acceptedContract = brainstormContractSchema.parse(await readJsonFile(contractPath));
   const delivery = await loadDeliveryIndex(projectRoot, locator.deliveryId);
   const phase = delivery.phases.find((item) => item.phaseId === locator.phaseId);
-  const currentRoadmapPhase = contract.roadmap?.phases.find((item) => item.phaseId === locator.phaseId);
+  const currentRoadmapPhase = acceptedContract.roadmap?.phases.find((item) => item.phaseId === locator.phaseId);
   const alreadyConfirmed =
-    contract.status === "confirmed" &&
-    contract.phasePlan.current.phaseId === locator.phaseId &&
+    acceptedContract.status === "confirmed" &&
+    acceptedContract.phasePlan.current.phaseId === locator.phaseId &&
     currentRoadmapPhase?.status === "scope_confirmed";
   if (!phase || alreadyConfirmed) {
     return null;
   }
-  const preview = contract.phasePlan.nextPhasePreview;
-  if (!contract.roadmap) {
+  const preview = acceptedContract.phasePlan.nextPhasePreview;
+  if (!acceptedContract.roadmap) {
     throw invalidArgument("Brainstorm contract roadmap is required for phase continuation.", {
       deliveryId: locator.deliveryId,
       phaseId: locator.phaseId,
     });
   }
+  const phaseDraftContract = brainstormContractSchema.parse(JSON.parse(JSON.stringify(acceptedContract)));
   const now = new Date().toISOString();
   const brainstormRunId = createId(`bs-${phase.phaseId}`);
   const requestId = createId(`brainstorm-session-${phase.phaseId}`);
   const candidateFile = toProjectRelative(projectRoot, brainstormRequestCandidatePath(projectRoot, locator.deliveryId, phase.phaseId, requestId));
-  const roadmapPhase = ensureRoadmapPhaseForBrainstorm(contract, phase, preview);
-  contract.roadmap.currentPhaseId = phase.phaseId;
+  const roadmapPhase = ensureRoadmapPhaseForBrainstorm(phaseDraftContract, phase, preview);
+  phaseDraftContract.roadmap!.currentPhaseId = phase.phaseId;
   roadmapPhase.status = "scope_confirming";
   const fromPhaseId = lastCompletedPhaseId(delivery, phase.phaseId);
   const requirementRefs = await requirementContextRefsForPhaseContinuation(projectRoot, delivery);
   const decisionRefs = await brainstormDecisionRefsForPhaseContinuation(projectRoot, delivery, fromPhaseId);
-  addPhaseClarificationQuestion(contract, phase, roadmapPhase.goal, now);
-  contract.status = "needs_clarification";
-  contract.handoff = {
+  addPhaseClarificationQuestion(phaseDraftContract, phase, roadmapPhase.goal, now);
+  phaseDraftContract.status = "needs_clarification";
+  phaseDraftContract.handoff = {
     ready: false,
     nextNode: "planning_generation_contract",
     blockingReasons: [`${phase.phaseId} scope requires user clarification and confirmation.`],
     confirmedAt: null,
   };
-  contract.updatedAt = now;
+  phaseDraftContract.updatedAt = now;
   const request = createPhaseBrainstormSessionRequest({
     projectRoot,
     deliveryId: locator.deliveryId,
     phase,
-    contract,
+    contract: phaseDraftContract,
     brainstormRunId,
     requestId,
     candidateFile,
@@ -813,8 +877,6 @@ async function maybePreparePhaseBrainstormAfterRepositoryContext(
   });
   const requestPath = brainstormSessionRequestPath(projectRoot, locator.deliveryId, requestId);
   return {
-    contract,
-    contractPath,
     request,
     requestPath,
     refs: {
@@ -1077,6 +1139,10 @@ function createPhaseBrainstormSessionRequest(input: {
   now: string;
 }): Record<string, unknown> {
   const blockedFile = input.candidateFile.replace(/candidate\.json$/, "blocked.json");
+  const knowledgeQueryWorkspace = toProjectRelative(
+    input.projectRoot,
+    brainstormKnowledgeQueryDir(input.projectRoot, input.deliveryId, input.phase.phaseId, input.requestId),
+  );
   const submitCommand = {
     name: "brainstorm accept",
     argv: [
@@ -1194,6 +1260,8 @@ function createPhaseBrainstormSessionRequest(input: {
       mayUseForConceptGroundingCandidates: true,
       ignoreWhenIrrelevant: true,
     },
+    knowledgeContextProtocol: brainstormKnowledgeContextProtocol(knowledgeQueryWorkspace),
+    knowledgeQueryPlan: brainstormKnowledgeQueryPlan(),
     phaseContinuationContext: {
       activePhase: {
         phaseId: input.phase.phaseId,
@@ -1828,6 +1896,18 @@ function validateRepositoryContext(root: string, context: RepositoryContext, req
   const issues: Array<{ code: string; path: string; message: string }> = [];
   if (requestRef && context.source.requestRef !== requestRef) {
     issues.push({ code: "REQUEST_REF_MISMATCH", path: "source.requestRef", message: "RepositoryContext source.requestRef must match the accepted request." });
+  }
+  if (context.requestLens.baselineProjectKind !== context.requestLens.projectKind) {
+    issues.push({ code: "BASELINE_PROJECT_KIND_MISMATCH", path: "requestLens.baselineProjectKind", message: "requestLens.baselineProjectKind must match requestLens.projectKind; projectKind is the baseline, not the current repo mode." });
+  }
+  if (context.requestLens.repositoryMode === "unknown") {
+    issues.push({ code: "REPOSITORY_MODE_REQUIRED", path: "requestLens.repositoryMode", message: "RepositoryContext must state the current repositoryMode from the request lens." });
+  }
+  if (context.requestLens.phaseDevelopmentMode === "unknown") {
+    issues.push({ code: "PHASE_DEVELOPMENT_MODE_REQUIRED", path: "requestLens.phaseDevelopmentMode", message: "RepositoryContext must state whether this phase is initial_delivery or incremental_delivery." });
+  }
+  if (context.requestLens.phaseDevelopmentMode === "incremental_delivery" && context.requestLens.repositoryMode !== "existing_project") {
+    issues.push({ code: "INCREMENTAL_REQUIRES_EXISTING_REPO", path: "requestLens.repositoryMode", message: "incremental_delivery phases must use repositoryMode=existing_project because previous phase code is now current repository context." });
   }
   const surfaceIds = new Set<string>();
   for (const [index, surface] of context.relevantSurfaces.entries()) {

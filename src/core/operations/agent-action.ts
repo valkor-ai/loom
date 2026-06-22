@@ -16,6 +16,8 @@ export type AgentActionContract = {
     optional?: string[];
     primaryMethod?: "inspect";
     fallbackMethod?: "request_manifest_refs";
+    planAuthority?: "requestReadPlan.groups";
+    fieldGroupsOmittedReason?: string;
     fieldGroups?: AgentActionReadGroup[];
     fields?: AgentActionReadField[];
     fallbackRule?: string;
@@ -239,6 +241,19 @@ export function normalizeAgentActionForRequest(value: unknown, request: Record<s
 }
 
 function normalizeReadPlan(actionKind: string, read: AgentActionContract["read"]): AgentActionContract["read"] {
+  if (read.planAuthority === "requestReadPlan.groups") {
+    const { fields: _legacyFields, fieldGroups: _fieldGroups, ...rest } = read;
+    return {
+      ...rest,
+      required: readLabels(read.required),
+      optional: read.optional ? readLabels(read.optional) : undefined,
+      primaryMethod: "inspect",
+      fallbackMethod: "request_manifest_refs",
+      planAuthority: "requestReadPlan.groups",
+      fieldGroupsOmittedReason: read.fieldGroupsOmittedReason ?? "Detailed grouped reads live on root requestReadPlan.groups for this request.",
+      fallbackRule: read.fallbackRule ?? "Read root requestReadPlan.groups first. Use agentAction.read only as a compatibility pointer, not as a second detailed read plan.",
+    };
+  }
   const requiredLabels = readLabels(read.required);
   const optionalLabels = readLabels(read.optional);
   const supplementalRequiredFields = requiredLabels

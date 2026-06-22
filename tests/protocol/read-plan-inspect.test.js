@@ -616,7 +616,7 @@ writeJson(path.join(tmp, ".loom/requests/request.refs/agent-action.json"), actio
 function inlineRequestReadPlan(requestRef, agentAction) {
   return {
     schemaVersion: "1.0",
-    authority: "agentAction.read.fieldGroups",
+    authority: "requestReadPlan.groups",
     primaryMethod: "loom inspect",
     requestRef,
     groups: agentAction.read.fieldGroups.map((group) => ({

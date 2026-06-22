@@ -51,6 +51,9 @@ function createRepositoryContextCandidate(requestData, root) {
     },
     requestLens: {
       projectKind: request.projectKind,
+      baselineProjectKind: request.projectKind,
+      repositoryMode: request.repositoryMode,
+      phaseDevelopmentMode: request.phaseDevelopmentMode,
       scanPurpose: "phase_start_repository_snapshot",
       primaryConsumer: "phase_brainstorm",
       laterConsumers: ["PGC", "AAC", "TaskPlan"],
@@ -494,6 +497,10 @@ function main() {
     const repoRequestBody = requestFromCommand(repoRequest, candidateRoot);
     assert.equal(repoRequest.request, undefined);
     assert.equal(repoRequestBody.projectKind, "greenfield");
+    assert.equal(repoRequestBody.repositoryMode, "existing_project");
+    assert.equal(repoRequestBody.phaseDevelopmentMode, "incremental_delivery");
+    assert.equal(repoRequestBody.scanPurpose.repositoryMode, "existing_project");
+    assert.equal(repoRequestBody.scanPurpose.phaseDevelopmentMode, "incremental_delivery");
     assert.equal(Object.hasOwn(repoRequestBody, "currentPhaseLens"), false);
     assert.equal(Object.hasOwn(repoRequestBody, "nextPhasePreview"), false);
     assert.equal(repoRequestBody.scanPurpose.activePhase.phaseId, "phase-2");
@@ -508,6 +515,16 @@ function main() {
     assert.equal(accepted.instruction.mode, "ask_user");
     assert.equal(accepted.instruction.nextAction.type, "brainstorm_confirmation");
     const brainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, accepted.instruction.expectedResponse.requestRef)));
+    const acceptedContractAfterRepoContext = readJson(projectFile(candidateRoot, `.loom/deliveries/delivery-preview-candidate/brainstorms/contract.json`));
+    assert.equal(acceptedContractAfterRepoContext.status, "confirmed", "Phase continuation must not downgrade the accepted Brainstorm contract.");
+    assert.equal(acceptedContractAfterRepoContext.handoff.ready, true, "Phase continuation must not rewrite the accepted Brainstorm handoff.");
+    assert.equal(brainstormRequest.knowledgeContextProtocol.queryWorkspace.scope, "current_brainstorm_request");
+    assert.equal(
+      brainstormRequest.knowledgeContextProtocol.queryWorkspace.directory.includes(`/phase-2/${brainstormRequest.requestId}/`),
+      true,
+      "Phase continuation Brainstorm knowledge query workspace must be scoped to the current phase request.",
+    );
+    assert.ok(brainstormRequest.knowledgeQueryPlan.blocks.phase_scope, "Phase continuation Brainstorm must carry knowledgeQueryPlan.");
     writeJson(projectFile(candidateRoot, brainstormRequest.outputContract.candidateFile), createDeferredScopeNonePreviewCandidate(brainstormRequest));
     const rejectedBrainstorm = runCli([
       "brainstorm", "accept",

@@ -48,15 +48,17 @@ async function loadRequest(projectRoot, requestRef) {
 }
 
 async function requestFromCommand(data, projectRoot) {
-  if (data.request) {
-    return data.request;
-  }
   const requestRef = data.requestPath ??
     data.requestRef ??
     data.executionRequestPath ??
     data.instruction?.requestRef;
-  assert.ok(requestRef, `command result must expose requestRef/requestPath: ${JSON.stringify(data, null, 2)}`);
-  return await loadRequest(projectRoot, requestRef);
+  if (requestRef) {
+    return await loadRequest(projectRoot, requestRef);
+  }
+  if (data.request) {
+    return data.request;
+  }
+  assert.fail(`command result must expose requestRef/requestPath: ${JSON.stringify(data, null, 2)}`);
 }
 
 function fieldCovers(parent, child) {
@@ -80,7 +82,7 @@ function allReadFields(agentAction) {
 }
 
 function readGroup(request, groupId) {
-  return request.agentAction.read.fieldGroups.find((group) => group.groupId === groupId);
+  return request.requestReadPlan.groups.find((group) => group.groupId === groupId);
 }
 
 function auditReadPlan(label, request, options = {}) {
@@ -90,16 +92,16 @@ function auditReadPlan(label, request, options = {}) {
   assert.equal(agentAction.read.primaryMethod, "inspect", `${label}: read.primaryMethod must be inspect`);
   assert.equal(agentAction.read.fallbackMethod, "request_manifest_refs", `${label}: read.fallbackMethod must be request_manifest_refs`);
   assert.equal(agentAction.read.fields, undefined, `${label}: legacy read.fields must not be emitted`);
-  assert.ok(Array.isArray(agentAction.read.fieldGroups), `${label}: read.fieldGroups missing`);
-  assert.ok(agentAction.read.fieldGroups.length > 0, `${label}: read.fieldGroups must not be empty`);
+  assert.equal(agentAction.read.planAuthority, "requestReadPlan.groups", `${label}: agentAction sidecar must point to root requestReadPlan`);
+  assert.equal(agentAction.read.fieldGroups, undefined, `${label}: agentAction sidecar must not duplicate requestReadPlan.groups`);
   assert.ok(request.requestReadPlan, `${label}: request root must expose requestReadPlan before sidecar fallback`);
-  assert.equal(request.requestReadPlan.authority, "agentAction.read.fieldGroups", `${label}: requestReadPlan must mirror agentAction fieldGroups`);
+  assert.equal(request.requestReadPlan.authority, "requestReadPlan.groups", `${label}: requestReadPlan must be the detailed read authority`);
   assert.ok(Array.isArray(request.requestReadPlan.groups), `${label}: requestReadPlan.groups missing`);
-  assert.equal(request.requestReadPlan.groups.length, agentAction.read.fieldGroups.length, `${label}: requestReadPlan groups must mirror fieldGroups`);
+  assert.ok(request.requestReadPlan.groups.length > 0, `${label}: requestReadPlan.groups must not be empty`);
   assert.equal(JSON.stringify(request.requestReadPlan).includes("{requestRef}"), false, `${label}: requestReadPlan commands must use the concrete requestRef, not a placeholder`);
 
   const globalFields = [];
-  for (const [index, group] of agentAction.read.fieldGroups.entries()) {
+  for (const group of request.requestReadPlan.groups) {
     assert.equal(typeof group.groupId, "string", `${label}: fieldGroup.groupId missing`);
     assert.equal(typeof group.required, "boolean", `${label}.${group.groupId}: fieldGroup.required missing`);
     assert.ok(Array.isArray(group.fields), `${label}.${group.groupId}: fields must be array`);
@@ -109,16 +111,8 @@ function auditReadPlan(label, request, options = {}) {
     assert.equal(group.readCommand?.name, "inspect", `${label}.${group.groupId}: readCommand must use inspect`);
     assert.deepEqual(
       group.readCommand?.argv,
-      ["inspect", "--request", "{requestRef}", "--field", group.fields.join(",")],
-      `${label}.${group.groupId}: readCommand argv must match fields exactly`,
-    );
-    const rootPlanGroup = request.requestReadPlan.groups[index];
-    assert.equal(rootPlanGroup.groupId, group.groupId, `${label}.${group.groupId}: requestReadPlan groupId must match agentAction`);
-    assert.deepEqual(rootPlanGroup.fields, group.fields, `${label}.${group.groupId}: requestReadPlan fields must match agentAction`);
-    assert.deepEqual(
-      rootPlanGroup.readCommand?.argv,
       ["inspect", "--request", request.requestReadPlan.requestRef, "--field", group.fields.join(",")],
-      `${label}.${group.groupId}: requestReadPlan readCommand must target the concrete requestRef`,
+      `${label}.${group.groupId}: readCommand argv must match fields exactly`,
     );
     globalFields.push(...group.fields);
   }
@@ -737,7 +731,7 @@ async function auditBrainstorm() {
     );
     assert.deepEqual(candidateRequirementSemanticRules.fields, ["rules.requirementSemanticGrounding.compactRules"], "candidate_requirement_semantic_rules must hold compact requirement semantic rule list");
     assert.deepEqual(candidateSelfReviewRules.fields, ["rules.candidateSelfReview", "rules.nextPhasePreviewGeneration"], "candidate_self_review_rules must hold narrow self-review rule fields");
-    const brainstormFields = request.agentAction.read.fieldGroups.flatMap((group) => group.fields);
+    const brainstormFields = request.requestReadPlan.groups.flatMap((group) => group.fields);
     assert.equal(brainstormFields.includes("outputContract"), false, "BrainstormSessionRequest must not read full outputContract in fieldGroups");
     assert.equal(brainstormFields.includes("outputContract.schemaShape"), false, "BrainstormSessionRequest must not read full outputContract.schemaShape in fieldGroups");
     assert.equal(brainstormFields.includes("outputContract.schemaShape.candidateRules"), false, "BrainstormSessionRequest must not read full candidateRules in fieldGroups");

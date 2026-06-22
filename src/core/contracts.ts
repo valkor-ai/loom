@@ -1867,6 +1867,8 @@ export const repositoryContextRequestSchema = z.object({
   status: z.literal("pending"),
   purpose: z.literal("generate_phase_start_repository_snapshot"),
   projectKind: projectKindSchema,
+  repositoryMode: z.enum(["empty_project", "existing_project", "unknown"]),
+  phaseDevelopmentMode: z.enum(["initial_delivery", "incremental_delivery", "unknown"]),
   source: z.record(z.unknown()),
   referencedArtifactReadGuide: referencedArtifactReadGuideSchema.optional(),
   scanPurpose: z.record(z.unknown()),
@@ -1904,6 +1906,9 @@ export const repositoryContextSchema = z.object({
   }),
   requestLens: z.object({
     projectKind: projectKindSchema,
+    baselineProjectKind: projectKindSchema,
+    repositoryMode: z.enum(["empty_project", "existing_project", "unknown"]),
+    phaseDevelopmentMode: z.enum(["initial_delivery", "incremental_delivery", "unknown"]),
     scanPurpose: z.literal("phase_start_repository_snapshot"),
     primaryConsumer: z.literal("phase_brainstorm"),
     laterConsumers: z.array(z.enum(["PGC", "AAC", "TaskPlan"])).default([]),

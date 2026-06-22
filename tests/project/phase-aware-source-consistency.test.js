@@ -42,6 +42,9 @@ function writeRepositoryContext(root, deliveryId, phaseId) {
     },
     requestLens: {
       projectKind: "existing_project",
+      baselineProjectKind: "existing_project",
+      repositoryMode: "existing_project",
+      phaseDevelopmentMode: "initial_delivery",
       scanPurpose: "phase_start_repository_snapshot",
       primaryConsumer: "phase_brainstorm",
       laterConsumers: ["PGC", "AAC", "TaskPlan"],

@@ -98,7 +98,9 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
     if (!(key in manifest)) {
       continue;
     }
-    const value = manifest[key];
+    const value = key === "agentAction" && requestReadPlan
+      ? compactAgentActionReadPlan(manifest[key])
+      : manifest[key];
     if (value === undefined || value === null) {
       continue;
     }
@@ -136,6 +138,32 @@ async function buildRequestManifest<T extends Record<string, unknown>>(
     },
   });
   return manifest as T;
+}
+
+function compactAgentActionReadPlan(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.read)) {
+    return value;
+  }
+  const read = value.read;
+  const required = Array.isArray(read.required)
+    ? read.required.filter((item): item is string => typeof item === "string")
+    : [];
+  const optional = Array.isArray(read.optional)
+    ? read.optional.filter((item): item is string => typeof item === "string")
+    : undefined;
+  return {
+    ...value,
+    read: {
+      required,
+      ...(optional ? { optional } : {}),
+      displayPolicy: typeof read.displayPolicy === "string" ? read.displayPolicy : "compact",
+      primaryMethod: "inspect",
+      fallbackMethod: "request_manifest_refs",
+      planAuthority: "requestReadPlan.groups",
+      fieldGroupsOmittedReason: "Detailed grouped reads are stored once on the request root at requestReadPlan.groups.",
+      fallbackRule: "Read root requestReadPlan.groups first. Use this agentAction sidecar for write, submit, schema, and stopConditions, not as a second detailed read plan.",
+    },
+  };
 }
 
 function buildInlineRequestReadPlan(
@@ -176,7 +204,7 @@ function buildInlineRequestReadPlan(
   }
   return {
     schemaVersion: "1.0",
-    authority: "agentAction.read.fieldGroups",
+    authority: "requestReadPlan.groups",
     primaryMethod: "loom inspect",
     requestRef,
     groups,
@@ -197,8 +225,8 @@ function refManifestMetadata(key: string): {
 } {
   const metadata: Record<string, { purpose: string; requiredSelectors?: string[]; rule?: string }> = {
     agentAction: {
-      purpose: "Primary agent action map: what to read, what to write, and how to submit.",
-      requiredSelectors: [".actionKind", ".read", ".write", ".submit", ".schema"],
+      purpose: "Primary agent action map for write, submit, schema, and stop conditions. Detailed grouped reads live on root requestReadPlan.groups for new requests.",
+      requiredSelectors: [".actionKind", ".read.planAuthority", ".write", ".submit", ".schema"],
       rule: "Do not read this full sidecar to discover the read plan when requestReadPlan is present on the request root.",
     },
     outputContract: {
@@ -220,7 +248,7 @@ function refManifestMetadata(key: string): {
       requiredSelectors: [".*Ref"],
     },
     contextProjection: {
-      purpose: "Request-scoped projection of existing authority artifacts for the current operation. Read only the fields listed in agentAction.read.fieldGroups.",
+      purpose: "Request-scoped projection of existing authority artifacts for the current operation. Read only the fields listed in root requestReadPlan.groups.",
       rule: "This is not a parallel authority model. Use requestReadPlan/inspect groups to read selected fields; do not print this full sidecar.",
     },
     enumRefs: {

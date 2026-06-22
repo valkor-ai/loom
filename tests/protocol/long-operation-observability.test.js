@@ -240,12 +240,12 @@ function main() {
     assert.equal(archRequest.agentAction.write.currentTarget.candidateFile, archRequest.outputContract.sectionOutputs[0].candidateFile);
     assert.ok(archRequest.agentAction.write.currentTarget.schemaShape, "Current section target must carry its schemaShape.");
     assert.equal(
-      archRequest.agentAction.read.fieldGroups.some((group) => group.fields.includes("outputContract.sectionOutputs")),
+      archRequest.requestReadPlan.groups.some((group) => group.fields.includes("outputContract.sectionOutputs")),
       false,
       "Single-section architecture read plan must not include the full sectionOutputs schema set.",
     );
     assert.ok(
-      archRequest.agentAction.read.fieldGroups.some((group) => group.fields.includes("agentAction.write.currentTarget")),
+      archRequest.requestReadPlan.groups.some((group) => group.fields.includes("agentAction.write.currentTarget")),
       "Architecture agentAction read plan must expose the current single-section target as a fieldGroup",
     );
     const initialTargetInspect = run(["inspect", "--request", arch.requestPath, "--field", "agentAction.write.currentTarget"], root).data.fields["agentAction.write.currentTarget"].value;
@@ -289,7 +289,7 @@ function main() {
     assert.equal(storedArchRequest.agentAction.write.currentTarget.candidateFile, decision.instruction.targetCandidateFile);
     assert.ok(storedArchRequest.agentAction.write.currentTarget.schemaShape, "Recovered current section target must carry its schemaShape.");
     assert.equal(
-      storedArchRequest.agentAction.read.fieldGroups.some((group) => group.fields.includes("outputContract.sectionOutputs")),
+      storedArchRequest.requestReadPlan.groups.some((group) => group.fields.includes("outputContract.sectionOutputs")),
       false,
       "Recovered single-section architecture read plan must not include the full sectionOutputs schema set.",
     );

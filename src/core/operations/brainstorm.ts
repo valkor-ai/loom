@@ -1853,7 +1853,7 @@ function brainstormEnumRefs(): Record<string, string[]> {
   };
 }
 
-function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
+export function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
   const runCommand = {
     name: "knowledge brainstorm-context" as const,
     argv: ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
@@ -1997,7 +1997,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
   };
 }
 
-function brainstormKnowledgeContextProtocol(queryWorkspaceDirectory: string): BrainstormKnowledgeContextProtocol {
+export function brainstormKnowledgeContextProtocol(queryWorkspaceDirectory: string): BrainstormKnowledgeContextProtocol {
   return {
     status: "enabled",
     purpose: "Optional block-scoped knowledge context for Brainstorm clarification. Follow knowledgeQueryPlan to decide query order and subjects. Knowledge helps the agent discover clarification points, but only user-confirmed conclusions may enter BrainstormCandidate.",
