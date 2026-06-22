@@ -28,7 +28,7 @@ export function createInspectHandler(options: {
     const requestRef = options.request.trim();
     const fields = parseFields(options.field);
     const requestFile = resolveProjectFile(ctx.projectRoot, requestRef);
-    const request = await readJsonFile(requestFile);
+    const request = await hydrateRequestManifest(ctx.projectRoot, requestFile);
     if (!isRecord(request)) {
       throw invalidArgument("inspect request must point to a JSON object.", {
         requestRef,
@@ -151,6 +151,20 @@ async function resolveRequestField(
 
   const manifestRefs = requestManifestRefs(request);
   const rootKey = parts[0];
+  if (rootKey === "agentAction" && rootKey in request) {
+    const normalizedRequest = {
+      ...request,
+      agentAction: normalizeAgentActionForRequest(request.agentAction, request),
+    };
+    return {
+      status: "resolved",
+      value: selectValue(normalizedRequest, parts),
+      resolvedRefKey: null,
+      resolvedRef: null,
+      selector: `.${parts.join(".")}`,
+      source: "request_root",
+    };
+  }
   if (rootKey === "contextRefs" && parts.length >= 2) {
     const contextRefs = request.contextRefs;
     const refKey = parts[1];
@@ -429,11 +443,9 @@ async function buildInspectRecovery(
     status: "field_not_found_use_request_read_plan",
     requestedFields,
     requestRef,
-    readPlanAuthority: readPlan.source === "request_read_plan" ? "requestReadPlan.groups" : "agentAction.read.fieldGroups",
+    readPlanAuthority: "requestReadPlan.groups",
     readPlanSource: readPlan.source,
-    ...(readPlan.source !== "request_read_plan" ? { agentActionSource: readPlan.source } : {}),
-    ...(readPlan.ref ? { agentActionRef: readPlan.ref } : {}),
-    ...(readPlan.readError ? { agentActionReadError: readPlan.readError } : {}),
+    ...(readPlan.readError ? { requestReadPlanReadError: readPlan.readError } : {}),
     availableFieldGroups: readPlan.availableFieldGroups,
     recommendedNextRead: requiredGroup
       ? {
@@ -442,7 +454,7 @@ async function buildInspectRecovery(
         commandInvocation: requiredGroup.commandInvocation,
       }
       : {
-        reason: "No agentAction.read.fieldGroups were found. Read requestManifest refs for the required root keys before falling back to the request file.",
+        reason: "No requestReadPlan.groups were found. Read requestManifest refs for the required root keys before falling back to the request file.",
         commandInvocation: {
           name: "inspect",
           argv: ["inspect", "--request", requestRef, "--field", "requestManifest"],
@@ -452,7 +464,7 @@ async function buildInspectRecovery(
       },
     fallbackRule: "If the recommended inspect command fails, read the listed fieldGroup fields through requestManifest refs and targeted selectors. If the read plan is missing or unreadable, read requestRef and requestManifest refs directly as a correctness fallback while keeping chat output compact.",
     doNot: [
-      "Do not guess old wrapper fields such as phaseScopePrompt, data, contract, objective, scope, or outputContract when they are not listed in requestReadPlan.groups or agentAction.read.fieldGroups.",
+      "Do not guess old wrapper fields such as phaseScopePrompt, data, contract, objective, scope, or outputContract when they are not listed in requestReadPlan.groups.",
       "Do not run broad searches over $HOME/.loom, .codex, node_modules, unrelated test directories, or the whole project to discover request fields.",
       "Do not print full .loom request, TaskPlan, run, result, or ref JSON into chat.",
     ],

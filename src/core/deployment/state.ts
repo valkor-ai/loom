@@ -6,6 +6,7 @@ import { readJsonFile, readJsonWithSchemaVersion, writeJsonAtomic } from "../sta
 import { hydrateRequestManifest, writeRequestManifestAtomic } from "../operations/request-manifest";
 import { DEFAULT_DEPLOY_REPAIR_MAX_ATTEMPTS } from "./constants";
 import { getDeploymentPaths, getDeploymentRepairPaths } from "./paths";
+import { buildDeploymentTopology } from "./topology";
 import type {
   DeployExecutionRepairRequest,
   DeployExecutionRepairTaskResult,
@@ -278,6 +279,34 @@ const deploymentSourceModelSchema = z.object({
   notes: z.array(z.string()).default([]),
 });
 
+const deploymentRouteSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("static-spa"),
+    publicPath: z.literal("/"),
+    targetServiceId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("http-proxy"),
+    publicPath: z.string().min(1),
+    targetServiceId: z.string().min(1),
+    targetPort: z.number().int().positive(),
+    preservePath: z.literal(true),
+  }),
+]);
+
+const deploymentTopologySchema = z.object({
+  schemaVersion: z.literal(1),
+  publicEntryServiceId: z.string().min(1),
+  routes: z.array(deploymentRouteSchema).default([]),
+  validation: z.object({
+    previewPaths: z.array(z.string().min(1)).default(["/"]),
+    apiPaths: z.array(z.string().min(1)).default([]),
+  }).default({
+    previewPaths: ["/"],
+    apiPaths: [],
+  }),
+}).optional();
+
 const deploymentCodeEvidenceSummarySchema = z.object({
   ref: z.string().min(1),
   fingerprint: z.string().min(1),
@@ -356,10 +385,12 @@ const deploymentSpecSchema = z.preprocess(normalizeLegacyDeploymentSpecInput, z.
   compose: deploymentComposeInfoSchema,
   runtimeContract: deploymentRuntimeContractSchema,
   sourceModel: deploymentSourceModelSchema.optional(),
+  topology: deploymentTopologySchema,
   codeEvidence: deploymentCodeEvidenceSummarySchema,
   files: z.object({
     dockerfilePath: z.string().min(1).nullable(),
     dockerfilePaths: z.record(z.string()).default({}),
+    nginxConfigPaths: z.record(z.string()).default({}),
     composePath: z.string().min(1),
     dockerignorePath: z.string().min(1).nullable(),
     buildContextPath: z.string().min(1).default("."),
@@ -399,9 +430,8 @@ const deploymentSpecSchema = z.preprocess(normalizeLegacyDeploymentSpecInput, z.
     logs: z.array(z.string()),
     status: z.array(z.string()),
   }),
-})).transform(({ legacyCodeProbe, ...spec }) => ({
-  ...spec,
-  runtimeContract: spec.runtimeContract ?? {
+})).transform(({ legacyCodeProbe, ...spec }) => {
+  const runtimeContract = spec.runtimeContract ?? {
     source: "heuristic" as const,
     ref: null,
     status: "heuristic" as const,
@@ -423,17 +453,25 @@ const deploymentSpecSchema = z.preprocess(normalizeLegacyDeploymentSpecInput, z.
     frontend: null,
     api: null,
     dependencyServices: [],
-  },
-  sourceModel: spec.sourceModel ?? sourceModelFromLegacySpec({ files: spec.files, legacyCodeProbe }),
-  files: {
+  };
+  const sourceModel = spec.sourceModel ?? sourceModelFromLegacySpec({ files: spec.files, legacyCodeProbe });
+  const files = {
     ...spec.files,
     dockerfilePaths: Object.keys(spec.files.dockerfilePaths).length > 0
       ? spec.files.dockerfilePaths
       : spec.files.dockerfilePath && legacyCodeProbe
         ? { app: spec.files.dockerfilePath }
         : {},
-  },
-}));
+    nginxConfigPaths: spec.files.nginxConfigPaths,
+  };
+  return {
+    ...spec,
+    runtimeContract,
+    sourceModel,
+    topology: spec.topology ?? buildDeploymentTopology({ runtimeContract, sourceModel }),
+    files,
+  };
+});
 
 const deploymentStateSchema = z.object({
   schemaVersion: z.literal(1),
@@ -481,6 +519,7 @@ const deploymentRepairRequestSchema = z.object({
     "application_startup_failed",
     "http_probe_failed",
     "preview_not_verified",
+    "api_route_not_verified",
     "deploy_asset_invalid",
     "logs",
     "unknown",
@@ -546,6 +585,7 @@ const deploymentFailureKindSchema = z.enum([
   "application_startup_failed",
   "http_probe_failed",
   "preview_not_verified",
+  "api_route_not_verified",
   "deploy_asset_invalid",
   "logs",
   "unknown",

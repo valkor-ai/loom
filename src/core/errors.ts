@@ -246,7 +246,7 @@ function genericFailureRecovery(context: FailureRecoveryContext, failureKind: st
       },
       {
         step: "repair_targeted_artifact",
-        instruction: "When the failed command or recovered instruction names a candidateFile, resultFile, inputFile, requestRef, or requestId, repair that exact artifact/request path. Use requestReadPlan groups first when a requestRef is present; if absent, use the request's agentAction.read.fieldGroups inspect commands as compatibility fallback.",
+        instruction: "When the failed command or recovered instruction names a candidateFile, resultFile, inputFile, requestRef, or requestId, repair that exact artifact/request path. Use requestReadPlan.groups when a requestRef is present.",
         completeWhen: "the exact target artifact is repaired and its submit command succeeds, or the CLI returns a non-repairable/user-gated result.",
       },
     ],

@@ -885,7 +885,7 @@ function brainstormMissingClarificationInstruction(
     userMessage: "BrainstormCandidate is incomplete because one or more progressive clarification blocks have not been confirmed. Continue the Brainstorm conversation with the next missing block; do not repair JSON or rerun brainstorm accept until final_summary is explicitly confirmed.",
     expectedResponse: {
       kind: "brainstorm_progressive_clarification",
-      rule: "Treat the failed accept as an early-submit signal, not a JSON repair task. Read requestRef through requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups, present the next missing Brainstorm block to the user, and continue the progressive conversation. Only after final_summary is explicitly confirmed should you read candidate_write_contract, write BrainstormCandidate, and run brainstorm accept.",
+      rule: "Treat the failed accept as an early-submit signal, not a JSON repair task. Read requestRef through requestReadPlan.groups, present the next missing Brainstorm block to the user, and continue the progressive conversation. Only after final_summary is explicitly confirmed should you read candidate_write_contract, write BrainstormCandidate, and run brainstorm accept.",
       requestReadRule: brainstormAskUserReadStep,
       requestRef,
       currentTurnAnswerRule: {
@@ -1853,7 +1853,7 @@ function brainstormEnumRefs(): Record<string, string[]> {
   };
 }
 
-function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
+export function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
   const runCommand = {
     name: "knowledge brainstorm-context" as const,
     argv: ["knowledge", "brainstorm-context", "--query-file", "{queryFile}"],
@@ -1997,7 +1997,7 @@ function brainstormKnowledgeQueryPlan(): BrainstormKnowledgeQueryPlan {
   };
 }
 
-function brainstormKnowledgeContextProtocol(queryWorkspaceDirectory: string): BrainstormKnowledgeContextProtocol {
+export function brainstormKnowledgeContextProtocol(queryWorkspaceDirectory: string): BrainstormKnowledgeContextProtocol {
   return {
     status: "enabled",
     purpose: "Optional block-scoped knowledge context for Brainstorm clarification. Follow knowledgeQueryPlan to decide query order and subjects. Knowledge helps the agent discover clarification points, but only user-confirmed conclusions may enter BrainstormCandidate.",

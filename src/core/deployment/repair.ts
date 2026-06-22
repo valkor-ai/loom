@@ -329,6 +329,10 @@ function suggestedActionsFor(
     actions.push("Edit only the deployment files listed in editableFiles, then rerun loom deploy up.");
   }
 
+  if (failureKind === "api_route_not_verified") {
+    actions.push("Keep the public frontend entry as the only exposed service and route API paths to the backend service through the deployment topology.");
+  }
+
   if (spec.environment.missing.length > 0) {
     actions.push(`Review missing environment variables before retrying: ${spec.environment.missing.map((variable) => variable.name).join(", ")}.`);
   }
@@ -369,9 +373,10 @@ function editableFilesFor(spec: DeploymentSpec, failureKind: DeploymentFailureKi
 
   return [
     spec.files.composePath,
-    ...(spec.files.dockerfilePath ? [spec.files.dockerfilePath] : []),
+    ...Object.values(spec.files.dockerfilePaths),
+    ...Object.values(spec.files.nginxConfigPaths),
     ...(spec.files.dockerignorePath ? [spec.files.dockerignorePath] : []),
-  ];
+  ].filter((item, index, items) => items.indexOf(item) === index);
 }
 
 function protectedFilesFor(spec: DeploymentSpec): string[] {
@@ -402,6 +407,8 @@ function instructionFor(spec: DeploymentSpec, failureKind: DeploymentFailureKind
     case "http_probe_failed":
     case "preview_not_verified":
       return "Deploy cannot repair this by editing generated deployment assets. Route this application-code/runtime delivery failure through repair request --type execution --source deploy using the latest failure report.";
+    case "api_route_not_verified":
+      return `${base} Focus on the public entry service, generated nginx proxy routes, Compose service names, internal backend port, and depends_on wiring. Do not edit application API handlers for this failure.`;
     case "deploy_asset_invalid":
       return `${base} Focus only on generated Dockerfile, Compose, dockerignore, healthcheck, port, and environment injection.`;
     case "logs":
@@ -441,6 +448,13 @@ function failedContractFor(
       workingDirectory,
     };
   }
+  if (failureKind === "api_route_not_verified") {
+    return {
+      field: "deploymentTopology.apiRoutes",
+      command: null,
+      workingDirectory,
+    };
+  }
   if (failureKind === "application_startup_failed") {
     return {
       field: "runtime.startup",
@@ -461,6 +475,7 @@ function failedAtFor(failureKind: DeploymentFailureKind): string {
   if (failureKind === "application_startup_failed") return "runtime_application_startup";
   if (failureKind === "http_probe_failed") return "runtime_http_probe";
   if (failureKind === "preview_not_verified") return "runtime_preview_probe";
+  if (failureKind === "api_route_not_verified") return "runtime_api_route_probe";
   if (failureKind === "healthcheck") return "runtime_healthcheck";
   return "deployment_runtime_validation";
 }

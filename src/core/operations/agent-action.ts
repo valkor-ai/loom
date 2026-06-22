@@ -123,7 +123,7 @@ export function brainstormSessionAgentActionContract(input: {
     : [];
   return agentActionContract({
     actionKind: "brainstorm_session",
-    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary, read the request through root requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups inspect commands. Continue through phase_scope, concept_grounding, frontend_experience, and final_summary in chat. Write and submit BrainstormCandidate only after the user explicitly confirms the dedicated final_summary block. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
+    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary, read the request through root requestReadPlan.groups inspect commands. Continue through phase_scope, concept_grounding, frontend_experience, and final_summary in chat. Write and submit BrainstormCandidate only after the user explicitly confirms the dedicated final_summary block. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
     read: {
       required: [
         "this request",
@@ -157,7 +157,7 @@ export function brainstormSessionAgentActionContract(input: {
         "Write only outputContract.candidateFile for a confirmed BrainstormCandidate after final_summary has been presented and explicitly confirmed by the user.",
         "If blocked, write only blockedOutput.candidateFile when present.",
         "Do not write accepted Brainstorm contract files directly.",
-        "Do not base BrainstormCandidate fields on null values returned from guessed selectors; return to agentAction.read.fieldGroups and sourceFieldAccessHints.",
+        "Do not base BrainstormCandidate fields on null values returned from guessed selectors; return to requestReadPlan.groups and sourceFieldAccessHints.",
       ],
     },
     submit: {
