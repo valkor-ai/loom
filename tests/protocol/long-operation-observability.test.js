@@ -244,10 +244,10 @@ function main() {
       false,
       "Single-section architecture read plan must not include the full sectionOutputs schema set.",
     );
-    assert.ok(
-      archRequest.requestReadPlan.groups.some((group) => group.fields.includes("agentAction.write.currentTarget")),
-      "Architecture agentAction read plan must expose the current single-section target as a fieldGroup",
-    );
+	    assert.ok(
+	      archRequest.requestReadPlan.groups.some((group) => group.fields.includes("agentAction.write.currentTarget")),
+	      "Architecture requestReadPlan must expose the current single-section target as a fieldGroup",
+	    );
     const initialTargetInspect = run(["inspect", "--request", arch.requestPath, "--field", "agentAction.write.currentTarget"], root).data.fields["agentAction.write.currentTarget"].value;
     assert.equal(initialTargetInspect.section, "foundation");
     assert.equal(initialTargetInspect.candidateFile, archRequest.outputContract.sectionOutputs[0].candidateFile);

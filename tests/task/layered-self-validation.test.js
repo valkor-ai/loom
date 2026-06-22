@@ -229,7 +229,7 @@ function assertBrainstormStartInstruction(instruction, requestPath, label) {
   assert.equal(instruction?.submitCommand, undefined, `${label}: ask_user instruction must not expose brainstorm submitCommand before final_summary confirmation`);
   assert.equal(instruction?.requestReadProtocol?.authority, "requestReadPlan", `${label}: instruction must expose requestReadPlan-first request read protocol`);
   assert.ok(
-    instruction?.requestReadProtocol?.readRule?.includes("agentAction.read.fieldGroups"),
+    instruction?.requestReadProtocol?.readRule?.includes("requestReadPlan.groups"),
     `${label}: instruction must require Brainstorm ask_user inspect read plan`,
   );
   assert.ok(
@@ -249,10 +249,7 @@ function assertBrainstormStartInstruction(instruction, requestPath, label) {
 
 function assertBrainstormRequestReadPlan(request, label) {
   assert.equal(request?.agentAction?.actionKind, "brainstorm_session", `${label}: Brainstorm request must expose agentAction`);
-  assert.equal(request?.agentAction?.read?.primaryMethod, "inspect", `${label}: Brainstorm request must prefer inspect reads`);
-  assert.equal(request?.agentAction?.read?.fields, undefined, `${label}: Brainstorm request must not expose legacy read.fields`);
-  assert.equal(request?.agentAction?.read?.planAuthority, "requestReadPlan.groups", `${label}: Brainstorm agentAction must point to root requestReadPlan`);
-  assert.equal(request?.agentAction?.read?.fieldGroups, undefined, `${label}: Brainstorm agentAction must not duplicate root requestReadPlan groups`);
+  assert.equal(request?.agentAction?.read, undefined, `${label}: Brainstorm agentAction must not expose a read contract`);
   const groups = request?.requestReadPlan?.groups ?? [];
   assert.ok(Array.isArray(groups) && groups.length > 0, `${label}: Brainstorm requestReadPlan must expose groups`);
   assert.ok(
@@ -578,7 +575,7 @@ function assertExecuteTaskInstruction(data, label) {
   assert.equal(data.instruction?.runtimeForegroundProbeCloseoutRules, undefined, `${label}: instruction must not duplicate runtime closeout rules`);
   assert.equal(data.instruction?.verificationCommandSchedulingRules, undefined, `${label}: instruction must not duplicate verification scheduling rules`);
   assert.ok(data.instruction?.finalResponseGuard?.invalidFinalResponseWhen, `${label}: instruction must expose final response guard`);
-  assert.ok(data.instruction?.requestReadProtocol?.readRule?.includes("agentAction.read.fieldGroups"), `${label}: instruction must route rule reads through request refs`);
+  assert.ok(data.instruction?.requestReadProtocol?.readRule?.includes("requestReadPlan.groups"), `${label}: instruction must route rule reads through requestReadPlan`);
   assert.ok(
     data.instruction?.routingRule?.includes("Progress-only summaries are not completion"),
     `${label}: routingRule must forbid progress-only task stops`,
@@ -2259,7 +2256,7 @@ function main() {
     assertRequestOutputParentDirsExist(root, taskPlanRequestBody, "TaskPlanGroupedGenerationRequest");
     assertTaskPlanVerificationEvidenceProtocol(taskPlanRequestBody, "TaskPlanGroupedGenerationRequest");
     assert.ok(
-      taskPlanRequestBody.agentAction.read.required.includes("contextProjection.requirementDetailTransfer"),
+      allReadFields(taskPlanRequestBody).includes("contextProjection.requirementDetailTransfer"),
       "TaskPlan request must require reading requirementDetailTransfer.",
     );
     assert.ok(
@@ -2372,10 +2369,10 @@ function main() {
     );
     assertRequestProtocol(executionRequest, "TaskExecutionRequest", { expectBlocked: true, allowProjectModification: true });
     assertSourceEditPreparationContract(executionRequest, "TaskExecutionRequest");
-    assert.ok(executionRequest.agentAction.read.required.some((item) => item.includes("taskConceptGrounding")));
+    assert.ok(allReadFields(executionRequest).some((item) => item.includes("taskConceptGrounding")));
     assert.ok(executionRequest.agentAction.write.rules.some((rule) => rule.includes("conceptEvidence")));
     assert.ok(
-      executionRequest.agentAction.read.required.includes("sourceContext.requirementDetailSnapshot"),
+      allReadFields(executionRequest).includes("sourceContext.requirementDetailSnapshot"),
       "TaskExecutionRequest must require reading task-scoped requirement detail snapshot when TaskPlan assigned detail refs.",
     );
     assert.ok(
@@ -2445,10 +2442,10 @@ function main() {
     assert.equal(review.instruction.autoContinue, true, "review request must auto-continue");
     assert.equal(review.instruction.requestRef, review.requestPath);
     assert.equal(review.instruction.resultFile, reviewRequest.outputContract.resultFile);
-    assert.ok(reviewRequest.agentAction.read.required.includes("conceptReviewMatrix"));
-    assert.ok(reviewRequest.agentAction.read.required.includes("detailReviewMatrix"));
-    assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.conceptReviewRules"));
-    assert.ok(reviewRequest.agentAction.read.required.includes("outputContract.requirementDetailReview"));
+    assert.ok(allReadFields(reviewRequest).includes("conceptReviewMatrix"));
+    assert.ok(allReadFields(reviewRequest).includes("detailReviewMatrix"));
+    assert.ok(allReadFields(reviewRequest).includes("outputContract.conceptReviewRules"));
+    assert.ok(allReadFields(reviewRequest).includes("outputContract.requirementDetailReview"));
     assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("conceptRef from conceptReviewMatrix")));
     assert.ok(reviewRequest.agentAction.write.rules.some((rule) => rule.includes("detailReviewMatrix")));
     assert.ok(

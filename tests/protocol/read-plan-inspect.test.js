@@ -995,11 +995,11 @@ for (const file of [
   "plugins/claude-code/skills/loom-deploy/SKILL.md",
   "plugins/opencode/.opencode/commands/loom-deploy.md",
 ]) {
-  assertIncludes(file, "requestReadPlan", `${file}: adapter must prefer root requestReadPlan.`);
-  assertIncludes(file, "agentAction.read.fieldGroups", `${file}: adapter must mention structured read field groups.`);
-  assertIncludes(file, "inspect", `${file}: adapter must mention inspect.`);
-  assertIncludes(file, "fallback", `${file}: adapter must mention fallback.`);
-}
+	  assertIncludes(file, "requestReadPlan", `${file}: adapter must prefer root requestReadPlan.`);
+	  assertIncludes(file, "older requests without `requestReadPlan`", `${file}: adapter must limit agentAction.read fallback to older requests.`);
+	  assertIncludes(file, "inspect", `${file}: adapter must mention inspect.`);
+	  assertIncludes(file, "fallback", `${file}: adapter must mention fallback.`);
+	}
 
 assertIncludes("src/core/operations/output-policy.ts", "agentAction.read.fieldGroups", "output policy must route agents through read field groups.");
 assertIncludes("src/core/operations/output-policy.ts", "inspect readCommand", "output policy must mention inspect readCommand.");

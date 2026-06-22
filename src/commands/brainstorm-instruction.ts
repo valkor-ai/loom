@@ -20,7 +20,7 @@ export function brainstormStartInstruction(result: BrainstormStartResult): Recor
     userMessage: "Read the BrainstormSessionRequest through requestRef, then present the next required Brainstorm clarification block. Write and submit BrainstormCandidate only after the user confirms the dedicated final_summary block.",
     expectedResponse: {
       kind: "brainstorm_progressive_clarification",
-      rule: "Agent manages the Brainstorm conversation. Read requestRef and its requestManifest refs for agentAction, rules, context refs, keyword hints, concept grounding, and frontend clarification protocol. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read outputContract/generationProtocol/enumRefs, write BrainstormCandidate, and run submitCommand only after the user explicitly confirms the dedicated final_summary block.",
+      rule: "Agent manages the Brainstorm conversation. Read requestRef through requestReadPlan.groups inspect commands. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read outputContract/generationProtocol/enumRefs, write BrainstormCandidate, and run submitCommand only after the user explicitly confirms the dedicated final_summary block.",
       requestReadRule: brainstormAskUserReadStep,
       requestRef: result.requestPath,
       currentTurnAnswerRule: {

@@ -256,7 +256,7 @@ export function sourceEditPreparationContract(input: {
       {
         step: 1,
         name: "collect_required_context",
-        requiredAction: "Read the required agentAction.read.fieldGroups and the current source files that will be changed before deciding edit content.",
+        requiredAction: "Read the required requestReadPlan.groups and the current source files that will be changed before deciding edit content.",
       },
       {
         step: 2,

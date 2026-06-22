@@ -321,7 +321,10 @@ function main() {
     assert.ok(request.sourceRefs.planningContractRef);
     assert.ok(request.sourceRefs.confirmedFrontendExperienceRef);
     assert.equal(request.frontendExperienceSource.confirmedFrontendExperienceRef, request.sourceRefs.confirmedFrontendExperienceRef);
-    assert.ok(request.agentAction.read.required.some((item) => item.includes("frontendExperienceSource")));
+    assert.ok(
+      request.requestReadPlan.groups.flatMap((group) => group.fields ?? []).some((field) => field.includes("frontendExperienceSource")),
+      "Architecture requestReadPlan must expose frontendExperienceSource fields.",
+    );
     assert.ok(request.fieldAccessHints.compactJqExamples.some((example) => example.includes(".outputContract.sectionOutputs")));
     assert.equal(request.outputContract.allowedRefsUsage.exactOnly, true);
     assert.ok(request.agentAction.write.rules.some((rule) => rule.includes("allowedRefs.acceptanceRefs")));
@@ -956,7 +959,7 @@ function main() {
     assert.equal(Object.prototype.hasOwnProperty.call(nextTask.instruction, "executionSteps"), false);
     assert.equal(nextTask.instruction.runtimeCommandGuard, undefined);
     assert.equal(nextTask.instruction.verificationCommandSchedulingRules, undefined);
-    assert.ok(nextTask.instruction.requestReadProtocol.readRule.includes("agentAction.read.fieldGroups"));
+    assert.ok(nextTask.instruction.requestReadProtocol.readRule.includes("requestReadPlan.groups"));
     assert.ok(executionRequest.executionRules.rules.some((rule) => /temporary local runtime, dev server, preview server, container, or probe process/.test(rule)));
     assert.ok(executionRequest.executionRules.rules.some((rule) => /write-producing verification commands/.test(rule)));
     assert.ok(executionRequest.executionRules.rules.some((rule) => /Never run long-lived runtime\/server commands/.test(rule)));

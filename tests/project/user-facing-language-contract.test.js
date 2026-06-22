@@ -34,9 +34,9 @@ assert.ok(
   "language constraint must not force technical identifiers to be translated",
 );
 assert.equal(
-  request.agentAction.read.required.includes("userFacingLanguage"),
+  request.requestReadPlan.groups.some((group) => group.fields.includes("userFacingLanguage")),
   true,
-  "Brainstorm agentAction must require reading userFacingLanguage",
+  "Brainstorm requestReadPlan must require reading userFacingLanguage",
 );
 
 const phaseScopeCoreGroup = request.requestReadPlan.groups.find((group) => group.groupId === "brainstorm_session_phase_scope_core");

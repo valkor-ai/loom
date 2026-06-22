@@ -38,8 +38,8 @@ function assertRecovery(envelope, label) {
     `${label}: recovery must provide an executable continue command.`,
   );
   assert.ok(
-    recovery.requiredSteps.some((step) => step.instruction.includes("agentAction.read.fieldGroups")),
-    `${label}: recovery must route request reads through fieldGroups when a requestRef exists.`,
+    recovery.requiredSteps.some((step) => step.instruction.includes("requestReadPlan.groups")),
+    `${label}: recovery must route request reads through requestReadPlan when a requestRef exists.`,
   );
   assert.ok(
     recovery.fallbackWhenStatusFails.allowedReadClasses.some((entry) =>

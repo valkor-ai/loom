@@ -112,8 +112,8 @@ assertIncludes(
 );
 assertIncludes(
   "src/core/operations/output-policy.ts",
-  "agentAction.read.fieldGroups",
-  "auto-runnable instructions must tell agents to use structured read fields",
+  "requestReadPlan.groups",
+  "auto-runnable instructions must tell agents to use root request read groups",
 );
 assertIncludes(
   "src/core/operations/output-policy.ts",
@@ -173,7 +173,7 @@ assertIncludes(
 assertIncludes(
   "src/core/operations/agent-action.ts",
   "brainstormSessionAgentActionContract",
-  "BrainstormSessionRequest must use a shared agentAction read plan",
+  "BrainstormSessionRequest must use a shared read contract source",
 );
 assertIncludes(
   "src/core/operations/agent-action.ts",

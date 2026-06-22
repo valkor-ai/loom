@@ -50,7 +50,7 @@ export function architectureSingleSectionCompletionBarrier(targetCandidateFile: 
 export function architectureSingleSectionRequiredSteps(): string[] {
   return [
     "read instruction.requestRef and its root requestReadPlan when present",
-    "use requestReadPlan.groups inspect commands for required ArchitectureSections fields; if absent, use agentAction.read.fieldGroups as compatibility fallback",
+    "use requestReadPlan.groups inspect commands for required ArchitectureSections fields",
     "the current section schema lives in agentAction.write.currentTarget.schemaShape or the matching requestReadPlan field value",
     "write only instruction.targetSection to instruction.targetCandidateFile",
     "run instruction.completionBarrier.followUpCommand.commandInvocation immediately after targetCandidateFile exists",

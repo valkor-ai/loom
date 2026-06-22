@@ -583,23 +583,26 @@ try {
   assert.deepEqual(guidance?.unresolvedBindingInputs, []);
   assert.equal(guidance?.executionGuidanceIsNonBlocking, undefined, "non-blocking flag belongs to executionRules, not task guidance.");
 
-  const readPlan = run([
-    "inspect",
-    "--request",
-    next.executionRequestPath,
-    "--field",
-    "agentAction.read.required",
-  ], projectRoot);
-  const requiredReads = fieldValue(readPlan, "agentAction.read.required");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"), "agent read plan must name frontendBackendBindings.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs"), "agent read plan must name unresolved binding inputs.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"), "agent read plan must name workflow closure refs.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource"), "agent read plan must name workflow closure detail source.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.operationPathsInScope"), "agent read plan must name operation paths.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataViewsInScope"), "agent read plan must name data views.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.actionsInScope"), "agent read plan must name frontend actions.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation"), "agent read plan must name data-binding expectations for closure tasks.");
-  assert.ok(requiredReads.includes("sourceContext.architectureArtifactProjection"), "agent read plan must require task-scoped AAC projection.");
+	  const readPlan = run([
+	    "inspect",
+	    "--request",
+	    next.executionRequestPath,
+	    "--field",
+	    "requestReadPlan.groups",
+	  ], projectRoot);
+	  const requiredReads = fieldValue(readPlan, "requestReadPlan.groups").flatMap((group) => group.fields ?? []);
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"), "requestReadPlan must name frontendBackendBindings.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs"), "requestReadPlan must name unresolved binding inputs.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"), "requestReadPlan must name workflow closure refs.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource"), "requestReadPlan must name workflow closure detail source.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.operationPathsInScope"), "requestReadPlan must name operation paths.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataViewsInScope"), "requestReadPlan must name data views.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.actionsInScope"), "requestReadPlan must name frontend actions.");
+	  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation"), "requestReadPlan must name data-binding expectations for closure tasks.");
+	  assert.ok(
+	    requiredReads.some((field) => field.startsWith("sourceContext.architectureArtifactProjection.")),
+	    "requestReadPlan must require task-scoped AAC projection fields.",
+	  );
 
   const projectionRead = run([
     "inspect",

@@ -16,8 +16,6 @@ export type AgentActionContract = {
     optional?: string[];
     primaryMethod?: "inspect";
     fallbackMethod?: "request_manifest_refs";
-    planAuthority?: "requestReadPlan.groups";
-    fieldGroupsOmittedReason?: string;
     fieldGroups?: AgentActionReadGroup[];
     fields?: AgentActionReadField[];
     fallbackRule?: string;
@@ -125,7 +123,7 @@ export function brainstormSessionAgentActionContract(input: {
     : [];
   return agentActionContract({
     actionKind: "brainstorm_session",
-    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary, read the request through root requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups inspect commands. Continue through phase_scope, concept_grounding, frontend_experience, and final_summary in chat. Write and submit BrainstormCandidate only after the user explicitly confirms the dedicated final_summary block. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
+    instruction: "Manage the progressive Brainstorm clarification conversation. Before presenting any confirmation summary, read the request through root requestReadPlan.groups inspect commands. Continue through phase_scope, concept_grounding, frontend_experience, and final_summary in chat. Write and submit BrainstormCandidate only after the user explicitly confirms the dedicated final_summary block. Do not infer scope, output paths, sources, concepts, frontend target, or rules from guessed legacy root fields.",
     read: {
       required: [
         "this request",
@@ -159,7 +157,7 @@ export function brainstormSessionAgentActionContract(input: {
         "Write only outputContract.candidateFile for a confirmed BrainstormCandidate after final_summary has been presented and explicitly confirmed by the user.",
         "If blocked, write only blockedOutput.candidateFile when present.",
         "Do not write accepted Brainstorm contract files directly.",
-        "Do not base BrainstormCandidate fields on null values returned from guessed selectors; return to agentAction.read.fieldGroups and sourceFieldAccessHints.",
+        "Do not base BrainstormCandidate fields on null values returned from guessed selectors; return to requestReadPlan.groups and sourceFieldAccessHints.",
       ],
     },
     submit: {
@@ -241,19 +239,6 @@ export function normalizeAgentActionForRequest(value: unknown, request: Record<s
 }
 
 function normalizeReadPlan(actionKind: string, read: AgentActionContract["read"]): AgentActionContract["read"] {
-  if (read.planAuthority === "requestReadPlan.groups") {
-    const { fields: _legacyFields, fieldGroups: _fieldGroups, ...rest } = read;
-    return {
-      ...rest,
-      required: readLabels(read.required),
-      optional: read.optional ? readLabels(read.optional) : undefined,
-      primaryMethod: "inspect",
-      fallbackMethod: "request_manifest_refs",
-      planAuthority: "requestReadPlan.groups",
-      fieldGroupsOmittedReason: read.fieldGroupsOmittedReason ?? "Detailed grouped reads live on root requestReadPlan.groups for this request.",
-      fallbackRule: read.fallbackRule ?? "Read root requestReadPlan.groups first. Use agentAction.read only as a compatibility pointer, not as a second detailed read plan.",
-    };
-  }
   const requiredLabels = readLabels(read.required);
   const optionalLabels = readLabels(read.optional);
   const supplementalRequiredFields = requiredLabels

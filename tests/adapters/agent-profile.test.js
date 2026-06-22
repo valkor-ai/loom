@@ -2045,8 +2045,8 @@ for (const file of [
   );
   assertIncludes(
     file,
-    "agentAction.read.fieldGroups",
-    `${file}: deploy adapter must use request inspect read groups before artifact fallbacks`,
+    "requestReadPlan.groups",
+    `${file}: deploy adapter must use requestReadPlan inspect read groups before artifact fallbacks`,
   );
   assertIncludes(
     file,

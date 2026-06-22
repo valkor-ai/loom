@@ -7,7 +7,7 @@ const agentActionContractSchema = z.object({
   instruction: z.string().min(1),
   actionRequired: z.record(z.unknown()).optional(),
   finalResponseGuard: z.record(z.unknown()).optional(),
-  read: z.record(z.unknown()),
+  read: z.record(z.unknown()).optional(),
   write: z.record(z.unknown()),
   submit: z.record(z.unknown()),
   schema: z.record(z.unknown()),

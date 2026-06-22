@@ -591,7 +591,7 @@ export async function acceptRepositoryContext(input: AcceptRepositoryContextInpu
       userMessage: "RepositoryContext accepted. Use the generated BrainstormSessionRequest to continue the progressive Brainstorm conversation for this phase. Do not write or submit BrainstormCandidate until the dedicated final_summary block is confirmed.",
       expectedResponse: {
         kind: "brainstorm_progressive_clarification",
-        rule: "Read requestRef through requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups before presenting Brainstorm confirmation. Agent manages the conversation. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read outputContract/generationProtocol/enumRefs, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
+        rule: "Read requestRef through requestReadPlan.groups before presenting Brainstorm confirmation. Agent manages the conversation. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read outputContract/generationProtocol/enumRefs, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
         requestReadRule: brainstormAskUserReadStep,
         requestRef: brainstormPlan.refs.brainstormRequest,
       },

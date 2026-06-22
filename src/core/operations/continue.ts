@@ -526,7 +526,7 @@ async function instructionFor(
         : "当前阶段范围需要由 Agent 总结并等待用户确认；确认 phase_scope 后继续后续 Brainstorm 块，只有 final_summary 被确认后才提交 BrainstormCandidate。",
       expectedResponse: {
         kind: "brainstorm_progressive_clarification",
-        rule: "Agent manages the conversation. Before presenting confirmation or writing BrainstormCandidate, read requestRef through requestReadPlan groups when present; otherwise use agentAction.read.fieldGroups inspect commands. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read the candidate write contract, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
+        rule: "Agent manages the conversation. Before presenting confirmation or writing BrainstormCandidate, read requestRef through requestReadPlan.groups inspect commands. For phase_scope, concept_grounding, and frontend_experience confirmations, continue to the next Brainstorm block in chat. Read the candidate write contract, write BrainstormCandidate, and run submitCommand only after the dedicated final_summary block is explicitly confirmed.",
         requestReadRule: brainstormAskUserReadStep,
         currentTurnAnswerRule: {
           consumeCurrentUserMessage: true,
@@ -1667,25 +1667,41 @@ async function syncRequestAgentActionCurrentTarget(
   hydratedRequest: unknown,
   currentTarget: Record<string, unknown>,
 ): Promise<unknown> {
-  const updatedRequest = withAgentActionCurrentTarget(hydratedRequest, currentTarget);
+  const updatedRequest = withAgentActionCurrentTarget(hydratedRequest, currentTarget, {
+    requestRef,
+    preferRootReadPlan: true,
+  });
   const requestFile = path.join(projectRoot, requestRef);
   const rawRequest = await readJsonIfPresent(requestFile);
   if (!isRecord(rawRequest)) {
     return updatedRequest;
   }
 
+  const hasRootReadPlan = isRecord(rawRequest.requestReadPlan);
   const agentActionRef = requestManifestRef(rawRequest, "agentAction");
   if (agentActionRef) {
     const agentActionFile = path.join(projectRoot, agentActionRef);
     const agentAction = await readJsonIfPresent(agentActionFile);
     if (isRecord(agentAction)) {
-      await writeJsonAtomic(agentActionFile, withAgentActionCurrentTarget({ agentAction }, currentTarget).agentAction);
+      const nextAgentAction = hasRootReadPlan
+        ? withAgentActionExecutionTarget(agentAction, currentTarget)
+        : withAgentActionCurrentTarget({ agentAction }, currentTarget, { requestRef, preferRootReadPlan: false }).agentAction;
+      await writeJsonAtomic(agentActionFile, nextAgentAction);
+    }
+    if (hasRootReadPlan) {
+      await writeJsonAtomic(requestFile, {
+        ...rawRequest,
+        requestReadPlan: withCurrentTargetRequestReadPlan(rawRequest.requestReadPlan, requestRef),
+      });
     }
     return updatedRequest;
   }
 
   if (isRecord(rawRequest.agentAction)) {
-    await writeJsonAtomic(requestFile, withAgentActionCurrentTarget(rawRequest, currentTarget));
+    await writeJsonAtomic(requestFile, withAgentActionCurrentTarget(rawRequest, currentTarget, {
+      requestRef,
+      preferRootReadPlan: hasRootReadPlan,
+    }));
   }
   return updatedRequest;
 }
@@ -1697,13 +1713,36 @@ function requestManifestRef(request: Record<string, unknown>, key: string): stri
   return isRecord(entry) && typeof entry.ref === "string" ? entry.ref : null;
 }
 
-function withAgentActionCurrentTarget(value: unknown, currentTarget: Record<string, unknown>): Record<string, unknown> {
+function withAgentActionCurrentTarget(
+  value: unknown,
+  currentTarget: Record<string, unknown>,
+  options: { requestRef: string; preferRootReadPlan: boolean },
+): Record<string, unknown> {
   const request = isRecord(value) ? { ...value } : {};
   const normalizedAgentAction = normalizeAgentActionForFieldGroups(request.agentAction);
-  const agentAction = isRecord(normalizedAgentAction) ? { ...normalizedAgentAction } : {};
+  if (!isRecord(normalizedAgentAction)) {
+    return request;
+  }
+  const agentAction = { ...normalizedAgentAction };
   const isGenerateSections = agentAction.actionKind === "generate_sections";
-  const read = isRecord(agentAction.read) ? { ...agentAction.read } : {};
   const currentTargetField = "agentAction.write.currentTarget";
+  const write = isRecord(agentAction.write) ? { ...agentAction.write } : {};
+  write.currentTarget = currentTarget;
+  agentAction.write = write;
+  if (isGenerateSections) {
+    const schema = isRecord(agentAction.schema) ? { ...agentAction.schema } : {};
+    schema.shapeLocation = "agentAction.write.currentTarget.schemaShape";
+    schema.enumLocation = "agentAction.write.currentTarget.enumRefs";
+    agentAction.schema = schema;
+  }
+  if (options.preferRootReadPlan && isRecord(request.requestReadPlan)) {
+    delete agentAction.read;
+    request.requestReadPlan = withCurrentTargetRequestReadPlan(request.requestReadPlan, options.requestRef);
+    request.agentAction = agentAction;
+    return request;
+  }
+
+  const read = isRecord(agentAction.read) ? { ...agentAction.read } : {};
   const required = isGenerateSections
     ? withoutArchitectureSectionRedundantFields(read.required)
     : Array.isArray(read.required) ? [...read.required] : [];
@@ -1714,13 +1753,11 @@ function withAgentActionCurrentTarget(value: unknown, currentTarget: Record<stri
     ? compactArchitectureSectionFieldGroups(read.fieldGroups)
     : Array.isArray(read.fieldGroups) ? [...read.fieldGroups] : [];
   if (!fieldGroups.some((group) => isRecord(group) && Array.isArray(group.fields) && group.fields.includes(currentTargetField))) {
-    fieldGroups.unshift(agentActionCurrentTargetReadGroup());
+    fieldGroups.unshift(agentActionCurrentTargetReadGroup("{requestRef}"));
   }
   const optional = isGenerateSections
     ? withoutArchitectureSectionRedundantFields(read.optional)
     : read.optional;
-  const write = isRecord(agentAction.write) ? { ...agentAction.write } : {};
-  write.currentTarget = currentTarget;
   read.required = required;
   if (Array.isArray(optional)) {
     read.optional = optional;
@@ -1728,15 +1765,53 @@ function withAgentActionCurrentTarget(value: unknown, currentTarget: Record<stri
   read.fieldGroups = fieldGroups;
   delete read.fields;
   agentAction.read = read;
+  request.agentAction = normalizeAgentActionForFieldGroups(agentAction);
+  return request;
+}
+
+function withAgentActionExecutionTarget(agentActionValue: Record<string, unknown>, currentTarget: Record<string, unknown>): Record<string, unknown> {
+  const agentAction = { ...agentActionValue };
+  const write = isRecord(agentAction.write) ? { ...agentAction.write } : {};
+  write.currentTarget = currentTarget;
   agentAction.write = write;
-  if (isGenerateSections) {
+  if (agentAction.actionKind === "generate_sections") {
     const schema = isRecord(agentAction.schema) ? { ...agentAction.schema } : {};
     schema.shapeLocation = "agentAction.write.currentTarget.schemaShape";
     schema.enumLocation = "agentAction.write.currentTarget.enumRefs";
     agentAction.schema = schema;
   }
-  request.agentAction = normalizeAgentActionForFieldGroups(agentAction);
-  return request;
+  delete agentAction.read;
+  return agentAction;
+}
+
+function withCurrentTargetRequestReadPlan(value: unknown, requestRef: string): unknown {
+  if (!isRecord(value) || !Array.isArray(value.groups)) {
+    return value;
+  }
+  const currentTargetField = "agentAction.write.currentTarget";
+  const groups = compactArchitectureSectionFieldGroups(value.groups)
+    .filter((group): group is Record<string, unknown> => isRecord(group));
+  if (!groups.some((group) => Array.isArray(group.fields) && group.fields.includes(currentTargetField))) {
+    groups.unshift(agentActionCurrentTargetReadGroup(requestRef));
+  }
+  return {
+    ...value,
+    groups: groups.map((group) => normalizeRequestReadPlanGroupCommand(group, requestRef)),
+  };
+}
+
+function normalizeRequestReadPlanGroupCommand(group: Record<string, unknown>, requestRef: string): Record<string, unknown> {
+  const fields = Array.isArray(group.fields)
+    ? [...new Set(group.fields.filter((field): field is string => typeof field === "string" && field.trim().length > 0))]
+    : [];
+  return {
+    ...group,
+    fields,
+    readCommand: {
+      name: "inspect",
+      argv: ["inspect", "--request", requestRef, "--field", fields.join(",")],
+    },
+  };
 }
 
 function withoutArchitectureSectionRedundantFields(value: unknown): string[] {
@@ -1784,7 +1859,7 @@ function normalizeReadLabel(label: string): string {
     .trim();
 }
 
-function agentActionCurrentTargetReadGroup(): Record<string, unknown> {
+function agentActionCurrentTargetReadGroup(requestRef: string): Record<string, unknown> {
   const field = "agentAction.write.currentTarget";
   return {
     groupId: "agent_action_current_target",
@@ -1794,7 +1869,7 @@ function agentActionCurrentTargetReadGroup(): Record<string, unknown> {
     fields: [field],
     readCommand: {
       name: "inspect",
-      argv: ["inspect", "--request", "{requestRef}", "--field", field],
+      argv: ["inspect", "--request", requestRef, "--field", field],
     },
     fallbackRule: "If this grouped inspect read fails, use the requestReadPlan field list or targeted agentAction.write.currentTarget fallback. Do not print full .loom artifacts.",
   };

@@ -77,10 +77,6 @@ function coveredPairs(fields) {
   return pairs;
 }
 
-function allReadFields(agentAction) {
-  return agentAction.read.fieldGroups.flatMap((group) => group.fields);
-}
-
 function readGroup(request, groupId) {
   return request.requestReadPlan.groups.find((group) => group.groupId === groupId);
 }
@@ -88,12 +84,7 @@ function readGroup(request, groupId) {
 function auditReadPlan(label, request, options = {}) {
   const agentAction = request.agentAction;
   assert.ok(agentAction, `${label}: request must expose agentAction`);
-  assert.ok(agentAction.read, `${label}: agentAction.read missing`);
-  assert.equal(agentAction.read.primaryMethod, "inspect", `${label}: read.primaryMethod must be inspect`);
-  assert.equal(agentAction.read.fallbackMethod, "request_manifest_refs", `${label}: read.fallbackMethod must be request_manifest_refs`);
-  assert.equal(agentAction.read.fields, undefined, `${label}: legacy read.fields must not be emitted`);
-  assert.equal(agentAction.read.planAuthority, "requestReadPlan.groups", `${label}: agentAction sidecar must point to root requestReadPlan`);
-  assert.equal(agentAction.read.fieldGroups, undefined, `${label}: agentAction sidecar must not duplicate requestReadPlan.groups`);
+  assert.equal(agentAction.read, undefined, `${label}: agentAction must not expose a read contract when root requestReadPlan exists`);
   assert.ok(request.requestReadPlan, `${label}: request root must expose requestReadPlan before sidecar fallback`);
   assert.equal(request.requestReadPlan.authority, "requestReadPlan.groups", `${label}: requestReadPlan must be the detailed read authority`);
   assert.ok(Array.isArray(request.requestReadPlan.groups), `${label}: requestReadPlan.groups missing`);
