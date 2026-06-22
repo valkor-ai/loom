@@ -27,6 +27,8 @@ import {
   verificationEvidenceSchema,
 } from "../contracts";
 import type { RouteAction } from "../schemas";
+import type { UserFacingLanguageConstraint } from "../schemas";
+import { userFacingLanguageRule } from "../requirements/user-facing-language";
 import { ensureDir, pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
 import { getActiveLocator, resolveLocator } from "../state/delivery";
 import {
@@ -178,6 +180,7 @@ export const frontendImplementationOrganizationRules = [
   "For frontend tasks, organize implementation by responsibility boundaries rather than by one giant mixed file.",
   "Use the project's existing frontend structure when present.",
   frontendModuleEntryPreservationRule,
+  "For frontend tasks, follow sourceContext.userFacingLanguage or executionRules.userFacingLanguage for user-visible copy. Do not translate code identifiers, API paths, database fields, enum values, package names, framework terms, or internal artifact ids.",
   "When creating new frontend code, choose the smallest maintainable structure appropriate to the detected stack.",
   "The implementation should make UI/view, API/service interaction, state/feedback handling, and verification/test evidence distinguishable.",
   "Do not force every responsibility into a separate directory or file when the task is small.",
@@ -2410,7 +2413,12 @@ function buildFrontendBackendBindingProjection(
   };
 }
 
-function buildFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactContract, frontendExperience: FrontendExperienceContract): Record<string, unknown> {
+function buildFrontendExecutionGuidance(
+  task: Task,
+  aac: ArchitectureArtifactContract,
+  frontendExperience: FrontendExperienceContract,
+  userFacingLanguage?: UserFacingLanguageConstraint | null,
+): Record<string, unknown> {
   const moduleRefs = new Set(task.writeBoundary.artifactRefs.modules);
   const userFlowRefs = new Set(task.writeBoundary.artifactRefs.userFlows);
   const flowById = new Map(aac.userFlows.map((flow) => [flow.flowId, flow]));
@@ -2471,6 +2479,8 @@ function buildFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactCon
     schemaVersion: "1.0",
     purpose: "Use this to implement the current frontend task. It is guidance for the task, not a separate source of truth.",
     sourceAuthority: "task.frontendExperienceRequirement plus architectureArtifactContractRef#/frontendExperience",
+    userFacingLanguage: userFacingLanguage ?? null,
+    userFacingLanguageRule: userFacingLanguageRule(userFacingLanguage),
     responsibility: frontendTaskResponsibility(task),
     surfacesInScope: surfacesInScope.map((surface) => {
       const surfaceInterfaceRefs = uniqueRefs(surface.workflowRefs.flatMap((flowRef) => flowById.get(flowRef)?.interfaceRefs ?? []));
@@ -2623,7 +2633,7 @@ function workflowClosureRequirementsFromTaskGuidance(task: Task): Array<Record<s
     : [];
 }
 
-function withFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactContract): Task {
+function withFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactContract, userFacingLanguage?: UserFacingLanguageConstraint | null): Task {
   if (!task.frontendExperienceRequirement || !aac.frontendExperience) {
     return task;
   }
@@ -2638,7 +2648,7 @@ function withFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactCont
       ...requirement,
       executionGuidance: {
         ...safeExistingGuidance,
-        ...buildFrontendExecutionGuidance(task, aac, aac.frontendExperience),
+        ...buildFrontendExecutionGuidance(task, aac, aac.frontendExperience, userFacingLanguage),
       },
     },
   };
@@ -2655,7 +2665,8 @@ async function buildTaskExecutionRequest(
   const baseline = await loadRequiredTechnicalBaseline(projectRoot, locator);
   const aac = await loadArchitectureArtifact(projectRoot, taskPlan.source.architectureArtifactContractId, locator);
   const pgc = await loadPlanningContract(projectRoot, taskPlan.source.planningGenerationContractId, locator);
-  const requestTask = withFrontendExecutionGuidance(task, aac);
+  const userFacingLanguage = pgc.planningInputs.userFacingLanguage ?? null;
+  const requestTask = withFrontendExecutionGuidance(task, aac, userFacingLanguage);
   const requirementDetailSnapshot = buildTaskRequirementDetailSnapshot(pgc, aac, requestTask);
   const workflowClosureRequirements = workflowClosureRequirementsFromTaskGuidance(requestTask);
   const phaseConceptGroundingAbs = phaseConceptGroundingPath(projectRoot, locator.deliveryId, locator.phaseId);
@@ -2700,6 +2711,8 @@ async function buildTaskExecutionRequest(
     "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
     "task.frontendExperienceRequirement.executionGuidance.purpose",
     "task.frontendExperienceRequirement.executionGuidance.sourceAuthority",
+    "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
+    "task.frontendExperienceRequirement.executionGuidance.userFacingLanguageRule",
     "task.frontendExperienceRequirement.executionGuidance.responsibility",
     "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
     "task.frontendExperienceRequirement.executionGuidance.navigationInScope",
@@ -2768,7 +2781,7 @@ async function buildTaskExecutionRequest(
       }),
       finalResponseGuard,
       read: {
-        required: uniqueRefs(["this request", "referencedArtifactReadGuide", "task", ...frontendGuidanceReadFields, "sourceContext.architectureArtifactProjection", "sourceContext.acceptanceSnapshot", ...(requirementDetailSnapshot.length > 0 ? ["sourceContext.requirementDetailSnapshot"] : []), "executionRules", ...taskResultContractReadFields, "taskConceptGrounding when mode=concepts_present"]),
+        required: uniqueRefs(["this request", "referencedArtifactReadGuide", "task", ...frontendGuidanceReadFields, "sourceContext.architectureArtifactProjection", "sourceContext.acceptanceSnapshot", "sourceContext.userFacingLanguage", ...(requirementDetailSnapshot.length > 0 ? ["sourceContext.requirementDetailSnapshot"] : []), "executionRules", ...taskResultContractReadFields, "taskConceptGrounding when mode=concepts_present"]),
         optional: uniqueRefs([
           "sourceRefs",
           ...(requestTask.frontendExperienceRequirement ? [
@@ -2806,6 +2819,7 @@ async function buildTaskExecutionRequest(
           "When task.frontendExperienceRequirement.executionGuidance is present, use it to decide the surfaces, workflows, operation paths, interaction states, and data-binding evidence for this task.",
           "When task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings is present, use it as the first coding guide for wiring user actions to AAC-declared interfaces, including method/path/schemas and success/error UI states.",
           "When operationPathsInScope/dataViewsInScope/actionsInScope are present, implement or verify the declared target discovery, selection, action entry, refresh policy, and visible feedback; record matching evidence in frontendExperienceSelfCheck.",
+          userFacingLanguageRule(userFacingLanguage),
           "When sourceContext.requirementDetailSnapshot is non-empty, use it as the task-scoped requirement detail authority. Implement and verify those detailIds through task.requirementDetailRefs and verificationIntents[].requirementDetailRefs.",
           "When task objective, acceptanceSnapshot, taskConceptGrounding, or sourceContext.architectureArtifactProjection names key fields, object operations, operation inputs, preconditions, blocking reasons, state changes, or feedback, implement and verify those details explicitly. Do not replace them with a generic completed feature summary.",
           ...(requestTask.frontendExperienceRequirement ? frontendImplementationOrganizationRules : []),
@@ -2899,6 +2913,7 @@ async function buildTaskExecutionRequest(
       architectureArtifactProjection: buildArchitectureProjection(aac, requestTask),
       acceptanceSnapshot: buildTaskAcceptanceSnapshot(pgc, aac, requestTask),
       requirementDetailSnapshot,
+      userFacingLanguage,
       dependencyResults: run.taskStates
         .filter((state) => requestTask.dependsOn.includes(state.taskId) && state.resultId)
         .map((state) => ({
@@ -2916,6 +2931,10 @@ async function buildTaskExecutionRequest(
         resultFile,
         submitCommandName: submitCommand.name,
       }),
+      userFacingLanguage: {
+        constraint: userFacingLanguage,
+        rule: userFacingLanguageRule(userFacingLanguage),
+      },
       interactiveVerificationProbePolicy: interactiveVerificationProbePolicy(),
       rules: [
         "Execute only the given task.",
@@ -2939,6 +2958,7 @@ async function buildTaskExecutionRequest(
         "Do not implement full lifecycle for reference_only entities.",
         "Preserve task-scoped requirement details from sourceContext.requirementDetailSnapshot. When present, each listed detailId must be addressed by implementation or verification within the current task boundary.",
         "Preserve task-scoped object-operation details from acceptanceSnapshot, taskConceptGrounding, and architectureArtifactProjection: key fields, operation inputs, preconditions, validation/blocking reasons, success states, state transitions, and visible feedback.",
+        userFacingLanguageRule(userFacingLanguage),
         "Use project structure and framework conventions discovered in the workspace.",
         compactContextReadStep,
         "Record intended deliverable changes in TaskResult.changedFiles: source, tests, configs, manifests, lockfiles, docs, and other task-relevant project files.",
@@ -3008,6 +3028,8 @@ async function buildTaskExecutionRequest(
         useExecutionGuidanceWhenPresent: true,
         useFrontendBackendBindingsFirst: true,
         frontendBackendBindingsAreNotAllowlist: true,
+        userFacingLanguage,
+        userFacingLanguageRule: userFacingLanguageRule(userFacingLanguage),
         executionGuidanceIsNonBlocking: true,
         mustKeepUiAlignedWithContract: true,
         doNotCreateDemoOnlyUiWhenUsableProductRequired: true,

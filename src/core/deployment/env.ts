@@ -6,7 +6,7 @@ import type {
   DeploymentEnvDiagnostics,
   DeploymentEnvSource,
   DeploymentEnvVariable,
-  DetectedStack,
+  DeploymentCodeProbe,
 } from "./types";
 
 type EnvAccumulator = Map<string, {
@@ -93,7 +93,7 @@ const OPTIONAL_ENV_NAMES = new Set([
 export async function analyzeDeploymentEnvironment(input: {
   projectRoot: string;
   deploymentRoot: string;
-  stack: DetectedStack;
+  stack: DeploymentCodeProbe;
   generatedEnvironment: Record<string, string>;
   contractEnvironment?: {
     required: string[];
@@ -210,7 +210,7 @@ export async function analyzeDeploymentEnvironment(input: {
   };
 }
 
-export function generatedRuntimeEnvironment(stack: DetectedStack): Record<string, string> {
+export function generatedRuntimeEnvironment(stack: DeploymentCodeProbe): Record<string, string> {
   switch (stack.kind) {
     case "node":
       return {
@@ -237,7 +237,7 @@ export function generatedRuntimeEnvironment(stack: DetectedStack): Record<string
   }
 }
 
-export function generatedDependencyEnvironment(stack: DetectedStack): Record<string, string> {
+export function generatedDependencyEnvironment(stack: DeploymentCodeProbe): Record<string, string> {
   return Object.assign({}, ...stack.services.map((dependency) => dependency.connectionEnv));
 }
 
@@ -392,7 +392,7 @@ function parseEnvNames(raw: string): string[] {
   return [...names].sort();
 }
 
-function frameworkRequiredEnv(stack: DetectedStack): Array<{ name: string; reason: string }> {
+function frameworkRequiredEnv(stack: DeploymentCodeProbe): Array<{ name: string; reason: string }> {
   const vars: Array<{ name: string; reason: string }> = [];
   if (stack.framework === "laravel") {
     vars.push({ name: "APP_KEY", reason: "Laravel requires APP_KEY for encrypted cookies and app crypto." });
@@ -407,7 +407,7 @@ function frameworkRequiredEnv(stack: DetectedStack): Array<{ name: string; reaso
 }
 
 function generatedPlaceholderEnvironment(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   env: EnvAccumulator,
 ): Record<string, string> {
   const generated: Record<string, string> = {};
@@ -426,14 +426,14 @@ function generatedPlaceholderEnvironment(
   return generated;
 }
 
-function generatedSourceFor(name: string, stack: DetectedStack): DeploymentEnvSource {
+function generatedSourceFor(name: string, stack: DeploymentCodeProbe): DeploymentEnvSource {
   if (Object.keys(generatedRuntimeEnvironment(stack)).includes(name)) {
     return "runtime-default";
   }
   return "dependency-service";
 }
 
-function canGenerateLocalPlaceholder(name: string, stack: DetectedStack): boolean {
+function canGenerateLocalPlaceholder(name: string, stack: DeploymentCodeProbe): boolean {
   if (name === "APP_KEY") {
     return stack.framework === "laravel";
   }
@@ -464,7 +464,7 @@ function localPlaceholderFor(name: string): string {
   }
 }
 
-function isRequiredEnvName(name: string, stack: DetectedStack): boolean {
+function isRequiredEnvName(name: string, stack: DeploymentCodeProbe): boolean {
   if (isOptionalEnvName(name)) {
     return false;
   }

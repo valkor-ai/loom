@@ -3,7 +3,8 @@ import type {
   DeployProvider,
   DeploymentProviderCandidate,
   DeploymentProviderPolicy,
-  DetectedStack,
+  DeploymentCodeProbe,
+  DeploymentSourceModel,
 } from "./types";
 import type { ExistingDeploymentFiles } from "./existing";
 
@@ -15,7 +16,7 @@ export type DeploymentStrategy = {
 };
 
 export function resolveDeploymentStrategy(input: {
-  detectedStack: DetectedStack;
+  codeProbe: DeploymentCodeProbe;
   existing: ExistingDeploymentFiles;
   policy?: Partial<DeploymentProviderPolicy>;
 }): DeploymentStrategy {
@@ -28,6 +29,38 @@ export function resolveDeploymentStrategy(input: {
     reason: reasonFor(selectedProvider, { ...input, policy }),
     policy,
     candidates: providerCandidates(selectedProvider, { ...input, policy }),
+  };
+}
+
+export function deploymentStrategyForSourceModel(input: {
+  strategy: DeploymentStrategy;
+  sourceModel: DeploymentSourceModel;
+}): DeploymentStrategy {
+  if (input.sourceModel.services.length <= 1 || input.strategy.provider !== "dockerfile-existing") {
+    return input.strategy;
+  }
+
+  return {
+    ...input.strategy,
+    provider: "dockerfile-template",
+    reason: "Deployment source model has multiple application services, so loom will generate service-specific Dockerfile/Compose assets instead of reusing one root Dockerfile as the whole application.",
+    candidates: input.strategy.candidates.map((candidate) => {
+      if (candidate.provider === "dockerfile-existing") {
+        return {
+          ...candidate,
+          status: "skipped" as const,
+          reason: "Skipped because one root Dockerfile cannot represent multiple application services from the deployment source model.",
+        };
+      }
+      if (candidate.provider === "dockerfile-template") {
+        return {
+          ...candidate,
+          status: "selected" as const,
+          reason: "Selected because the deployment source model requires service-specific generated Dockerfiles.",
+        };
+      }
+      return candidate;
+    }),
   };
 }
 
@@ -49,7 +82,7 @@ function validateProviderPolicy(input: {
 }
 
 function selectProvider(input: {
-  detectedStack: DetectedStack;
+  codeProbe: DeploymentCodeProbe;
   existing: ExistingDeploymentFiles;
   policy: DeploymentProviderPolicy;
 }): DeployProvider {
@@ -71,7 +104,7 @@ function selectProvider(input: {
 function reasonFor(
   provider: DeployProvider,
   input: {
-    detectedStack: DetectedStack;
+    codeProbe: DeploymentCodeProbe;
     existing: ExistingDeploymentFiles;
     policy: DeploymentProviderPolicy;
   },
@@ -92,14 +125,14 @@ function reasonFor(
     case "dockerfile-existing":
       return "Root-level Dockerfile exists, so loom will reuse it and materialize only a local Compose wrapper.";
     case "dockerfile-template":
-      return `Detected a ${input.detectedStack.kind} stack that can use loom's deterministic Dockerfile template.`;
+      return `Repository probes found ${input.codeProbe.kind} runtime evidence, so loom will generate deployment files from the deployment source model.`;
   }
 }
 
 function providerCandidates(
   selectedProvider: DeployProvider,
   input: {
-    detectedStack: DetectedStack;
+    codeProbe: DeploymentCodeProbe;
     existing: ExistingDeploymentFiles;
     policy: DeploymentProviderPolicy;
   },
@@ -129,7 +162,7 @@ function providerCandidates(
 function candidateReason(
   provider: DeployProvider,
   input: {
-    detectedStack: DetectedStack;
+    codeProbe: DeploymentCodeProbe;
     existing: ExistingDeploymentFiles;
     policy: DeploymentProviderPolicy;
   },
@@ -154,7 +187,7 @@ function candidateReason(
         ? "Existing Dockerfile found at project root."
         : "No root-level Dockerfile was found.";
     case "dockerfile-template":
-      return templateReason(input.detectedStack.kind);
+      return templateReason(input.codeProbe.kind);
   }
 }
 
@@ -179,9 +212,9 @@ export function normalizeProviderPolicy(
   };
 }
 
-function templateReason(kind: DetectedStack["kind"]): string {
+function templateReason(kind: DeploymentCodeProbe["kind"]): string {
   if (kind === "unknown") {
     return "Available as a deterministic local preview so a coding agent can inspect and repair deployment files if the first attempt fails.";
   }
-  return `Available because loom has a ${kind} template.`;
+  return `Available because loom can model a ${kind} runtime as a deployment source service.`;
 }

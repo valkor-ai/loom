@@ -104,7 +104,9 @@ assert.ok(validateTaskResult(completedButPartial, executionRequest).issues.some(
 
 const badVerification = baseTaskResult();
 badVerification.requirementDetailEvidence[0].verificationIds = ["missing-verification"];
-assert.ok(validateTaskResult(badVerification, executionRequest).issues.some((issue) => issue.code === "TASK_RESULT_DETAIL_EVIDENCE_INVALID"));
+const normalizedVerificationIds = validateTaskResult(badVerification, executionRequest);
+assert.equal(normalizedVerificationIds.issues.length, 0, JSON.stringify(normalizedVerificationIds.issues, null, 2));
+assert.deepEqual(normalizedVerificationIds.value.requirementDetailEvidence[0].verificationIds, ["verify-review"]);
 
 const reviewRequest = {
   schemaVersion: "1.0",

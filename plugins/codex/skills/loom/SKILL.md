@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Use when the user explicitly invokes @loom to route a software delivery task through the local loom CLI. The plugin uses delivery-scoped state, Brainstorm confirmation, contract/request artifacts, task execution requests, review, repair, continue routing, and explicit deploy routing.
+description: Use when the user explicitly invokes @loom to route a software delivery task or knowledge-source command through the local loom CLI. The plugin uses delivery-scoped state, Brainstorm confirmation, contract/request artifacts, task execution requests, review, repair, continue routing, direct knowledge routing, and explicit deploy routing.
 ---
 
 # loom
@@ -27,18 +27,24 @@ For `execute_task`, a task is not complete when code is changed, tests pass, or 
 
 ## First CLI Action
 
-For explicit `@loom continue`, `@loom status`, `@loom deploy`, or `@loom deploy <subcommand>`, your first assistant action must be the matching CLI tool call. Do not answer in prose, recap state, read files, or inspect `.loom/` before that first CLI call.
+For explicit `@loom continue`, `@loom status`, `@loom knowledge`, `@loom knowledge <subcommand>`, `@loom deploy`, or `@loom deploy <subcommand>`, your first assistant action must be the matching CLI tool call. Do not answer in prose, recap state, read files, or inspect `.loom/` before that first CLI call.
 
 - `@loom continue`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root /abs/project`
 - `@loom status`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" status --project-root /abs/project`
+- `@loom knowledge`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge --project-root /abs/project`
+- `@loom knowledge <subcommand>`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge <subcommand and args> --project-root /abs/project`
 - `@loom deploy`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`
 - `@loom deploy <subcommand>`: run `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy <subcommand> --project-root /abs/project`
+
+Knowledge commands are direct knowledge-source management, build, resume, search, context, inspect, enable, disable, remove, and semantic commands. They are not delivery requests. For `@loom knowledge ...`, do not run `plan`, `continue`, Brainstorm, candidate generation, task execution, or deploy routing before the knowledge command. After the knowledge command returns, parse the JSON envelope and follow any returned CLI instruction; otherwise report the user-facing result compactly.
 
 For deploy commands, keep waiting on the first CLI session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
 Do not run manual `init` before `status`, `continue`, or `plan`. `status` is read-only and may report `STATE_NOT_INITIALIZED`; `plan` initializes `.loom/` when needed for new delivery requests. Do not hijack ordinary non-loom work: treat natural-language "continue" as loom only when the current project root has initialized and recoverable loom state.
 
 ## New Requests
+
+This section applies only after explicit routing commands such as `continue`, `status`, `knowledge`, and `deploy` have not matched.
 
 For `@loom <request>` or `@loom plan <request>`, run `plan` through the launcher. For local requirement files such as PDF, DOCX, XLSX, TXT, MD, CSV, or TSV paths, pass one `--requirement-file <path>` per file, plus `--request "<remaining natural-language request>"` only when there is remaining non-file text. Do not pass requirement file paths as plain request text.
 
@@ -57,6 +63,8 @@ During `phase_scope`, follow the request's `phaseScopeOptionComparison` guidance
 
 For Brainstorm `ask_user` gates, read `requestRef` and follow root `requestReadPlan.groups` inspect commands when present; otherwise use `agentAction.read.fieldGroups` inspect commands. Do this before presenting phase_scope, concept_grounding, frontend_experience, or final_summary. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block as a concrete user-facing question or confirmation summary. Do not infer Brainstorm scope, sources, concepts, frontend target, candidateFile, output schema, or submit command from guessed legacy root fields such as `.objective`, `.scope`, or `.outputContract`.
 
+Follow Brainstorm `knowledgeQueryPlan`; do not merge its steps into one query.
+
 ## Instruction Priority
 
 Every loom JSON response may include top-level `actionRequired` and `instruction`. These fields are the highest-priority routing signal.
@@ -71,6 +79,7 @@ Supported instruction modes:
 
 - `run_cli`: run `instruction.commandInvocation` when present. Otherwise run `instruction.command.argv` with `LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli"` and the same `--project-root`. Do not use bare `loom`.
 - `generate_candidate`: read `requestRef`; use root `requestReadPlan.groups` when present, otherwise inspect `agentAction.read.fieldGroups`; write files. ArchitectureSections `single_section`: write `targetSection` -> `targetCandidateFile`, run `completionBarrier.followUpCommand.commandInvocation`, submit only after `submit_existing_candidate`. Others run `submitCommand`.
+- `generate_knowledge_semantics`: read `instruction.requestRef` as `KnowledgeSemanticBuildRequest`; read every chunk body via each chunk's `readCommand`; copy `request.outputContract.resultTemplate` as the result-file shape; fill each existing `chunkResults[]` entry for its matching chunkId; write `instruction.resultFile`; run `instruction.submitCommand`; immediately follow any returned `generate_knowledge_semantics` instruction until the source is published or blocked. Do not ask whether to continue after `knowledge build` reports `semantic_pending`. Do not inspect Loom source files, dist files, TypeScript type definitions, or old semantic result files to infer the result schema; `request.outputContract.resultTemplate` is the schema authority.
 - `submit_existing_candidate`: read `instruction.requestRef`, use `requestReadPlan.groups[].readCommand` when present or `agentAction.read.fieldGroups[].readCommand` as fallback when request fields are needed, verify the named candidate/result files exist, then run `instruction.submitCommand`.
 - `execute_task`: read `instruction.requestRef`, use `requestReadPlan.groups[].readCommand` when present or `agentAction.read.fieldGroups[].readCommand` as fallback to read required request fields, follow `executionRules.sourceEditPreparationContract` before source/artifact writes, execute only that TaskExecutionRequest against project files, write `instruction.resultFile`, then run `instruction.submitCommand`. A progress-only response before `resultFile` exists and submit succeeds is invalid.
 - `repair_candidate`: repair the same candidate file or grouped candidate files described by `instruction.issues`, then run `instruction.submitCommand`. Do not run `loom continue` before the repaired submit succeeds.

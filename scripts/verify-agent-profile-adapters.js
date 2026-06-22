@@ -188,6 +188,16 @@ function assertBrainstormPhaseScopeGuidanceAligned() {
       "Use a single scope only when the request rules' atomic-scope exception is satisfied",
       "Brainstorm phase_scope must restrict single-scope confirmation to the atomic exception",
     );
+    assertIncludes(
+      file,
+      "knowledgeQueryPlan",
+      "Brainstorm adapters must tell agents to follow the request-owned knowledge query plan",
+    );
+    assertIncludes(
+      file,
+      "do not merge its steps into one query",
+      "Brainstorm adapters must prevent one broad knowledge query from replacing the query plan",
+    );
   }
 }
 
@@ -1789,7 +1799,7 @@ assertIncludes(
 );
 assertIncludes(
   "plugins/claude-code/skills/loom/SKILL.md",
-  "For `/loom continue`, `/loom status`, `/loom deploy`, or `/loom deploy <subcommand>`, your first assistant action must be the matching Bash tool call",
+  "For `/loom continue`, `/loom status`, `/loom knowledge`, `/loom knowledge <subcommand>`, `/loom deploy`, or `/loom deploy <subcommand>`, your first assistant action must be the matching Bash tool call",
   "Claude main skill must force direct CLI execution for routing slash commands",
 );
 assertIncludes(
@@ -1834,7 +1844,7 @@ assertIncludes(
 );
 assertIncludes(
   "plugins/claude-code/skills/loom/SKILL.md",
-  "argument-hint: \"<request> | plan <request> | continue | deploy [subcommand] | status\"",
+  "argument-hint: \"<request> | plan <request> | continue | knowledge [subcommand] | deploy [subcommand] | status\"",
   "Claude main skill must expose bare /loom <request> as the primary new-delivery entrypoint",
 );
 assertIncludes(

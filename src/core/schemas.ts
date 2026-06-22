@@ -181,6 +181,16 @@ export type RequirementInput = {
 
 const stringArraySchema = z.array(z.string());
 
+export const userFacingLanguageSchema = z.object({
+  defaultLocale: z.enum(["zh-CN", "en", "und"]),
+  source: z.enum(["project_default", "requirement_primary_language", "fallback"]),
+  appliesTo: stringArraySchema,
+  doesNotApplyTo: stringArraySchema,
+  rule: z.string().min(1),
+});
+
+export type UserFacingLanguageConstraint = z.infer<typeof userFacingLanguageSchema>;
+
 export const requirementSourceTypeSchema = z.enum([
   "user_text",
   "pdf",
@@ -433,6 +443,7 @@ export const deliveryContextSchema = z.object({
     text: z.string().min(1),
     inputRefs: stringArraySchema,
   }),
+  userFacingLanguage: userFacingLanguageSchema.optional(),
   initialSummary: z.object({
     title: z.string().min(1),
     oneLine: z.string().min(1),

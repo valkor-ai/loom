@@ -76,6 +76,7 @@ Capability | What it changes
 Dynamic workflows | Turn each delivery goal into an adaptive loop for clarification, planning, execution, verification, repair, and handoff.
 Delivery harness | Route work through requirement clarification, planning, building, checking, previewing, reviewing, repairing, and reporting.
 Requirement intelligence | Turns clarification from a chat step into a delivery-quality gate: confirmed scope, business rules, lifecycle coverage, and UI operation paths become structured context that planning, execution, and review must preserve.
+Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and let requirement clarification pull only matching chunks into the right step without making the knowledge base a hidden requirement source.
 Token-saving context | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents do not reread the whole repository every turn.
 Task contracts | Turn broad goals into bounded tasks with source refs, acceptance intent, result files, and continuation rules.
 Executable tools | Give agents CLI commands for context collection, task routing, result recording, deployment checks, and delivery evidence.
@@ -148,24 +149,84 @@ Each adapter install script builds the CLI, writes the stable launcher at `~/.lo
 
 `plugin:install-adapters` installs or refreshes Codex, Claude Code, and OpenCode together.
 
-After installing or updating an adapter, open a new agent session so the refreshed local plugin is loaded.
+After installing or updating an adapter, open a new agent session in the target project so the refreshed local plugin is loaded.
 
-To verify the install without starting a delivery, run:
+To verify the install without starting a delivery, use the Loom command inside your coding agent:
 
-```bash
-"$HOME/.loom/bin/loom-cli" --version
-"$HOME/.loom/bin/loom-cli" status --project-root /path/to/project
+```text
+@loom status     # Codex
+/loom status     # Claude Code and OpenCode
 ```
 
-`status` is read-only. In a project that has not used Loom yet, `STATE_NOT_INITIALIZED` is a valid smoke-check result: it means the launcher works, and no delivery has been started. You can also verify the adapter command from a fresh agent session with `@loom status` in Codex, or `/loom status` in Claude Code and opencode.
+`status` is read-only. In a project that has not used Loom yet, `STATE_NOT_INITIALIZED` is a valid smoke-check result: it means the adapter command is available and no delivery has been started.
 
-You normally do not need to run `loom init` by hand. Starting a delivery from an agent, such as `@loom build ...` or `/loom build ...`, will initialize `.loom/` in that project when needed. Direct CLI users can still initialize explicitly:
-
-```bash
-"$HOME/.loom/bin/loom-cli" init --project-root /path/to/project
-```
+You normally do not initialize `.loom/` by hand. Starting a delivery from the agent, such as `@loom build ...` or `/loom build ...`, initializes the project-local delivery state when needed.
 
 ## How to Use
+
+Loom is meant to be used through the local plugin inside your coding agent. Use `@loom` in Codex and `/loom` in Claude Code or OpenCode; the CLI launcher is wired by the adapter and is not the normal user-facing workflow.
+
+### Use Knowledge Sources
+
+Knowledge sources are optional, but they are useful when your delivery work depends on product rules, domain notes, design standards, operating procedures, or other local reference material.
+
+Loom treats knowledge sources as clarification aids, not as requirements by themselves. During requirement clarification, Loom searches enabled and successfully built knowledge indexes, reads only matching chunks for the current clarification step, and turns useful findings into user-visible questions or confirmation points.
+
+Run knowledge commands from the coding agent session for the project you are working on. The examples below show Codex with `@loom`; in Claude Code and OpenCode, use the same subcommands with `/loom`.
+
+Add a new knowledge source:
+
+```text
+@loom knowledge add --name product-rules ~/Documents/product-rules
+@loom knowledge build product-rules
+```
+
+`--name` is required and must be unique. A source can include one file, many files, one directory, many directories, or a mix of files and directories. Currently supported formats are `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.pdf`, and `.docx`.
+
+Update an existing knowledge source's registered paths:
+
+```text
+@loom knowledge update product-rules --add-path ~/Documents/new-rules.md
+@loom knowledge update product-rules --remove-path ~/Documents/old-rules.md
+@loom knowledge update product-rules --replace-paths ~/Documents/current-rules
+@loom knowledge build product-rules
+```
+
+If the files inside an already registered path changed, run `build` again. You do not need `update` unless the path set changes.
+
+Resume an unfinished semantic knowledge build:
+
+```text
+@loom knowledge resume product-rules
+```
+
+Use `resume` when a knowledge build stopped before publishing, for example after reopening a coding-agent session or when a multi-pack semantic build did not finish. It does not rebuild the source; it finds the next unfinished semantic pack and lets the agent continue until the index is published.
+
+Review and manage existing knowledge sources:
+
+```text
+@loom knowledge list
+@loom knowledge status product-rules
+@loom knowledge pending product-rules
+@loom knowledge discard product-rules
+```
+
+Disable a source without deleting it:
+
+```text
+@loom knowledge disable product-rules
+@loom knowledge enable product-rules
+```
+
+Remove a source registration and its local Loom index:
+
+```text
+@loom knowledge remove product-rules
+```
+
+`remove` does not delete your original documents. It only removes Loom's registration, pending queue, and built index for that knowledge source.
+
+### Run Delivery
 
 Start from your coding agent with its Loom command surface:
 
@@ -198,21 +259,7 @@ Use `continue` whenever you want Loom to resume or advance the current delivery 
 /loom continue     # Claude Code and OpenCode
 ```
 
-Or run the CLI directly through the stable launcher:
-
-```bash
-"$HOME/.loom/bin/loom-cli" status --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" plan --project-root /path/to/project --request "Add team invitations"
-"$HOME/.loom/bin/loom-cli" continue --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" review --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project
-```
-
-Agent adapters usually set `LOOM_AGENT_PROFILE` and `LOOM_COMPACT_OUTPUT` automatically. If you are wiring a new adapter, run routing commands through the launcher and prefer compact routing output:
-
-```bash
-LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root /path/to/project
-```
+Agent adapters set the Loom agent profile and routing environment for you. Use the agent command surface for normal work; the underlying CLI launcher is an adapter implementation detail.
 
 ## How It Works
 
@@ -230,12 +277,12 @@ Loom creates project-local delivery state under `.loom/` and uses it as the sour
 
 Need | Command or file
 --- | ---
-See available commands | `"$HOME/.loom/bin/loom-cli" --help`
+Check Loom plugin availability | `@loom status` in Codex, or `/loom status` in Claude Code and OpenCode
 Install or refresh all adapters | `npm run plugin:install-adapters`
 Install or refresh Codex adapter | `npm run plugin:install-codex`
 Install or refresh Claude Code adapter | `npm run plugin:install-claude`
 Install or refresh OpenCode adapter | `npm run plugin:install-opencode`
-Run a local deployment preview | `"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project`
+Run a local deployment preview | `@loom deploy` in Codex, or `/loom deploy` in Claude Code and OpenCode
 
 ## FAQ
 

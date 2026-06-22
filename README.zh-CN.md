@@ -78,6 +78,7 @@ Loom 就是为弥合这条鸿沟而存在的。
 Dynamic workflows | 把每个交付目标变成一条可自适应的循环：澄清、规划、执行、验证、修复和交接。
 Delivery harness | 把需求澄清、规划、构建、检查、预览、review、修复和报告变成稳定流程。
 Requirement intelligence | 把需求澄清从普通聊天确认变成交付质量门：将已确认的阶段范围、业务规则、生命周期覆盖和页面办理路径沉淀为结构化上下文，让后续规划、编码和 review 必须承接。
+Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段，提升业务理解质量，同时避免把知识库变成隐藏需求来源。
 Token-saving context | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，减少 agent 反复读取全仓库。
 Task contracts | 将宽泛目标拆成有边界的任务，并带上 source refs、验收意图、结果文件和 continuation rules。
 Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 CLI 命令。
@@ -150,24 +151,84 @@ npm run plugin:install-adapters
 
 `plugin:install-adapters` 会一次性安装或刷新 Codex、Claude Code 和 OpenCode。
 
-安装或更新 adapter 后，请打开一个新的 agent 会话，让本地插件重新加载。
+安装或更新 adapter 后，请在目标项目里打开一个新的 agent 会话，让本地插件重新加载。
 
-如果只想验证安装是否正常、但还不想开始需求交付，可以执行：
+如果只想验证安装是否正常、但还不想开始需求交付，请在 coding agent 里使用 Loom 命令：
 
-```bash
-"$HOME/.loom/bin/loom-cli" --version
-"$HOME/.loom/bin/loom-cli" status --project-root /path/to/project
+```text
+@loom status     # Codex
+/loom status     # Claude Code 和 OpenCode
 ```
 
-`status` 是只读命令。对于还没有使用过 Loom 的项目，返回 `STATE_NOT_INITIALIZED` 也属于正常的 smoke check 结果：这说明 launcher 可用，并且没有启动任何交付流程。也可以在新的 agent 会话里验证 adapter 命令：Codex 使用 `@loom status`，Claude Code 和 opencode 使用 `/loom status`。
+`status` 是只读命令。对于还没有使用过 Loom 的项目，返回 `STATE_NOT_INITIALIZED` 也属于正常的 smoke check 结果：这说明 adapter 命令可用，并且没有启动任何交付流程。
 
-正常使用时不需要手动先执行 `loom init`。从 agent 发起交付，例如 `@loom build ...` 或 `/loom build ...`，会在需要时自动为当前项目初始化 `.loom/`。如果你是直接使用 CLI，也可以显式初始化：
-
-```bash
-"$HOME/.loom/bin/loom-cli" init --project-root /path/to/project
-```
+正常使用时不需要手动初始化 `.loom/`。从 agent 发起交付，例如 `@loom build ...` 或 `/loom build ...`，会在需要时自动为当前项目初始化本地交付状态。
 
 ## 如何使用
+
+Loom 的正常使用入口是 code agent 里的本地插件。Codex 使用 `@loom`，Claude Code 和 OpenCode 使用 `/loom`；底层 CLI launcher 由 adapter 接好，不是普通用户的主要操作入口。
+
+### 使用知识库
+
+知识库是可选能力，适合在交付工作依赖产品规则、业务文档、设计规范、操作手册或其他本地参考资料时使用。
+
+Loom 会把知识库当作需求澄清辅助，而不是把它当成需求本身。需求澄清时，Loom 会搜索已启用且已成功构建的知识库索引，只读取当前澄清步骤匹配到的片段，并把有用信息转成对用户可见的问题或确认点。
+
+知识库命令应在当前项目的 coding agent 会话里执行。下面示例使用 Codex 的 `@loom`；在 Claude Code 和 OpenCode 中，把同样的子命令换成 `/loom`。
+
+新增知识库：
+
+```text
+@loom knowledge add --name product-rules ~/Documents/product-rules
+@loom knowledge build product-rules
+```
+
+`--name` 必填且必须全局唯一。一个知识库可以包含单个文件、多个文件、单个目录、多个目录，或文件与目录混合。当前支持的格式是 `.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.pdf`、`.docx`。
+
+更新已有知识库的路径集合：
+
+```text
+@loom knowledge update product-rules --add-path ~/Documents/new-rules.md
+@loom knowledge update product-rules --remove-path ~/Documents/old-rules.md
+@loom knowledge update product-rules --replace-paths ~/Documents/current-rules
+@loom knowledge build product-rules
+```
+
+如果只是已注册路径里的文件内容发生变化，直接重新执行 `build`。只有知识库包含的路径集合发生变化时，才需要先执行 `update`。
+
+恢复未完成的知识库语义构建：
+
+```text
+@loom knowledge resume product-rules
+```
+
+如果知识库构建还没发布就中断了，例如重新打开 coding agent 会话，或者多 pack 语义构建没有跑完，可以使用 `resume`。它不会重新构建知识库，而是找到下一包未完成的语义构建任务，让 agent 接着执行直到索引发布。
+
+查看和管理已有知识库：
+
+```text
+@loom knowledge list
+@loom knowledge status product-rules
+@loom knowledge pending product-rules
+@loom knowledge discard product-rules
+```
+
+临时停用或重新启用某个知识库：
+
+```text
+@loom knowledge disable product-rules
+@loom knowledge enable product-rules
+```
+
+删除知识库注册和 Loom 本地索引：
+
+```text
+@loom knowledge remove product-rules
+```
+
+`remove` 不会删除你的原始文档，只会删除 Loom 对这个知识库的注册信息、待构建队列和已构建索引。
+
+### 运行交付
 
 在 coding agent 中使用对应的 Loom 命令入口启动：
 
@@ -200,21 +261,7 @@ Claude Code 和 OpenCode：
 /loom continue     # Claude Code 和 OpenCode
 ```
 
-也可以通过稳定 launcher 直接运行 CLI：
-
-```bash
-"$HOME/.loom/bin/loom-cli" status --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" plan --project-root /path/to/project --request "Add team invitations"
-"$HOME/.loom/bin/loom-cli" continue --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" review --project-root /path/to/project
-"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project
-```
-
-Agent adapter 通常会自动设置 `LOOM_AGENT_PROFILE` 和 `LOOM_COMPACT_OUTPUT`。如果你正在接入新的 adapter，路由命令应通过 launcher 执行，并建议使用 compact output：
-
-```bash
-LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root /path/to/project
-```
+Agent adapter 会自动设置 Loom 所需的 agent profile 和路由环境。正常使用时请走 agent 命令入口；底层 CLI launcher 是 adapter 实现细节。
 
 ## 工作方式
 
@@ -232,12 +279,12 @@ Loom 在项目本地创建 `.loom/` 交付状态，并把它作为 agent 下一�
 
 需求 | 命令或文件
 --- | ---
-查看可用命令 | `"$HOME/.loom/bin/loom-cli" --help`
+检查 Loom 插件可用性 | Codex 使用 `@loom status`，Claude Code 和 OpenCode 使用 `/loom status`
 安装或刷新全部 adapters | `npm run plugin:install-adapters`
 安装或刷新 Codex adapter | `npm run plugin:install-codex`
 安装或刷新 Claude Code adapter | `npm run plugin:install-claude`
 安装或刷新 OpenCode adapter | `npm run plugin:install-opencode`
-运行本地部署预览 | `"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project`
+运行本地部署预览 | Codex 使用 `@loom deploy`，Claude Code 和 OpenCode 使用 `/loom deploy`
 
 ## FAQ
 

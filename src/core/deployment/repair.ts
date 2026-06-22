@@ -417,38 +417,41 @@ function failedContractFor(
   spec: DeploymentSpec,
   failureKind: DeploymentFailureKind,
 ): DeploymentFailureReport["failedContract"] {
+  const primary = spec.sourceModel.services.find((service) => service.serviceId === spec.sourceModel.primaryServiceId) ??
+    spec.sourceModel.services[0];
+  const workingDirectory = primary?.workingDirectory ?? spec.workspace.appPath;
   if (failureKind === "build_command_failed") {
     return {
       field: "build.command",
       command: spec.runtimeContract.buildCommand,
-      workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
+      workingDirectory,
     };
   }
   if (failureKind === "start_command_failed") {
     return {
       field: "start.command",
       command: spec.runtimeContract.startCommand,
-      workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
+      workingDirectory,
     };
   }
   if (failureKind === "http_probe_failed" || failureKind === "preview_not_verified") {
     return {
       field: "httpProbes.previewPath",
       command: null,
-      workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
+      workingDirectory,
     };
   }
   if (failureKind === "application_startup_failed") {
     return {
       field: "runtime.startup",
-      command: spec.runtimeContract.startCommand ?? spec.detectedStack.startCommand,
-      workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
+      command: spec.runtimeContract.startCommand ?? primary?.startCommand ?? null,
+      workingDirectory,
     };
   }
   return {
     field: failureKind === "healthcheck" ? "httpProbes.healthPath" : "runtime.delivery",
     command: null,
-    workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
+    workingDirectory,
   };
 }
 

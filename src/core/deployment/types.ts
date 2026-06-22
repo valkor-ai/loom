@@ -236,23 +236,71 @@ export type DeploymentCodeEvidenceSummary = {
   missingFactCount: number;
 };
 
-export type DetectedStack = {
-  kind: "node" | "python" | "go" | "java" | "dotnet" | "php" | "ruby" | "static" | "unknown";
-  packageManager:
-    | "npm"
-    | "pnpm"
-    | "yarn"
-    | "bun"
-    | "pip"
-    | "poetry"
-    | "uv"
-    | "go"
-    | "maven"
-    | "gradle"
-    | "dotnet"
-    | "composer"
-    | "bundler"
-    | null;
+export type DeploymentRuntimeKind =
+  | "node"
+  | "python"
+  | "go"
+  | "java"
+  | "dotnet"
+  | "php"
+  | "ruby"
+  | "static"
+  | "unknown";
+
+export type DeploymentPackageManager =
+  | "npm"
+  | "pnpm"
+  | "yarn"
+  | "bun"
+  | "pip"
+  | "poetry"
+  | "uv"
+  | "go"
+  | "maven"
+  | "gradle"
+  | "dotnet"
+  | "composer"
+  | "bundler"
+  | null;
+
+export type DeploymentSourceShape = "single-service" | "frontend-and-backend";
+
+export type DeploymentSourceRole = "app" | "frontend" | "backend";
+
+export type DeploymentSourceService = {
+  serviceId: string;
+  role: DeploymentSourceRole;
+  root: string;
+  workingDirectory: string | null;
+  workspacePackageJsonPaths: string[];
+  runtimeKind: DeploymentRuntimeKind;
+  packageManager: DeploymentPackageManager;
+  hasLockfile: boolean;
+  framework: string | null;
+  runtimeVersion: string | null;
+  runtimeVersionSource: string | null;
+  buildCommand: string | null;
+  startCommand: string | null;
+  outputDirectory: string | null;
+  port: number;
+  healthcheckPath: string | null;
+};
+
+export type DeploymentSourceModel = {
+  schemaVersion: 1;
+  source: "code-probe" | "runtime-contract";
+  shape: DeploymentSourceShape;
+  primaryServiceId: string;
+  previewServiceId: string;
+  buildContextPath: string;
+  services: DeploymentSourceService[];
+  dependencies: DependencyService[];
+  notes: string[];
+};
+
+export type DeploymentCodeProbe = {
+  kind: DeploymentRuntimeKind;
+  packageManager: DeploymentPackageManager;
   hasLockfile: boolean;
   framework: string | null;
   runtimeVersion: string | null;
@@ -270,9 +318,9 @@ export type DetectedStack = {
 export type DeploymentWorkspaceCandidate = {
   path: string;
   score: number;
-  stackKind: DetectedStack["kind"];
+  runtimeKind: DeploymentRuntimeKind;
   framework: string | null;
-  packageManager: DetectedStack["packageManager"];
+  packageManager: DeploymentPackageManager;
   signals: string[];
 };
 
@@ -369,6 +417,7 @@ export type DeploymentRuntimeContract = {
   ref: string | null;
   status: "modified" | "unchanged" | "not_applicable" | "heuristic";
   dependencyServicePolicy: "heuristic" | "contract_only";
+  deploymentShape: DeploymentSourceShape | null;
   runtimeKind: string | null;
   buildCommand: string | null;
   startCommand: string | null;
@@ -382,6 +431,23 @@ export type DeploymentRuntimeContract = {
     required: string[];
     optional: string[];
   };
+  frontend: {
+    required: boolean;
+    kind: string | null;
+    buildCommand: string | null;
+    sourceRoot: string | null;
+    outputDir: string | null;
+    servedBy: string | null;
+    servedByRef: string | null;
+  } | null;
+  api: {
+    required: boolean;
+    kind: string | null;
+    buildCommand: string | null;
+    entry: string | null;
+    basePath: string | null;
+    probePaths: string[];
+  } | null;
   dependencyServices: DependencyService[];
 };
 
@@ -396,14 +462,15 @@ export type DeploymentSpec = {
   projectRoot: string;
   generatedAt: string;
   workspace: DeploymentWorkspace;
-  detectedStack: DetectedStack;
   environment: DeploymentEnvDiagnostics;
   bootstrap: DeploymentBootstrapDiagnostics;
   compose: DeploymentComposeInfo;
   runtimeContract: DeploymentRuntimeContract;
+  sourceModel: DeploymentSourceModel;
   codeEvidence?: DeploymentCodeEvidenceSummary;
   files: {
     dockerfilePath: string | null;
+    dockerfilePaths: Record<string, string>;
     composePath: string;
     dockerignorePath: string | null;
     buildContextPath: string;

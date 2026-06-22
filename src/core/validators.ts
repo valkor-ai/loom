@@ -627,7 +627,8 @@ export function validateTaskResult(candidate: unknown, request: TaskExecutionReq
   value: TaskResult | null;
   issues: ContractIssue[];
 } {
-  const parsed = parseWithIssues(taskResultSchema, normalizeOptionalEmptyFields(candidate, ["evidenceType"]));
+  const machineNormalizedCandidate = normalizeTaskResultMachineOwnedFields(candidate, request);
+  const parsed = parseWithIssues(taskResultSchema, normalizeOptionalEmptyFields(machineNormalizedCandidate, ["evidenceType"]));
   if (!parsed.value) {
     return parsed;
   }
@@ -717,6 +718,273 @@ export function validateTaskResult(candidate: unknown, request: TaskExecutionReq
   }
 
   return { value: result, issues };
+}
+
+function normalizeTaskResultMachineOwnedFields(candidate: unknown, request: TaskExecutionRequest): unknown {
+  if (!isPlainRecord(candidate)) {
+    return candidate;
+  }
+  const normalized: Record<string, unknown> = {
+    ...candidate,
+    schemaVersion: "1.0",
+    taskId: request.source.taskId,
+    taskPlanId: request.source.taskPlanId,
+  };
+  const now = new Date().toISOString();
+  if (!isNonEmptyString(normalized.taskResultId)) {
+    normalized.taskResultId = `taskresult-${request.requestId}`;
+  }
+  if (!Array.isArray(normalized.changedFiles)) {
+    normalized.changedFiles = [];
+  }
+  if (!("noChangeReason" in normalized)) {
+    normalized.noChangeReason = null;
+  }
+  if (!("selfRepairSummary" in normalized)) {
+    normalized.selfRepairSummary = {
+      attempted: false,
+      attemptCount: 0,
+      stopReason: "not_attempted",
+      progressObserved: false,
+    };
+  }
+  if (normalized.status !== "failed") {
+    normalized.failure = null;
+  }
+  if (!Array.isArray(normalized.notes)) {
+    normalized.notes = [];
+  }
+  if (!isIsoDateTimeString(normalized.createdAt)) {
+    normalized.createdAt = now;
+  }
+  if (!isIsoDateTimeString(normalized.updatedAt)) {
+    normalized.updatedAt = now;
+  }
+  if (normalized.status !== "blocked") {
+    normalized.blockedReasons = [];
+  } else if (!Array.isArray(normalized.blockedReasons)) {
+    normalized.blockedReasons = [];
+  }
+
+  normalized.verificationResults = normalizeVerificationResultMachineFields(
+    normalized.verificationResults,
+    request.task.verificationIntents,
+  );
+
+  const detailEvidence = normalizeRequirementDetailEvidenceMachineFields(
+    normalized.requirementDetailEvidence,
+    request,
+  );
+  if (detailEvidence) {
+    normalized.requirementDetailEvidence = detailEvidence;
+  }
+
+  const conceptEvidence = normalizeConceptEvidenceMachineFields(
+    normalized.conceptEvidence,
+    request.task.conceptRefs ?? [],
+  );
+  if (conceptEvidence) {
+    normalized.conceptEvidence = conceptEvidence;
+  }
+
+  normalized.runtimeDeliveryEvidence = normalizeRuntimeDeliveryEvidenceMachineFields(
+    normalized.runtimeDeliveryEvidence,
+    request,
+  );
+  normalized.frontendExperienceSelfCheck = normalizeFrontendSelfCheckMachineFields(
+    normalized.frontendExperienceSelfCheck,
+    request,
+  );
+
+  return normalized;
+}
+
+function normalizeVerificationResultMachineFields(
+  value: unknown,
+  intents: TaskExecutionRequest["task"]["verificationIntents"],
+): unknown {
+  const rawItems = Array.isArray(value) ? value.filter(isPlainRecord) : [];
+  const usedIndexes = new Set<number>();
+  const normalized = intents.map((intent, index) => {
+    const matchingIndex = rawItems.findIndex((item, itemIndex) =>
+      !usedIndexes.has(itemIndex) && item.verificationId === intent.verificationId
+    );
+    const rawIndex = matchingIndex >= 0 ? matchingIndex : index;
+    const raw = rawItems[rawIndex] ?? {};
+    if (rawItems[rawIndex]) {
+      usedIndexes.add(rawIndex);
+    }
+    return {
+      ...raw,
+      verificationId: intent.verificationId,
+      status: isNonEmptyString(raw.status) ? raw.status : "not_run",
+      evidenceType: isNonEmptyString(raw.evidenceType) && (intent.acceptableEvidence as string[]).includes(raw.evidenceType)
+        ? raw.evidenceType
+        : intent.acceptableEvidence[0],
+      summary: isNonEmptyString(raw.summary)
+        ? raw.summary
+        : "Verification result was not reported before TaskResult submission.",
+    };
+  });
+  const extra = rawItems.filter((_, index) => !usedIndexes.has(index));
+  return [...normalized, ...extra];
+}
+
+function normalizeRequirementDetailEvidenceMachineFields(
+  value: unknown,
+  request: TaskExecutionRequest,
+): unknown[] | undefined {
+  const requiredDetailIds = uniqueStrings([
+    ...(request.task.requirementDetailRefs ?? []),
+    ...request.task.verificationIntents.flatMap((intent) => intent.requirementDetailRefs ?? []),
+  ]);
+  if (requiredDetailIds.length === 0 && !Array.isArray(value)) {
+    return undefined;
+  }
+  const rawItems = Array.isArray(value) ? value.filter(isPlainRecord) : [];
+  const usedIndexes = new Set<number>();
+  const expectedVerificationByDetail = new Map<string, string[]>();
+  for (const intent of request.task.verificationIntents) {
+    for (const detailId of intent.requirementDetailRefs ?? []) {
+      const refs = expectedVerificationByDetail.get(detailId) ?? [];
+      refs.push(intent.verificationId);
+      expectedVerificationByDetail.set(detailId, uniqueStrings(refs));
+    }
+  }
+  const normalized = requiredDetailIds.map((detailId, index) => {
+    const matchingIndex = rawItems.findIndex((item, itemIndex) =>
+      !usedIndexes.has(itemIndex) && item.detailId === detailId
+    );
+    const rawIndex = matchingIndex >= 0 ? matchingIndex : index;
+    const raw = rawItems[rawIndex] ?? {};
+    if (rawItems[rawIndex]) {
+      usedIndexes.add(rawIndex);
+    }
+    return {
+      ...raw,
+      detailId,
+      status: isNonEmptyString(raw.status) ? raw.status : "not_verified",
+      verificationIds: expectedVerificationByDetail.get(detailId) ?? [],
+      evidenceRefs: Array.isArray(raw.evidenceRefs) ? raw.evidenceRefs : [],
+      summary: isNonEmptyString(raw.summary)
+        ? raw.summary
+        : "Requirement detail evidence was not reported before TaskResult submission.",
+    };
+  });
+  const extra = rawItems.filter((_, index) => !usedIndexes.has(index));
+  return [...normalized, ...extra];
+}
+
+function normalizeConceptEvidenceMachineFields(value: unknown, conceptRefs: string[]): unknown[] | undefined {
+  if (conceptRefs.length === 0 && !Array.isArray(value)) {
+    return undefined;
+  }
+  const rawItems = Array.isArray(value) ? value.filter(isPlainRecord) : [];
+  const usedIndexes = new Set<number>();
+  const normalized = conceptRefs
+    .map((conceptRef, index) => {
+      const matchingIndex = rawItems.findIndex((item, itemIndex) =>
+        !usedIndexes.has(itemIndex) && item.conceptRef === conceptRef
+      );
+      const rawIndex = matchingIndex >= 0 ? matchingIndex : index;
+      const raw = rawItems[rawIndex];
+      if (!raw) {
+        return null;
+      }
+      usedIndexes.add(rawIndex);
+      return {
+        ...raw,
+        conceptRef,
+      };
+    })
+    .filter((item) => item !== null);
+  const extra = rawItems.filter((_, index) => !usedIndexes.has(index));
+  return [...normalized, ...extra];
+}
+
+function normalizeRuntimeDeliveryEvidenceMachineFields(value: unknown, request: TaskExecutionRequest): unknown {
+  const requirement = request.task.runtimeDeliveryRequirement;
+  if (!requirement?.appliesToThisTask) {
+    return value;
+  }
+  const raw = isPlainRecord(value) ? value : {};
+  const requiredChecks = requirement.requiredCodeLevelChecks ?? [];
+  const rawChecks = Array.isArray(raw.codeLevelChecks) ? raw.codeLevelChecks.filter(isPlainRecord) : [];
+  const usedIndexes = new Set<number>();
+  const codeLevelChecks = requiredChecks
+    .map((check, index) => {
+      const matchingIndex = rawChecks.findIndex((item, itemIndex) =>
+        !usedIndexes.has(itemIndex) && (
+          item.checkId === check.checkId ||
+          item.contractField === check.contractField
+        )
+      );
+      const rawIndex = matchingIndex >= 0 ? matchingIndex : index;
+      const rawCheck = rawChecks[rawIndex];
+      if (!rawCheck) {
+        return null;
+      }
+      usedIndexes.add(rawIndex);
+      return {
+        ...rawCheck,
+        checkId: check.checkId,
+        contractField: check.contractField,
+      };
+    })
+    .filter((item) => item !== null);
+  const extraChecks = rawChecks.filter((_, index) => !usedIndexes.has(index));
+  return {
+    ...raw,
+    requirementRef: requirement.runtimeDeliveryRef,
+    checkedFields: requirement.affectedContractFields ?? [],
+    codeLevelChecks: [...codeLevelChecks, ...extraChecks],
+  };
+}
+
+function normalizeFrontendSelfCheckMachineFields(value: unknown, request: TaskExecutionRequest): unknown {
+  if (!request.task.frontendExperienceRequirement) {
+    return value;
+  }
+  const raw = isPlainRecord(value) ? value : {};
+  const closureRequirementIds = workflowClosureRequirementIdsFromTaskRequest(request);
+  const dataBinding = isPlainRecord(raw.dataBinding) ? raw.dataBinding : undefined;
+  return {
+    ...raw,
+    requirementRef: frontendExperienceRefFromTaskRequest(request),
+    ...(closureRequirementIds.length > 0 ? { closureRequirementIds } : {}),
+    ...(dataBinding ? {
+      dataBinding: {
+        ...dataBinding,
+        ...(closureRequirementIds.length > 0 ? { closureRequirementIds } : {}),
+      },
+    } : {}),
+  };
+}
+
+function frontendExperienceRefFromTaskRequest(request: TaskExecutionRequest): string {
+  const requirement = request.task.frontendExperienceRequirement;
+  if (!isPlainRecord(requirement)) {
+    return "task.frontendExperienceRequirement.frontendExperienceRef";
+  }
+  return isNonEmptyString(requirement.frontendExperienceRef)
+    ? requirement.frontendExperienceRef
+    : "task.frontendExperienceRequirement.frontendExperienceRef";
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isIsoDateTimeString(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && value.includes("T");
 }
 
 function validateWorkflowClosureTaskResult(result: TaskResult, request: TaskExecutionRequest, issues: ContractIssue[]): void {

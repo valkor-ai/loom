@@ -1,6 +1,6 @@
 ---
 description: Route Loom delivery commands through the local Claude adapter.
-argument-hint: "<request> | plan <request> | continue | deploy [subcommand] | status"
+argument-hint: "<request> | plan <request> | continue | knowledge [subcommand] | deploy [subcommand] | status"
 allowed-tools: [Read, Glob, Grep, Bash, Edit, MultiEdit, Write]
 ---
 
@@ -16,6 +16,10 @@ Route `$ARGUMENTS` as follows:
   `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" status --project-root "$PWD"`
 - If `$ARGUMENTS` is `continue`, `resume`, `proceed`, `next`, or empty, run:
   `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" continue --project-root "$PWD"`
+- If `$ARGUMENTS` is `knowledge`, run:
+  `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge --project-root "$PWD"`
+- If `$ARGUMENTS` starts with `knowledge `, remove the leading `knowledge ` token and pass the remaining text as knowledge subcommand arguments:
+  `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge <the knowledge subcommand arguments from $ARGUMENTS> --project-root "$PWD"`
 - If `$ARGUMENTS` is `deploy`, run:
   `LOOM_AGENT_PROFILE=claude LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root "$PWD"`
 - If `$ARGUMENTS` starts with `deploy `, remove the leading `deploy ` token and pass the remaining text as the deploy subcommand arguments:
@@ -30,4 +34,6 @@ After the Bash command returns, parse the JSON envelope. If it returns `actionRe
 
 For `status`, report only the current Loom state and user guidance from the returned JSON. Do not start a new delivery from `status`.
 
-For every non-status route, after the first Bash command returns and before acting on a returned request, user gate, candidate generation, task execution, review, repair, or deploy instruction, read `~/.claude/skills/loom/skills/loom/SKILL.md` unless that exact skill body is already loaded in this session. Then continue with that installed Loom adapter protocol: use returned `requestRef`, `agentAction.read.fieldGroups[].readCommand`, exact output paths, submit commands, Brainstorm block order, TaskExecution completion barriers, review/repair routing, and deploy boundaries from that protocol. Do not replace Loom with Claude Plan Mode, internal task state, or prose-only progress summaries; internal task/todo/subagent tools may be used only as implementation aids after Loom routing is established.
+For knowledge routes, parse the returned JSON envelope and follow any returned CLI instruction. `knowledge build` and `knowledge resume` may return `generate_knowledge_semantics`; complete that semantic pack workflow immediately instead of asking whether to continue. For semantic packs, copy `request.outputContract.resultTemplate` as the result-file shape and fill it; do not inspect Loom source files, dist files, TypeScript type definitions, or old semantic result files to infer the result schema. Otherwise report the user-facing result compactly. Knowledge commands are source management, build, resume, search, context, inspect, enable, disable, remove, and semantic commands; they are not delivery requests, so do not start `plan`, Brainstorm, candidate generation, or task execution for them.
+
+For every other non-status route, after the first Bash command returns and before acting on a returned request, user gate, candidate generation, task execution, review, repair, or deploy instruction, read `~/.claude/skills/loom/skills/loom/SKILL.md` unless that exact skill body is already loaded in this session. Then continue with that installed Loom adapter protocol: use returned `requestRef`, `agentAction.read.fieldGroups[].readCommand`, exact output paths, submit commands, Brainstorm block order, TaskExecution completion barriers, review/repair routing, and deploy boundaries from that protocol. Do not replace Loom with Claude Plan Mode, internal task state, or prose-only progress summaries; internal task/todo/subagent tools may be used only as implementation aids after Loom routing is established.

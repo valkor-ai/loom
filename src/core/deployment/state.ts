@@ -23,7 +23,7 @@ const healthSchema = z.object({
   error: z.string().nullable(),
 });
 
-const detectedStackSchema = z.object({
+const legacyCodeProbeSchema = z.object({
   kind: z.enum(["node", "python", "go", "java", "dotnet", "php", "ruby", "static", "unknown"]),
   packageManager: z.enum(["npm", "pnpm", "yarn", "bun", "pip", "poetry", "uv", "go", "maven", "gradle", "dotnet", "composer", "bundler"]).nullable(),
   hasLockfile: z.boolean(),
@@ -83,11 +83,15 @@ const dependencyServiceSchema = z.object({
 const deploymentWorkspaceCandidateSchema = z.object({
   path: z.string().min(1),
   score: z.number(),
-  stackKind: z.enum(["node", "python", "go", "java", "dotnet", "php", "ruby", "static", "unknown"]),
+  runtimeKind: z.enum(["node", "python", "go", "java", "dotnet", "php", "ruby", "static", "unknown"]).optional(),
+  stackKind: z.enum(["node", "python", "go", "java", "dotnet", "php", "ruby", "static", "unknown"]).optional(),
   framework: z.string().nullable(),
   packageManager: z.enum(["npm", "pnpm", "yarn", "bun", "pip", "poetry", "uv", "go", "maven", "gradle", "dotnet", "composer", "bundler"]).nullable(),
   signals: z.array(z.string()),
-});
+}).transform((candidate) => ({
+  ...candidate,
+  runtimeKind: candidate.runtimeKind ?? candidate.stackKind ?? "unknown",
+}));
 
 const deploymentWorkspaceSchema = z.object({
   appPath: z.string().min(1).default("."),
@@ -206,6 +210,7 @@ const deploymentRuntimeContractSchema = z.object({
   ref: z.string().nullable(),
   status: z.enum(["modified", "unchanged", "not_applicable", "heuristic"]),
   dependencyServicePolicy: z.enum(["heuristic", "contract_only"]).default("heuristic"),
+  deploymentShape: z.enum(["single-service", "frontend-and-backend"]).nullable().default("single-service"),
   runtimeKind: z.string().nullable(),
   buildCommand: z.string().nullable(),
   startCommand: z.string().nullable(),
@@ -222,8 +227,56 @@ const deploymentRuntimeContractSchema = z.object({
     required: [],
     optional: [],
   }),
+  frontend: z.object({
+    required: z.boolean(),
+    kind: z.string().nullable(),
+    buildCommand: z.string().nullable(),
+    sourceRoot: z.string().nullable(),
+    outputDir: z.string().nullable(),
+    servedBy: z.string().nullable(),
+    servedByRef: z.string().nullable(),
+  }).nullable().default(null),
+  api: z.object({
+    required: z.boolean(),
+    kind: z.string().nullable(),
+    buildCommand: z.string().nullable(),
+    entry: z.string().nullable(),
+    basePath: z.string().nullable(),
+    probePaths: z.array(z.string()).default([]),
+  }).nullable().default(null),
   dependencyServices: z.array(dependencyServiceSchema).default([]),
 }).optional();
+
+const deploymentSourceServiceSchema = z.object({
+  serviceId: z.string().min(1),
+  role: z.enum(["app", "frontend", "backend"]),
+  root: z.string().min(1),
+  workingDirectory: z.string().nullable(),
+  workspacePackageJsonPaths: z.array(z.string()).default([]),
+  runtimeKind: z.enum(["node", "python", "go", "java", "dotnet", "php", "ruby", "static", "unknown"]),
+  packageManager: z.enum(["npm", "pnpm", "yarn", "bun", "pip", "poetry", "uv", "go", "maven", "gradle", "dotnet", "composer", "bundler"]).nullable(),
+  hasLockfile: z.boolean(),
+  framework: z.string().nullable(),
+  runtimeVersion: z.string().nullable(),
+  runtimeVersionSource: z.string().nullable(),
+  buildCommand: z.string().nullable(),
+  startCommand: z.string().nullable(),
+  outputDirectory: z.string().nullable(),
+  port: z.number().int().positive(),
+  healthcheckPath: z.string().nullable(),
+});
+
+const deploymentSourceModelSchema = z.object({
+  schemaVersion: z.literal(1),
+  source: z.enum(["code-probe", "runtime-contract"]),
+  shape: z.enum(["single-service", "frontend-and-backend"]),
+  primaryServiceId: z.string().min(1),
+  previewServiceId: z.string().min(1),
+  buildContextPath: z.string().min(1),
+  services: z.array(deploymentSourceServiceSchema),
+  dependencies: z.array(dependencyServiceSchema),
+  notes: z.array(z.string()).default([]),
+});
 
 const deploymentCodeEvidenceSummarySchema = z.object({
   ref: z.string().min(1),
@@ -253,7 +306,21 @@ const deploymentCodeEvidenceSummarySchema = z.object({
   missingFactCount: z.number().int().nonnegative(),
 }).optional();
 
-const deploymentSpecSchema = z.object({
+const legacyProbeInputKey = ["detected", "Stack"].join("");
+
+function normalizeLegacyDeploymentSpecInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const normalized = { ...value };
+  if (!("legacyCodeProbe" in normalized) && legacyProbeInputKey in normalized) {
+    normalized.legacyCodeProbe = normalized[legacyProbeInputKey];
+  }
+  delete normalized[legacyProbeInputKey];
+  return normalized;
+}
+
+const deploymentSpecSchema = z.preprocess(normalizeLegacyDeploymentSpecInput, z.object({
   schemaVersion: z.literal(1),
   provider: z.enum(["compose-existing", "dockerfile-existing", "dockerfile-template"]),
   providerReason: z
@@ -283,14 +350,16 @@ const deploymentSpecSchema = z.object({
   projectRoot: z.string().min(1),
   generatedAt: z.string().datetime(),
   workspace: deploymentWorkspaceSchema,
-  detectedStack: detectedStackSchema,
+  legacyCodeProbe: legacyCodeProbeSchema.optional(),
   environment: deploymentEnvDiagnosticsSchema,
   bootstrap: deploymentBootstrapDiagnosticsSchema,
   compose: deploymentComposeInfoSchema,
   runtimeContract: deploymentRuntimeContractSchema,
+  sourceModel: deploymentSourceModelSchema.optional(),
   codeEvidence: deploymentCodeEvidenceSummarySchema,
   files: z.object({
     dockerfilePath: z.string().min(1).nullable(),
+    dockerfilePaths: z.record(z.string()).default({}),
     composePath: z.string().min(1),
     dockerignorePath: z.string().min(1).nullable(),
     buildContextPath: z.string().min(1).default("."),
@@ -330,27 +399,39 @@ const deploymentSpecSchema = z.object({
     logs: z.array(z.string()),
     status: z.array(z.string()),
   }),
-}).transform((spec) => ({
+})).transform(({ legacyCodeProbe, ...spec }) => ({
   ...spec,
   runtimeContract: spec.runtimeContract ?? {
     source: "heuristic" as const,
     ref: null,
     status: "heuristic" as const,
     dependencyServicePolicy: "heuristic" as const,
-    runtimeKind: spec.detectedStack.framework ?? spec.detectedStack.kind,
-    buildCommand: spec.detectedStack.buildCommand,
-    startCommand: spec.detectedStack.startCommand,
-    port: spec.detectedStack.port,
+    deploymentShape: "single-service" as const,
+    runtimeKind: legacyCodeProbe?.framework ?? legacyCodeProbe?.kind ?? null,
+    buildCommand: legacyCodeProbe?.buildCommand ?? null,
+    startCommand: legacyCodeProbe?.startCommand ?? null,
+    port: legacyCodeProbe?.port ?? null,
     previewPath: "/",
-    healthPath: spec.detectedStack.healthcheckPath ?? null,
+    healthPath: legacyCodeProbe?.healthcheckPath ?? null,
     apiPaths: [],
-    frontendOutputDir: spec.detectedStack.outputDirectory,
-    probeKind: spec.detectedStack.startCommand ? "http" as const : "process" as const,
+    frontendOutputDir: legacyCodeProbe?.outputDirectory ?? null,
+    probeKind: legacyCodeProbe?.startCommand ? "http" as const : "process" as const,
     environment: {
       required: [],
       optional: [],
     },
+    frontend: null,
+    api: null,
     dependencyServices: [],
+  },
+  sourceModel: spec.sourceModel ?? sourceModelFromLegacySpec({ files: spec.files, legacyCodeProbe }),
+  files: {
+    ...spec.files,
+    dockerfilePaths: Object.keys(spec.files.dockerfilePaths).length > 0
+      ? spec.files.dockerfilePaths
+      : spec.files.dockerfilePath && legacyCodeProbe
+        ? { app: spec.files.dockerfilePath }
+        : {},
   },
 }));
 
@@ -615,6 +696,58 @@ const deployExecutionRepairTaskResultSchema = z.object({
   notes: z.array(z.string()),
 });
 
+function sourceModelFromLegacySpec(spec: {
+  files: { buildContextPath: string };
+  legacyCodeProbe?: z.infer<typeof legacyCodeProbeSchema>;
+}) {
+  const probe = spec.legacyCodeProbe;
+  if (!probe) {
+    return {
+      schemaVersion: 1 as const,
+      source: "code-probe" as const,
+      shape: "single-service" as const,
+      primaryServiceId: "app",
+      previewServiceId: "app",
+      buildContextPath: spec.files.buildContextPath,
+      services: [],
+      dependencies: [],
+      notes: ["Legacy deployment spec did not contain a source model."],
+    };
+  }
+  return {
+    schemaVersion: 1 as const,
+    source: "code-probe" as const,
+    shape: "single-service" as const,
+    primaryServiceId: "app",
+    previewServiceId: "app",
+    buildContextPath: spec.files.buildContextPath,
+    services: [{
+      serviceId: "app",
+      role: "app" as const,
+      root: probe.workingDirectory ?? ".",
+      workingDirectory: probe.workingDirectory,
+      workspacePackageJsonPaths: probe.workspacePackageJsonPaths,
+      runtimeKind: probe.kind,
+      packageManager: probe.packageManager,
+      hasLockfile: probe.hasLockfile,
+      framework: probe.framework,
+      runtimeVersion: probe.runtimeVersion,
+      runtimeVersionSource: probe.runtimeVersionSource,
+      buildCommand: probe.buildCommand,
+      startCommand: probe.startCommand,
+      outputDirectory: probe.outputDirectory,
+      port: probe.port,
+      healthcheckPath: probe.healthcheckPath ?? null,
+    }],
+    dependencies: probe.services,
+    notes: ["Deployment source model migrated from a legacy deployment spec."],
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export async function readDeploymentSpec(projectRoot: string): Promise<DeploymentSpec> {
   const paths = getDeploymentPaths(projectRoot);
   try {
@@ -794,10 +927,11 @@ export async function writeDeployExecutionRepairRequest(
 export async function readDeployExecutionRepairTaskResult(
   projectRoot: string,
   resultFile: string,
+  request?: DeployExecutionRepairRequest,
 ): Promise<DeployExecutionRepairTaskResult> {
   try {
     const raw = await readJsonFile(path.resolve(projectRoot, resultFile));
-    return deployExecutionRepairTaskResultSchema.parse(raw);
+    return deployExecutionRepairTaskResultSchema.parse(normalizeDeployExecutionRepairMachineOwnedFields(raw, request));
   } catch (error) {
     if (error instanceof ZodError) {
       throw stateCorrupted("Deploy execution repair task result does not match schema.", {
@@ -809,6 +943,73 @@ export async function readDeployExecutionRepairTaskResult(
     }
     throw error;
   }
+}
+
+function normalizeDeployExecutionRepairMachineOwnedFields(
+  raw: unknown,
+  request?: DeployExecutionRepairRequest,
+): unknown {
+  if (!request || !isPlainRecord(raw)) {
+    return raw;
+  }
+  const normalized: Record<string, unknown> = {
+    ...raw,
+    schemaVersion: "1.0",
+    repairId: request.repairId,
+    deploymentFailureRef: request.deploymentFailureRef,
+  };
+  if (!Array.isArray(normalized.changedFiles)) {
+    normalized.changedFiles = [];
+  }
+  if (!Array.isArray(normalized.notes)) {
+    normalized.notes = [];
+  }
+  if (!isPlainRecord(normalized.selfRepairSummary)) {
+    normalized.selfRepairSummary = {
+      attempted: false,
+      attemptCount: 0,
+      stopReason: "not_attempted",
+      progressObserved: false,
+    };
+  }
+  const rawRuntime = isPlainRecord(normalized.runtimeDeliveryEvidence) ? normalized.runtimeDeliveryEvidence : {};
+  const requiredChecks = request.syntheticTask.runtimeDeliveryRequirement.requiredCodeLevelChecks;
+  const rawChecks = Array.isArray(rawRuntime.codeLevelChecks) ? rawRuntime.codeLevelChecks.filter(isPlainRecord) : [];
+  const usedIndexes = new Set<number>();
+  const codeLevelChecks = requiredChecks
+    .map((check, index) => {
+      const matchingIndex = rawChecks.findIndex((item, itemIndex) =>
+        !usedIndexes.has(itemIndex) && (
+          item.checkId === check.checkId ||
+          item.contractField === check.contractField
+        )
+      );
+      const rawIndex = matchingIndex >= 0 ? matchingIndex : index;
+      const rawCheck = rawChecks[rawIndex];
+      if (!rawCheck) {
+        return null;
+      }
+      usedIndexes.add(rawIndex);
+      return {
+        ...rawCheck,
+        checkId: check.checkId,
+      };
+    })
+    .filter((item) => item !== null);
+  const extraChecks = rawChecks.filter((_, index) => !usedIndexes.has(index));
+  normalized.runtimeDeliveryEvidence = {
+    ...rawRuntime,
+    source: "deploy_failure_repair",
+    addressedFailedContractFields: request.syntheticTask.runtimeDeliveryRequirement.affectedContractFields,
+    codeLevelChecks: [...codeLevelChecks, ...extraChecks],
+    commandsRun: Array.isArray(rawRuntime.commandsRun) ? rawRuntime.commandsRun : [],
+    unverifiedItems: Array.isArray(rawRuntime.unverifiedItems) ? rawRuntime.unverifiedItems : [],
+  };
+  return normalized;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function appendDeploymentLog(projectRoot: string, content: string): Promise<void> {

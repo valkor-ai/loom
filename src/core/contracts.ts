@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { userFacingLanguageSchema } from "./schemas";
 
 const stringArraySchema = z.array(z.string());
 const agentActionContractSchema = z.object({
@@ -317,6 +318,7 @@ export const planningGenerationContractSchema = z.object({
     capabilityGroups: z.array(z.unknown()),
     businessFlows: z.array(z.unknown()),
     frontendExperience: z.record(z.unknown()).nullable().optional(),
+    userFacingLanguage: userFacingLanguageSchema.nullable().optional(),
     sourceRefs: stringArraySchema,
     contextNotes: stringArraySchema,
   }),
@@ -1466,6 +1468,7 @@ export const taskExecutionRequestSchema = z.object({
     architectureArtifactProjection: z.record(z.unknown()),
     acceptanceSnapshot: z.array(z.record(z.unknown())),
     requirementDetailSnapshot: z.array(z.record(z.unknown())).optional(),
+    userFacingLanguage: userFacingLanguageSchema.nullable().optional(),
     dependencyResults: z.array(z.record(z.unknown())),
   }),
   executionRules: z.record(z.unknown()),

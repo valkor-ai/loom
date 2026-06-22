@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { invalidArgument, stateNotInitialized } from "../errors";
 import {
   type ManualReviewResolution,
+  type PlanningGenerationContract,
   type ReviewRequest,
   type ReviewResult,
   type TaskPlan,
@@ -22,6 +23,7 @@ import {
   reviewResultSchema,
   taskResultSchema,
 } from "../contracts";
+import { userFacingLanguageRule } from "../requirements/user-facing-language";
 import { pathExists, readJsonFile, writeJsonAtomic, writeTextAtomic } from "../state/fs";
 import { getActiveLocator, getLocatorForBrainstormRun, loadDeliveryIndex, resolveLocator } from "../state/delivery";
 import {
@@ -306,6 +308,8 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
         "If outputContract.reviewSignals contains frontend_workflow_closure with closureSatisfied=false and recommendedNextAction=execution_repair, write a blocking frontend_experience finding and route execution_repair.",
         "If outputContract.reviewSignals contains frontend_workflow_closure with recommendedNextAction=taskplan_repair, write a blocking task_artifact_mapping_issue or task_verification_mapping_issue finding and route taskplan_repair.",
         "If outputContract.reviewSignals contains requirement_detail_evidence with detailSatisfied=false, write a blocking evidence_insufficient or task_verification_mapping_issue finding and route execution_repair.",
+        userFacingLanguageRule(pgc.planningInputs.userFacingLanguage ?? null),
+        "When frontend UI was changed or created, check whether user-visible copy follows the userFacingLanguage constraint. Obvious language drift is a frontend_experience finding, not a subjective style preference.",
         frontendModuleEntryPreservationRule,
       ],
       changeSetRules: changeSet.mode === "git_diff_ref"
@@ -340,7 +344,7 @@ export async function createReviewRequest(input: CreateReviewRequestInput): Prom
       findingCategoryEnum: [...reviewFindingCategorySchema.options],
       findingCategoryToAction: REVIEW_CATEGORY_TO_ACTION,
       severityPolicy: buildReviewSeverityPolicy(),
-      frontendExperienceReview: buildFrontendExperienceReview(aac),
+      frontendExperienceReview: buildFrontendExperienceReview(aac, pgc),
       runtimeDeliveryReview: buildRuntimeDeliveryReview(aac),
       conceptReviewMatrix,
       requirementDetailReview: {
@@ -1299,11 +1303,17 @@ function buildReviewSeverityPolicy(): Record<string, unknown> {
   };
 }
 
-function buildFrontendExperienceReview(aac: Awaited<ReturnType<typeof loadArchitectureArtifact>>): Record<string, unknown> {
+function buildFrontendExperienceReview(
+  aac: Awaited<ReturnType<typeof loadArchitectureArtifact>>,
+  pgc: PlanningGenerationContract,
+): Record<string, unknown> {
   const workflowClosureRequirements = buildWorkflowClosureRequirements(aac);
+  const userFacingLanguage = pgc.planningInputs.userFacingLanguage ?? null;
   return {
     required: aac.frontendExperience?.required ?? false,
     frontendExperienceRef: "architectureArtifactRef#/frontendExperience",
+    userFacingLanguage,
+    userFacingLanguageRule: userFacingLanguageRule(userFacingLanguage),
     contract: aac.frontendExperience ?? null,
     workflowClosureRequirements: workflowClosureRequirementReviewView(workflowClosureRequirements),
     workflowClosureReviewRule: workflowClosureRequirements.length > 0
@@ -1313,6 +1323,7 @@ function buildFrontendExperienceReview(aac: Awaited<ReturnType<typeof loadArchit
       "Block objective contract violations such as no visible UI when frontend is required.",
       "When workflowClosureRequirements is non-empty, check matching reviewSignals before approving.",
       "For workflow closures with operationPathRefs/dataViewRefs/actionRefs, check that evidence covers target discovery, action entry, declared interface invocation, result refresh/readback or status observation, and success/blocking feedback.",
+      "When changed UI contains user-visible labels, navigation, forms, buttons, success/error/business-blocking messages, or visible status/result text, verify it follows userFacingLanguage. Do not require code identifiers, API paths, database fields, enum values, or internal ids to use that language.",
       frontendModuleEntryPreservationRule,
       "Use manual_review for subjective visual polish decisions.",
       "Playwright failure alone is not a frontend product defect.",

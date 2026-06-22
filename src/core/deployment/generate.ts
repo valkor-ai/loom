@@ -1,21 +1,23 @@
 import path from "node:path";
 import type {
+  DependencyService,
   DeploymentBootstrapDiagnostics,
   DeploymentComposeInfo,
+  DeploymentRuntimeContract,
+  DeploymentSourceModel,
+  DeploymentSourceService,
   DeployProvider,
   DeploymentProviderPolicy,
   DeploymentEnvDiagnostics,
   DeploymentProviderCandidate,
   DeploymentWorkspace,
-  DetectedStack,
   DeploymentSpec,
   DeploymentCodeEvidenceSummary,
 } from "./types";
 import { toProjectRelative } from "../state/paths";
-import { generatedDependencyEnvironment, generatedRuntimeEnvironment } from "./env";
 
 export type GeneratedDeploymentFiles = {
-  dockerfile: string;
+  dockerfiles: Record<string, string>;
   compose: string;
   dockerignore: string;
 };
@@ -29,12 +31,13 @@ export function createDeploymentSpec(input: {
   providerReason: string;
   providerPolicy: DeploymentProviderPolicy;
   providerCandidates: DeploymentProviderCandidate[];
-  detectedStack: DetectedStack;
+  runtimeContract: DeploymentRuntimeContract;
+  sourceModel: DeploymentSourceModel;
   environment: DeploymentEnvDiagnostics;
   bootstrap: DeploymentBootstrapDiagnostics;
   compose?: DeploymentComposeInfo;
   codeEvidence?: DeploymentCodeEvidenceSummary;
-  dockerfilePath: string;
+  dockerfilePaths: Record<string, string>;
   composePath: string;
   dockerignorePath: string;
   generated: boolean;
@@ -44,10 +47,16 @@ export function createDeploymentSpec(input: {
   const serviceName = sanitizeName(path.basename(input.deploymentRoot));
   const imageName = `${serviceName}:loom-local`;
   const composePath = toProjectRelative(input.projectRoot, input.composePath);
-  const dockerfilePath = toProjectRelative(input.projectRoot, input.dockerfilePath);
+  const dockerfilePaths = Object.fromEntries(Object.entries(input.dockerfilePaths).map(([serviceId, filePath]) => [
+    serviceId,
+    toProjectRelative(input.projectRoot, filePath),
+  ]));
+  const primaryService = primaryServiceFor(input.sourceModel);
+  const previewService = previewServiceFor(input.sourceModel);
+  const dockerfilePath = dockerfilePaths[primaryService.serviceId] ?? Object.values(dockerfilePaths)[0] ?? null;
   const buildContextPath = toProjectRelative(input.projectRoot, input.buildContextRoot) || ".";
-  const healthcheckPath = input.detectedStack.healthcheckPath ?? "/";
-  const healthcheckEnabled = input.detectedStack.startCommand !== null || input.provider === "dockerfile-template";
+  const healthcheckPath = previewService.healthcheckPath ?? "/";
+  const healthcheckEnabled = previewService.startCommand !== null || input.provider === "dockerfile-template";
   const baseUrl = `http://localhost:${input.hostPort}`;
 
   return {
@@ -61,33 +70,15 @@ export function createDeploymentSpec(input: {
     projectRoot: input.projectRoot,
     generatedAt: new Date().toISOString(),
     workspace: input.workspace,
-    detectedStack: input.detectedStack,
     environment: input.environment,
     bootstrap: input.bootstrap,
-    compose: input.compose ?? generatedComposeInfo(serviceName, input.detectedStack.port),
+    compose: input.compose ?? generatedComposeInfo(input.sourceModel, input.hostPort),
     ...(input.codeEvidence ? { codeEvidence: input.codeEvidence } : {}),
-    runtimeContract: {
-      source: "heuristic",
-      ref: null,
-      status: "heuristic",
-      dependencyServicePolicy: "heuristic",
-      runtimeKind: input.detectedStack.framework ?? input.detectedStack.kind,
-      buildCommand: input.detectedStack.buildCommand,
-      startCommand: input.detectedStack.startCommand,
-      port: input.detectedStack.port,
-      previewPath: "/",
-      healthPath: input.detectedStack.healthcheckPath ?? null,
-      apiPaths: [],
-      frontendOutputDir: input.detectedStack.outputDirectory,
-      probeKind: input.detectedStack.startCommand ? "http" : "process",
-      environment: {
-        required: [],
-        optional: [],
-      },
-      dependencyServices: [],
-    },
+    runtimeContract: input.runtimeContract,
+    sourceModel: input.sourceModel,
     files: {
       dockerfilePath,
+      dockerfilePaths,
       composePath,
       dockerignorePath: toProjectRelative(input.projectRoot, input.dockerignorePath),
       buildContextPath,
@@ -95,13 +86,13 @@ export function createDeploymentSpec(input: {
       reused: input.reused,
     },
     runtime: {
-      containerPort: input.detectedStack.port,
+      containerPort: previewService.port,
       hostPort: input.hostPort,
       url: `http://localhost:${input.hostPort}`,
       healthcheck: {
         enabled: healthcheckEnabled,
         path: healthcheckPath,
-        candidates: healthcheckCandidatesFor(input.detectedStack),
+        candidates: healthcheckCandidatesFor(previewService),
         url: healthcheckEnabled ? `${baseUrl}${healthcheckPath}` : null,
         expectedStatusMax: 399,
         attempts: 12,
@@ -119,48 +110,59 @@ export function createDeploymentSpec(input: {
   };
 }
 
-function generatedComposeInfo(serviceName: string, containerPort: number): DeploymentComposeInfo {
+function generatedComposeInfo(sourceModel: DeploymentSourceModel, hostPort: number): DeploymentComposeInfo {
   return {
-    selectedService: serviceName,
-    serviceReason: "Generated Compose uses the generated application service.",
+    selectedService: previewServiceFor(sourceModel).serviceId,
+    serviceReason: "Generated Compose uses the deployment source model preview service.",
     services: [
-      {
-        name: serviceName,
+      ...sourceModel.services.map((service) => ({
+        name: service.serviceId,
         score: 100,
         image: null,
         build: true,
-        ports: [
+        ports: service.serviceId === sourceModel.previewServiceId ? [
           {
-            hostPort: null,
-            containerPort,
+            hostPort,
+            containerPort: service.port,
             protocol: "tcp",
-            raw: String(containerPort),
+            raw: String(service.port),
           },
-        ],
+        ] : [],
         expose: [],
-        dependsOn: [],
+        dependsOn: sourceModel.dependencies.map((dependency) => dependency.serviceName),
         profiles: [],
         dependencyLike: false,
-        reason: "Generated application service.",
-      },
+        reason: "Generated application service from deployment source model.",
+      })),
     ],
     warnings: [],
   };
 }
 
+function primaryServiceFor(sourceModel: DeploymentSourceModel): DeploymentSourceService {
+  return sourceModel.services.find((service) => service.serviceId === sourceModel.primaryServiceId) ?? sourceModel.services[0];
+}
+
+function previewServiceFor(sourceModel: DeploymentSourceModel): DeploymentSourceService {
+  return sourceModel.services.find((service) => service.serviceId === sourceModel.previewServiceId) ?? primaryServiceFor(sourceModel);
+}
+
 export function generateDeploymentFiles(spec: DeploymentSpec): GeneratedDeploymentFiles {
-  if (!spec.files.dockerfilePath) {
-    throw new Error("Cannot generate Dockerfile deployment files without a Dockerfile path.");
+  if (Object.keys(spec.files.dockerfilePaths).length === 0) {
+    throw new Error("Cannot generate deployment files without service Dockerfile paths.");
   }
 
   return {
-    dockerfile: generateDockerfile(spec.detectedStack),
-    compose: generateCompose(spec, spec.files.dockerfilePath),
+    dockerfiles: Object.fromEntries(spec.sourceModel.services.map((service) => [
+      service.serviceId,
+      generateDockerfile(service),
+    ])),
+    compose: generateCompose(spec),
     dockerignore: generateDockerignore(),
   };
 }
 
-function healthcheckCandidatesFor(stack: DetectedStack): string[] {
+function healthcheckCandidatesFor(stack: DeploymentSourceService): string[] {
   const common = ["/", "/health", "/healthz", "/api/health", "/ready", "/readiness"];
   const detected = stack.healthcheckPath ? [stack.healthcheckPath] : [];
   switch (stack.framework) {
@@ -181,42 +183,36 @@ function healthcheckCandidatesFor(stack: DetectedStack): string[] {
   }
 }
 
-function generateDockerfile(stack: DetectedStack): string {
-  if (stack.kind === "static") {
-    return [
-      "FROM nginx:1.27-alpine",
-      "WORKDIR /usr/share/nginx/html",
-      "COPY . .",
-      "EXPOSE 80",
-      "",
-    ].join("\n");
+function generateDockerfile(stack: DeploymentSourceService): string {
+  if (stack.runtimeKind === "static" || (stack.role === "frontend" && !stack.startCommand)) {
+    return generateStaticFrontendDockerfile(stack);
   }
 
-  if (stack.kind === "node") {
+  if (stack.runtimeKind === "node") {
     return generateNodeDockerfile(stack);
   }
 
-  if (stack.kind === "python") {
+  if (stack.runtimeKind === "python") {
     return generatePythonDockerfile(stack);
   }
 
-  if (stack.kind === "go") {
+  if (stack.runtimeKind === "go") {
     return generateGoDockerfile(stack);
   }
 
-  if (stack.kind === "java") {
+  if (stack.runtimeKind === "java") {
     return generateJavaDockerfile(stack);
   }
 
-  if (stack.kind === "dotnet") {
+  if (stack.runtimeKind === "dotnet") {
     return generateDotnetDockerfile(stack);
   }
 
-  if (stack.kind === "php") {
+  if (stack.runtimeKind === "php") {
     return generatePhpDockerfile(stack);
   }
 
-  if (stack.kind === "ruby") {
+  if (stack.runtimeKind === "ruby") {
     return generateRubyDockerfile(stack);
   }
 
@@ -229,7 +225,27 @@ function generateDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generateNodeDockerfile(stack: DetectedStack): string {
+function generateStaticFrontendDockerfile(stack: DeploymentSourceService): string {
+  const packageManager = stack.packageManager ?? "npm";
+  const installCommand = installCommandFor(packageManager, stack.hasLockfile);
+  const outputDirectory = stack.outputDirectory ?? "dist";
+  const buildCommand = stack.buildCommand ?? packageManagerRun(packageManager, "build");
+  return [
+    `FROM ${nodeBaseImageFor(stack)} AS builder`,
+    "WORKDIR /workspace",
+    "COPY . .",
+    ...(stack.root !== "." ? [`WORKDIR /workspace/${stack.root}`] : []),
+    `RUN ${installCommand}`,
+    ...(buildCommand ? [`RUN ${buildCommand}`] : []),
+    "",
+    "FROM nginx:1.27-alpine AS runner",
+    `COPY --from=builder /workspace/${outputDirectory} /usr/share/nginx/html`,
+    "EXPOSE 80",
+    "",
+  ].join("\n");
+}
+
+function generateNodeDockerfile(stack: DeploymentSourceService): string {
   const installCommand = installCommandFor(stack.packageManager ?? "npm", stack.hasLockfile);
   const lockfileCopy = lockfileCopyFor(stack.packageManager ?? "npm");
   const baseImage = nodeBaseImageFor(stack);
@@ -261,7 +277,7 @@ function generateNodeDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generatePythonDockerfile(stack: DetectedStack): string {
+function generatePythonDockerfile(stack: DeploymentSourceService): string {
   const installLines = pythonInstallLines(stack.packageManager ?? "pip");
   const startCommand =
     stack.startCommand ??
@@ -281,7 +297,7 @@ function generatePythonDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generateGoDockerfile(stack: DetectedStack): string {
+function generateGoDockerfile(stack: DeploymentSourceService): string {
   const startCommand = stack.startCommand ?? "/app/server";
 
   return [
@@ -303,7 +319,7 @@ function generateGoDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generateJavaDockerfile(stack: DetectedStack): string {
+function generateJavaDockerfile(stack: DeploymentSourceService): string {
   const javaVersion = stack.runtimeVersion ?? "21";
   const packageManager = stack.packageManager === "gradle" ? "gradle" : "maven";
   const builderImage = packageManager === "maven"
@@ -331,7 +347,7 @@ function generateJavaDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generateDotnetDockerfile(stack: DetectedStack): string {
+function generateDotnetDockerfile(stack: DeploymentSourceService): string {
   const dotnetVersion = stack.runtimeVersion ?? "8";
   const runtimeImage = stack.framework === "aspnetcore"
     ? `mcr.microsoft.com/dotnet/aspnet:${dotnetVersion}`
@@ -356,7 +372,7 @@ function generateDotnetDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generatePhpDockerfile(stack: DetectedStack): string {
+function generatePhpDockerfile(stack: DeploymentSourceService): string {
   const phpVersion = stack.runtimeVersion ?? "8.3";
   const startCommand = stack.startCommand ?? "php -S 0.0.0.0:${PORT:-8000} -t public public/index.php";
 
@@ -384,7 +400,7 @@ function generatePhpDockerfile(stack: DetectedStack): string {
   ].join("\n");
 }
 
-function generateRubyDockerfile(stack: DetectedStack): string {
+function generateRubyDockerfile(stack: DeploymentSourceService): string {
   const rubyVersion = stack.runtimeVersion ?? "3.3";
   const startCommand = stack.startCommand ?? "bundle exec rails server -b 0.0.0.0 -p ${PORT:-3000}";
 
@@ -415,56 +431,65 @@ export function generateComposeForDockerfile(spec: DeploymentSpec): string {
   if (!spec.files.dockerfilePath) {
     throw new Error("Cannot generate Compose file without a Dockerfile path.");
   }
-  return generateCompose(spec, spec.files.dockerfilePath);
+  return generateCompose(spec);
 }
 
-function generateCompose(spec: DeploymentSpec, dockerfilePath: string): string {
-  const service = spec.serviceName;
-  const port = `${spec.runtime.hostPort}:${spec.runtime.containerPort}`;
-  const contextPath = projectPathRelativeToFile(spec.files.composePath, spec.files.buildContextPath);
-  const dockerfile = projectPathRelativeToDirectory(spec.files.buildContextPath, dockerfilePath);
-  const appEnvironment = {
-    ...generatedRuntimeEnvironment(spec.detectedStack),
-    ...generatedDependencyEnvironment(spec.detectedStack),
-    ...spec.environment.generated,
-  };
-
+function generateCompose(spec: DeploymentSpec): string {
   const lines = [
     "services:",
-    `  ${service}:`,
-    "    build:",
-    `      context: ${yamlString(contextPath)}`,
-    `      dockerfile: ${yamlString(dockerfile)}`,
-    `    image: ${spec.imageName}`,
-    "    ports:",
-    `      - \"${port}\"`,
-    ...yamlEnvironment(appEnvironment, 4),
-    ...(spec.detectedStack.startCommand
-      ? [
-          "    healthcheck:",
-          `      test: [\"CMD-SHELL\", \"wget -qO- http://127.0.0.1:${spec.runtime.containerPort}${spec.runtime.healthcheck.path} >/dev/null 2>&1 || exit 1\"]`,
-          "      interval: 10s",
-          "      timeout: 3s",
-          "      retries: 6",
-          "      start_period: 10s",
-        ]
-      : []),
-    ...(spec.detectedStack.services.length > 0
-      ? [
-          "    depends_on:",
-          ...spec.detectedStack.services.map((dependency) => `      - ${dependency.serviceName}`),
-        ]
-      : []),
-    "    restart: unless-stopped",
-    "",
-    ...spec.detectedStack.services.flatMap(generateDependencyService),
+    ...spec.sourceModel.services.flatMap((service) => generateAppService(spec, service)),
+    ...spec.sourceModel.dependencies.flatMap(generateDependencyService),
     ...generateVolumes(spec),
   ];
 
   return lines.join("\n");
 }
 
-function generateDependencyService(service: DetectedStack["services"][number]): string[] {
+function generateAppService(spec: DeploymentSpec, service: DeploymentSourceService): string[] {
+  const dockerfilePath = spec.files.dockerfilePaths[service.serviceId] ?? spec.files.dockerfilePath;
+  if (!dockerfilePath) {
+    throw new Error(`Cannot generate Compose service ${service.serviceId} without a Dockerfile path.`);
+  }
+  const contextPath = projectPathRelativeToFile(spec.files.composePath, spec.files.buildContextPath);
+  const dockerfile = projectPathRelativeToDirectory(spec.files.buildContextPath, dockerfilePath);
+  const environment = {
+    ...generatedRuntimeEnvironmentForService(service),
+    ...(service.role === "frontend" ? {} : generatedDependencyEnvironmentForServices(spec.sourceModel.dependencies)),
+    ...spec.environment.generated,
+  };
+  const ports = service.serviceId === spec.sourceModel.previewServiceId
+    ? [`    ports:`, `      - "${spec.runtime.hostPort}:${service.port}"`]
+    : [];
+  return [
+    `  ${service.serviceId}:`,
+    "    build:",
+    `      context: ${yamlString(contextPath)}`,
+    `      dockerfile: ${yamlString(dockerfile)}`,
+    `    image: ${spec.imageName}-${service.serviceId}`,
+    ...ports,
+    ...yamlEnvironment(environment, 4),
+    ...(service.startCommand
+      ? [
+          "    healthcheck:",
+          `      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${service.port}${service.healthcheckPath ?? "/"} >/dev/null 2>&1 || exit 1"]`,
+          "      interval: 10s",
+          "      timeout: 3s",
+          "      retries: 6",
+          "      start_period: 10s",
+        ]
+      : []),
+    ...(spec.sourceModel.dependencies.length > 0 && service.role !== "frontend"
+      ? [
+          "    depends_on:",
+          ...spec.sourceModel.dependencies.map((dependency) => `      - ${dependency.serviceName}`),
+        ]
+      : []),
+    "    restart: unless-stopped",
+    "",
+  ];
+}
+
+function generateDependencyService(service: DependencyService): string[] {
   const commandLines = dependencyCommand(service);
 
   return [
@@ -484,8 +509,40 @@ function generateDependencyService(service: DetectedStack["services"][number]): 
   ];
 }
 
+function generatedRuntimeEnvironmentForService(service: DeploymentSourceService): Record<string, string> {
+  switch (service.runtimeKind) {
+    case "node":
+      return {
+        NODE_ENV: "production",
+        PORT: String(service.port),
+      };
+    case "python":
+      return {
+        PORT: String(service.port),
+      };
+    case "go":
+    case "java":
+    case "dotnet":
+    case "php":
+    case "ruby":
+      return {
+        PORT: String(service.port),
+        ...(service.runtimeKind === "ruby" ? { RAILS_ENV: "production", RACK_ENV: "production" } : {}),
+        ...(service.runtimeKind === "java" ? { SERVER_PORT: String(service.port) } : {}),
+        ...(service.runtimeKind === "dotnet" ? { ASPNETCORE_URLS: `http://0.0.0.0:${service.port}` } : {}),
+      };
+    case "static":
+    case "unknown":
+      return {};
+  }
+}
+
+function generatedDependencyEnvironmentForServices(services: DependencyService[]): Record<string, string> {
+  return Object.assign({}, ...services.map((dependency) => dependency.connectionEnv));
+}
+
 function generateVolumes(spec: DeploymentSpec): string[] {
-  const volumes = spec.detectedStack.services
+  const volumes = spec.sourceModel.dependencies
     .map((service) => service.volumeName)
     .filter((volumeName): volumeName is string => Boolean(volumeName));
   if (volumes.length === 0) {
@@ -562,7 +619,7 @@ function generateDockerignore(): string {
 }
 
 function installCommandFor(
-  packageManager: NonNullable<DetectedStack["packageManager"]>,
+  packageManager: Exclude<DeploymentSourceService["packageManager"], null>,
   hasLockfile: boolean,
 ): string {
   switch (packageManager) {
@@ -593,7 +650,33 @@ function installCommandFor(
   }
 }
 
-function nodeBaseImageFor(stack: DetectedStack): string {
+function packageManagerRun(
+  packageManager: Exclude<DeploymentSourceService["packageManager"], null>,
+  script: string,
+): string {
+  switch (packageManager) {
+    case "npm":
+      return `npm run ${script}`;
+    case "pnpm":
+      return `pnpm run ${script}`;
+    case "yarn":
+      return `yarn ${script}`;
+    case "bun":
+      return `bun run ${script}`;
+    case "pip":
+    case "poetry":
+    case "uv":
+    case "go":
+    case "maven":
+    case "gradle":
+    case "dotnet":
+    case "composer":
+    case "bundler":
+      return "";
+  }
+}
+
+function nodeBaseImageFor(stack: DeploymentSourceService): string {
   if (stack.packageManager === "bun") {
     return "oven/bun:1";
   }
@@ -601,7 +684,7 @@ function nodeBaseImageFor(stack: DetectedStack): string {
   return `node:${stack.runtimeVersion ?? "22"}-slim`;
 }
 
-function lockfileCopyFor(packageManager: NonNullable<DetectedStack["packageManager"]>): string {
+function lockfileCopyFor(packageManager: Exclude<DeploymentSourceService["packageManager"], null>): string {
   switch (packageManager) {
     case "npm":
       return "COPY package.json package-lock.json* ./";
@@ -624,12 +707,12 @@ function lockfileCopyFor(packageManager: NonNullable<DetectedStack["packageManag
   }
 }
 
-function workingDirectoryLines(stack: DetectedStack): string[] {
+function workingDirectoryLines(stack: DeploymentSourceService): string[] {
   return stack.workingDirectory ? [`WORKDIR /app/${stack.workingDirectory}`] : [];
 }
 
-function workspaceManifestCopyLines(stack: DetectedStack, sourcePrefix = "."): string[] {
-  if (stack.kind !== "node") {
+function workspaceManifestCopyLines(stack: DeploymentSourceService, sourcePrefix = "."): string[] {
+  if (stack.runtimeKind !== "node") {
     return [];
   }
 
@@ -649,8 +732,8 @@ function workspaceManifestCopyLines(stack: DetectedStack, sourcePrefix = "."): s
     });
 }
 
-function workspaceNodeModulesCopyLines(stack: DetectedStack): string[] {
-  if (!stack.workingDirectory || stack.kind !== "node") {
+function workspaceNodeModulesCopyLines(stack: DeploymentSourceService): string[] {
+  if (!stack.workingDirectory || stack.runtimeKind !== "node") {
     return [];
   }
   if (!["pnpm", "yarn"].includes(stack.packageManager ?? "")) {
@@ -712,7 +795,7 @@ function javaRuntimeStartCommand(command: string | null): string {
   return command;
 }
 
-function pythonInstallLines(packageManager: NonNullable<DetectedStack["packageManager"]>): string[] {
+function pythonInstallLines(packageManager: Exclude<DeploymentSourceService["packageManager"], null>): string[] {
   switch (packageManager) {
     case "uv":
       return [
@@ -735,7 +818,7 @@ function pythonInstallLines(packageManager: NonNullable<DetectedStack["packageMa
   }
 }
 
-function dependencyCommand(service: DetectedStack["services"][number]): string[] {
+function dependencyCommand(service: DependencyService): string[] {
   if (service.kind === "minio") {
     return ["    command: server /data --console-address \":9001\""];
   }

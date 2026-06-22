@@ -22,6 +22,7 @@ async function main() {
   await verifyGoTemplate(join(root, "go-template"));
   await verifyJavaMavenTemplate(join(root, "java-maven-template"));
   await verifyJavaMixedFrontendTemplate(join(root, "java-mixed-frontend-template"));
+  await verifyCompositeFrontendBackendSourceModel(join(root, "composite-frontend-backend-source-model"));
   await verifyDotnetAspnetTemplate(join(root, "dotnet-aspnet-template"));
   await verifyPhpLaravelTemplate(join(root, "php-laravel-template"));
   await verifyRubyRailsTemplate(join(root, "ruby-rails-template"));
@@ -83,9 +84,9 @@ async function verifyGeneratedTemplate(projectRoot) {
   assert.equal(envelope.data.files.generated, true);
   assert.equal(envelope.data.files.reused.length, 0);
   assertSelectedCandidate(envelope, "dockerfile-template");
-  assert.equal(envelope.data.detectedStack.services.length, 2);
-  assert.equal(envelope.data.detectedStack.runtimeVersion, "22");
-  assert.equal(envelope.data.detectedStack.runtimeVersionSource, "default");
+  assert.equal(dependencies(envelope).length, 2);
+  assert.equal(appService(envelope).runtimeVersion, "22");
+  assert.equal(appService(envelope).runtimeVersionSource, "default");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM node:22-slim AS deps/);
@@ -110,7 +111,7 @@ async function verifyGeneratedTemplateWithoutEnvironment(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "unknown");
+  assert.equal(appService(envelope).runtimeKind, "unknown");
   assert.equal(envelope.data.provider, "dockerfile-template");
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
@@ -282,7 +283,7 @@ async function verifyExistingComposeServiceSelection(projectRoot) {
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.provider, "compose-existing");
   assert.equal(envelope.data.url, "http://localhost:8123");
-  assert.equal(envelope.data.detectedStack.port, 3000);
+  assert.equal(appService(envelope).port, 3000);
 
   const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.compose.selectedService, "web");
@@ -308,8 +309,8 @@ async function verifyNextBunTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.framework, "next");
-  assert.equal(envelope.data.detectedStack.packageManager, "bun");
+  assert.equal(appService(envelope).framework, "next");
+  assert.equal(appService(envelope).packageManager, "bun");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM oven\/bun:1 AS deps/);
@@ -339,8 +340,8 @@ async function verifyNextStandaloneTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.framework, "next");
-  assert.equal(envelope.data.detectedStack.startCommand, "node .next/standalone/server.js");
+  assert.equal(appService(envelope).framework, "next");
+  assert.equal(appService(envelope).startCommand, "node .next/standalone/server.js");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /RUN npm install/);
@@ -361,8 +362,8 @@ async function verifyNodeVersionTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.runtimeVersion, "20");
-  assert.equal(envelope.data.detectedStack.runtimeVersionSource, "package.json engines.node");
+  assert.equal(appService(envelope).runtimeVersion, "20");
+  assert.equal(appService(envelope).runtimeVersionSource, "package.json engines.node");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM node:20-slim AS deps/);
@@ -376,12 +377,12 @@ async function verifyPythonTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "python");
-  assert.equal(envelope.data.detectedStack.packageManager, "pip");
-  assert.equal(envelope.data.detectedStack.framework, "fastapi");
-  assert.equal(envelope.data.detectedStack.port, 8000);
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "mongodb"));
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "rabbitmq"));
+  assert.equal(appService(envelope).runtimeKind, "python");
+  assert.equal(appService(envelope).packageManager, "pip");
+  assert.equal(appService(envelope).framework, "fastapi");
+  assert.equal(appService(envelope).port, 8000);
+  assert.ok(dependencies(envelope).some((service) => service.kind === "mongodb"));
+  assert.ok(dependencies(envelope).some((service) => service.kind === "rabbitmq"));
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM python:3\.12-slim/);
@@ -433,12 +434,12 @@ async function verifyPythonStdlibHttpTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "python");
-  assert.equal(envelope.data.detectedStack.packageManager, "pip");
-  assert.equal(envelope.data.detectedStack.framework, "stdlib-http");
-  assert.equal(envelope.data.detectedStack.port, 8000);
-  assert.equal(envelope.data.detectedStack.healthcheckPath, "/health");
-  assert.equal(envelope.data.detectedStack.startCommand, "python server.py --host 0.0.0.0 --port 8000");
+  assert.equal(appService(envelope).runtimeKind, "python");
+  assert.equal(appService(envelope).packageManager, "pip");
+  assert.equal(appService(envelope).framework, "stdlib-http");
+  assert.equal(appService(envelope).port, 8000);
+  assert.equal(appService(envelope).healthcheckPath, "/health");
+  assert.equal(appService(envelope).startCommand, "python server.py --host 0.0.0.0 --port 8000");
   assert.match(envelope.data.url, /^http:\/\/localhost:\d+$/);
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
@@ -475,8 +476,8 @@ async function verifyDependencyServiceTokenBoundaries(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "python");
-  assert.equal(envelope.data.detectedStack.services.length, 0);
+  assert.equal(appService(envelope).runtimeKind, "python");
+  assert.equal(dependencies(envelope).length, 0);
 }
 
 async function verifyGoTemplate(projectRoot) {
@@ -488,11 +489,11 @@ async function verifyGoTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "go");
-  assert.equal(envelope.data.detectedStack.packageManager, "go");
-  assert.equal(envelope.data.detectedStack.framework, "gin");
-  assert.equal(envelope.data.detectedStack.port, 9090);
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "mysql"));
+  assert.equal(appService(envelope).runtimeKind, "go");
+  assert.equal(appService(envelope).packageManager, "go");
+  assert.equal(appService(envelope).framework, "gin");
+  assert.equal(appService(envelope).port, 9090);
+  assert.ok(dependencies(envelope).some((service) => service.kind === "mysql"));
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM golang:1\.23-alpine AS builder/);
@@ -524,13 +525,13 @@ async function verifyJavaMavenTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "java");
-  assert.equal(envelope.data.detectedStack.packageManager, "maven");
-  assert.equal(envelope.data.detectedStack.framework, "spring-boot");
-  assert.equal(envelope.data.detectedStack.runtimeVersion, "17");
-  assert.equal(envelope.data.detectedStack.runtimeVersionSource, "java.version");
-  assert.equal(envelope.data.detectedStack.port, 9091);
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.equal(appService(envelope).runtimeKind, "java");
+  assert.equal(appService(envelope).packageManager, "maven");
+  assert.equal(appService(envelope).framework, "spring-boot");
+  assert.equal(appService(envelope).runtimeVersion, "17");
+  assert.equal(appService(envelope).runtimeVersionSource, "java.version");
+  assert.equal(appService(envelope).port, 9091);
+  assert.ok(dependencies(envelope).some((service) => service.kind === "postgres"));
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM maven:3-eclipse-temurin-17 AS builder/);
@@ -581,8 +582,8 @@ async function verifyJavaMixedFrontendTemplate(projectRoot) {
 
   const envelope = runDeployPrepare(projectRoot);
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "java");
-  assert.equal(envelope.data.detectedStack.buildCommand, "npm --prefix apps/web run build && mvn -DskipTests package");
+  assert.equal(appService(envelope).runtimeKind, "java");
+  assert.equal(appService(envelope).buildCommand, "npm --prefix apps/web run build && mvn -DskipTests package");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /USER root/);
@@ -595,6 +596,93 @@ async function verifyJavaMixedFrontendTemplate(projectRoot) {
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
   assert.doesNotMatch(compose, /container_name:/);
+}
+
+async function verifyCompositeFrontendBackendSourceModel(projectRoot) {
+  await mkdir(join(projectRoot, "apps/web-admin"), { recursive: true });
+  await mkdir(join(projectRoot, "apps/backend"), { recursive: true });
+  await writeFile(join(projectRoot, "Dockerfile"), [
+    "FROM alpine:3.20",
+    "CMD [\"sh\", \"-c\", \"echo legacy single dockerfile\"]",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(join(projectRoot, "apps/web-admin/package.json"), `${JSON.stringify({
+    scripts: { build: "vite build" },
+    dependencies: {
+      "@vitejs/plugin-react": "^4.3.1",
+      vite: "^5.3.4",
+      react: "^18.3.1",
+    },
+  }, null, 2)}\n`, "utf8");
+  await writeFile(join(projectRoot, "apps/backend/pom.xml"), [
+    "<project>",
+    "  <properties><java.version>21</java.version></properties>",
+    "  <dependencies>",
+    "    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>",
+    "    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><version>42.7.3</version></dependency>",
+    "  </dependencies>",
+    "</project>",
+    "",
+  ].join("\n"), "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "react_vite_admin_plus_spring_boot_api",
+    buildCommand: "npm run build --prefix apps/web-admin && mvn -f apps/backend/pom.xml package",
+    startCommand: "mvn -f apps/backend/pom.xml spring-boot:run",
+    startPort: 4173,
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "apps/web-admin/dist",
+    environment: { required: ["SPRING_DATASOURCE_URL"], optional: [] },
+  });
+  const architecturePath = join(projectRoot, ".loom/deliveries/delivery-runtime/artifacts/architecture/phase-1/aac.json");
+  const aac = JSON.parse(await readFile(architecturePath, "utf8"));
+  aac.engineeringBoundary.applications = [
+    { appId: "web-admin", type: "web_app", root: "apps/web-admin" },
+    { appId: "backend", type: "api_service", root: "apps/backend" },
+  ];
+  aac.runtimeDelivery.frontend = {
+    required: true,
+    kind: "vite_react",
+    buildCommand: "npm run build --prefix apps/web-admin",
+    sourceRoot: "apps/web-admin/src",
+    outputDir: "apps/web-admin/dist",
+    servedBy: "vite_preview",
+    servedByRef: "apps/web-admin",
+    codeLevelExpectations: ["Frontend builds independently."],
+  };
+  aac.runtimeDelivery.api = {
+    required: true,
+    kind: "spring_boot",
+    buildCommand: "mvn -f apps/backend/pom.xml package",
+    entry: "apps/backend/src/main/java/com/example/Application.java",
+    basePath: "/api",
+    probePaths: ["/api/security-accounts"],
+    codeLevelExpectations: ["Backend exposes API routes."],
+  };
+  aac.runtimeDelivery.httpProbes.apiPaths = ["/api/security-accounts"];
+  await writeFile(architecturePath, `${JSON.stringify(aac, null, 2)}\n`, "utf8");
+
+  const envelope = runDeployPrepare(projectRoot);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.provider, "dockerfile-template");
+  assert.equal(envelope.data.sourceModel.shape, "frontend-and-backend");
+  assert.equal(
+    envelope.data.providerCandidates.find((candidate) => candidate.provider === "dockerfile-existing")?.status,
+    "skipped",
+  );
+  assert.deepEqual(envelope.data.sourceModel.services.map((service) => service.serviceId), ["frontend", "backend"]);
+  assert.equal(envelope.data.sourceModel.previewServiceId, "frontend");
+  assert.equal(envelope.data.sourceModel.primaryServiceId, "backend");
+  assert.ok(envelope.data.sourceModel.dependencies.some((service) => service.kind === "postgres"));
+  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile.frontend")), true);
+  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile.backend")), true);
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.match(compose, /^  frontend:/m);
+  assert.match(compose, /^  backend:/m);
+  assert.match(compose, /^  postgres:/m);
+  assert.match(compose, /dockerfile: "\.loom\/deployment\/specs\/generated\/Dockerfile\.frontend"/);
+  assert.match(compose, /dockerfile: "\.loom\/deployment\/specs\/generated\/Dockerfile\.backend"/);
 }
 
 async function verifyDotnetAspnetTemplate(projectRoot) {
@@ -618,14 +706,14 @@ async function verifyDotnetAspnetTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "dotnet");
-  assert.equal(envelope.data.detectedStack.packageManager, "dotnet");
-  assert.equal(envelope.data.detectedStack.framework, "aspnetcore");
-  assert.equal(envelope.data.detectedStack.runtimeVersion, "8");
-  assert.equal(envelope.data.detectedStack.runtimeVersionSource, "TargetFramework");
-  assert.equal(envelope.data.detectedStack.port, 7070);
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "postgres"));
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "redis"));
+  assert.equal(appService(envelope).runtimeKind, "dotnet");
+  assert.equal(appService(envelope).packageManager, "dotnet");
+  assert.equal(appService(envelope).framework, "aspnetcore");
+  assert.equal(appService(envelope).runtimeVersion, "8");
+  assert.equal(appService(envelope).runtimeVersionSource, "TargetFramework");
+  assert.equal(appService(envelope).port, 7070);
+  assert.ok(dependencies(envelope).some((service) => service.kind === "postgres"));
+  assert.ok(dependencies(envelope).some((service) => service.kind === "redis"));
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM mcr\.microsoft\.com\/dotnet\/sdk:8 AS build/);
@@ -663,14 +751,14 @@ async function verifyPhpLaravelTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "php");
-  assert.equal(envelope.data.detectedStack.packageManager, "composer");
-  assert.equal(envelope.data.detectedStack.framework, "laravel");
-  assert.equal(envelope.data.detectedStack.runtimeVersion, "8.2");
-  assert.equal(envelope.data.detectedStack.runtimeVersionSource, "composer.json require.php");
-  assert.equal(envelope.data.detectedStack.port, 8000);
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "mysql"));
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "redis"));
+  assert.equal(appService(envelope).runtimeKind, "php");
+  assert.equal(appService(envelope).packageManager, "composer");
+  assert.equal(appService(envelope).framework, "laravel");
+  assert.equal(appService(envelope).runtimeVersion, "8.2");
+  assert.equal(appService(envelope).runtimeVersionSource, "composer.json require.php");
+  assert.equal(appService(envelope).port, 8000);
+  assert.ok(dependencies(envelope).some((service) => service.kind === "mysql"));
+  assert.ok(dependencies(envelope).some((service) => service.kind === "redis"));
   assert.ok(envelope.data.environment.generated.APP_KEY);
   assert.ok(envelope.data.environment.provided.includes("APP_KEY"));
 
@@ -710,14 +798,14 @@ async function verifyRubyRailsTemplate(projectRoot) {
   const envelope = runDeployPrepare(projectRoot);
 
   assert.equal(envelope.ok, true);
-  assert.equal(envelope.data.detectedStack.kind, "ruby");
-  assert.equal(envelope.data.detectedStack.packageManager, "bundler");
-  assert.equal(envelope.data.detectedStack.framework, "rails");
-  assert.equal(envelope.data.detectedStack.runtimeVersion, "3.2");
-  assert.equal(envelope.data.detectedStack.runtimeVersionSource, "Gemfile ruby");
-  assert.equal(envelope.data.detectedStack.port, 3000);
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "postgres"));
-  assert.ok(envelope.data.detectedStack.services.some((service) => service.kind === "redis"));
+  assert.equal(appService(envelope).runtimeKind, "ruby");
+  assert.equal(appService(envelope).packageManager, "bundler");
+  assert.equal(appService(envelope).framework, "rails");
+  assert.equal(appService(envelope).runtimeVersion, "3.2");
+  assert.equal(appService(envelope).runtimeVersionSource, "Gemfile ruby");
+  assert.equal(appService(envelope).port, 3000);
+  assert.ok(dependencies(envelope).some((service) => service.kind === "postgres"));
+  assert.ok(dependencies(envelope).some((service) => service.kind === "redis"));
   assert.ok(envelope.data.environment.generated.SECRET_KEY_BASE);
   assert.ok(envelope.data.environment.provided.includes("SECRET_KEY_BASE"));
 
@@ -771,10 +859,10 @@ async function verifyPnpmWorkspaceTemplate(projectRoot) {
   assert.equal(envelope.data.workspace.appPath, "apps/web");
   assert.equal(envelope.data.workspace.buildContextPath, ".");
   assert.equal(envelope.data.files.buildContextPath, ".");
-  assert.equal(envelope.data.detectedStack.kind, "node");
-  assert.equal(envelope.data.detectedStack.framework, "vite");
-  assert.equal(envelope.data.detectedStack.packageManager, "pnpm");
-  assert.equal(envelope.data.detectedStack.workingDirectory, "apps/web");
+  assert.equal(appService(envelope).runtimeKind, "node");
+  assert.equal(appService(envelope).framework, "vite");
+  assert.equal(appService(envelope).packageManager, "pnpm");
+  assert.equal(appService(envelope).workingDirectory, "apps/web");
   assert.equal(envelope.data.provider, "dockerfile-template");
   assert.ok(envelope.data.workspace.candidates.some((candidate) => candidate.path === "apps/web"));
 
@@ -834,9 +922,9 @@ async function verifyNpmWorkspaceTemplate(projectRoot) {
 
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.workspace.appPath, ".");
-  assert.equal(envelope.data.detectedStack.kind, "node");
-  assert.equal(envelope.data.detectedStack.packageManager, "npm");
-  assert.deepEqual(envelope.data.detectedStack.workspacePackageJsonPaths, [
+  assert.equal(appService(envelope).runtimeKind, "node");
+  assert.equal(appService(envelope).packageManager, "npm");
+  assert.deepEqual(appService(envelope).workspacePackageJsonPaths, [
     "apps/api/package.json",
     "apps/web/package.json",
   ]);
@@ -1249,11 +1337,11 @@ async function verifyRuntimeContractPromotesRootWorkspaceWhenChildrenAreSourceOn
   assert.equal(prepare.data.workspace.appPath, ".");
   assert.equal(prepare.data.workspace.buildContextPath, ".");
   assert.equal(prepare.data.files.buildContextPath, ".");
-  assert.equal(prepare.data.detectedStack.kind, "node");
-  assert.equal(prepare.data.detectedStack.packageManager, "npm");
-  assert.equal(prepare.data.detectedStack.buildCommand, "npm run build");
-  assert.equal(prepare.data.detectedStack.startCommand, "npm run dev");
-  assert.equal(prepare.data.detectedStack.outputDirectory, "dist/apps/staff-web");
+  assert.equal(appService(prepare).runtimeKind, "node");
+  assert.equal(appService(prepare).packageManager, "npm");
+  assert.equal(appService(prepare).buildCommand, "npm run build");
+  assert.equal(appService(prepare).startCommand, "npm run dev");
+  assert.equal(appService(prepare).outputDirectory, "dist/apps/staff-web");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /FROM node:22-slim AS deps/);
@@ -1352,7 +1440,7 @@ async function verifyRuntimeContractSuppressesHeuristicDependencyServices(projec
   const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.runtimeContract.source, "accepted_aac");
   assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
-  assert.deepEqual(spec.detectedStack.services, []);
+  assert.deepEqual(spec.sourceModel.dependencies, []);
   assert.ok(!spec.environment.provided.includes("DATABASE_URL"));
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
@@ -1411,7 +1499,7 @@ async function verifyRuntimeContractDerivesDependencyServicesFromEnvironment(pro
     "SPRING_DATASOURCE_PASSWORD",
   ]);
   assert.ok(spec.runtimeContract.dependencyServices.some((service) => service.kind === "postgres"));
-  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.sourceModel.dependencies.some((service) => service.kind === "postgres"));
   assert.ok(spec.environment.provided.includes("SPRING_DATASOURCE_URL"));
   assert.ok(!spec.environment.missing.some((variable) => variable.name === "SPRING_DATASOURCE_URL"));
 
@@ -1460,8 +1548,8 @@ async function verifyRuntimeContractUsesDetectedSqlServiceForGenericDatasource(p
 
   const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.runtimeContract.dependencyServices.length, 0);
-  assert.ok(spec.detectedStack.services.some((service) => service.kind === "mysql"));
-  assert.ok(!spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.sourceModel.dependencies.some((service) => service.kind === "mysql"));
+  assert.ok(!spec.sourceModel.dependencies.some((service) => service.kind === "postgres"));
   assert.ok(spec.environment.provided.includes("SPRING_DATASOURCE_URL"));
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
@@ -1489,7 +1577,7 @@ async function verifyStaleRuntimeContractSpecReprepare(projectRoot) {
   assert.equal(heuristicPrepare.ok, true);
   let spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.runtimeContract.source, "heuristic");
-  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.sourceModel.dependencies.some((service) => service.kind === "postgres"));
 
   await writeAcceptedRuntimeDelivery(projectRoot, {
     startPort: 4173,
@@ -1505,7 +1593,7 @@ async function verifyStaleRuntimeContractSpecReprepare(projectRoot) {
   spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.runtimeContract.source, "accepted_aac");
   assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
-  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.sourceModel.dependencies.some((service) => service.kind === "postgres"));
   assert.equal(spec.runtime.containerPort, 4173);
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
@@ -1546,7 +1634,7 @@ async function verifyDeployUsesPreviousCompletedPhaseRuntimeContract(projectRoot
   assert.equal(spec.runtimeContract.source, "accepted_aac");
   assert.equal(spec.runtimeContract.ref, ".loom/deliveries/delivery-runtime/artifacts/architecture/phase-1/aac.json#/runtimeDelivery");
   assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
-  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.sourceModel.dependencies.some((service) => service.kind === "postgres"));
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
   assert.match(compose, /postgres:16-alpine/);
@@ -1582,7 +1670,7 @@ async function verifyTechnicalBaselineOnlyDoesNotProvisionDatabase(projectRoot) 
   assert.equal(prepare.ok, true);
   const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.codeEvidence.warningCount, 1);
-  assert.ok(!spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(!spec.sourceModel.dependencies.some((service) => service.kind === "postgres"));
 
   const evidence = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/evidence/latest-code-evidence.json"), "utf8"));
   assert.match(evidence.warnings.join("\n"), /will not start that service from baseline alone/i);
@@ -1910,9 +1998,10 @@ async function verifyRuntimeContractBuildFailureRoutesToDeliveryRepair(projectRo
   assert.equal(repair.ok, true);
   assert.equal(repair.data.operation, "deploy_execution_repair_request_created");
   const repairRequest = JSON.parse(await readFile(join(projectRoot, repair.data.requestRef), "utf8"));
+  const repairExecutionRules = await readManifestField(projectRoot, repair.data.requestRef, repairRequest, "executionRules");
   assert.equal(repairRequest.syntheticTask.mutatesOriginalTaskPlan, false);
   assert.equal(repairRequest.syntheticTask.writeBoundary.forbiddenPaths.includes(".loom"), true);
-  assert.equal(repairRequest.executionRules.evidenceReadPolicy.firstRead, "deploymentFailureRef#.evidence.errorWindow");
+  assert.equal(repairExecutionRules.evidenceReadPolicy.firstRead, "deploymentFailureRef#.evidence.errorWindow");
   assert.equal(repair.instruction.mode, "execute_task");
   assert.match(repair.data.requestRef, /^\.loom\/deployment\/repairs\/deploy-exec-repair-/);
 
@@ -2288,7 +2377,7 @@ async function verifyExplicitAppPath(projectRoot) {
 
   assert.equal(envelope.ok, true);
   assert.equal(envelope.data.workspace.appPath, "apps/admin");
-  assert.equal(envelope.data.detectedStack.startCommand, "npm run start");
+  assert.equal(appService(envelope).startCommand, "npm run start");
 
   const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
   assert.match(dockerfile, /WORKDIR \/app\/apps\/admin/);
@@ -2823,6 +2912,37 @@ async function fileExists(filePath) {
   } catch {
     return false;
   }
+}
+
+function appService(envelope) {
+  return appServiceFromModel(envelope.data.sourceModel);
+}
+
+function appServiceFromSpec(spec) {
+  return appServiceFromModel(spec.sourceModel);
+}
+
+function appServiceFromModel(sourceModel) {
+  assert.ok(sourceModel, "Expected deploy result to include sourceModel.");
+  return sourceModel.services.find((service) => service.serviceId === sourceModel.primaryServiceId) ??
+    sourceModel.services[0];
+}
+
+function dependencies(envelope) {
+  assert.ok(envelope.data.sourceModel, "Expected deploy result to include sourceModel.");
+  return envelope.data.sourceModel.dependencies;
+}
+
+async function readManifestField(projectRoot, requestRef, request, field) {
+  if (request && Object.prototype.hasOwnProperty.call(request, field)) {
+    return request[field];
+  }
+  const refKey = `${field}Ref`;
+  const directRef = typeof request?.[refKey] === "string" ? request[refKey] : null;
+  const manifestRef = request?.requestManifest?.refs?.[field]?.ref;
+  const ref = directRef ?? (typeof manifestRef === "string" ? manifestRef : null);
+  assert.ok(ref, `${requestRef} must expose ${field} or ${refKey}`);
+  return JSON.parse(await readFile(join(projectRoot, ref), "utf8"));
 }
 
 function stopHealthServer(child) {

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathExists } from "../state/fs";
-import type { DeploymentBootstrapDiagnostics, DeploymentBootstrapTask, DetectedStack } from "./types";
+import type { DeploymentBootstrapDiagnostics, DeploymentBootstrapTask, DeploymentCodeProbe } from "./types";
 
 const BOOTSTRAP_IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -22,7 +22,7 @@ const BOOTSTRAP_MAX_DEPTH = 8;
 
 export async function analyzeDeploymentBootstrap(input: {
   deploymentRoot: string;
-  stack: DetectedStack;
+  stack: DeploymentCodeProbe;
 }): Promise<DeploymentBootstrapDiagnostics> {
   const tasks: DeploymentBootstrapTask[] = [];
   const warnings: string[] = [];
@@ -213,7 +213,7 @@ function commandInDirectory(root: string, directory: string, command: string): s
     : command;
 }
 
-function flywayCommand(stack: DetectedStack): string {
+function flywayCommand(stack: DeploymentCodeProbe): string {
   if (stack.kind === "java" && stack.packageManager === "maven") {
     return "mvn -DskipTests flyway:migrate";
   }
@@ -223,7 +223,7 @@ function flywayCommand(stack: DetectedStack): string {
   return "flyway migrate";
 }
 
-function liquibaseCommand(stack: DetectedStack): string {
+function liquibaseCommand(stack: DeploymentCodeProbe): string {
   if (stack.kind === "java" && stack.packageManager === "maven") {
     return "mvn -DskipTests liquibase:update";
   }
@@ -243,7 +243,7 @@ function normalizeRelativePath(value: string): string {
   return value.split(path.sep).join("/");
 }
 
-function packageManagerRun(packageManager: DetectedStack["packageManager"], command: string): string {
+function packageManagerRun(packageManager: DeploymentCodeProbe["packageManager"], command: string): string {
   switch (packageManager) {
     case "pnpm":
       return `pnpm exec ${command}`;

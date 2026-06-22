@@ -1194,6 +1194,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
         "RepositoryContext must not be treated as current phase scope or acceptance coverage.",
         "Concept refs are confirmed Brainstorm semantic facts. CLI validates refs only; Agent performs semantic use.",
         "Frontend experience refs are user-confirmed product targets. AAC may engineer them but must not downgrade or override them without user decision.",
+        "User-facing language is a delivery-level copy constraint. It applies to visible product text only; it must not translate code identifiers, API paths, database fields, enum values, or internal artifact ids.",
         "PGC mechanically preserves Brainstorm current-phase detail fields; do not summarize away phaseScope.*.items, phaseScope.acceptanceCandidates[].sourceRefs/capabilityRefs, planningInputs.businessFlows[].summary, concept refs, frontend refs, or frontend operation path details carried by those frontend refs.",
         "PGC requirementDetails.items is the canonical detail index after Brainstorm. AAC, TaskPlan, TaskExecution, and Review should reference detailId instead of duplicating full detail text.",
       ],
@@ -1211,6 +1212,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
       capabilityGroups: brainstorm.domainModel.capabilityGroups,
       businessFlows: brainstorm.domainModel.businessFlows,
       frontendExperience: brainstorm.frontendExperience ?? null,
+      userFacingLanguage: brainstorm.deliveryContext.userFacingLanguage ?? null,
       sourceRefs: brainstorm.sources.map((source) => source.sourceId),
       contextNotes: ["Brainstorm contract 已确认当前阶段范围。"],
     },
@@ -2606,37 +2608,70 @@ function architectureRepairHintForIssue(issue: ArchitectureAcceptResult["issues"
   return issue.repairHint;
 }
 
-export function inferArchitectureRepairSections(issues: ArchitectureAcceptResult["issues"]): Array<"foundation" | "domain_contract" | "behavior" | "frontend_experience" | "runtime_delivery" | "coverage"> {
-  const sections = new Set<"foundation" | "domain_contract" | "behavior" | "frontend_experience" | "runtime_delivery" | "coverage">();
+type ArchitectureSectionName = ArchitectureSectionCandidate["section"];
+
+const ARCHITECTURE_SECTION_NAMES = new Set<ArchitectureSectionName>([
+  "foundation",
+  "domain_contract",
+  "behavior",
+  "frontend_experience",
+  "runtime_delivery",
+  "coverage",
+]);
+
+const AAC_TOP_LEVEL_SECTION_OWNER: Record<string, ArchitectureSectionName> = {
+  source: "foundation",
+  engineeringBoundary: "foundation",
+  modules: "foundation",
+  dataModel: "domain_contract",
+  interfaces: "domain_contract",
+  userFlows: "behavior",
+  stateMachines: "behavior",
+  frontendExperience: "frontend_experience",
+  runtimeDelivery: "runtime_delivery",
+  acceptanceMatrix: "coverage",
+  detailCoverage: "coverage",
+  risksAndDecisions: "coverage",
+  handoff: "coverage",
+};
+
+const AAC_ISSUE_CODE_SECTION_OWNER: Partial<Record<ArchitectureAcceptResult["issues"][number]["code"], ArchitectureSectionName>> = {
+  AAC_COVERAGE_TYPE_MISMATCH: "coverage",
+  DETAIL_COVERAGE_INVALID: "coverage",
+  DETAIL_REF_INVALID: "coverage",
+};
+
+export function inferArchitectureRepairSections(issues: ArchitectureAcceptResult["issues"]): ArchitectureSectionName[] {
+  const sections = new Set<ArchitectureSectionName>();
   for (const issue of issues) {
-    const pointer = issue.path;
-    if (pointer.includes("/sections/foundation")) {
-      sections.add("foundation");
-    } else if (pointer.includes("/sections/domain_contract")) {
-      sections.add("domain_contract");
-    } else if (pointer.includes("/sections/behavior")) {
-      sections.add("behavior");
-    } else if (pointer.includes("/sections/frontend_experience")) {
-      sections.add("frontend_experience");
-    } else if (pointer.includes("/sections/runtime_delivery")) {
-      sections.add("runtime_delivery");
-    } else if (pointer.includes("/sections/coverage")) {
-      sections.add("coverage");
-    } else if (pointer.includes("/runtimeDelivery")) {
-      sections.add("runtime_delivery");
-    } else if (pointer.includes("/frontendExperience")) {
-      sections.add("frontend_experience");
-    } else if (pointer.includes("/acceptanceMatrix") || pointer.includes("/risksAndDecisions") || issue.code === "AAC_COVERAGE_TYPE_MISMATCH") {
-      sections.add("coverage");
-    } else if (pointer.includes("/userFlows") || pointer.includes("/stateMachines")) {
-      sections.add("behavior");
-    } else if (pointer.includes("/dataModel") || pointer.includes("/interfaces")) {
-      sections.add("domain_contract");
-    } else if (pointer.includes("/engineeringBoundary") || pointer.includes("/modules")) {
-      sections.add("foundation");
-    }
+    const section = inferArchitectureRepairSection(issue);
+    if (section) sections.add(section);
   }
   return [...sections];
+}
+
+function inferArchitectureRepairSection(issue: ArchitectureAcceptResult["issues"][number]): ArchitectureSectionName | null {
+  const segments = jsonPointerSegments(issue.path);
+  if (segments[0] === "sections") {
+    const section = segments[1];
+    return isArchitectureSectionName(section) ? section : null;
+  }
+  const owner = AAC_TOP_LEVEL_SECTION_OWNER[segments[0] ?? ""];
+  if (owner) return owner;
+  return AAC_ISSUE_CODE_SECTION_OWNER[issue.code] ?? null;
+}
+
+function jsonPointerSegments(pointer: string): string[] {
+  if (!pointer.startsWith("/")) return [];
+  return pointer
+    .slice(1)
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
+}
+
+function isArchitectureSectionName(value: string | undefined): value is ArchitectureSectionName {
+  return typeof value === "string" && ARCHITECTURE_SECTION_NAMES.has(value as ArchitectureSectionName);
 }
 
 function requireCandidateFile(candidateFile: string | undefined): string {
@@ -2751,6 +2786,8 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       sourceRefs: item.sourceRefs ?? [],
     })),
     businessFlowDetails: pgc.planningInputs.businessFlows,
+    userFacingLanguage: pgc.planningInputs.userFacingLanguage ?? null,
+    userFacingLanguageUsageRule: "Apply only to user-visible product copy such as navigation labels, page text, form labels, action labels, result/status text, success messages, validation errors, and business-blocking feedback. Do not translate code identifiers, API paths, database fields, enum values, package names, framework terms, or internal artifact ids.",
     objectOperationDetailRules: {
       sourceFields: [
         "currentPhaseScope.included[].items",
@@ -3151,6 +3188,7 @@ function frontendExperienceSectionContentShape(): Record<string, unknown> {
         "RepositoryContext and TechnicalBaseline provide implementation facts only.",
         "Do not downgrade a user-confirmed usable_internal_product target to technical_demo without a user decision ref.",
         "Do not invent a current UI implementation target when Brainstorm confirmed frontend required=false or experienceLevel=none.",
+        "Use contextProjection.requirementDetailTransfer.userFacingLanguage for user-visible labels, navigation text, form text, success/error/business-blocking feedback, and visible state/result text. Keep technical identifiers conventional.",
       ],
       detection: {
         source: "agent_inferred_and_repo_detected | agent_inferred | repo_detected | not_applicable",

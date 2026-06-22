@@ -22,13 +22,13 @@ import { getDeploymentPaths } from "./paths";
 import type {
   DeploymentCodeEvidence,
   DeploymentCodeEvidenceSummary,
-  DetectedStack,
+  DeploymentCodeProbe,
 } from "./types";
 export { loadDeploymentTechnicalBaseline } from "./baseline-evidence";
 
 export async function buildDeploymentCodeEvidence(input: {
   projectRoot: string;
-  stack: DetectedStack;
+  stack: DeploymentCodeProbe;
   technicalBaseline: BaselineInfo | null;
 }): Promise<DeploymentCodeEvidence> {
   const files = await indexProjectFiles(input.projectRoot);
@@ -125,9 +125,9 @@ export function summarizeDeploymentCodeEvidence(
 }
 
 export function applyDeploymentCodeEvidenceToStack(
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   evidenceValue: DeploymentCodeEvidence,
-): DetectedStack {
+): DeploymentCodeProbe {
   return {
     ...stack,
     services: evidenceValue.dependencyFacts.services.map((service) => service.value),

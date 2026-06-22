@@ -1,6 +1,6 @@
 ---
 description: Route a software delivery task through loom
-argument-hint: "<request> | plan <request> | continue | deploy [subcommand] | status"
+argument-hint: "<request> | plan <request> | continue | knowledge [subcommand] | deploy [subcommand] | status"
 ---
 
 # loom
@@ -33,6 +33,11 @@ Current invocation facts from opencode:
 
 Use these invocation facts to choose the entrypoint. Dispatch by the first token before looking at delivery state:
 
+- If `First token` is exactly `knowledge`, this is an explicit knowledge-source command and this command file must handle it directly.
+- For `First token = knowledge`, do not run `loom continue`, `loom brainstorm start`, `loom plan`, `loom status`, `loom deploy`, or any phase/delivery command before the knowledge command.
+- If `First token = knowledge` and `Second token` is empty, run exactly `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge --project-root /abs/project`.
+- If `First token = knowledge` and `Second token` is non-empty, run exactly `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" knowledge <Second token and remaining knowledge arguments> --project-root /abs/project`.
+- After knowledge returns, follow any CLI instruction or report compactly. Build/resume may return `generate_knowledge_semantics`; complete it. Knowledge commands are not delivery requests, so do not route into phase planning, Brainstorm, candidate generation, task execution, review, repair, or deploy.
 - If `First token` is exactly `deploy`, this is an explicit deployment command and this command file must handle it directly. Do not ask the user to rerun `/loom-deploy`.
 - For `First token = deploy`, do not run `loom continue`, `loom brainstorm start`, `loom plan`, `loom status`, or any phase/delivery command before the deploy command.
 - If `First token = deploy` and `Second token` is empty, run exactly `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project`.
@@ -41,7 +46,7 @@ Use these invocation facts to choose the entrypoint. Dispatch by the first token
 
 For deploy commands, keep waiting on the first tool session while it is active. After one short "deploy is running" update, stay quiet for the first 120 seconds unless the command returns, the user asks, or a blocker appears. Then observe no more often than once every 60 seconds; prefer `deploy status`, use logs sparingly, obey `instruction.observationPolicy`, and never send final deploy prose while `operationActive=true`.
 
-For non-deploy commands:
+For non-deploy, non-knowledge commands:
 
 - New delivery requests that include local requirement files such as PDF, DOCX, XLSX, TXT, MD, CSV, or TSV paths must run `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" plan --project-root /abs/project --requirement-file <path>` with one `--requirement-file` per file, plus `--request "<remaining natural-language request>"` only when there is remaining non-file text. Do not pass requirement file paths as plain request text.
 - `<request>` or `plan <request>`: run `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" plan --project-root /abs/project --request "<request>"`. The `plan` entrypoint initializes an empty project before creating the Brainstorm request. A bare `/loom <request>` is the normal new-delivery entrypoint and must behave like Codex `@loom <request>`.
@@ -60,6 +65,8 @@ During `phase_scope`, follow the request's `phaseScopeOptionComparison` guidance
 
 For Brainstorm `ask_user` gates, read `requestRef` and follow root `requestReadPlan.groups` inspect commands when present; otherwise use `agentAction.read.fieldGroups` inspect commands. Do this before presenting phase_scope, concept_grounding, frontend_experience, or final_summary. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block as a concrete user-facing question or confirmation summary. Do not infer Brainstorm scope, sources, concepts, frontend target, candidateFile, output schema, or submit command from guessed legacy root fields such as `.objective`, `.scope`, or `.outputContract`.
 
+Follow Brainstorm `knowledgeQueryPlan`; do not merge its steps into one query.
+
 ## Instruction Priority
 
 Every loom JSON response may include top-level `actionRequired` and `instruction`. These fields are the highest-priority routing signal.
@@ -74,6 +81,7 @@ Supported instruction modes:
 
 - `run_cli`: run `instruction.commandInvocation` when present. Otherwise run `instruction.command.argv` with `LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli"` and the same `--project-root`. Do not use bare `loom`.
 - `generate_candidate`: read `requestRef`; use root `requestReadPlan.groups` when present, otherwise inspect `agentAction.read.fieldGroups`; write files. ArchitectureSections `single_section`: write `targetSection` -> `targetCandidateFile`, run `completionBarrier.followUpCommand.commandInvocation`, submit only after `submit_existing_candidate`. Others run `submitCommand`.
+- `generate_knowledge_semantics`: read `instruction.requestRef`; read chunks; copy `request.outputContract.resultTemplate` to `instruction.resultFile`; submit; repeat until published/blocked. Do not ask after `semantic_pending`. Do not inspect Loom source files for schema.
 - `submit_existing_candidate`: read `instruction.requestRef` when needed, verify named files exist, then run `instruction.submitCommand`.
 - `execute_task`: read `instruction.requestRef`, use `requestReadPlan.groups[].readCommand` when present or `agentAction.read.fieldGroups[].readCommand` as fallback, follow `executionRules.sourceEditPreparationContract` before source/artifact writes, execute only that TaskExecutionRequest, write `instruction.resultFile`, then run `instruction.submitCommand`.
 - `repair_candidate`: repair the same candidate file or grouped candidate files described by `instruction.issues`, then run `instruction.submitCommand`. Do not run `loom continue` before the repaired submit succeeds.
@@ -116,28 +124,11 @@ Keep chat output compact. Do not paste generated JSON candidates, result files, 
 
 ## Engineering Discipline
 
-Load only the delivery reference that matches the current instruction:
-
-- [../references/loom/delivery/repair.md](../references/loom/delivery/repair.md): bug fixes, failed checks, regressions, repairs.
-- [../references/loom/delivery/testing.md](../references/loom/delivery/testing.md): tests and verification seams.
-- [../references/loom/delivery/domain.md](../references/loom/delivery/domain.md): concept conflicts.
-- [../references/loom/delivery/planning.md](../references/loom/delivery/planning.md): scope, slices, dependencies.
-- [../references/loom/delivery/design.md](../references/loom/delivery/design.md): modules, interfaces, seams.
-- [../references/loom/delivery/review.md](../references/loom/delivery/review.md): findings and repairable issues.
-- [../references/loom/delivery/handoff.md](../references/loom/delivery/handoff.md): final, blocked, handoff, continuation.
+Load only the delivery reference matching the current instruction: [repair](../references/loom/delivery/repair.md), [testing](../references/loom/delivery/testing.md), [domain](../references/loom/delivery/domain.md), [planning](../references/loom/delivery/planning.md), [design](../references/loom/delivery/design.md), [review](../references/loom/delivery/review.md), or [handoff](../references/loom/delivery/handoff.md).
 
 ## Frontend UIX Delivery
 
-Keep UIX knowledge modular. When a request includes `frontend_experience`, `frontendExperienceRequirement`, frontend review signals, or user-visible UI work, load only the relevant references:
-
-- [../references/loom/uix/core.md](../references/loom/uix/core.md) for the baseline UIX delivery contract.
-- [../references/loom/uix/interaction.md](../references/loom/uix/interaction.md) for complex flows, forms, search, loading, feedback, state machines, or error recovery.
-- [../references/loom/uix/system.md](../references/loom/uix/system.md) for design systems, tokens, component specs, theming, localization, icons, or motion.
-- [../references/loom/uix/mobile.md](../references/loom/uix/mobile.md) for mobile, tablet, responsive, PWA, or native-app expectations.
-- [../references/loom/uix/frameworks.md](../references/loom/uix/frameworks.md) when a frontend framework or component library is named.
-- [../references/loom/uix/content.md](../references/loom/uix/content.md) for UX writing, empty states, error copy, CTAs, onboarding copy, or terminology.
-- [../references/loom/uix/data.md](../references/loom/uix/data.md) for charts, dashboards, tables, analytics, finance, research, or visualization-heavy screens.
-- [../references/loom/uix/verification.md](../references/loom/uix/verification.md) before visual, interaction, accessibility, or screenshot-based review.
+For `frontend_experience`, `frontendExperienceRequirement`, frontend review signals, or user-visible UI work, load only relevant UIX references: [core](../references/loom/uix/core.md), [interaction](../references/loom/uix/interaction.md), [system](../references/loom/uix/system.md), [mobile](../references/loom/uix/mobile.md), [frameworks](../references/loom/uix/frameworks.md), [content](../references/loom/uix/content.md), [data](../references/loom/uix/data.md), or [verification](../references/loom/uix/verification.md).
 
 ## Deploy
 

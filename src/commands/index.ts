@@ -25,6 +25,23 @@ import {
 } from "./deploy";
 import { handleInit } from "./init";
 import { createInspectHandler } from "./inspect";
+import {
+  createKnowledgeAddHandler,
+  createKnowledgeBrainstormContextHandler,
+  createKnowledgeBuildHandler,
+  createKnowledgeDisableHandler,
+  createKnowledgeDiscardHandler,
+  createKnowledgeEnableHandler,
+  createKnowledgeInspectHandler,
+  createKnowledgePendingHandler,
+  createKnowledgeRemoveHandler,
+  createKnowledgeResumeHandler,
+  createKnowledgeSearchHandler,
+  createKnowledgeSemanticSubmitHandler,
+  createKnowledgeStatusHandler,
+  createKnowledgeUpdateHandler,
+  handleKnowledgeList,
+} from "./knowledge";
 import { handleTokenSavingMetrics } from "./metrics";
 import { createNextTaskHandler } from "./next-task";
 import { createPlanHandler } from "./plan";
@@ -66,6 +83,8 @@ export async function runCli(argv: string[]): Promise<void> {
 
   const metrics = program.command("metrics").description("Show local loom metrics");
   registerSimpleCommand(metrics, "token-saving", "Show token-saving telemetry", handleTokenSavingMetrics);
+
+  registerKnowledgeCommands(program);
 
   program
     .command("inspect")
@@ -612,7 +631,222 @@ function registerSimpleCommand(
     });
 }
 
+function registerKnowledgeCommands(program: Command): void {
+  const knowledge = program.command("knowledge").description("Manage registered knowledge sources");
+
+  knowledge
+    .command("add [paths...]")
+    .description("Queue a new knowledge source path set")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .requiredOption("--name <name>", "Globally unique knowledge source name")
+    .action(async (paths: string[] | undefined, options) => {
+      await runCommand("knowledge.add", options, createKnowledgeAddHandler({
+        name: stringOption(options.name),
+        paths: paths ?? [],
+      }));
+    });
+
+  knowledge
+    .command("update <name>")
+    .description("Queue path changes for a knowledge source")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--add-path <path>", "Add a file or directory path", collect, [])
+    .option("--remove-path <path>", "Remove a previously registered path", collect, [])
+    .option("--replace-paths <paths...>", "Replace all registered paths")
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.update", options, createKnowledgeUpdateHandler({
+        name,
+        addPath: stringArrayOption(options.addPath),
+        removePath: stringArrayOption(options.removePath),
+        replacePaths: stringArrayOption(options.replacePaths),
+      }));
+    });
+
+  knowledge
+    .command("pending [name]")
+    .description("Show queued knowledge source changes")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string | undefined, options) => {
+      await runCommand("knowledge.pending", options, createKnowledgePendingHandler({ name }));
+    });
+
+  knowledge
+    .command("discard <name>")
+    .description("Discard queued knowledge source changes")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.discard", options, createKnowledgeDiscardHandler({ name }));
+    });
+
+  knowledge
+    .command("build <name>")
+    .description("Build the mechanical knowledge index for a source")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.build", options, createKnowledgeBuildHandler({ name }));
+    });
+
+  knowledge
+    .command("resume <name>")
+    .description("Resume an unfinished knowledge semantic build")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.resume", options, createKnowledgeResumeHandler({ name }));
+    });
+
+  registerKnowledgeSimpleCommand(knowledge, "list", "List knowledge sources", handleKnowledgeList, "knowledge.list");
+
+  knowledge
+    .command("status <name>")
+    .description("Show knowledge source status")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.status", options, createKnowledgeStatusHandler({ name }));
+    });
+
+  knowledge
+    .command("remove <name>")
+    .description("Remove a knowledge source registration and pending queue")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.remove", options, createKnowledgeRemoveHandler({ name }));
+    });
+
+  knowledge
+    .command("search")
+    .description("Search published knowledge indexes and return chunk cards")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--query <text>", "Natural language query text")
+    .option("--query-file <path>", "JSON KnowledgeSearchQuery file")
+    .option("--source <name>", "Restrict search to a knowledge source", collect, [])
+    .option("--block <block>", "Brainstorm block: phase_scope, concept_grounding, or frontend_experience")
+    .option("--semantic-focus <kind:text>", "Semantic focus entry", collect, [])
+    .option("--limit <count>", "Maximum chunks to return")
+    .action(async (options) => {
+      await runCommand("knowledge.search", options, createKnowledgeSearchHandler({
+        query: stringOption(options.query),
+        queryFile: stringOption(options.queryFile),
+        source: stringArrayOption(options.source),
+        block: stringOption(options.block),
+        semanticFocus: stringArrayOption(options.semanticFocus),
+        limit: stringOption(options.limit),
+      }));
+    });
+
+  knowledge
+    .command("brainstorm-context")
+    .description("Prepare block-scoped Brainstorm knowledge context from published indexes")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--query <text>", "Natural language query text")
+    .option("--query-file <path>", "JSON KnowledgeMatchQuery file")
+    .option("--block <block>", "Brainstorm block: phase_scope, concept_grounding, or frontend_experience")
+    .option("--semantic-focus <kind:text>", "Semantic focus entry", collect, [])
+    .option("--source-limit <count>", "Maximum matched sources")
+    .option("--chunk-limit-per-source <count>", "Maximum chunks per matched source")
+    .action(async (options) => {
+      await runCommand("knowledge.brainstorm_context", options, createKnowledgeBrainstormContextHandler({
+        query: stringOption(options.query),
+        queryFile: stringOption(options.queryFile),
+        block: stringOption(options.block),
+        semanticFocus: stringArrayOption(options.semanticFocus),
+        sourceLimit: stringOption(options.sourceLimit),
+        chunkLimitPerSource: stringOption(options.chunkLimitPerSource),
+      }));
+    });
+
+  knowledge
+    .command("inspect")
+    .description("Read a knowledge chunk body")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--source <name>", "Knowledge source name")
+    .option("--build-id <id>", "Knowledge build id")
+    .option("--chunk <id>", "Knowledge chunk id")
+    .action(async (options) => {
+      await runCommand("knowledge.inspect", options, createKnowledgeInspectHandler({
+        source: stringOption(options.source),
+        buildId: stringOption(options.buildId),
+        chunkId: stringOption(options.chunk),
+      }));
+    });
+
+  knowledge
+    .command("enable <name>")
+    .description("Enable a built knowledge source")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.enable", options, createKnowledgeEnableHandler({ name }));
+    });
+
+  knowledge
+    .command("disable <name>")
+    .description("Disable a built knowledge source")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (name: string, options) => {
+      await runCommand("knowledge.disable", options, createKnowledgeDisableHandler({ name }));
+    });
+
+  const semantic = knowledge.command("semantic").description("Manage knowledge semantic build packs");
+  semantic
+    .command("submit")
+    .description("Submit a KnowledgeSemanticPackResult for the current pack")
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .option("--request <path>", "KnowledgeSemanticBuildRequest JSON file")
+    .option("--result-file <path>", "KnowledgeSemanticPackResult JSON file")
+    .action(async (options) => {
+      await runCommand("knowledge.semantic.submit", options, createKnowledgeSemanticSubmitHandler({
+        requestFile: stringOption(options.request),
+        resultFile: stringOption(options.resultFile),
+      }));
+    });
+}
+
 function registerDeployCommand(
+  program: Command,
+  name: string,
+  description: string,
+  handler: Parameters<typeof runCommand>[2],
+  commandId: string,
+): void {
+  program
+    .command(name)
+    .description(description)
+    .addOption(projectRootOption())
+    .addOption(jsonOption())
+    .addOption(compactOption())
+    .action(async (options) => {
+      await runCommand(commandId, options, handler);
+    });
+}
+
+function registerKnowledgeSimpleCommand(
   program: Command,
   name: string,
   description: string,
@@ -757,6 +991,16 @@ function mergeParentOptions(options: CommandOptionBag, command: Command): Comman
 
 function stringOption(value: CommandOptionBag[string]): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function stringArrayOption(value: CommandOptionBag[string]): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  if (typeof value === "string") {
+    return [value];
+  }
+  return undefined;
 }
 
 function collect(value: string, previous: string[]): string[] {

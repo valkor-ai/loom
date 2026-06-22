@@ -49,7 +49,8 @@ import {
 } from "./runtime";
 import { classifyDeploymentRepair, writeDeploymentRepairRequest } from "./repair";
 import { applyRuntimeContractToStack, loadDeploymentRuntimeContract } from "./runtime-contract";
-import { resolveDeploymentStrategy } from "./strategy";
+import { previewSourceService, sourceModelFromRuntimeContract } from "./source-model";
+import { deploymentStrategyForSourceModel, resolveDeploymentStrategy } from "./strategy";
 import { validateStartupLogs } from "./validate";
 import { discoverNodeWorkspacePackageJsonPaths, resolveDeploymentWorkspaceForApp } from "./workspace";
 import { withAutoRunnableTransition } from "../operations/routing-instructions";
@@ -76,13 +77,16 @@ import type {
   DeploymentState,
   DeploymentCodeEvidence,
   DeploymentActiveOperationView,
+  DeploymentCodeProbe,
+  DeploymentSourceModel,
+  DeploymentSourceService,
   DeployProvider,
 } from "./types";
 
 export type DeployPrepareResult = {
   prepared: true;
   specPath: string;
-  detectedStack: DeploymentSpec["detectedStack"];
+  sourceModel: DeploymentSourceModel;
   provider: DeploymentSpec["provider"];
   providerReason: string;
   providerPolicy: DeploymentSpec["providerPolicy"];
@@ -195,7 +199,7 @@ export type DeployInspectResult = {
   workspace: DeploymentSpec["workspace"] | null;
   codeEvidence: DeploymentSpec["codeEvidence"] | null;
   codeEvidenceReadGuide: Record<string, unknown> | null;
-  detectedStack: DeploymentSpec["detectedStack"] | null;
+  sourceModel: DeploymentSourceModel | null;
   files: DeploymentSpec["files"] | null;
   compose: DeploymentSpec["compose"] | null;
   runtime: DeploymentSpec["runtime"] | null;
@@ -268,15 +272,15 @@ async function deployPrepareInternal(input: {
 
   const workspace = await resolveDeploymentWorkspaceForApp(input.projectRoot, input.appPath ?? null);
   const deploymentRoot = workspace.deploymentRoot;
-  const detectedStack = workspace.detectedStack;
+  const codeProbe = workspace.codeProbe;
   const existing = await findExistingDeploymentFiles(deploymentRoot);
-  const strategy = resolveDeploymentStrategy({ detectedStack, existing, policy: input.providerPolicy });
-  const generatedBuildContextRoot = buildContextRootFor(input.projectRoot, deploymentRoot, detectedStack, strategy.provider);
-  const workspacePackageJsonPaths = detectedStack.kind === "node"
+  let strategy = resolveDeploymentStrategy({ codeProbe, existing, policy: input.providerPolicy });
+  const generatedBuildContextRoot = buildContextRootFor(input.projectRoot, deploymentRoot, codeProbe, strategy.provider);
+  const workspacePackageJsonPaths = codeProbe.kind === "node"
     ? await discoverNodeWorkspacePackageJsonPaths(generatedBuildContextRoot)
     : [];
   const stackForContext = {
-    ...detectedStack,
+    ...codeProbe,
     workingDirectory: path.resolve(generatedBuildContextRoot) === path.resolve(deploymentRoot)
       ? null
       : toProjectRelative(generatedBuildContextRoot, deploymentRoot),
@@ -293,7 +297,13 @@ async function deployPrepareInternal(input: {
   const codeEvidence = await writeDeploymentCodeEvidence(input.projectRoot, rawCodeEvidence);
   assertDeploymentCodeEvidenceReady(input.projectRoot, rawCodeEvidence, codeEvidence.ref);
   const evidenceStack = applyDeploymentCodeEvidenceToStack(contractStack, rawCodeEvidence);
-  const hostPort = await findAvailablePort(evidenceStack.port);
+  const sourceModel = sourceModelFromRuntimeContract({
+    runtimeContract,
+    fallbackProbe: evidenceStack,
+    buildContextPath: toProjectRelative(input.projectRoot, generatedBuildContextRoot) || ".",
+  });
+  strategy = deploymentStrategyForSourceModel({ strategy, sourceModel });
+  const hostPort = await findAvailablePort(previewSourceService(sourceModel).port);
   const workspaceMetadata = {
     ...workspace.workspace,
     buildContextPath: toProjectRelative(input.projectRoot, generatedBuildContextRoot) || ".",
@@ -335,12 +345,13 @@ async function deployPrepareInternal(input: {
       providerReason: strategy.reason,
       providerPolicy: strategy.policy,
       providerCandidates: strategy.candidates,
-      detectedStack: composeStack,
+      runtimeContract,
+      sourceModel: sourceModelWithPrimaryPort(sourceModel, composeStack.port),
       environment,
       bootstrap,
       compose: composeInfo,
       codeEvidence,
-      dockerfilePath: existing.dockerfilePath ?? paths.dockerfileFile,
+      dockerfilePaths: existing.dockerfilePath ? dockerfilePathsFor(sourceModel, paths.generatedDir, existing.dockerfilePath) : {},
       composePath: existing.composePath,
       dockerignorePath: paths.dockerignoreFile,
       generated: false,
@@ -357,7 +368,6 @@ async function deployPrepareInternal(input: {
       projectRoot: input.projectRoot,
       specFile: paths.specFile,
       spec,
-      detectedStack: spec.detectedStack,
       logMessage: `Prepared ${spec.serviceName} deployment by reusing ${spec.files.composePath}.`,
     });
   }
@@ -376,11 +386,12 @@ async function deployPrepareInternal(input: {
       providerReason: strategy.reason,
       providerPolicy: strategy.policy,
       providerCandidates: strategy.candidates,
-      detectedStack: evidenceStack,
+      runtimeContract,
+      sourceModel,
       environment,
       bootstrap,
       codeEvidence,
-      dockerfilePath: existing.dockerfilePath,
+      dockerfilePaths: dockerfilePathsFor(sourceModel, paths.generatedDir, existing.dockerfilePath),
       composePath: paths.composeFile,
       dockerignorePath: paths.dockerignoreFile,
       generated: true,
@@ -394,7 +405,6 @@ async function deployPrepareInternal(input: {
       projectRoot: input.projectRoot,
       specFile: paths.specFile,
       spec,
-      detectedStack: spec.detectedStack,
       logMessage: `Prepared ${spec.serviceName} deployment by reusing ${spec.files.dockerfilePath}.`,
     });
   }
@@ -408,11 +418,12 @@ async function deployPrepareInternal(input: {
     providerReason: strategy.reason,
     providerPolicy: strategy.policy,
     providerCandidates: strategy.candidates,
-    detectedStack: evidenceStack,
+    runtimeContract,
+    sourceModel,
     environment,
     bootstrap,
     codeEvidence,
-    dockerfilePath: paths.dockerfileFile,
+    dockerfilePaths: dockerfilePathsFor(sourceModel, paths.generatedDir, paths.dockerfileFile),
     composePath: paths.composeFile,
     dockerignorePath: paths.dockerignoreFile,
     generated: true,
@@ -422,15 +433,19 @@ async function deployPrepareInternal(input: {
   applyRuntimeContractHealthDefaults(spec, runtimeContract, input.healthcheck);
   const generated = generateDeploymentFiles(spec);
 
-  await fs.writeFile(paths.dockerfileFile, generated.dockerfile, "utf8");
+  for (const [serviceId, content] of Object.entries(generated.dockerfiles)) {
+    const dockerfilePath = spec.files.dockerfilePaths[serviceId];
+    if (dockerfilePath) {
+      await fs.writeFile(path.resolve(input.projectRoot, dockerfilePath), content, "utf8");
+    }
+  }
   await fs.writeFile(paths.composeFile, generated.compose, "utf8");
   await fs.writeFile(paths.dockerignoreFile, generated.dockerignore, "utf8");
   return finalizeDeployPrepare({
     projectRoot: input.projectRoot,
     specFile: paths.specFile,
     spec,
-    detectedStack: spec.detectedStack,
-    logMessage: `Prepared ${spec.serviceName} deployment with ${spec.detectedStack.kind} stack from ${spec.workspace.appPath}.`,
+    logMessage: `Prepared ${spec.serviceName} deployment with ${spec.sourceModel.shape} source model from ${spec.workspace.appPath}.`,
   });
 }
 
@@ -1157,7 +1172,7 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
     workspace: spec?.workspace ?? null,
     codeEvidence: spec?.codeEvidence ?? null,
     codeEvidenceReadGuide: deploymentCodeEvidenceReadGuide(spec?.codeEvidence?.ref ?? null),
-    detectedStack: spec?.detectedStack ?? null,
+    sourceModel: spec?.sourceModel ?? null,
     files: spec?.files ?? null,
     compose: spec?.compose ?? null,
     runtime: spec?.runtime ?? null,
@@ -1374,10 +1389,12 @@ async function preparedRuntimeContractDiffers(projectRoot: string, currentSpec?:
   try {
     const spec = currentSpec ?? await readDeploymentSpec(projectRoot);
     const workspace = await resolveDeploymentWorkspaceForApp(projectRoot, spec.workspace.appPath);
+    const primary = spec.sourceModel.services.find((service) => service.serviceId === spec.sourceModel.primaryServiceId) ??
+      spec.sourceModel.services[0];
     const latestStackForContext = {
-      ...workspace.detectedStack,
-      workingDirectory: spec.detectedStack.workingDirectory,
-      workspacePackageJsonPaths: spec.detectedStack.workspacePackageJsonPaths,
+      ...workspace.codeProbe,
+      workingDirectory: primary?.workingDirectory ?? null,
+      workspacePackageJsonPaths: primary?.workspacePackageJsonPaths ?? [],
     };
     const latest = await loadDeploymentRuntimeContract(projectRoot, latestStackForContext);
     const latestDeploymentStack = applyRuntimeContractToStack(latestStackForContext, latest);
@@ -1388,8 +1405,13 @@ async function preparedRuntimeContractDiffers(projectRoot: string, currentSpec?:
       technicalBaseline,
     });
     const latestEvidenceStack = applyDeploymentCodeEvidenceToStack(latestDeploymentStack, latestEvidence);
+    const latestSourceModel = sourceModelFromRuntimeContract({
+      runtimeContract: latest,
+      fallbackProbe: latestEvidenceStack,
+      buildContextPath: spec.files.buildContextPath,
+    });
     return !runtimeContractsEquivalent(spec.runtimeContract, latest) ||
-      deploymentStackDiffers(spec.detectedStack, latestEvidenceStack) ||
+      sourceModelDiffers(spec.sourceModel, latestSourceModel) ||
       spec.codeEvidence?.fingerprint !== latestEvidence.fingerprint;
   } catch {
     return false;
@@ -1405,6 +1427,7 @@ function runtimeContractsEquivalent(
     left.ref === right.ref &&
     left.status === right.status &&
     left.dependencyServicePolicy === right.dependencyServicePolicy &&
+    left.deploymentShape === right.deploymentShape &&
     left.runtimeKind === right.runtimeKind &&
     left.buildCommand === right.buildCommand &&
     left.startCommand === right.startCommand &&
@@ -1413,28 +1436,19 @@ function runtimeContractsEquivalent(
     left.healthPath === right.healthPath &&
     left.frontendOutputDir === right.frontendOutputDir &&
     left.probeKind === right.probeKind &&
+    JSON.stringify(left.frontend) === JSON.stringify(right.frontend) &&
+    JSON.stringify(left.api) === JSON.stringify(right.api) &&
     JSON.stringify(left.apiPaths) === JSON.stringify(right.apiPaths) &&
     JSON.stringify(left.environment) === JSON.stringify(right.environment) &&
     JSON.stringify(left.dependencyServices) === JSON.stringify(right.dependencyServices)
   );
 }
 
-function deploymentStackDiffers(
-  left: DeploymentSpec["detectedStack"],
-  right: DeploymentSpec["detectedStack"],
+function sourceModelDiffers(
+  left: DeploymentSourceModel,
+  right: DeploymentSourceModel,
 ): boolean {
-  return (
-    left.buildCommand !== right.buildCommand ||
-    left.startCommand !== right.startCommand ||
-    left.outputDirectory !== right.outputDirectory ||
-    left.port !== right.port ||
-    left.kind !== right.kind ||
-    left.framework !== right.framework ||
-    left.packageManager !== right.packageManager ||
-    left.runtimeVersion !== right.runtimeVersion ||
-    left.runtimeVersionSource !== right.runtimeVersionSource ||
-    JSON.stringify(left.services) !== JSON.stringify(right.services)
-  );
+  return JSON.stringify(left) !== JSON.stringify(right);
 }
 
 function normalizeAppPathForCompare(appPath: string): string {
@@ -1549,17 +1563,45 @@ async function resolveDeploymentContainer(
 function buildContextRootFor(
   projectRoot: string,
   deploymentRoot: string,
-  detectedStack: DeploymentSpec["detectedStack"],
+  codeProbe: DeploymentCodeProbe,
   provider: DeployProvider,
 ): string {
   if (
     provider === "dockerfile-template" &&
-    detectedStack.kind === "node" &&
+    codeProbe.kind === "node" &&
     path.resolve(projectRoot) !== path.resolve(deploymentRoot)
   ) {
     return projectRoot;
   }
   return deploymentRoot;
+}
+
+function dockerfilePathsFor(
+  sourceModel: DeploymentSourceModel,
+  generatedDir: string,
+  singleDockerfilePath: string,
+): Record<string, string> {
+  if (sourceModel.services.length === 1) {
+    return {
+      [sourceModel.services[0].serviceId]: singleDockerfilePath,
+    };
+  }
+  return Object.fromEntries(sourceModel.services.map((service) => [
+    service.serviceId,
+    path.join(generatedDir, `Dockerfile.${service.serviceId}`),
+  ]));
+}
+
+function sourceModelWithPrimaryPort(
+  sourceModel: DeploymentSourceModel,
+  port: number,
+): DeploymentSourceModel {
+  return {
+    ...sourceModel,
+    services: sourceModel.services.map((service) => service.serviceId === sourceModel.primaryServiceId
+      ? { ...service, port }
+      : service),
+  };
 }
 
 function classifyUpFailure(
@@ -1625,7 +1667,9 @@ function classifyStartupLogFailure(
   rawLogs: string,
 ): DeploymentFailureKind {
   const combined = rawLogs.toLowerCase();
-  const startCommand = spec.runtimeContract.startCommand ?? spec.detectedStack.startCommand;
+  const primary = spec.sourceModel.services.find((service) => service.serviceId === spec.sourceModel.primaryServiceId) ??
+    spec.sourceModel.services[0];
+  const startCommand = spec.runtimeContract.startCommand ?? primary?.startCommand ?? null;
   const scriptName = startCommand ? packageScriptNameFromCommand(startCommand) : null;
   const missingScript = combined.match(/missing script:\s*["']?([a-z0-9:_-]+)/i)?.[1]?.toLowerCase() ?? null;
   if (
@@ -1688,12 +1732,11 @@ function toPrepareResult(
   projectRoot: string,
   specFile: string,
   spec: DeploymentSpec,
-  detectedStack: DeploymentSpec["detectedStack"],
 ): DeployPrepareResult {
   return {
     prepared: true,
     specPath: toProjectRelative(projectRoot, specFile),
-    detectedStack,
+    sourceModel: spec.sourceModel,
     provider: spec.provider,
     providerReason: spec.providerReason,
     providerPolicy: spec.providerPolicy,
@@ -1713,13 +1756,12 @@ async function finalizeDeployPrepare(input: {
   projectRoot: string;
   specFile: string;
   spec: DeploymentSpec;
-  detectedStack: DeploymentSpec["detectedStack"];
   logMessage: string;
 }): Promise<DeployPrepareResult> {
   await writeDeploymentSpec(input.projectRoot, input.spec);
   await clearDeploymentFailureArtifacts(input.projectRoot);
   await appendDeploymentLog(input.projectRoot, logLine("prepare", input.logMessage));
-  return toPrepareResult(input.projectRoot, input.specFile, input.spec, input.detectedStack);
+  return toPrepareResult(input.projectRoot, input.specFile, input.spec);
 }
 
 function assertDeploymentCodeEvidenceReady(

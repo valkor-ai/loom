@@ -1,4 +1,4 @@
-import type { DependencyService, DependencyServiceKind, DetectedStack } from "./types";
+import type { DependencyService, DependencyServiceKind, DeploymentCodeProbe } from "./types";
 
 export type DependencyServiceSignalMatch = {
   kind: DependencyServiceKind;
@@ -423,7 +423,7 @@ export function springDatasourceEnv(kind: "postgres" | "mysql"): Record<string, 
 
 export function withSpringDatasourceConnectionEnv(
   service: DependencyService,
-  stack: DetectedStack,
+  stack: DeploymentCodeProbe,
   evidenceText: string,
 ): DependencyService {
   const combined = evidenceText.toLowerCase();
