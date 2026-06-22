@@ -1,52 +1,20 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope.data;
-}
-
-function readProjectJson(projectRoot, relativePath) {
-  return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
-}
-
-function readRepo(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-}
-
-function hydrateRequest(projectRoot, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readProjectJson(projectRoot, value);
-  }
-  return hydrated;
-}
+const { runCli } = require("../harness/cli");
+const { readRepoFile } = require("../harness/root");
+const { hydrateRequest, readProjectJson, tempProject } = require("../harness/files");
 
 function assertIncludes(text, needle, message) {
   assert.ok(text.includes(needle), message);
 }
 
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-user-facing-language-"));
-run(["init"], projectRoot);
+const projectRoot = tempProject("loom-user-facing-language-");
+runCli(["init"], projectRoot);
 
-const started = run([
+const started = runCli([
   "brainstorm",
   "start",
   "--request",
@@ -96,7 +64,7 @@ assert.equal(
   "BrainstormContract deliveryContext must preserve user-facing language",
 );
 
-const repositoryContextSource = readRepo("src/core/operations/repository-context.ts");
+const repositoryContextSource = readRepoFile("src/core/operations/repository-context.ts");
 assertIncludes(
   repositoryContextSource,
   "userFacingLanguage = input.contract.deliveryContext.userFacingLanguage",
@@ -108,7 +76,7 @@ assertIncludes(
   "phase continuation Brainstorm requests must infer a fallback for older contracts",
 );
 
-const contractsSource = readRepo("src/core/operations/contracts.ts");
+const contractsSource = readRepoFile("src/core/operations/contracts.ts");
 assertIncludes(
   contractsSource,
   "userFacingLanguage: brainstorm.deliveryContext.userFacingLanguage ?? null",
@@ -120,7 +88,7 @@ assertIncludes(
   "AAC requirement-detail transfer must carry user-facing language",
 );
 
-const tasksSource = readRepo("src/core/operations/tasks.ts");
+const tasksSource = readRepoFile("src/core/operations/tasks.ts");
 assertIncludes(
   tasksSource,
   "sourceContext.userFacingLanguage",
@@ -137,7 +105,7 @@ assertIncludes(
   "TaskExecutionRequest rules must include the user-facing language rule",
 );
 
-const reviewSource = readRepo("src/core/operations/review.ts");
+const reviewSource = readRepoFile("src/core/operations/review.ts");
 assertIncludes(
   reviewSource,
   "Obvious language drift is a frontend_experience finding",

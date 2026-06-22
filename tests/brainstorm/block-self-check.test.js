@@ -1,59 +1,16 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope.data;
-}
-
-function runEnvelope(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex", LOOM_COMPACT_OUTPUT: "1" },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope;
-}
-
-function readJson(projectRoot, relativePath) {
-  return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
-}
-
-function hydrateRequest(projectRoot, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectRoot, value);
-  }
-  return hydrated;
-}
+const { runCli, runEnvelope } = require("../harness/cli");
+const {
+  hydrateRequest,
+  readProjectJson: readJson,
+  tempProject,
+  writeProjectJson: writeJson,
+} = require("../harness/files");
 
 function includes(text, needle, message) {
   assert.ok(String(text).includes(needle), message);
-}
-
-function writeJson(projectRoot, relativePath, value) {
-  const target = path.join(projectRoot, relativePath);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function phaseScopeOnlyCandidate(request) {
@@ -161,10 +118,10 @@ function phaseScopeOnlyCandidate(request) {
   };
 }
 
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-brainstorm-block-self-check-"));
-run(["init"], projectRoot);
+const projectRoot = tempProject("loom-brainstorm-block-self-check-");
+runCli(["init"], projectRoot);
 
-const started = run([
+const started = runCli([
   "brainstorm",
   "start",
   "--request",
@@ -322,7 +279,7 @@ const earlyAccept = runEnvelope([
   request.brainstormRunId,
   "--candidate-file",
   request.outputContract.candidateFile,
-], projectRoot);
+], projectRoot, { compactOutput: true });
 assert.equal(earlyAccept.data.accepted, false, "phase_scope-only candidate must not be accepted.");
 assert.equal(earlyAccept.instruction?.mode, "ask_user", "phase_scope-only accept must route back to Brainstorm clarification.");
 assert.equal(earlyAccept.instruction?.expectedResponse?.kind, "brainstorm_progressive_clarification");

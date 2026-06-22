@@ -1,57 +1,32 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
+const {
+  runEnvelope,
+  runFailure: runCliFailure,
+  runText,
+} = require("../harness/cli");
+const {
+  hydrateRequest: hydrateProjectRequest,
+  readProjectJson: readProjectJsonFromRoot,
+  tempProject,
+  writeJson,
+} = require("../harness/files");
 
-const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-brainstorm-knowledge-fixture-"));
-const loomHome = fs.mkdtempSync(path.join(os.tmpdir(), "loom-brainstorm-knowledge-home-"));
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-brainstorm-knowledge-project-"));
+const fixtureRoot = tempProject("loom-brainstorm-knowledge-fixture-");
+const loomHome = tempProject("loom-brainstorm-knowledge-home-");
+const projectRoot = tempProject("loom-brainstorm-knowledge-project-");
+const loomEnv = { LOOM_HOME: loomHome };
 
 function run(args) {
-  const output = execFileSync(process.execPath, [
-    cli,
-    ...args,
-    "--project-root",
-    projectRoot,
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      LOOM_AGENT_PROFILE: "codex",
-      LOOM_HOME: loomHome,
-    },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope;
+  return runEnvelope(args, projectRoot, { env: loomEnv });
 }
 
 function runFailure(args) {
-  const result = spawnSync(process.execPath, [
-    cli,
-    ...args,
-    "--project-root",
-    projectRoot,
-    "--json",
-  ], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      LOOM_AGENT_PROFILE: "codex",
-      LOOM_HOME: loomHome,
-    },
-  });
-  assert.notEqual(result.status, 0, `Expected command to fail: ${args.join(" ")}\n${result.stdout}\n${result.stderr}`);
-  return JSON.parse(result.stdout);
+  return runCliFailure(args, projectRoot, { env: loomEnv });
 }
 
 function writeFixture(relativePath, content) {
@@ -61,24 +36,12 @@ function writeFixture(relativePath, content) {
   return target;
 }
 
-function writeJson(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 function readProjectJson(relativePath) {
-  return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
+  return readProjectJsonFromRoot(projectRoot, relativePath);
 }
 
 function hydrateRequest(request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readProjectJson(value);
-  }
-  return hydrated;
+  return hydrateProjectRequest(projectRoot, request);
 }
 
 function includes(text, needle, message) {
@@ -210,10 +173,7 @@ const finalSummaryFailure = runFailure([
 assert.equal(finalSummaryFailure.ok, false);
 assert.equal(finalSummaryFailure.error.code, "INVALID_ARGUMENT");
 
-const help = execFileSync(process.execPath, [cli, "knowledge", "brainstorm-context", "--help"], {
-  cwd: repoRoot,
-  encoding: "utf8",
-});
+const help = runText(["knowledge", "brainstorm-context", "--help"], null, { json: false });
 assert.equal(/--source\s+<name>/.test(help), false, "Brainstorm knowledge context command must not allow user-selected sources.");
 
 const started = run([

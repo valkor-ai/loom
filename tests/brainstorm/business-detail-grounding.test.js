@@ -1,52 +1,19 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope.data;
-}
-
-function readJson(projectRoot, relativePath) {
-  return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
-}
-
-function readRepo(relativePath) {
-  return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-}
-
-function hydrateRequest(projectRoot, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectRoot, value);
-  }
-  return hydrated;
-}
+const { runCli } = require("../harness/cli");
+const { readRepoFile } = require("../harness/root");
+const { hydrateRequest, readProjectJson: readJson, tempProject } = require("../harness/files");
 
 function includes(text, needle, message) {
   assert.ok(String(text).includes(needle), message);
 }
 
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-brainstorm-business-detail-"));
-run(["init"], projectRoot);
+const projectRoot = tempProject("loom-brainstorm-business-detail-");
+runCli(["init"], projectRoot);
 
-const started = run([
+const started = runCli([
   "brainstorm",
   "start",
   "--request",
@@ -144,13 +111,13 @@ includes(conceptShape, "key field meaning", "schema shape must guide field meani
 includes(conceptShape, "inputs or fields", "schema shape must guide applicable inputs or fields in concept explanation.");
 includes(conceptShape, "visible feedback", "schema shape must guide visible feedback in concept explanation.");
 
-const contractsSource = readRepo("src/core/operations/contracts.ts");
+const contractsSource = readRepoFile("src/core/operations/contracts.ts");
 includes(contractsSource, "objectOperationDetailRules", "AAC requirement transfer must include objectOperationDetailRules.");
 includes(contractsSource, "Every currentPhaseScope.included item should remain traceable", "AAC transfer must preserve scope item traceability.");
 includes(contractsSource, "Represent business objects as entities or reference projections", "AAC domain_contract mapping must preserve business objects.");
 includes(contractsSource, "Represent object operations as userFlows/stateMachines", "AAC behavior mapping must preserve operations.");
 
-const tasksSource = readRepo("src/core/operations/tasks.ts");
+const tasksSource = readRepoFile("src/core/operations/tasks.ts");
 includes(tasksSource, "objectOperationDetailRules", "TaskPlan requirement transfer must include objectOperationDetailRules.");
 includes(tasksSource, "Every currentPhaseScope.included item should remain traceable into TaskPlan tasks", "TaskPlan transfer must preserve scope item traceability.");
 includes(tasksSource, "taskAssignmentRule", "TaskPlan must assign object-operation details to tasks.");

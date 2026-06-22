@@ -1,65 +1,11 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope.data;
-}
-
-function runEnvelope(args, projectRoot, extraEnv = {}) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex", ...extraEnv },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope;
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
-
-function requestFromCommand(data, root) {
-  return data.request ?? hydrateRequest(root, readJson(projectFile(root, data.requestPath ?? data.requestRef)));
-}
-
-function hydrateRequest(root, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectFile(root, value));
-  }
-  return hydrated;
-}
+const { runCli, runEnvelope } = require("../harness/cli");
+const { buildDist } = require("../harness/root");
+const { hydrateRequest, projectFile, readJson, requestFromCommand, tempProject, writeJson } = require("../harness/files");
 
 function now() {
   return "2026-05-24T00:00:00.000Z";
@@ -271,7 +217,7 @@ function createDeferredScopeCandidatePreviewCandidate(request) {
 function writeBaseState(root, nextPhasePreview) {
   const deliveryId = nextPhasePreview.kind === "candidate" ? "delivery-preview-candidate" : "delivery-preview-none";
   const phaseId = "phase-1";
-  run(["init"], root);
+  runCli(["init"], root);
   const status = readJson(projectFile(root, ".loom/status.json"));
   status.activeDeliveryId = deliveryId;
   status.deliveries = [{
@@ -522,9 +468,9 @@ function writeBaseState(root, nextPhasePreview) {
 }
 
 function main() {
-  execFileSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
+  buildDist();
 
-  const candidateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-preview-candidate-"));
+  const candidateRoot = tempProject("loom-preview-candidate-");
   try {
     fs.mkdirSync(projectFile(candidateRoot, "src"), { recursive: true });
     fs.writeFileSync(projectFile(candidateRoot, "src/index.ts"), "export const phase1 = true;\n");
@@ -536,7 +482,7 @@ function main() {
       scopePreview: ["next capability"],
       reason: "A next phase remains.",
     });
-    const decision = run(["continue"], candidateRoot);
+    const decision = runCli(["continue"], candidateRoot);
     assert.equal(decision.transition.type, "phase_activated");
     assert.equal(decision.phaseId, "phase-2");
     assert.equal(decision.nextAction.type, "repository_context_request");
@@ -544,7 +490,7 @@ function main() {
     assert.deepEqual(decision.instruction.command.argv.slice(0, 2), ["repository-context", "request"]);
 
     writeTechnicalBaseline(candidateRoot, "delivery-preview-candidate");
-    const repoRequest = run(["repository-context", "request", "--delivery-id", "delivery-preview-candidate", "--phase-id", "phase-2"], candidateRoot);
+    const repoRequest = runCli(["repository-context", "request", "--delivery-id", "delivery-preview-candidate", "--phase-id", "phase-2"], candidateRoot);
     const repoRequestBody = requestFromCommand(repoRequest, candidateRoot);
     assert.equal(repoRequest.request, undefined);
     assert.equal(repoRequestBody.projectKind, "greenfield");
@@ -552,7 +498,7 @@ function main() {
     assert.equal(Object.hasOwn(repoRequestBody, "nextPhasePreview"), false);
     assert.equal(repoRequestBody.scanPurpose.activePhase.phaseId, "phase-2");
     writeJson(projectFile(candidateRoot, repoRequest.candidateFile), createRepositoryContextCandidate(repoRequest, candidateRoot));
-    const accepted = run([
+    const accepted = runCli([
       "repository-context", "accept",
       "--delivery-id", "delivery-preview-candidate",
       "--phase-id", "phase-2",
@@ -563,7 +509,7 @@ function main() {
     assert.equal(accepted.instruction.nextAction.type, "brainstorm_confirmation");
     const brainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, accepted.instruction.expectedResponse.requestRef)));
     writeJson(projectFile(candidateRoot, brainstormRequest.outputContract.candidateFile), createDeferredScopeNonePreviewCandidate(brainstormRequest));
-    const rejectedBrainstorm = run([
+    const rejectedBrainstorm = runCli([
       "brainstorm", "accept",
       "--delivery-id", "delivery-preview-candidate",
       "--phase-id", "phase-2",
@@ -590,7 +536,7 @@ function main() {
       "--phase-id", "phase-2",
       "--request-id", repoRequest.requestId,
       "--candidate-file", repoRequest.candidateFile,
-    ], candidateRoot, { LOOM_COMPACT_OUTPUT: "1" });
+    ], candidateRoot, { compactOutput: true });
     assert.equal(compactAccepted.instruction.mode, "ask_user");
     assert.equal(compactAccepted.actionRequired, undefined);
     assert.ok(compactAccepted.instruction.expectedResponse.requestRef);
@@ -643,7 +589,7 @@ function main() {
     );
     const compactBrainstormRequest = hydrateRequest(candidateRoot, readJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.requestRef)));
     writeJson(projectFile(candidateRoot, compactBrainstormRequest.outputContract.candidateFile), createDeferredScopeCandidatePreviewCandidate(compactBrainstormRequest));
-    const acceptedBrainstorm = run([
+    const acceptedBrainstorm = runCli([
       "brainstorm", "accept",
       "--delivery-id", "delivery-preview-candidate",
       "--phase-id", "phase-2",
@@ -664,13 +610,13 @@ function main() {
     fs.rmSync(candidateRoot, { recursive: true, force: true });
   }
 
-  const noneRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-preview-none-"));
+  const noneRoot = tempProject("loom-preview-none-");
   try {
     writeBaseState(noneRoot, {
       kind: "none",
       reason: "No next phase remains.",
     });
-    const decision = run(["continue"], noneRoot);
+    const decision = runCli(["continue"], noneRoot);
     assert.equal(decision.nextAction.type, "done");
     assert.equal(decision.instruction.mode, "report_done");
     const status = readJson(projectFile(noneRoot, ".loom/status.json"));

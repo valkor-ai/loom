@@ -1,58 +1,12 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
 const NOW = "2026-05-24T00:00:00.000Z";
 
-function runEnvelope(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope;
-}
-
-function run(args, projectRoot) {
-  return runEnvelope(args, projectRoot).data;
-}
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function requestFromCommand(data, root) {
-  return data.request ?? hydrateRequest(root, readJson(projectFile(root, data.requestPath ?? data.requestRef)));
-}
-
-function hydrateRequest(root, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectFile(root, value));
-  }
-  return hydrated;
-}
+const { runCli, runEnvelope } = require("../harness/cli");
+const { buildDist } = require("../harness/root");
+const { projectFile, readJson, requestFromCommand, tempProject, writeJson } = require("../harness/files");
 
 function allReadFields(request) {
   return (request.agentAction?.read?.fieldGroups ?? []).flatMap((group) => group.fields ?? []);
@@ -220,8 +174,8 @@ function greenfieldCandidate(request, overrides = {}) {
 }
 
 function setupRoot() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-greenfield-baseline-"));
-  run(["init"], root);
+  const root = tempProject("loom-greenfield-baseline-");
+  runCli(["init"], root);
   writeDelivery(root, "delivery-greenfield", "phase-1");
   return root;
 }
@@ -229,7 +183,7 @@ function setupRoot() {
 function verifyGreenfieldRequestGuidance() {
   const root = setupRoot();
   try {
-    const data = run(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
+    const data = runCli(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
     const request = requestFromCommand(data, root);
     const fields = allReadFields(request);
 
@@ -269,7 +223,7 @@ function verifyGreenfieldRequestGuidance() {
 function verifyUnconfirmedGreenfieldCannotContinue() {
   const root = setupRoot();
   try {
-    const data = run(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
+    const data = runCli(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
     const request = requestFromCommand(data, root);
     writeJson(projectFile(root, request.outputContract.candidateFile), greenfieldCandidate(request, {
       technicalBaselineId: "tb-greenfield-unconfirmed",
@@ -309,14 +263,14 @@ function verifyUnconfirmedGreenfieldCannotContinue() {
 function verifyIncompleteGreenfieldTracksRejected() {
   const root = setupRoot();
   try {
-    const data = run(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
+    const data = runCli(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
     const request = requestFromCommand(data, root);
     writeJson(projectFile(root, request.outputContract.candidateFile), greenfieldCandidate(request, {
       technicalBaselineId: "tb-greenfield-incomplete",
       stack: { tracks: { web: stackTracks().web } },
     }));
 
-    const rejected = run([
+    const rejected = runCli([
       "technical-baseline", "accept",
       "--delivery-id", "delivery-greenfield",
       "--phase-id", "phase-1",
@@ -332,11 +286,11 @@ function verifyIncompleteGreenfieldTracksRejected() {
 function verifyConfirmedGreenfieldContinuesToPgc() {
   const root = setupRoot();
   try {
-    const data = run(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
+    const data = runCli(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
     const request = requestFromCommand(data, root);
     writeJson(projectFile(root, request.outputContract.candidateFile), greenfieldCandidate(request));
 
-    const accepted = run([
+    const accepted = runCli([
       "technical-baseline", "accept",
       "--delivery-id", "delivery-greenfield",
       "--phase-id", "phase-1",
@@ -357,7 +311,7 @@ function verifyConfirmedGreenfieldContinuesToPgc() {
 function verifyCustomGreenfieldTrackAcceptedWhenConfirmed() {
   const root = setupRoot();
   try {
-    const data = run(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
+    const data = runCli(["technical-baseline", "request", "--delivery-id", "delivery-greenfield", "--phase-id", "phase-1"], root);
     const request = requestFromCommand(data, root);
     writeJson(projectFile(root, request.outputContract.candidateFile), greenfieldCandidate(request, {
       technicalBaselineId: "tb-greenfield-custom",
@@ -373,7 +327,7 @@ function verifyCustomGreenfieldTrackAcceptedWhenConfirmed() {
       reasoningSummary: ["User specified backend=Java+spring boot and confirmed the final greenfield technology baseline."],
     }));
 
-    const accepted = run([
+    const accepted = runCli([
       "technical-baseline", "accept",
       "--delivery-id", "delivery-greenfield",
       "--phase-id", "phase-1",
@@ -387,7 +341,7 @@ function verifyCustomGreenfieldTrackAcceptedWhenConfirmed() {
 }
 
 function main() {
-  execFileSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
+  buildDist();
   verifyGreenfieldRequestGuidance();
   verifyUnconfirmedGreenfieldCannotContinue();
   verifyIncompleteGreenfieldTracksRejected();

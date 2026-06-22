@@ -1,53 +1,11 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope.data;
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
-
-function requestFromCommand(data, root) {
-  return data.request ?? hydrateRequest(root, readJson(projectFile(root, data.requestPath ?? data.requestRef)));
-}
-
-function hydrateRequest(root, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectFile(root, value));
-  }
-  return hydrated;
-}
+const { runCli } = require("../harness/cli");
+const { buildDist } = require("../harness/root");
+const { projectFile, readJson, requestFromCommand, tempProject, writeJson } = require("../harness/files");
 
 function createPhase1Candidate(request) {
   return {
@@ -397,19 +355,19 @@ function writeArchitectureSections(root, archRequest, planningContract) {
 }
 
 function main() {
-  execFileSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
+  buildDist();
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-phase2-repoctx-"));
+  const root = tempProject("loom-phase2-repoctx-");
   try {
     fs.writeFileSync(projectFile(root, "package.json"), JSON.stringify({ type: "module", scripts: { test: "vitest" } }, null, 2));
     fs.mkdirSync(projectFile(root, "src"), { recursive: true });
     fs.writeFileSync(projectFile(root, "src/index.ts"), "export const ok = true;\n");
 
-    run(["init"], root);
-    const started = run(["brainstorm", "start", "--request", "Build a phased stock trading system."], root);
+    runCli(["init"], root);
+    const started = runCli(["brainstorm", "start", "--request", "Build a phased stock trading system."], root);
     const startedRequest = requestFromCommand(started, root);
     writeJson(projectFile(root, startedRequest.outputContract.candidateFile), createPhase1Candidate(startedRequest));
-    run([
+    runCli([
       "brainstorm", "accept",
       "--delivery-id", startedRequest.deliveryId,
       "--phase-id", "phase-1",
@@ -422,7 +380,7 @@ function main() {
     forcePhase2State(root, deliveryId);
     writeTechnicalBaseline(root, deliveryId);
 
-    const repoRequest = run(["repository-context", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
+    const repoRequest = runCli(["repository-context", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
     const repoRequestBody = requestFromCommand(repoRequest, root);
     assert.equal(repoRequest.request, undefined);
     assert.equal(Object.hasOwn(repoRequestBody, "priorPhaseContext"), false);
@@ -432,7 +390,7 @@ function main() {
     assert.deepEqual(repoRequestBody.scanPurpose.completedPhases.map((phase) => phase.phaseId), ["phase-1"]);
 
     writeJson(projectFile(root, repoRequest.candidateFile), createRepositoryContextCandidate(repoRequest, root));
-    run([
+    runCli([
       "repository-context", "accept",
       "--delivery-id", deliveryId,
       "--phase-id", "phase-2",
@@ -440,7 +398,7 @@ function main() {
       "--candidate-file", repoRequest.candidateFile,
     ], root);
 
-    const baselineAccepted = run([
+    const baselineAccepted = runCli([
       "technical-baseline", "accept",
       "--delivery-id", deliveryId,
       "--phase-id", "phase-2",
@@ -450,23 +408,23 @@ function main() {
     assert.equal(baselineAccepted.nextAction.reason, "TECHNICAL_BASELINE_READY_WITH_REPOSITORY_CONTEXT");
     assert.equal(baselineAccepted.instruction.command.name, "planning_contract_create");
 
-    const pgc = run(["planning-contract", "create", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
+    const pgc = runCli(["planning-contract", "create", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
     assert.deepEqual(pgc.contract.phaseScope.included.map((item) => item.scopeId), ["scope-phase-2"]);
     assert.deepEqual(pgc.contract.phaseScope.excluded.map((item) => item.scopeId), ["scope-no-deploy"]);
     assert.deepEqual(pgc.contract.phaseScope.deferred.map((item) => item.scopeId), []);
     assert.ok(pgc.contract.contextRefs.repositoryContextRef.endsWith("/workspace/phase-2/repository-context.json"));
 
-    const arch = run(["architecture", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
+    const arch = runCli(["architecture", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
     const archRequestBody = requestFromCommand(arch, root);
     assert.equal(arch.request, undefined);
     assert.equal(archRequestBody.sourceRefs.repositoryContextRef, pgc.contract.contextRefs.repositoryContextRef);
     writeArchitectureSections(root, archRequestBody, pgc.contract);
-    const archAccepted = run(["architecture", "accept", "--delivery-id", deliveryId, "--phase-id", "phase-2", "--request-id", archRequestBody.requestId], root);
+    const archAccepted = runCli(["architecture", "accept", "--delivery-id", deliveryId, "--phase-id", "phase-2", "--request-id", archRequestBody.requestId], root);
     assert.equal(archAccepted.accepted, true, JSON.stringify(archAccepted.issues ?? [], null, 2));
 
-    const taskPlanGate = run(["continue"], root);
+    const taskPlanGate = runCli(["continue"], root);
     assert.equal(taskPlanGate.nextAction.type, "taskplan_generation");
-    const taskPlan = run(["task-plan", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
+    const taskPlan = runCli(["task-plan", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
     const taskPlanRequestBody = requestFromCommand(taskPlan, root);
     assert.equal(taskPlan.request, undefined);
     assert.equal(taskPlanRequestBody.sourceRefs.repositoryContextRef, pgc.contract.contextRefs.repositoryContextRef);

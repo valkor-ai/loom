@@ -3,54 +3,13 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope.data;
-}
+const { runCli } = require("../harness/cli");
+const { buildDist } = require("../harness/root");
+const { projectFile, readJson, requestFromCommand, tempProject, writeJson } = require("../harness/files");
 
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-}
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
-
-function requestFromCommand(data, root) {
-  return data.request ?? hydrateRequest(root, readJson(projectFile(root, data.requestPath ?? data.requestRef)));
-}
-
-function hydrateRequest(root, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectFile(root, value));
-  }
-  return hydrated;
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function now() {
@@ -370,9 +329,9 @@ function gitCheckpointAdvisory(decision) {
 }
 
 function main() {
-  execFileSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
+  buildDist();
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-phase-advisory-"));
+  const root = tempProject("loom-phase-advisory-");
   try {
     fs.writeFileSync(projectFile(root, "package.json"), JSON.stringify({ type: "module" }, null, 2));
     git(["init"], root);
@@ -381,9 +340,9 @@ function main() {
     git(["add", "package.json"], root);
     git(["commit", "-m", "initial"], root);
 
-    run(["init"], root);
+    runCli(["init"], root);
     const deliveryId = writeDeliveryAtPhaseHandoff(root);
-    const firstContinue = run(["continue"], root);
+    const firstContinue = runCli(["continue"], root);
     assert.equal(firstContinue.deliveryId, deliveryId);
     assert.equal(firstContinue.phaseId, "phase-2");
     assert.equal(firstContinue.nextAction.type, "repository_context_request");
@@ -392,10 +351,10 @@ function main() {
     assert.equal(gitCheckpointAdvisory(firstContinue), null);
 
     writeTechnicalBaseline(root, deliveryId);
-    const repoRequest = run(["repository-context", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
+    const repoRequest = runCli(["repository-context", "request", "--delivery-id", deliveryId, "--phase-id", "phase-2"], root);
     assert.equal(repoRequest.request, undefined);
     writeJson(projectFile(root, repoRequest.candidateFile), createRepositoryContextCandidate(repoRequest, root));
-    const repoAccepted = run([
+    const repoAccepted = runCli([
       "repository-context", "accept",
       "--delivery-id", deliveryId,
       "--phase-id", "phase-2",
@@ -414,7 +373,7 @@ function main() {
     assert.ok(advisory.commands.includes("git status --short"));
     assert.ok(advisory.commands.includes("git push # optional"));
 
-    const ordinaryContinue = run(["continue"], root);
+    const ordinaryContinue = runCli(["continue"], root);
     assert.equal(ordinaryContinue.phaseId, "phase-2");
     assert.equal(ordinaryContinue.nextAction.type, "brainstorm_confirmation");
     assert.equal(ordinaryContinue.instruction.mode, "ask_user");

@@ -1,38 +1,9 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope.data;
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
+const { runCli } = require("../harness/cli");
+const { projectFile, readJson, tempProject, writeJson } = require("../harness/files");
 
 function now() {
   return "2026-05-24T00:00:00.000Z";
@@ -101,7 +72,7 @@ function writeRepositoryContext(root, deliveryId, phaseId) {
 function writeFixture(root) {
   const deliveryId = "delivery-source-consistency";
   const phaseId = "phase-3";
-  run(["init"], root);
+  runCli(["init"], root);
   fs.mkdirSync(projectFile(root, "src"), { recursive: true });
   fs.writeFileSync(projectFile(root, "package.json"), JSON.stringify({ scripts: { test: "node -e true" } }, null, 2));
 
@@ -222,11 +193,11 @@ function writeFixture(root) {
   return { deliveryId, phaseId };
 }
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-source-consistency-"));
+const root = tempProject("loom-source-consistency-");
 try {
   const { deliveryId, phaseId } = writeFixture(root);
 
-  const baselineRequestData = run(["technical-baseline", "request", "--delivery-id", deliveryId, "--phase-id", phaseId], root);
+  const baselineRequestData = runCli(["technical-baseline", "request", "--delivery-id", deliveryId, "--phase-id", phaseId], root);
   const baselineRequest = readJson(projectFile(root, baselineRequestData.requestPath));
   assert.equal(baselineRequest.deliveryId, deliveryId);
   assert.equal(baselineRequest.phaseId, phaseId);
@@ -238,7 +209,7 @@ try {
   assert.equal(baselineRequest.reusePolicy.previousTechnicalBaseline, "reuse_stable_stack_only");
   assert.equal(baselineRequest.reusePolicy.currentPhaseScopeAuthority, "brainstorm_contract");
 
-  const pgcData = run(["planning-contract", "create", "--delivery-id", deliveryId, "--phase-id", phaseId], root);
+  const pgcData = runCli(["planning-contract", "create", "--delivery-id", deliveryId, "--phase-id", phaseId], root);
   assert.equal(pgcData.status, "ready");
   assert.equal(pgcData.contract.source.brainstormRunId, "bs-phase-3-latest");
   assert.equal(pgcData.contract.source.phaseId, phaseId);

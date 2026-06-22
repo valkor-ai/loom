@@ -1,42 +1,14 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
+const { runCli } = require("../harness/cli");
+const { hydrateRequest, readProjectJson: readJson, tempProject } = require("../harness/files");
 
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope.data;
-}
-
-function readJson(projectRoot, relativePath) {
-  return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
-}
-
-function hydrateRequest(projectRoot, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectRoot, value);
-  }
-  return hydrated;
-}
-
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-requirements-"));
-run(["init"], projectRoot);
+const projectRoot = tempProject("loom-requirements-");
+runCli(["init"], projectRoot);
 
 const requestFile = path.join(projectRoot, "stock-trading-requirements.txt");
 fs.writeFileSync(
@@ -48,7 +20,7 @@ fs.writeFileSync(
   ].join("\n"),
 );
 
-const data = run([
+const data = runCli([
   "brainstorm",
   "start",
   "--requirement-file",

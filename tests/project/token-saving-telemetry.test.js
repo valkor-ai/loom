@@ -1,21 +1,10 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
+const { runEnvelope } = require("../harness/cli");
+const { projectFile, readJson, tempProject } = require("../harness/files");
 
 function captureStdout(fn) {
   const originalWrite = process.stdout.write;
@@ -37,24 +26,8 @@ function captureStdout(fn) {
   return output;
 }
 
-function runJson(args, projectRoot, options = {}) {
-  const cliArgs = [cli, ...args, "--project-root", projectRoot, "--json"];
-  if (options.compact) {
-    cliArgs.push("--compact");
-  }
-  const output = execFileSync(process.execPath, cliArgs, {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope;
-}
-
 function runStatus(projectRoot) {
-  const envelope = runJson(["status"], projectRoot, { compact: true });
+  const envelope = runEnvelope(["status"], projectRoot, { compact: true });
   return envelope.data;
 }
 
@@ -72,7 +45,7 @@ async function main() {
   const { readTokenSavingSummary } = require("../../dist/core/operations/token-saving-telemetry");
   const { printEnvelope } = require("../../dist/commands/output");
 
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-token-saving-verify-"));
+  const projectRoot = tempProject("loom-token-saving-verify-");
   const sentinel = "TOKEN_SAVING_VERIFY_SENTINEL_USER_CONTENT";
   await initProject({ projectRoot });
 
@@ -117,7 +90,7 @@ async function main() {
     rules: Array.from({ length: 100 }, (_, index) => `${sentinel}-rule-${index}-${"x".repeat(40)}`),
   });
 
-  runJson(["inspect", "--request", ".loom/tmp/request.json", "--field", "outputContract.schemaShape"], projectRoot);
+  runEnvelope(["inspect", "--request", ".loom/tmp/request.json", "--field", "outputContract.schemaShape"], projectRoot);
 
   const telemetryFile = projectFile(projectRoot, ".loom/metrics/token-saving.json");
   const telemetry = readJson(telemetryFile);
@@ -141,7 +114,7 @@ async function main() {
     "status must expose source totals",
   );
 
-  const metrics = runJson(["metrics", "token-saving"], projectRoot, { compact: true }).data.tokenSaving;
+  const metrics = runEnvelope(["metrics", "token-saving"], projectRoot, { compact: true }).data.tokenSaving;
   assert.equal(metrics.telemetryRef, ".loom/metrics/token-saving.json", "metrics telemetry ref");
   assert.equal(metrics.eventCount, 3, "metrics command must expose the current telemetry total");
   assert.ok(metrics.recentEvents.some((event) => event.source === "inspect_selectors"), "metrics command must expose inspect selector events");

@@ -3,50 +3,14 @@
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
-
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, `${args.join(" ")} failed: ${output}`);
-  return envelope.data;
-}
+const { runCli } = require("../harness/cli");
+const { buildDist } = require("../harness/root");
+const { hydrateRequest, projectFile, readJson, tempProject, writeJson } = require("../harness/files");
 
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-}
-
-function projectFile(root, relativePath) {
-  return path.join(root, relativePath);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function hydrateRequest(root, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectFile(root, value));
-  }
-  return hydrated;
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function now() {
@@ -400,9 +364,9 @@ function writeReviewReadyState(root) {
 }
 
 function main() {
-  execFileSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "inherit" });
+  buildDist();
 
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-review-scope-"));
+  const root = tempProject("loom-review-scope-");
   try {
     fs.writeFileSync(projectFile(root, "package.json"), JSON.stringify({ type: "module" }, null, 2));
     fs.mkdirSync(projectFile(root, "src"), { recursive: true });
@@ -415,9 +379,9 @@ function main() {
     fs.writeFileSync(projectFile(root, "src/declared.ts"), "export const declared = 'after';\n");
     fs.writeFileSync(projectFile(root, "src/not-declared.ts"), "export const extra = true;\n");
 
-    run(["init"], root);
+    runCli(["init"], root);
     const { deliveryId, phaseId } = writeReviewReadyState(root);
-    const review = run(["review", "--delivery-id", deliveryId, "--phase-id", phaseId], root);
+    const review = runCli(["review", "--delivery-id", deliveryId, "--phase-id", phaseId], root);
     const reviewRequest = hydrateRequest(root, readJson(projectFile(root, review.requestPath ?? review.requestRef)));
     const changeContext = readJson(projectFile(root, reviewRequest.changeContextRef));
     assert.equal(changeContext.mode, "git_diff_ref");
@@ -527,7 +491,7 @@ function main() {
       createdAt: now(),
       updatedAt: now(),
     });
-    const acceptedReview = run(["review", "accept", "--delivery-id", deliveryId, "--phase-id", phaseId, "--result-file", resultFile], root);
+    const acceptedReview = runCli(["review", "accept", "--delivery-id", deliveryId, "--phase-id", phaseId, "--result-file", resultFile], root);
     assert.equal(acceptedReview.accepted, true, JSON.stringify(acceptedReview.issues, null, 2));
 
     console.log("review scope declared changed-files verification passed");

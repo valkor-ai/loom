@@ -1,49 +1,10 @@
 #!/usr/bin/env node
 
 const assert = require("node:assert/strict");
-const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-
-const repoRoot = path.resolve(__dirname, "../..");
-const cli = path.join(repoRoot, "dist", "cli.js");
 const now = "2026-05-24T00:00:00.000Z";
 
-function run(args, projectRoot) {
-  const output = execFileSync(process.execPath, [cli, ...args, "--project-root", projectRoot, "--json"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    env: { ...process.env, LOOM_AGENT_PROFILE: "codex" },
-  });
-  const envelope = JSON.parse(output);
-  assert.equal(envelope.ok, true, output);
-  return envelope.data;
-}
-
-function projectFile(projectRoot, relativePath) {
-  return path.join(projectRoot, relativePath);
-}
-
-function readJson(projectRoot, relativePath) {
-  return JSON.parse(fs.readFileSync(projectFile(projectRoot, relativePath), "utf8"));
-}
-
-function hydrateRequest(projectRoot, request) {
-  const hydrated = { ...request };
-  for (const [key, value] of Object.entries(request)) {
-    if (!key.endsWith("Ref") || typeof value !== "string" || key === "requestRef") continue;
-    const targetKey = key.slice(0, -"Ref".length);
-    if (targetKey in hydrated) continue;
-    hydrated[targetKey] = readJson(projectRoot, value);
-  }
-  return hydrated;
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-}
+const { runCli } = require("../harness/cli");
+const { hydrateRequest, projectFile, readProjectJson: readJson, tempProject, writeJson } = require("../harness/files");
 
 function createCandidate(request) {
   return {
@@ -273,10 +234,10 @@ function writeTechnicalBaseline(projectRoot, deliveryId) {
   });
 }
 
-const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "loom-requirement-detail-index-"));
-run(["init"], projectRoot);
+const projectRoot = tempProject("loom-requirement-detail-index-");
+runCli(["init"], projectRoot);
 
-const started = run(["brainstorm", "start", "--request", "Build an account application operations console."], projectRoot);
+const started = runCli(["brainstorm", "start", "--request", "Build an account application operations console."], projectRoot);
 const request = {
   ...hydrateRequest(projectRoot, readJson(projectRoot, started.requestPath ?? started.requestRef)),
   deliveryId: started.deliveryId,
@@ -285,7 +246,7 @@ const request = {
   requestId: started.requestId,
 };
 writeJson(projectFile(projectRoot, request.outputContract.candidateFile), createCandidate(request));
-run([
+runCli([
   "brainstorm", "accept",
   "--delivery-id", request.deliveryId,
   "--phase-id", request.phaseId,
@@ -295,7 +256,7 @@ run([
 ], projectRoot);
 
 writeTechnicalBaseline(projectRoot, request.deliveryId);
-const pgc = run(["planning-contract", "create", "--delivery-id", request.deliveryId, "--phase-id", request.phaseId], projectRoot);
+const pgc = runCli(["planning-contract", "create", "--delivery-id", request.deliveryId, "--phase-id", request.phaseId], projectRoot);
 const details = pgc.contract.requirementDetails;
 
 assert.equal(details.schemaVersion, "1.0");
