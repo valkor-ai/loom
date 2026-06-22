@@ -100,9 +100,9 @@ If `data.nextAction.type` is `needs_user_decision`, top-level `instruction.mode`
 
 ## Request Protocol
 
-When a command returns `requestRef`, read it first. Root `requestReadPlan` is the read authority: run each required group's `readCommand`, use `data.fields[<field>].value`, and do not open full sidecar refs to discover the plan. Only older requests without `requestReadPlan` may inspect `agentAction.read.fieldGroups` as compatibility fallback. If inspect fails, use that group's fields with requestManifest refs and targeted selectors; full listed refs are last-resort correctness fallback only.
+When a command returns `requestRef`, read it first. Root `requestReadPlan` is the read authority: run each required group's `readCommand`, use `data.fields[<field>].value`, and do not open full sidecar refs to discover the plan. If inspect fails, use that group's fields with requestManifest refs and targeted selectors; full listed refs are last-resort correctness fallback only.
 
-Use `requestReadPlan` as primary request-field read map and `agentAction` as execution/write/submit map: `requestReadPlan.groups` for fields, `agentAction.read.fieldGroups` only when reading older requests without `requestReadPlan`, `agentAction.write` for files, `agentAction.schema` for schema/enums, and `agentAction.submit` for submit commands. Do not invent shell selectors or infer submit arguments from older artifacts.
+Use `requestReadPlan` as primary request-field read map and `agentAction` as execution/write/submit map: `requestReadPlan.groups` for fields, `agentAction.write` for files, `agentAction.schema` for schema/enums, and `agentAction.submit` for submit commands. Do not invent shell selectors or infer submit arguments from older artifacts.
 
 When an `execute_task` request contains `executionRules.sourceEditPreparationContract`, follow it before `Write`, `Edit`, `MultiEdit`, or quiet programmatic writes: form targetPath, writeKind, contentBasis, writeMethod, and writePayloadReady=true. If a native file-write tool rejects missing/invalid arguments before writing, return to that contract; do not repeat the malformed tool call. If the write boundary remains unclear, write the failed/blocked TaskResult and submit.
 

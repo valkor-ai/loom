@@ -787,13 +787,24 @@ writeJson(path.join(tmp, ".loom/requests/tbr.json"), {
     "inspect",
     "--project-root", projectRoot,
     "--request", ".loom/requests/tbr.json",
+    "--field", "requestReadPlan",
+  ]);
+  assert.equal(result.status, 0, result.stderr);
+  const fields = parsed.data.fields.requestReadPlan.value.groups.flatMap((group) => group.fields);
+  assert.equal(fields.includes("contextRefs.latestRepositoryContextRef"), false, "legacy request migration must remove unavailable optional latestRepositoryContextRef.");
+  assert.equal(fields.includes("contextRefs.previousTechnicalBaselineRef"), false, "legacy request migration must remove unavailable optional previousTechnicalBaselineRef.");
+  assert.ok(fields.includes("contextRefs.brainstormContractRef"), "legacy request migration must preserve required present contextRefs.");
+}
+
+{
+  const { result, parsed } = runCli(projectRoot, [
+    "inspect",
+    "--project-root", projectRoot,
+    "--request", ".loom/requests/tbr.json",
     "--field", "agentAction",
   ]);
   assert.equal(result.status, 0, result.stderr);
-  const fields = parsed.data.fields.agentAction.value.read.fieldGroups.flatMap((group) => group.fields);
-  assert.equal(fields.includes("contextRefs.latestRepositoryContextRef"), false, "request-aware agentAction inspect must remove unavailable optional latestRepositoryContextRef.");
-  assert.equal(fields.includes("contextRefs.previousTechnicalBaselineRef"), false, "request-aware agentAction inspect must remove unavailable optional previousTechnicalBaselineRef.");
-  assert.ok(fields.includes("contextRefs.brainstormContractRef"), "request-aware agentAction inspect must preserve required present contextRefs.");
+  assert.equal(parsed.data.fields.agentAction.value.read, undefined, "hydrated legacy agentAction must not expose a read contract to agents.");
 }
 
 {
@@ -995,13 +1006,13 @@ for (const file of [
   "plugins/claude-code/skills/loom-deploy/SKILL.md",
   "plugins/opencode/.opencode/commands/loom-deploy.md",
 ]) {
-	  assertIncludes(file, "requestReadPlan", `${file}: adapter must prefer root requestReadPlan.`);
-	  assertIncludes(file, "older requests without `requestReadPlan`", `${file}: adapter must limit agentAction.read fallback to older requests.`);
-	  assertIncludes(file, "inspect", `${file}: adapter must mention inspect.`);
-	  assertIncludes(file, "fallback", `${file}: adapter must mention fallback.`);
-	}
+  assertIncludes(file, "requestReadPlan", `${file}: adapter must prefer root requestReadPlan.`);
+  assertNotIncludes(file, "agentAction.read", `${file}: adapter must not expose legacy read compatibility to agents.`);
+  assertIncludes(file, "inspect", `${file}: adapter must mention inspect.`);
+  assertIncludes(file, "fallback", `${file}: adapter must mention fallback.`);
+}
 
-assertIncludes("src/core/operations/output-policy.ts", "agentAction.read.fieldGroups", "output policy must route agents through read field groups.");
+assertNotIncludes("src/core/operations/output-policy.ts", "agentAction.read", "output policy must not expose legacy read compatibility to agents.");
 assertIncludes("src/core/operations/output-policy.ts", "inspect readCommand", "output policy must mention inspect readCommand.");
 assertNotIncludes("src/core/operations/output-policy.ts", "--limit", "request read protocol must not use content limits.");
 assertIncludes("src/core/operations/tasks.ts", "frontendImplementationOrganizationRules", "TaskPlan/TaskExecution must expose frontend responsibility-boundary rules.");

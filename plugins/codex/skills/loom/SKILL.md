@@ -108,12 +108,11 @@ Command responses can also include a direct `data.instruction`. Top-level `instr
 
 ## Request Protocol
 
-When a command returns `requestRef`, read it first. Root `requestReadPlan` is the read authority: run each required group's `readCommand` with the active launcher/profile, use `data.fields[<field>].value` as each complete field value, and do not open full sidecar refs to discover the plan. Only older requests without `requestReadPlan` may inspect `agentAction.read.fieldGroups` as the compatibility fallback. If an inspect command fails, use that group's fields with requestManifest refs and targeted selectors. If inspect and targeted fallback are unavailable, read listed manifest refs directly as a last-resort correctness fallback without printing full `.loom` artifacts.
+When a command returns `requestRef`, read it first. Root `requestReadPlan` is the read authority: run each required group's `readCommand` with the active launcher/profile, use `data.fields[<field>].value` as each complete field value, and do not open full sidecar refs to discover the plan. If an inspect command fails, use that group's fields with requestManifest refs and targeted selectors. If inspect and targeted fallback are unavailable, read listed manifest refs directly as a last-resort correctness fallback without printing full `.loom` artifacts.
 
 Use `requestReadPlan` as the primary request-field read map and `agentAction` as the execution/write/submit map:
 
 - `requestReadPlan.groups`: exact request fields, purposes, read timing, inspect commands, and fallback selectors.
-- `agentAction.read.fieldGroups`: older-request fallback only when `requestReadPlan` is absent.
 - `agentAction.write`: exact output files to write.
 - `agentAction.schema`: schema and enum locations.
 - `agentAction.submit`: exact command and required arguments.

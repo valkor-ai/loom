@@ -18,7 +18,7 @@ When this skill mentions a command such as `loom deploy up`, treat it as a logic
 
 If a deploy command returns `AGENT_PROFILE_REQUIRED`, rerun the exact same command immediately with `LOOM_AGENT_PROFILE=codex` and all original arguments.
 
-Use normal Codex file tools for source files, project docs, and small text artifacts. For `.loom` deployment JSON artifacts, repair request files, state files, logs, and generated candidates, use root `requestReadPlan.groups` inspect readCommands and read values from `data.fields[<field>].value`. Only older requests without `requestReadPlan` may use returned `agentAction.read.fieldGroups` as compatibility fallback. If inspect is missing or fails, fall back to requestManifest refs and targeted selectors; direct full artifact reads are a correctness fallback only and must not be printed into chat.
+Use normal Codex file tools for source files, project docs, and small text artifacts. For `.loom` deployment JSON artifacts, repair request files, state files, logs, and generated candidates, use root `requestReadPlan.groups` inspect readCommands and read values from `data.fields[<field>].value`. If inspect is missing or fails, fall back to requestManifest refs and targeted selectors; direct full artifact reads are a correctness fallback only and must not be printed into chat.
 
 ## Current Capability
 
@@ -102,7 +102,7 @@ Rules:
 - If top-level `instruction.mode` is `deploy_repair_assets`, edit only `instruction.editableFiles`, then run `instruction.retryCommand`; if it fails, run `loom deploy repair --project-root /abs/project` and immediately follow the returned instruction.
 - If `nextAction` is `edit-and-rerun`, edit only `editableFiles`, then run `loom deploy up --project-root /abs/project`.
 - If `nextAction` is `execution-repair`, do not edit deploy assets. Run the returned `loom repair request --type execution --source deploy ...`, execute the synthetic request, submit it, then follow the returned deploy retry instruction.
-- When the returned deploy repair or execution repair includes `requestRef`, read that request's root `requestReadPlan.groups` and run the listed inspect readCommands before editing files. Use `data.fields[<field>].value` for returned values. If the request is older and has no `requestReadPlan`, use `agentAction.read.fieldGroups` as compatibility fallback. If inspect fails, use the group fields through requestManifest refs and targeted selectors as the correctness fallback.
+- When the returned deploy repair or execution repair includes `requestRef`, read that request's root `requestReadPlan.groups` and run the listed inspect readCommands before editing files. Use `data.fields[<field>].value` for returned values. If inspect fails, use the group fields through requestManifest refs and targeted selectors as the correctness fallback.
 - For deploy-sourced execution repair, source and result writes are governed by `executionRules.sourceEditPreparationContract` when present; do not repeat malformed file-write/edit operations with missing path/content/edit arguments.
 - If `editableFiles` is empty for a RuntimeDeliveryContract, build command, start command, or preview probe mismatch, do not edit application code from deploy repair. Route through the normal loom delivery repair path.
 - If `editableFiles` is empty and `protectedFiles` is non-empty, ask the user before editing protected reused assets such as an existing `compose.yaml` or `Dockerfile`.

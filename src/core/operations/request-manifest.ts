@@ -52,10 +52,10 @@ export async function hydrateRequestManifest(projectRoot: string, requestFile: s
   if (!isRecord(request)) {
     return request;
   }
-  return hydrateRequestManifestValue(projectRoot, request);
+  return hydrateRequestManifestValue(projectRoot, request, requestFile);
 }
 
-export async function hydrateRequestManifestValue(projectRoot: string, request: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function hydrateRequestManifestValue(projectRoot: string, request: Record<string, unknown>, requestFile?: string): Promise<Record<string, unknown>> {
   const hydrated: Record<string, unknown> = { ...request };
   for (const [key, value] of Object.entries(request)) {
     if (!key.endsWith("Ref") || typeof value !== "string" || value.length === 0) {
@@ -67,8 +67,28 @@ export async function hydrateRequestManifestValue(projectRoot: string, request: 
     }
     hydrated[targetKey] = await readJsonFile(path.resolve(projectRoot, value));
   }
+  const manifestRefs = isRecord(request.requestManifest) && isRecord(request.requestManifest.refs)
+    ? request.requestManifest.refs
+    : {};
+  for (const [targetKey, entry] of Object.entries(manifestRefs)) {
+    if (targetKey in hydrated || !isRecord(entry) || typeof entry.ref !== "string" || entry.ref.length === 0) {
+      continue;
+    }
+    hydrated[targetKey] = await readJsonFile(path.resolve(projectRoot, entry.ref));
+  }
   if (isRecord(hydrated.agentAction)) {
     hydrated.agentAction = normalizeAgentActionForRequest(hydrated.agentAction, hydrated);
+  }
+  const requestReadPlan = isRecord(hydrated.requestReadPlan)
+    ? hydrated.requestReadPlan
+    : requestFile
+      ? buildInlineRequestReadPlan(projectRoot, requestFile, hydrated.agentAction)
+      : null;
+  if (requestReadPlan) {
+    hydrated.requestReadPlan = requestReadPlan;
+    if (isRecord(hydrated.agentAction)) {
+      hydrated.agentAction = compactAgentActionForExecutionRef(hydrated.agentAction);
+    }
   }
   return hydrated;
 }
