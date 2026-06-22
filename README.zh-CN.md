@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./assets/loom-logo.svg" alt="Loom" width="560">
+  <img src="./assets/headbar.png" alt="Loom" width="100%">
   <p><strong>面向 agentic software delivery 的 loop engineering。</strong></p>
   <p>一套开源交付 harness，把 Claude Code、Codex、OpenCode 等 coding agents 变成可重复的软件交付系统。</p>
   <p>
