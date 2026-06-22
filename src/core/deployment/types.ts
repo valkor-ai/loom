@@ -298,6 +298,32 @@ export type DeploymentSourceModel = {
   notes: string[];
 };
 
+export type DeploymentStaticSpaRoute = {
+  kind: "static-spa";
+  publicPath: "/";
+  targetServiceId: string;
+};
+
+export type DeploymentHttpProxyRoute = {
+  kind: "http-proxy";
+  publicPath: string;
+  targetServiceId: string;
+  targetPort: number;
+  preservePath: true;
+};
+
+export type DeploymentRoute = DeploymentStaticSpaRoute | DeploymentHttpProxyRoute;
+
+export type DeploymentTopology = {
+  schemaVersion: 1;
+  publicEntryServiceId: string;
+  routes: DeploymentRoute[];
+  validation: {
+    previewPaths: string[];
+    apiPaths: string[];
+  };
+};
+
 export type DeploymentCodeProbe = {
   kind: DeploymentRuntimeKind;
   packageManager: DeploymentPackageManager;
@@ -467,10 +493,12 @@ export type DeploymentSpec = {
   compose: DeploymentComposeInfo;
   runtimeContract: DeploymentRuntimeContract;
   sourceModel: DeploymentSourceModel;
+  topology: DeploymentTopology;
   codeEvidence?: DeploymentCodeEvidenceSummary;
   files: {
     dockerfilePath: string | null;
     dockerfilePaths: Record<string, string>;
+    nginxConfigPaths: Record<string, string>;
     composePath: string;
     dockerignorePath: string | null;
     buildContextPath: string;
@@ -532,6 +560,7 @@ export type DeploymentFailureKind =
   | "application_startup_failed"
   | "http_probe_failed"
   | "preview_not_verified"
+  | "api_route_not_verified"
   | "deploy_asset_invalid"
   | "logs"
   | "unknown";

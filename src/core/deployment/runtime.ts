@@ -259,6 +259,52 @@ export async function checkDeploymentPreview(spec: DeploymentSpec): Promise<Depl
   };
 }
 
+export async function checkDeploymentApiRoutes(spec: DeploymentSpec): Promise<DeploymentHealth> {
+  const apiPaths = spec.topology.validation.apiPaths;
+  if (apiPaths.length === 0) {
+    return {
+      status: "disabled",
+      url: spec.runtime.url,
+      checkedAt: new Date().toISOString(),
+      statusCode: null,
+      error: null,
+    };
+  }
+
+  const baseUrl = spec.runtime.url.replace(/\/+$/, "");
+  let last: DeploymentHealth = {
+    status: "unknown",
+    url: `${baseUrl}${normalizeHealthPath(apiPaths[0] ?? "/")}`,
+    checkedAt: new Date().toISOString(),
+    statusCode: null,
+    error: null,
+  };
+
+  for (let attempt = 0; attempt < spec.runtime.healthcheck.attempts; attempt += 1) {
+    let allHealthy = true;
+    for (const apiPath of apiPaths) {
+      const url = `${baseUrl}${normalizeHealthPath(apiPath)}`;
+      const result = await requestText(url, spec.runtime.healthcheck.timeoutMs);
+      last = apiRouteHealth(url, result);
+      if (last.status !== "healthy") {
+        allHealthy = false;
+        break;
+      }
+    }
+    if (allHealthy) {
+      return last;
+    }
+    if (attempt < spec.runtime.healthcheck.attempts - 1) {
+      await delay(spec.runtime.healthcheck.intervalMs);
+    }
+  }
+
+  return {
+    ...last,
+    status: "unhealthy",
+  };
+}
+
 type PreviewFetchResult = {
   health: DeploymentHealth;
   contentType: string;
@@ -355,6 +401,36 @@ async function requestPreview(url: string, timeoutMs: number): Promise<Deploymen
   return {
     ...result.health,
     error,
+  };
+}
+
+function apiRouteHealth(url: string, result: PreviewFetchResult): DeploymentHealth {
+  const statusCode = result.health.statusCode;
+  if (statusCode === null) {
+    return {
+      ...result.health,
+      status: "unhealthy",
+      error: result.health.error ?? `API route ${url} could not be reached.`,
+    };
+  }
+  if ((statusCode >= 200 && statusCode <= 399) || [400, 401, 403, 405].includes(statusCode)) {
+    if (statusCode >= 200 && statusCode <= 399 && isHtmlResponse(result.contentType, result.body)) {
+      return {
+        ...result.health,
+        status: "unhealthy",
+        error: `API route ${url} returned HTML instead of an API response. The public entry is likely serving the frontend fallback instead of proxying to the backend.`,
+      };
+    }
+    return {
+      ...result.health,
+      status: "healthy",
+      error: null,
+    };
+  }
+  return {
+    ...result.health,
+    status: "unhealthy",
+    error: `API route ${url} returned HTTP ${statusCode}.`,
   };
 }
 

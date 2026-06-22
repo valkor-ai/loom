@@ -46,11 +46,13 @@ import {
   findAvailablePort,
   inspectContainer,
   resolveComposePath,
+  checkDeploymentApiRoutes,
 } from "./runtime";
 import { classifyDeploymentRepair, writeDeploymentRepairRequest } from "./repair";
 import { applyRuntimeContractToStack, loadDeploymentRuntimeContract } from "./runtime-contract";
 import { previewSourceService, sourceModelFromRuntimeContract } from "./source-model";
 import { deploymentStrategyForSourceModel, resolveDeploymentStrategy } from "./strategy";
+import { buildDeploymentTopology, proxyRoutesForPublicEntry } from "./topology";
 import { validateStartupLogs } from "./validate";
 import { discoverNodeWorkspacePackageJsonPaths, resolveDeploymentWorkspaceForApp } from "./workspace";
 import { withAutoRunnableTransition } from "../operations/routing-instructions";
@@ -96,6 +98,7 @@ export type DeployPrepareResult = {
   environment: DeploymentSpec["environment"];
   bootstrap: DeploymentSpec["bootstrap"];
   compose: DeploymentSpec["compose"];
+  topology: DeploymentSpec["topology"];
   files: DeploymentSpec["files"];
   url: string;
   reused: string[];
@@ -138,6 +141,7 @@ export type DeployValidateResult = {
     stderrTail: string[];
   };
   health: DeploymentHealth | null;
+  apiRoutes: DeploymentHealth | null;
   instruction?: Record<string, unknown>;
 };
 
@@ -200,6 +204,7 @@ export type DeployInspectResult = {
   codeEvidence: DeploymentSpec["codeEvidence"] | null;
   codeEvidenceReadGuide: Record<string, unknown> | null;
   sourceModel: DeploymentSourceModel | null;
+  topology: DeploymentSpec["topology"] | null;
   files: DeploymentSpec["files"] | null;
   compose: DeploymentSpec["compose"] | null;
   runtime: DeploymentSpec["runtime"] | null;
@@ -302,7 +307,9 @@ async function deployPrepareInternal(input: {
     fallbackProbe: evidenceStack,
     buildContextPath: toProjectRelative(input.projectRoot, generatedBuildContextRoot) || ".",
   });
+  const topology = buildDeploymentTopology({ runtimeContract, sourceModel });
   strategy = deploymentStrategyForSourceModel({ strategy, sourceModel });
+  const nginxConfigPaths = nginxConfigPathsFor(topology, paths.generatedDir);
   const hostPort = await findAvailablePort(previewSourceService(sourceModel).port);
   const workspaceMetadata = {
     ...workspace.workspace,
@@ -388,10 +395,12 @@ async function deployPrepareInternal(input: {
       providerCandidates: strategy.candidates,
       runtimeContract,
       sourceModel,
+      topology,
       environment,
       bootstrap,
       codeEvidence,
       dockerfilePaths: dockerfilePathsFor(sourceModel, paths.generatedDir, existing.dockerfilePath),
+      nginxConfigPaths,
       composePath: paths.composeFile,
       dockerignorePath: paths.dockerignoreFile,
       generated: true,
@@ -420,10 +429,12 @@ async function deployPrepareInternal(input: {
     providerCandidates: strategy.candidates,
     runtimeContract,
     sourceModel,
+    topology,
     environment,
     bootstrap,
     codeEvidence,
     dockerfilePaths: dockerfilePathsFor(sourceModel, paths.generatedDir, paths.dockerfileFile),
+    nginxConfigPaths,
     composePath: paths.composeFile,
     dockerignorePath: paths.dockerignoreFile,
     generated: true,
@@ -437,6 +448,12 @@ async function deployPrepareInternal(input: {
     const dockerfilePath = spec.files.dockerfilePaths[serviceId];
     if (dockerfilePath) {
       await fs.writeFile(path.resolve(input.projectRoot, dockerfilePath), content, "utf8");
+    }
+  }
+  for (const [serviceId, content] of Object.entries(generated.nginxConfigs)) {
+    const nginxConfigPath = spec.files.nginxConfigPaths[serviceId];
+    if (nginxConfigPath) {
+      await fs.writeFile(path.resolve(input.projectRoot, nginxConfigPath), content, "utf8");
     }
   }
   await fs.writeFile(paths.composeFile, generated.compose, "utf8");
@@ -819,6 +836,35 @@ async function deployUpInternal(input: {
       ],
     });
   }
+  const apiRoutes = await checkDeploymentApiRoutes(healthSpec);
+  if (apiRoutes.status === "unhealthy") {
+    const apiLogInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, healthSpec, "docker compose API route failure logs");
+    const diagnostics = diagnoseDeploymentFailure({
+      spec: healthSpec,
+      stdout: apiLogInspection.logsResult.stdout,
+      stderr: [apiRoutes.error ?? `API route verification failed for ${apiRoutes.url ?? spec.runtime.url}.`, apiLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
+    });
+    await writeDeploymentRepairRequest({
+      projectRoot: input.projectRoot,
+      spec: healthSpec,
+      failureKind: "api_route_not_verified",
+      command: ["GET", apiRoutes.url ?? healthSpec.runtime.url],
+      exitCode: apiRoutes.statusCode ?? 1,
+      stdout: apiLogInspection.logsResult.stdout,
+      stderr: [apiRoutes.error ?? `API route verification failed for ${apiRoutes.url ?? spec.runtime.url}.`, apiLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
+      diagnostics,
+      previousAttempts: await nextRepairAttempt(input.projectRoot),
+    });
+    throw deployValidationFailed("Deployment API route verification failed.", {
+      ...apiRoutes,
+      provider: healthSpec.provider,
+      providerCandidates: healthSpec.providerCandidates,
+      suggestedActions: [
+        "Run loom deploy repair to inspect the deployment asset repair request.",
+        "Keep the frontend public entry exposed and route API paths to the backend service through generated nginx/Compose wiring.",
+      ],
+    });
+  }
   const state = createRunningState({
     projectRoot: input.projectRoot,
     spec: healthSpec,
@@ -879,8 +925,12 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
     const composePath = path.resolve(input.projectRoot, activeSpec.files.composePath);
     const expectedContainerName = containerNameFor(activeSpec);
     const inspected = await resolveDeploymentContainer(input.projectRoot, composePath, activeSpec);
-    const health = inspected.running ? await checkDeploymentPreview(activeSpec) : disabledHealth(state.url);
-    const healthSpec = applyHealthyPath(activeSpec, health);
+    const preview = inspected.running ? await checkDeploymentPreview(activeSpec) : disabledHealth(state.url);
+    const healthSpec = applyHealthyPath(activeSpec, preview);
+    const apiRoutes = inspected.running && preview.status === "healthy"
+      ? await checkDeploymentApiRoutes(healthSpec)
+      : disabledHealth(healthSpec.runtime.url);
+    const health = apiRoutes.status === "unhealthy" ? apiRoutes : preview;
     if (healthSpec !== activeSpec) {
       await writeDeploymentSpec(input.projectRoot, healthSpec);
     }
@@ -905,11 +955,17 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
       updatedAt: new Date().toISOString(),
     };
     await writeDeploymentState(input.projectRoot, updatedState);
-    if (inspected.running && (health.status === "healthy" || health.status === "disabled")) {
+    if (
+      inspected.running &&
+      (preview.status === "healthy" || preview.status === "disabled") &&
+      (apiRoutes.status === "healthy" || apiRoutes.status === "disabled")
+    ) {
       await clearDeploymentFailureArtifacts(input.projectRoot);
     }
 
-    const verifiedRunning = inspected.running && (health.status === "healthy" || health.status === "disabled");
+    const verifiedRunning = inspected.running &&
+      (preview.status === "healthy" || preview.status === "disabled") &&
+      (apiRoutes.status === "healthy" || apiRoutes.status === "disabled");
     return {
       running: inspected.running,
       url: inspected.running ? healthSpec.runtime.url : null,
@@ -943,8 +999,12 @@ export async function deployValidate(input: { projectRoot: string }): Promise<De
   await appendCommandLog(input.projectRoot, "docker compose validate config", configResult);
 
   const state = await readDeploymentState(input.projectRoot);
-  const health = state?.running ? await checkDeploymentPreview(spec) : null;
-  const healthSpec = health ? applyHealthyPath(spec, health) : spec;
+  const preview = state?.running ? await checkDeploymentPreview(spec) : null;
+  const healthSpec = preview ? applyHealthyPath(spec, preview) : spec;
+  const apiRoutes = state?.running && preview?.status === "healthy"
+    ? await checkDeploymentApiRoutes(healthSpec)
+    : null;
+  const health = apiRoutes?.status === "unhealthy" ? apiRoutes : preview;
   if (healthSpec !== spec) {
     await writeDeploymentSpec(input.projectRoot, healthSpec);
   }
@@ -957,8 +1017,10 @@ export async function deployValidate(input: { projectRoot: string }): Promise<De
     });
   }
 
-  const valid = configResult.exitCode === 0 && (!health || health.status === "healthy" || health.status === "disabled");
-  const verifiedRunning = Boolean(state?.running && health && (health.status === "healthy" || health.status === "disabled"));
+  const previewOk = !preview || preview.status === "healthy" || preview.status === "disabled";
+  const apiRoutesOk = !apiRoutes || apiRoutes.status === "healthy" || apiRoutes.status === "disabled";
+  const valid = configResult.exitCode === 0 && previewOk && apiRoutesOk;
+  const verifiedRunning = Boolean(state?.running && preview && previewOk && apiRoutesOk);
   if (verifiedRunning) {
     await clearDeploymentFailureArtifacts(input.projectRoot);
   }
@@ -973,6 +1035,7 @@ export async function deployValidate(input: { projectRoot: string }): Promise<De
       stderrTail: splitLines(configResult.stderr).slice(-40),
     },
     health,
+    apiRoutes,
     ...(verifiedRunning ? { instruction: deploySuccessInstruction("deploy.validate", healthSpec.runtime.url) } : {}),
   };
 }
@@ -1173,6 +1236,7 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
     codeEvidence: spec?.codeEvidence ?? null,
     codeEvidenceReadGuide: deploymentCodeEvidenceReadGuide(spec?.codeEvidence?.ref ?? null),
     sourceModel: spec?.sourceModel ?? null,
+    topology: spec?.topology ?? null,
     files: spec?.files ?? null,
     compose: spec?.compose ?? null,
     runtime: spec?.runtime ?? null,
@@ -1592,6 +1656,22 @@ function dockerfilePathsFor(
   ]));
 }
 
+function nginxConfigPathsFor(
+  topology: DeploymentSpec["topology"],
+  generatedDir: string,
+): Record<string, string> {
+  const publicEntryUsesGeneratedNginx = topology.routes.some((route) => (
+    route.kind === "static-spa" &&
+    route.targetServiceId === topology.publicEntryServiceId
+  ));
+  if (!publicEntryUsesGeneratedNginx || proxyRoutesForPublicEntry(topology).length === 0) {
+    return {};
+  }
+  return {
+    [topology.publicEntryServiceId]: path.join(generatedDir, `nginx.${topology.publicEntryServiceId}.conf`),
+  };
+}
+
 function sourceModelWithPrimaryPort(
   sourceModel: DeploymentSourceModel,
   port: number,
@@ -1746,6 +1826,7 @@ function toPrepareResult(
     environment: spec.environment,
     bootstrap: spec.bootstrap,
     compose: spec.compose,
+    topology: spec.topology,
     files: spec.files,
     url: spec.runtime.url,
     reused: spec.files.reused,

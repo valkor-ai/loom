@@ -4,6 +4,7 @@ import type {
   DeploymentBootstrapDiagnostics,
   DeploymentComposeInfo,
   DeploymentRuntimeContract,
+  DeploymentTopology,
   DeploymentSourceModel,
   DeploymentSourceService,
   DeployProvider,
@@ -15,9 +16,11 @@ import type {
   DeploymentCodeEvidenceSummary,
 } from "./types";
 import { toProjectRelative } from "../state/paths";
+import { buildDeploymentTopology, proxyRoutesForPublicEntry, proxyTargetServiceIdsForPublicEntry } from "./topology";
 
 export type GeneratedDeploymentFiles = {
   dockerfiles: Record<string, string>;
+  nginxConfigs: Record<string, string>;
   compose: string;
   dockerignore: string;
 };
@@ -33,11 +36,13 @@ export function createDeploymentSpec(input: {
   providerCandidates: DeploymentProviderCandidate[];
   runtimeContract: DeploymentRuntimeContract;
   sourceModel: DeploymentSourceModel;
+  topology?: DeploymentTopology;
   environment: DeploymentEnvDiagnostics;
   bootstrap: DeploymentBootstrapDiagnostics;
   compose?: DeploymentComposeInfo;
   codeEvidence?: DeploymentCodeEvidenceSummary;
   dockerfilePaths: Record<string, string>;
+  nginxConfigPaths?: Record<string, string>;
   composePath: string;
   dockerignorePath: string;
   generated: boolean;
@@ -51,8 +56,16 @@ export function createDeploymentSpec(input: {
     serviceId,
     toProjectRelative(input.projectRoot, filePath),
   ]));
+  const nginxConfigPaths = Object.fromEntries(Object.entries(input.nginxConfigPaths ?? {}).map(([serviceId, filePath]) => [
+    serviceId,
+    toProjectRelative(input.projectRoot, filePath),
+  ]));
   const primaryService = primaryServiceFor(input.sourceModel);
   const previewService = previewServiceFor(input.sourceModel);
+  const topology = input.topology ?? buildDeploymentTopology({
+    runtimeContract: input.runtimeContract,
+    sourceModel: input.sourceModel,
+  });
   const dockerfilePath = dockerfilePaths[primaryService.serviceId] ?? Object.values(dockerfilePaths)[0] ?? null;
   const buildContextPath = toProjectRelative(input.projectRoot, input.buildContextRoot) || ".";
   const healthcheckPath = previewService.healthcheckPath ?? "/";
@@ -72,13 +85,15 @@ export function createDeploymentSpec(input: {
     workspace: input.workspace,
     environment: input.environment,
     bootstrap: input.bootstrap,
-    compose: input.compose ?? generatedComposeInfo(input.sourceModel, input.hostPort),
+    compose: input.compose ?? generatedComposeInfo(input.sourceModel, topology, input.hostPort),
     ...(input.codeEvidence ? { codeEvidence: input.codeEvidence } : {}),
     runtimeContract: input.runtimeContract,
     sourceModel: input.sourceModel,
+    topology,
     files: {
       dockerfilePath,
       dockerfilePaths,
+      nginxConfigPaths,
       composePath,
       dockerignorePath: toProjectRelative(input.projectRoot, input.dockerignorePath),
       buildContextPath,
@@ -110,7 +125,7 @@ export function createDeploymentSpec(input: {
   };
 }
 
-function generatedComposeInfo(sourceModel: DeploymentSourceModel, hostPort: number): DeploymentComposeInfo {
+function generatedComposeInfo(sourceModel: DeploymentSourceModel, topology: DeploymentTopology, hostPort: number): DeploymentComposeInfo {
   return {
     selectedService: previewServiceFor(sourceModel).serviceId,
     serviceReason: "Generated Compose uses the deployment source model preview service.",
@@ -129,7 +144,7 @@ function generatedComposeInfo(sourceModel: DeploymentSourceModel, hostPort: numb
           },
         ] : [],
         expose: [],
-        dependsOn: sourceModel.dependencies.map((dependency) => dependency.serviceName),
+        dependsOn: composeDependsOnForService(sourceModel, topology, service),
         profiles: [],
         dependencyLike: false,
         reason: "Generated application service from deployment source model.",
@@ -155,7 +170,11 @@ export function generateDeploymentFiles(spec: DeploymentSpec): GeneratedDeployme
   return {
     dockerfiles: Object.fromEntries(spec.sourceModel.services.map((service) => [
       service.serviceId,
-      generateDockerfile(service),
+      generateDockerfile(service, spec),
+    ])),
+    nginxConfigs: Object.fromEntries(Object.keys(spec.files.nginxConfigPaths).map((serviceId) => [
+      serviceId,
+      generateNginxConfig(spec),
     ])),
     compose: generateCompose(spec),
     dockerignore: generateDockerignore(),
@@ -183,9 +202,9 @@ function healthcheckCandidatesFor(stack: DeploymentSourceService): string[] {
   }
 }
 
-function generateDockerfile(stack: DeploymentSourceService): string {
+function generateDockerfile(stack: DeploymentSourceService, spec: DeploymentSpec): string {
   if (stack.runtimeKind === "static" || (stack.role === "frontend" && !stack.startCommand)) {
-    return generateStaticFrontendDockerfile(stack);
+    return generateStaticFrontendDockerfile(stack, spec);
   }
 
   if (stack.runtimeKind === "node") {
@@ -225,11 +244,15 @@ function generateDockerfile(stack: DeploymentSourceService): string {
   ].join("\n");
 }
 
-function generateStaticFrontendDockerfile(stack: DeploymentSourceService): string {
+function generateStaticFrontendDockerfile(stack: DeploymentSourceService, spec: DeploymentSpec): string {
   const packageManager = stack.packageManager ?? "npm";
   const installCommand = installCommandFor(packageManager, stack.hasLockfile);
   const outputDirectory = stack.outputDirectory ?? "dist";
   const buildCommand = stack.buildCommand ?? packageManagerRun(packageManager, "build");
+  const nginxConfigPath = spec.files.nginxConfigPaths[stack.serviceId] ?? null;
+  const nginxConfigCopy = nginxConfigPath
+    ? [`COPY ${projectPathRelativeToDirectory(spec.files.buildContextPath, nginxConfigPath)} /etc/nginx/conf.d/default.conf`]
+    : [];
   return [
     `FROM ${nodeBaseImageFor(stack)} AS builder`,
     "WORKDIR /workspace",
@@ -239,6 +262,7 @@ function generateStaticFrontendDockerfile(stack: DeploymentSourceService): strin
     ...(buildCommand ? [`RUN ${buildCommand}`] : []),
     "",
     "FROM nginx:1.27-alpine AS runner",
+    ...nginxConfigCopy,
     `COPY --from=builder /workspace/${outputDirectory} /usr/share/nginx/html`,
     "EXPOSE 80",
     "",
@@ -454,9 +478,14 @@ function generateAppService(spec: DeploymentSpec, service: DeploymentSourceServi
   const dockerfile = projectPathRelativeToDirectory(spec.files.buildContextPath, dockerfilePath);
   const environment = {
     ...generatedRuntimeEnvironmentForService(service),
-    ...(service.role === "frontend" ? {} : generatedDependencyEnvironmentForServices(spec.sourceModel.dependencies)),
-    ...spec.environment.generated,
+    ...(service.role === "frontend"
+      ? {}
+      : {
+          ...generatedDependencyEnvironmentForServices(spec.sourceModel.dependencies),
+          ...spec.environment.generated,
+        }),
   };
+  const dependsOn = composeDependsOnForService(spec.sourceModel, spec.topology, service);
   const ports = service.serviceId === spec.sourceModel.previewServiceId
     ? [`    ports:`, `      - "${spec.runtime.hostPort}:${service.port}"`]
     : [];
@@ -478,15 +507,96 @@ function generateAppService(spec: DeploymentSpec, service: DeploymentSourceServi
           "      start_period: 10s",
         ]
       : []),
-    ...(spec.sourceModel.dependencies.length > 0 && service.role !== "frontend"
+    ...(dependsOn.length > 0
       ? [
           "    depends_on:",
-          ...spec.sourceModel.dependencies.map((dependency) => `      - ${dependency.serviceName}`),
+          ...dependsOn.map((serviceName) => `      - ${serviceName}`),
         ]
       : []),
     "    restart: unless-stopped",
     "",
   ];
+}
+
+function composeDependsOnForService(
+  sourceModel: DeploymentSourceModel,
+  topology: DeploymentTopology,
+  service: DeploymentSourceService,
+): string[] {
+  const dependencies = new Set<string>();
+  if (service.serviceId === topology.publicEntryServiceId) {
+    for (const targetServiceId of proxyTargetServiceIdsForPublicEntry(topology)) {
+      if (targetServiceId !== service.serviceId) {
+        dependencies.add(targetServiceId);
+      }
+    }
+  }
+  if (service.role !== "frontend") {
+    for (const dependency of sourceModel.dependencies) {
+      dependencies.add(dependency.serviceName);
+    }
+  }
+  return [...dependencies].sort(comparePaths);
+}
+
+function generateNginxConfig(spec: DeploymentSpec): string {
+  const proxyRoutes = proxyRoutesForPublicEntry(spec.topology);
+  return [
+    "server {",
+    "  listen 80;",
+    "  server_name localhost;",
+    "  root /usr/share/nginx/html;",
+    "  index index.html;",
+    "",
+    ...proxyRoutes.flatMap((route) => nginxProxyLocationLines(route.publicPath, route.targetServiceId, route.targetPort)),
+    "  location / {",
+    "    try_files $uri $uri/ /index.html;",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+}
+
+function nginxProxyLocationLines(publicPath: string, targetServiceId: string, targetPort: number): string[] {
+  const pathPrefix = normalizeNginxPublicPath(publicPath);
+  const slashPath = pathPrefix === "/" ? "/" : `${pathPrefix}/`;
+  const lines: string[] = [];
+  if (pathPrefix !== "/") {
+    lines.push(
+      `  location = ${pathPrefix} {`,
+      ...nginxProxyPassLines(targetServiceId, targetPort),
+      "  }",
+      "",
+    );
+  }
+  lines.push(
+    `  location ${slashPath} {`,
+    ...nginxProxyPassLines(targetServiceId, targetPort),
+    "  }",
+    "",
+  );
+  return lines;
+}
+
+function nginxProxyPassLines(targetServiceId: string, targetPort: number): string[] {
+  return [
+    `    proxy_pass http://${targetServiceId}:${targetPort};`,
+    "    proxy_http_version 1.1;",
+    "    proxy_set_header Host $host;",
+    "    proxy_set_header X-Real-IP $remote_addr;",
+    "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+    "    proxy_set_header X-Forwarded-Proto $scheme;",
+  ];
+}
+
+function normalizeNginxPublicPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") {
+    return "/";
+  }
+  const pathOnly = trimmed.split(/[?#]/, 1)[0];
+  const normalized = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
+  return normalized.replace(/\/+$/, "") || "/";
 }
 
 function generateDependencyService(service: DependencyService): string[] {

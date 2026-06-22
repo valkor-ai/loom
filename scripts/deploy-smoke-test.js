@@ -673,9 +673,31 @@ async function verifyCompositeFrontendBackendSourceModel(projectRoot) {
   assert.deepEqual(envelope.data.sourceModel.services.map((service) => service.serviceId), ["frontend", "backend"]);
   assert.equal(envelope.data.sourceModel.previewServiceId, "frontend");
   assert.equal(envelope.data.sourceModel.primaryServiceId, "backend");
+  assert.equal(envelope.data.topology.publicEntryServiceId, "frontend");
+  assert.deepEqual(
+    envelope.data.topology.routes.find((route) => route.kind === "http-proxy"),
+    {
+      kind: "http-proxy",
+      publicPath: "/api",
+      targetServiceId: "backend",
+      targetPort: 4173,
+      preservePath: true,
+    },
+  );
+  assert.deepEqual(envelope.data.topology.validation.apiPaths, ["/api/security-accounts"]);
   assert.ok(envelope.data.sourceModel.dependencies.some((service) => service.kind === "postgres"));
   assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile.frontend")), true);
   assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile.backend")), true);
+  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/nginx.frontend.conf")), true);
+
+  const frontendDockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile.frontend"), "utf8");
+  assert.match(frontendDockerfile, /COPY \.loom\/deployment\/specs\/generated\/nginx\.frontend\.conf \/etc\/nginx\/conf\.d\/default\.conf/);
+
+  const nginx = await readFile(join(projectRoot, ".loom/deployment/specs/generated/nginx.frontend.conf"), "utf8");
+  assert.match(nginx, /location = \/api/);
+  assert.match(nginx, /location \/api\//);
+  assert.match(nginx, /proxy_pass http:\/\/backend:4173;/);
+  assert.match(nginx, /try_files \$uri \$uri\/ \/index\.html;/);
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
   assert.match(compose, /^  frontend:/m);
@@ -683,6 +705,12 @@ async function verifyCompositeFrontendBackendSourceModel(projectRoot) {
   assert.match(compose, /^  postgres:/m);
   assert.match(compose, /dockerfile: "\.loom\/deployment\/specs\/generated\/Dockerfile\.frontend"/);
   assert.match(compose, /dockerfile: "\.loom\/deployment\/specs\/generated\/Dockerfile\.backend"/);
+  const frontendBlock = composeServiceBlock(compose, "frontend");
+  const backendBlock = composeServiceBlock(compose, "backend");
+  assert.match(frontendBlock, /depends_on:\n\s+- backend/);
+  assert.doesNotMatch(frontendBlock, /DATABASE_URL|SPRING_DATASOURCE_URL/);
+  assert.match(backendBlock, /depends_on:\n\s+- postgres/);
+  assert.match(backendBlock, /DATABASE_URL|SPRING_DATASOURCE_URL/);
 }
 
 async function verifyDotnetAspnetTemplate(projectRoot) {
@@ -2912,6 +2940,17 @@ async function fileExists(filePath) {
   } catch {
     return false;
   }
+}
+
+function composeServiceBlock(compose, serviceName) {
+  const lines = compose.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `  ${serviceName}:`);
+  assert.notEqual(start, -1, `Expected Compose service ${serviceName}.`);
+  const end = lines.findIndex((line, index) => (
+    index > start &&
+    (/^  [a-zA-Z0-9_-]+:/.test(line) || line === "volumes:")
+  ));
+  return lines.slice(start, end === -1 ? lines.length : end).join("\n");
 }
 
 function appService(envelope) {
