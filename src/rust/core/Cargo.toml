@@ -18,3 +18,19 @@ thiserror.workspace = true
 [[test]]
 name = "action_result_schema"
 path = "../../../tests/rust/core/action_result_schema.rs"
+
+[[test]]
+name = "route_action_mapping"
+path = "../../../tests/rust/core/route_action_mapping.rs"
+
+[[test]]
+name = "active_operation_lease"
+path = "../../../tests/rust/core/active_operation_lease.rs"
+
+[[test]]
+name = "transition_continue"
+path = "../../../tests/rust/core/transition_continue.rs"
+
+[[test]]
+name = "advance_after_submit"
+path = "../../../tests/rust/core/advance_after_submit.rs"

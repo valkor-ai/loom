@@ -123,18 +123,25 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
             operation: ActiveOperationRef {
                 operation_id: "op_1".to_string(),
                 operation_type: "deploy_run".to_string(),
+                delivery_id: Some("delivery_1".to_string()),
+                phase_id: Some("phase_1".to_string()),
                 started_at: "2026-06-23T00:00:00Z".to_string(),
                 expires_at: "2026-06-23T00:10:00Z".to_string(),
             },
             allowed_observation_tools: vec!["loom.status".to_string()],
+            progress_summary: None,
         }),
         LoomMcpActionResult::Done(LoomMcpDoneResult {
             project_root: "/tmp/project".to_string(),
             summary: "Done.".to_string(),
+            details: None,
+            warnings: vec![],
         }),
         LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
             project_root: "/tmp/project".to_string(),
             blockers: vec!["Need user input.".to_string()],
+            recommended_tool: Some("loom.plan".to_string()),
+            details: None,
         }),
         LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
             project_root: "/tmp/project".to_string(),
@@ -153,6 +160,9 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
                 code: "not_implemented_for_batch".to_string(),
                 message: "Not implemented.".to_string(),
                 target_batch: Some(4),
+                domain: Some("planning".to_string()),
+                route_action: None,
+                recovery_tool: None,
             },
         }),
     ]

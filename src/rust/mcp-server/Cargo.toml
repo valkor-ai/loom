@@ -30,3 +30,11 @@ path = "../../../tests/rust/mcp-server/tool_surface.rs"
 [[test]]
 name = "server_smoke"
 path = "../../../tests/rust/mcp-server/server_smoke.rs"
+
+[[test]]
+name = "lifecycle_tools"
+path = "../../../tests/rust/mcp-server/lifecycle_tools.rs"
+
+[[test]]
+name = "plan_continue_tools"
+path = "../../../tests/rust/mcp-server/plan_continue_tools.rs"

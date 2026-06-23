@@ -79,11 +79,11 @@ fn stdio_server_initializes_and_lists_batch_2_surface() {
     assert_eq!(status["result"]["structuredContent"]["state"], "failed");
     assert_eq!(
         status["result"]["structuredContent"]["error"]["code"],
-        "not_implemented_for_batch"
+        "STATE_NOT_INITIALIZED"
     );
     assert_eq!(
-        status["result"]["structuredContent"]["error"]["targetBatch"],
-        4
+        status["result"]["structuredContent"]["error"]["recoveryTool"],
+        "loom.initProject"
     );
 }
 

@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{LoomError, LoomMcpNextAction};
 
@@ -28,6 +29,9 @@ impl LoomMcpActionResult {
                 code: "not_implemented_for_batch".to_string(),
                 message: format!("{tool_name} is registered but not implemented in this batch."),
                 target_batch: Some(target_batch),
+                domain: None,
+                route_action: None,
+                recovery_tool: None,
             },
         })
     }
@@ -39,6 +43,9 @@ impl LoomMcpActionResult {
                 code: "invalid_project_root".to_string(),
                 message: message.into(),
                 target_batch: None,
+                domain: None,
+                route_action: None,
+                recovery_tool: None,
             },
         })
     }
@@ -76,6 +83,8 @@ pub struct LoomMcpActiveOperationResult {
     pub project_root: String,
     pub operation: ActiveOperationRef,
     pub allowed_observation_tools: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_summary: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -83,6 +92,10 @@ pub struct LoomMcpActiveOperationResult {
 pub struct ActiveOperationRef {
     pub operation_id: String,
     pub operation_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
     pub started_at: String,
     pub expires_at: String,
 }
@@ -92,6 +105,10 @@ pub struct ActiveOperationRef {
 pub struct LoomMcpDoneResult {
     pub project_root: String,
     pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -99,6 +116,10 @@ pub struct LoomMcpDoneResult {
 pub struct LoomMcpBlockedResult {
     pub project_root: String,
     pub blockers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommended_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -132,6 +153,12 @@ pub struct LoomMcpFailure {
     pub code: String,
     pub message: String,
     pub target_batch: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_tool: Option<String>,
 }
 
 impl From<LoomError> for LoomMcpFailure {
@@ -140,6 +167,9 @@ impl From<LoomError> for LoomMcpFailure {
             code: error.code,
             message: error.message,
             target_batch: None,
+            domain: None,
+            route_action: None,
+            recovery_tool: None,
         }
     }
 }

@@ -12,6 +12,7 @@ pub struct ProjectPaths {
     pub loom_dir: PathBuf,
     pub config_file: PathBuf,
     pub status_file: PathBuf,
+    pub gitignore_file: PathBuf,
     pub deliveries_dir: PathBuf,
     pub tmp_dir: PathBuf,
     pub requests_dir: PathBuf,
@@ -44,6 +45,7 @@ pub fn project_paths(project_root: &str) -> StateResult<ProjectPaths> {
     Ok(ProjectPaths {
         root: normalized.path,
         status_file: loom_dir.join("status.json"),
+        gitignore_file: loom_dir.join(".gitignore"),
         deliveries_dir,
         tmp_dir,
         config_file: loom_dir.join("config.json"),
@@ -135,6 +137,28 @@ pub fn task_run_file(project_root: &Path, locator: &DeliveryPhaseRunLocator) -> 
         .join(format!("{}.json", locator.run_id))
 }
 
+pub fn operation_lease_file(project_root: &Path, delivery_id: &str) -> PathBuf {
+    delivery_dir(project_root, delivery_id)
+        .join("operations")
+        .join("active-lease.json")
+}
+
+pub fn transition_decisions_dir(project_root: &Path, delivery_id: &str) -> PathBuf {
+    delivery_dir(project_root, delivery_id).join("transition-decisions")
+}
+
+pub fn transition_decision_file(
+    project_root: &Path,
+    delivery_id: &str,
+    decision_id: &str,
+) -> PathBuf {
+    transition_decisions_dir(project_root, delivery_id).join(format!("{decision_id}.json"))
+}
+
+pub fn transition_decision_latest_file(project_root: &Path, delivery_id: &str) -> PathBuf {
+    transition_decisions_dir(project_root, delivery_id).join("latest.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +168,7 @@ mod tests {
         let root = std::env::current_dir().expect("current dir");
         let paths = project_paths(root.to_str().expect("current dir utf8")).expect("project paths");
         assert!(paths.status_file.ends_with(".loom/status.json"));
+        assert!(paths.gitignore_file.ends_with(".loom/.gitignore"));
         assert!(paths.deliveries_dir.ends_with(".loom/deliveries"));
         assert!(paths.tmp_dir.ends_with(".loom/tmp"));
     }
@@ -183,6 +208,12 @@ mod tests {
             task_run_file(&root, &run),
             PathBuf::from(
                 "/tmp/loom-state-paths/.loom/deliveries/delivery_1/tasks/phase_scope/runs/run_1.json"
+            )
+        );
+        assert_eq!(
+            operation_lease_file(&root, &phase.delivery_id),
+            PathBuf::from(
+                "/tmp/loom-state-paths/.loom/deliveries/delivery_1/operations/active-lease.json"
             )
         );
     }

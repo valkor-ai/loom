@@ -1,5 +1,6 @@
 pub mod boundary;
 pub mod legacy_ts_reader;
+pub mod lifecycle_store;
 pub mod paths;
 pub mod project;
 pub mod read_audit;

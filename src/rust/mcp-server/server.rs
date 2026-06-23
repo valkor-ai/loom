@@ -1,7 +1,11 @@
 use std::future::{ready, Future};
 
 use delivery_core::{
-    InspectRequestInput, LoomMcpRuntimeContext, ReadFieldGroupInput, ReadRequestFieldsInput,
+    normalize_project_root, status_details, validate_plan_input, DomainDispatcher,
+    InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure,
+    LoomMcpFailureResult, LoomMcpRuntimeContext, OperationContext, PlanToolInput, ProjectToolInput,
+    ReadFieldGroupInput, ReadRequestFieldsInput, TransitionEngine, TransitionStore,
+    UnimplementedDomainDispatcher,
 };
 use rmcp::{
     model::{
@@ -14,6 +18,8 @@ use rmcp::{
     transport::stdio,
     ErrorData as McpError, ServerHandler, ServiceExt,
 };
+use serde_json::json;
+use state::lifecycle_store::{init_project_state, FileTransitionStore};
 
 use crate::{resource_registry::ResourceRegistry, tool_registry::ToolRegistry};
 
@@ -47,6 +53,20 @@ impl LoomMcpServer {
 
     pub fn resource_registry(&self) -> &ResourceRegistry {
         &self.resources
+    }
+
+    pub fn invoke_tool(
+        &self,
+        name: &str,
+        arguments: Option<rmcp::model::JsonObject>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = match arguments {
+            Some(arguments) => {
+                CallToolRequestParams::new(name.to_string()).with_arguments(arguments)
+            }
+            None => CallToolRequestParams::new(name.to_string()),
+        };
+        call_tool(self, request)
     }
 }
 
@@ -123,6 +143,16 @@ fn call_tool(
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, McpError> {
     match request.name.as_ref() {
+        "loom.initProject" => action_result(init_project_tool(parse_args::<ProjectToolInput>(
+            request.arguments,
+        )?)),
+        "loom.status" => action_result(status_tool(parse_args::<ProjectToolInput>(
+            request.arguments,
+        )?)),
+        "loom.plan" => action_result(plan_tool(parse_args::<PlanToolInput>(request.arguments)?)),
+        "loom.continue" => action_result(continue_tool(parse_args::<ProjectToolInput>(
+            request.arguments,
+        )?)),
         "loom.inspectRequest" => structured(state::inspect_request(parse_args::<
             InspectRequestInput,
         >(request.arguments)?)),
@@ -138,6 +168,140 @@ fn call_tool(
             .tools
             .call_registered_placeholder(&request.name, request.arguments)
             .map_err(|_| McpError::method_not_found::<CallToolRequestMethod>()),
+    }
+}
+
+fn init_project_tool(input: ProjectToolInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    match init_project_state(&normalized.display) {
+        Ok(result) => LoomMcpActionResult::Done(LoomMcpDoneResult {
+            project_root: normalized.display,
+            summary: "Loom project initialized.".to_string(),
+            details: Some(json!({
+                "initialized": true,
+                "created": result.created,
+                "alreadyExisted": result.already_existed,
+            })),
+            warnings: vec![],
+        }),
+        Err(error) => state_failure(normalized.display, error.to_string()),
+    }
+}
+
+fn status_tool(input: ProjectToolInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    let store = FileTransitionStore;
+    let status = match store.load_status(&normalized.display) {
+        Ok(status) => status,
+        Err(error) if error.code() == "STATE_NOT_INITIALIZED" => {
+            return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                project_root: normalized.display,
+                error: LoomMcpFailure {
+                    code: "STATE_NOT_INITIALIZED".to_string(),
+                    message: error.message().to_string(),
+                    target_batch: None,
+                    domain: Some("project_lifecycle".to_string()),
+                    route_action: None,
+                    recovery_tool: Some("loom.initProject".to_string()),
+                },
+            });
+        }
+        Err(error) => {
+            return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                project_root: normalized.display,
+                error: LoomMcpFailure {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                    target_batch: None,
+                    domain: Some("project_lifecycle".to_string()),
+                    route_action: None,
+                    recovery_tool: None,
+                },
+            });
+        }
+    };
+    let active_delivery = status
+        .active_delivery_id
+        .as_ref()
+        .map(|delivery_id| store.load_delivery_index(&normalized.display, delivery_id))
+        .transpose()
+        .ok()
+        .flatten();
+    let active_operation = status
+        .active_delivery_id
+        .as_ref()
+        .map(|delivery_id| store.read_operation_lease(&normalized.display, delivery_id))
+        .transpose()
+        .ok()
+        .flatten()
+        .flatten();
+
+    LoomMcpActionResult::Done(LoomMcpDoneResult {
+        project_root: normalized.display,
+        summary: "Loom project status read.".to_string(),
+        details: Some(status_details(
+            &status,
+            active_delivery.as_ref(),
+            active_operation.as_ref(),
+            &[],
+        )),
+        warnings: vec![],
+    })
+}
+
+fn plan_tool(input: PlanToolInput) -> LoomMcpActionResult {
+    let validated = match validate_plan_input(input) {
+        Ok(validated) => validated,
+        Err(message) => {
+            return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                project_root: String::new(),
+                error: LoomMcpFailure {
+                    code: "INVALID_ARGUMENT".to_string(),
+                    message,
+                    target_batch: None,
+                    domain: Some("project_lifecycle".to_string()),
+                    route_action: None,
+                    recovery_tool: None,
+                },
+            });
+        }
+    };
+    if let Err(error) = init_project_state(&validated.project_root) {
+        return state_failure(validated.project_root, error.to_string());
+    }
+    UnimplementedDomainDispatcher.start_brainstorm(&validated)
+}
+
+fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    let engine = TransitionEngine {
+        store: FileTransitionStore,
+        dispatcher: UnimplementedDomainDispatcher,
+    };
+    match engine.continue_current(OperationContext {
+        project_root: normalized.display.clone(),
+    }) {
+        Ok(result) => result,
+        Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
+            project_root: normalized.display,
+            error: LoomMcpFailure {
+                code: error.code().to_string(),
+                message: error.message().to_string(),
+                target_batch: None,
+                domain: Some("transition".to_string()),
+                route_action: None,
+                recovery_tool: None,
+            },
+        }),
     }
 }
 
@@ -180,6 +344,13 @@ where
     Ok(CallToolResult::structured(value))
 }
 
+fn action_result(result: LoomMcpActionResult) -> Result<CallToolResult, McpError> {
+    let value = serde_json::to_value(result).map_err(|error| {
+        McpError::internal_error(format!("failed to serialize action result: {error}"), None)
+    })?;
+    Ok(CallToolResult::structured(value))
+}
+
 fn json_resource(uri: &str, value: &impl serde::Serialize) -> Result<ReadResourceResult, McpError> {
     let text = serde_json::to_string(value).map_err(|error| {
         McpError::internal_error(format!("failed to serialize resource: {error}"), None)
@@ -192,6 +363,20 @@ fn json_resource(uri: &str, value: &impl serde::Serialize) -> Result<ReadResourc
 
 fn state_error(error: state::store::StateError) -> McpError {
     McpError::invalid_params(error.to_string(), None)
+}
+
+fn state_failure(project_root: String, message: String) -> LoomMcpActionResult {
+    LoomMcpActionResult::Failed(LoomMcpFailureResult {
+        project_root,
+        error: LoomMcpFailure {
+            code: "STATE_ERROR".to_string(),
+            message,
+            target_batch: None,
+            domain: Some("project_lifecycle".to_string()),
+            route_action: None,
+            recovery_tool: None,
+        },
+    })
 }
 
 pub async fn run_stdio_server() -> anyhow::Result<()> {

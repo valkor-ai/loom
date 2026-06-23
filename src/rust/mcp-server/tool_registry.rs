@@ -2,8 +2,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use delivery_core::{
     normalize_project_root, InspectRequestInput, InspectRequestResult, LoomMcpActionResult,
-    ProjectToolInput, ReadFieldGroupInput, ReadFieldGroupResult, ReadRequestFieldsInput,
-    ReadRequestFieldsResult,
+    PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadFieldGroupResult,
+    ReadRequestFieldsInput, ReadRequestFieldsResult,
 };
 use rmcp::{
     handler::server::common::schema_for_type,
@@ -24,6 +24,7 @@ pub struct ToolRegistration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolInputKind {
     Project,
+    Plan,
     InspectRequest,
     ReadFieldGroup,
     ReadRequestFields,
@@ -44,7 +45,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         target_batch: 4,
         input_kind: ToolInputKind::Project,
         output_kind: ToolOutputKind::ActionResult,
-        implemented: false,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.status",
@@ -52,15 +53,15 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         target_batch: 4,
         input_kind: ToolInputKind::Project,
         output_kind: ToolOutputKind::ActionResult,
-        implemented: false,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.plan",
         description: "Start or route a Loom delivery plan for a requirement.",
         target_batch: 4,
-        input_kind: ToolInputKind::Project,
+        input_kind: ToolInputKind::Plan,
         output_kind: ToolOutputKind::ActionResult,
-        implemented: false,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.continue",
@@ -68,7 +69,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         target_batch: 4,
         input_kind: ToolInputKind::Project,
         output_kind: ToolOutputKind::ActionResult,
-        implemented: false,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.inspectRequest",
@@ -188,6 +189,7 @@ fn tool_to_mcp(registration: &ToolRegistration) -> Tool {
 fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
     match kind {
         ToolInputKind::Project => schema_for_type::<ProjectToolInput>(),
+        ToolInputKind::Plan => schema_for_type::<PlanToolInput>(),
         ToolInputKind::InspectRequest => schema_for_type::<InspectRequestInput>(),
         ToolInputKind::ReadFieldGroup => schema_for_type::<ReadFieldGroupInput>(),
         ToolInputKind::ReadRequestFields => schema_for_type::<ReadRequestFieldsInput>(),

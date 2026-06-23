@@ -25,3 +25,21 @@ pub enum LoomCoreError {
     #[error("{0}: {1}")]
     Failure(String, String),
 }
+
+impl LoomCoreError {
+    pub fn failure(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Failure(code.into(), message.into())
+    }
+
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Failure(code, _) => code,
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Failure(_, message) => message,
+        }
+    }
+}
