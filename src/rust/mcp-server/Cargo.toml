@@ -1,0 +1,17 @@
+[package]
+name = "mcp-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "mcp_server"
+path = "lib.rs"
+
+[[bin]]
+name = "loom-mcp-server"
+path = "main.rs"
+
+[dependencies]
+delivery-core = { path = "../core" }

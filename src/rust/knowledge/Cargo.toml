@@ -1,0 +1,13 @@
+[package]
+name = "knowledge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "knowledge"
+path = "lib.rs"
+
+[dependencies]
+delivery-core = { path = "../core" }

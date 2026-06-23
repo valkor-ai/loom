@@ -1,0 +1,17 @@
+[package]
+name = "algorithm-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "algorithm_client"
+path = "lib.rs"
+
+[[test]]
+name = "worker_smoke"
+path = "../../../tests/rust/algorithm-client/worker_smoke.rs"
+
+[dependencies]
+serde_json.workspace = true

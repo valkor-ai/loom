@@ -1,0 +1,13 @@
+[package]
+name = "setup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "loom-setup"
+path = "main.rs"
+
+[dependencies]
+delivery-core = { path = "../core" }

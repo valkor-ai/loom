@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loom-algorithms"
+version = "0.1.0"
+description = "Algorithm worker package for Loom MCP runtime."
+requires-python = ">=3.11"
+dependencies = [
+  "jieba",
+  "rank-bm25",
+  "scikit-learn",
+]
+
+[tool.setuptools]
+packages = ["algorithms"]
+
+[tool.setuptools.package-dir]
+algorithms = "."
