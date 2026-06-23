@@ -1,6 +1,10 @@
 use std::{borrow::Cow, sync::Arc};
 
-use delivery_core::{normalize_project_root, LoomMcpActionResult, ProjectToolInput};
+use delivery_core::{
+    normalize_project_root, InspectRequestInput, InspectRequestResult, LoomMcpActionResult,
+    ProjectToolInput, ReadFieldGroupInput, ReadFieldGroupResult, ReadRequestFieldsInput,
+    ReadRequestFieldsResult,
+};
 use rmcp::{
     handler::server::common::schema_for_type,
     model::{CallToolResult, JsonObject, Tool},
@@ -12,6 +16,25 @@ pub struct ToolRegistration {
     pub name: &'static str,
     pub description: &'static str,
     pub target_batch: u32,
+    pub input_kind: ToolInputKind,
+    pub output_kind: ToolOutputKind,
+    pub implemented: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolInputKind {
+    Project,
+    InspectRequest,
+    ReadFieldGroup,
+    ReadRequestFields,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolOutputKind {
+    ActionResult,
+    InspectRequest,
+    ReadFieldGroup,
+    ReadRequestFields,
 }
 
 pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
@@ -19,46 +42,82 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         name: "loom.initProject",
         description: "Initialize Loom project state for the current project.",
         target_batch: 4,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
     },
     ToolRegistration {
         name: "loom.status",
         description: "Read Loom project status for the current project.",
         target_batch: 4,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
     },
     ToolRegistration {
         name: "loom.plan",
         description: "Start or route a Loom delivery plan for a requirement.",
         target_batch: 4,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
     },
     ToolRegistration {
         name: "loom.continue",
         description: "Continue the active Loom workflow for the current project.",
         target_batch: 4,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
+    },
+    ToolRegistration {
+        name: "loom.inspectRequest",
+        description:
+            "Inspect request metadata and declared read groups without returning the full request.",
+        target_batch: 3,
+        input_kind: ToolInputKind::InspectRequest,
+        output_kind: ToolOutputKind::InspectRequest,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.readFieldGroup",
         description: "Read a declared request field group.",
         target_batch: 3,
+        input_kind: ToolInputKind::ReadFieldGroup,
+        output_kind: ToolOutputKind::ReadFieldGroup,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.readRequestFields",
         description: "Read declared request fields by path.",
         target_batch: 3,
+        input_kind: ToolInputKind::ReadRequestFields,
+        output_kind: ToolOutputKind::ReadRequestFields,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.recordTaskResultFile",
         description: "Submit a task execution result file.",
         target_batch: 8,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
     },
     ToolRegistration {
         name: "loom.repairSubmitFile",
         description: "Submit a repair artifact file.",
         target_batch: 5,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
     },
     ToolRegistration {
         name: "loom.knowledgeSemanticSubmitFile",
         description: "Submit a generated knowledge semantic pack result file.",
         target_batch: 6,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: false,
     },
 ];
 
@@ -120,10 +179,28 @@ fn tool_to_mcp(registration: &ToolRegistration) -> Tool {
     let mut tool = Tool::new(
         Cow::Borrowed(registration.name),
         Cow::Borrowed(registration.description),
-        schema_for_type::<ProjectToolInput>(),
+        input_schema(registration.input_kind),
     );
-    tool.output_schema = Some(Arc::new(schema_json_object::<LoomMcpActionResult>()));
+    tool.output_schema = Some(Arc::new(output_schema(registration.output_kind)));
     tool
+}
+
+fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
+    match kind {
+        ToolInputKind::Project => schema_for_type::<ProjectToolInput>(),
+        ToolInputKind::InspectRequest => schema_for_type::<InspectRequestInput>(),
+        ToolInputKind::ReadFieldGroup => schema_for_type::<ReadFieldGroupInput>(),
+        ToolInputKind::ReadRequestFields => schema_for_type::<ReadRequestFieldsInput>(),
+    }
+}
+
+fn output_schema(kind: ToolOutputKind) -> JsonObject {
+    match kind {
+        ToolOutputKind::ActionResult => schema_json_object::<LoomMcpActionResult>(),
+        ToolOutputKind::InspectRequest => schema_json_object::<InspectRequestResult>(),
+        ToolOutputKind::ReadFieldGroup => schema_json_object::<ReadFieldGroupResult>(),
+        ToolOutputKind::ReadRequestFields => schema_json_object::<ReadRequestFieldsResult>(),
+    }
 }
 
 fn schema_json_object<T>() -> JsonObject
@@ -164,6 +241,7 @@ mod tests {
             vec![
                 "loom.continue",
                 "loom.initProject",
+                "loom.inspectRequest",
                 "loom.knowledgeSemanticSubmitFile",
                 "loom.plan",
                 "loom.readFieldGroup",

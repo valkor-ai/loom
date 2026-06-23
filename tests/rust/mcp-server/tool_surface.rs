@@ -24,6 +24,7 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
         vec![
             "loom.continue",
             "loom.initProject",
+            "loom.inspectRequest",
             "loom.knowledgeSemanticSubmitFile",
             "loom.plan",
             "loom.readFieldGroup",
