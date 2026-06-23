@@ -1,0 +1,253 @@
+use delivery_core::{
+    ActiveOperationRef, ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
+    ExecuteVerificationPolicy, ExecutionKind, GenerateKnowledgeSemanticsNext, KnowledgeReadMode,
+    LoomMcpActionResult, LoomMcpActiveOperationResult, LoomMcpAutoRunnableResult,
+    LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, PostSubmitAction,
+    ReadGroupRef, RepairIssue, WriteArtifactNext, WriteMode, WriteTarget,
+};
+use serde_json::Value;
+
+const FORBIDDEN_KEYS: &[&str] = &[
+    "commandInvocation",
+    "argv",
+    "argvTemplate",
+    "submitCommand",
+    "retryCommand",
+    "command",
+    "launcher",
+    "env",
+    "LOOM_AGENT_PROFILE",
+    "actionRequired",
+    "CliEnvelope",
+    "readCommand",
+    "fallbackRule",
+];
+
+#[test]
+fn action_result_states_have_expected_next_boundaries() {
+    for result in sample_results() {
+        let value = serde_json::to_value(&result).expect("result serializes");
+        assert_no_forbidden_keys(&value);
+        assert!(
+            !value.to_string().contains(".refs"),
+            "result must not expose .refs paths: {value}"
+        );
+
+        match value["state"].as_str().expect("state") {
+            "auto_runnable" => {
+                assert_eq!(value["stopAllowed"], false);
+                assert!(
+                    value.get("next").is_some(),
+                    "auto_runnable must include next"
+                );
+            }
+            "user_gate" | "done" | "blocked" | "repairable_error" | "failed" => {
+                assert!(
+                    value.get("next").is_none(),
+                    "{} must not include next",
+                    value["state"]
+                );
+            }
+            "active_operation" => {
+                assert!(value.get("next").is_none());
+                assert!(value.get("allowedObservationTools").is_some());
+            }
+            state => panic!("unexpected state {state}"),
+        }
+    }
+}
+
+#[test]
+fn repairable_error_contains_resubmit_contract() {
+    let result = LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+        project_root: "/tmp/project".to_string(),
+        target_file: ".loom/agent-writable/result.json".to_string(),
+        issues: vec![RepairIssue {
+            code: "missing_required_field".to_string(),
+            message: "field is required".to_string(),
+            field_path: Some("summary".to_string()),
+        }],
+        resubmit_tool: "loom.repairSubmitFile".to_string(),
+        fix_scope: Some("Only edit the target file.".to_string()),
+    });
+    let value = serde_json::to_value(result).expect("result json");
+    assert_eq!(value["targetFile"], ".loom/agent-writable/result.json");
+    assert_eq!(value["resubmitTool"], "loom.repairSubmitFile");
+    assert_eq!(value["issues"][0]["code"], "missing_required_field");
+}
+
+#[test]
+fn next_action_shapes_are_stable() {
+    let actions = vec![
+        sample_write_artifact_next(),
+        sample_execute_task_next(),
+        sample_generate_knowledge_semantics_next(),
+        sample_deploy_repair_assets_next(),
+    ];
+
+    let values: Vec<Value> = actions
+        .into_iter()
+        .map(|action| serde_json::to_value(action).expect("action json"))
+        .collect();
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| value["kind"].as_str().expect("kind"))
+            .collect::<Vec<_>>(),
+        vec![
+            "write_artifact",
+            "execute_task",
+            "generate_knowledge_semantics",
+            "deploy_repair_assets",
+        ]
+    );
+    for value in values {
+        assert_no_forbidden_keys(&value);
+    }
+}
+
+fn sample_results() -> Vec<LoomMcpActionResult> {
+    vec![
+        LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
+            "/tmp/project",
+            sample_write_artifact_next(),
+        )),
+        LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
+            project_root: "/tmp/project".to_string(),
+            prompt: "Confirm scope.".to_string(),
+            accepted_responses: vec!["confirm".to_string()],
+        }),
+        LoomMcpActionResult::ActiveOperation(LoomMcpActiveOperationResult {
+            project_root: "/tmp/project".to_string(),
+            operation: ActiveOperationRef {
+                operation_id: "op_1".to_string(),
+                operation_type: "deploy_run".to_string(),
+                started_at: "2026-06-23T00:00:00Z".to_string(),
+                expires_at: "2026-06-23T00:10:00Z".to_string(),
+            },
+            allowed_observation_tools: vec!["loom.status".to_string()],
+        }),
+        LoomMcpActionResult::Done(LoomMcpDoneResult {
+            project_root: "/tmp/project".to_string(),
+            summary: "Done.".to_string(),
+        }),
+        LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+            project_root: "/tmp/project".to_string(),
+            blockers: vec!["Need user input.".to_string()],
+        }),
+        LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+            project_root: "/tmp/project".to_string(),
+            target_file: ".loom/agent-writable/result.json".to_string(),
+            issues: vec![RepairIssue {
+                code: "invalid_shape".to_string(),
+                message: "Invalid shape.".to_string(),
+                field_path: None,
+            }],
+            resubmit_tool: "loom.repairSubmitFile".to_string(),
+            fix_scope: None,
+        }),
+        LoomMcpActionResult::Failed(LoomMcpFailureResult {
+            project_root: "/tmp/project".to_string(),
+            error: LoomMcpFailure {
+                code: "not_implemented_for_batch".to_string(),
+                message: "Not implemented.".to_string(),
+                target_batch: Some(4),
+            },
+        }),
+    ]
+}
+
+fn sample_write_artifact_next() -> LoomMcpNextAction {
+    LoomMcpNextAction::WriteArtifact(WriteArtifactNext {
+        artifact_kind: ArtifactKind::BrainstormCandidate,
+        request_ref: "loom://projects/project_1/requests/request_1".to_string(),
+        write_mode: WriteMode::CreateOrReplace,
+        write_targets: vec![WriteTarget {
+            target_id: "candidate".to_string(),
+            path: ".loom/agent-writable/candidate.json".to_string(),
+            required: true,
+            description: "Write candidate JSON.".to_string(),
+        }],
+        read_groups: vec![ReadGroupRef::new(
+            "main",
+            1,
+            vec!["requirement.text".to_string()],
+            "loom://projects/project_1/requests/request_1/field-groups/main",
+        )],
+        submit_tool: "loom.brainstormAcceptFile".to_string(),
+    })
+}
+
+fn sample_execute_task_next() -> LoomMcpNextAction {
+    LoomMcpNextAction::ExecuteTask(ExecuteTaskNext {
+        execution_kind: ExecutionKind::PlannedTask,
+        repair_origin: None,
+        request_ref: "loom://projects/project_1/requests/request_2".to_string(),
+        result_file: ".loom/agent-writable/task-result.json".to_string(),
+        task_id: "task_1".to_string(),
+        group_id: Some("group_1".to_string()),
+        read_groups: vec![],
+        submit_tool: "loom.recordTaskResultFile".to_string(),
+        edit_boundary: ExecuteEditBoundary {
+            allowed_paths: vec!["src".to_string()],
+            protected_paths: vec![".loom".to_string()],
+        },
+        verification_policy: ExecuteVerificationPolicy {
+            required_commands: vec!["npm test".to_string()],
+            evidence_required: true,
+        },
+        repair_context: None,
+        post_submit: PostSubmitAction::ContinueDelivery,
+    })
+}
+
+fn sample_generate_knowledge_semantics_next() -> LoomMcpNextAction {
+    LoomMcpNextAction::GenerateKnowledgeSemantics(GenerateKnowledgeSemanticsNext {
+        source_name: "domain".to_string(),
+        source_id: "ksrc_1".to_string(),
+        build_id: "kbld_1".to_string(),
+        pack_id: "kpack_1".to_string(),
+        request_ref: "loom://projects/project_1/requests/request_3".to_string(),
+        result_file: ".loom/agent-writable/semantic-result.json".to_string(),
+        read_mode: KnowledgeReadMode::ChunkInspect,
+        chunk_read_plan: vec![],
+        submit_tool: "loom.knowledgeSemanticSubmitFile".to_string(),
+    })
+}
+
+fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
+    LoomMcpNextAction::DeployRepairAssets(DeployRepairAssetsNext {
+        repair_id: "drepair_1".to_string(),
+        failure_kind: "runtime".to_string(),
+        failure_owner: "deploy".to_string(),
+        repair_route: "asset_repair".to_string(),
+        editable_files: vec!["deploy/nginx.conf".to_string()],
+        protected_files: vec!["src".to_string()],
+        diagnostics_ref: None,
+        error_window: None,
+        retry_tool: "loom.deployRun".to_string(),
+    })
+}
+
+fn assert_no_forbidden_keys(value: &Value) {
+    match value {
+        Value::Object(object) => {
+            for key in object.keys() {
+                assert!(
+                    !FORBIDDEN_KEYS.contains(&key.as_str()),
+                    "forbidden key {key} appears in {value}"
+                );
+            }
+            for child in object.values() {
+                assert_no_forbidden_keys(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assert_no_forbidden_keys(item);
+            }
+        }
+        _ => {}
+    }
+}

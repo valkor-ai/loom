@@ -10,5 +10,11 @@ name = "delivery_core"
 path = "lib.rs"
 
 [dependencies]
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+
+[[test]]
+name = "action_result_schema"
+path = "../../../tests/rust/core/action_result_schema.rs"

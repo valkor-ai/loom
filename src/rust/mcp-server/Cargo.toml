@@ -14,4 +14,18 @@ name = "loom-mcp-server"
 path = "main.rs"
 
 [dependencies]
+anyhow.workspace = true
 delivery-core = { path = "../core" }
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[[test]]
+name = "tool_surface"
+path = "../../../tests/rust/mcp-server/tool_surface.rs"
+
+[[test]]
+name = "server_smoke"
+path = "../../../tests/rust/mcp-server/server_smoke.rs"

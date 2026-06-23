@@ -1,7 +1,5 @@
-pub fn server_name() -> &'static str {
-    "loom-mcp-server"
-}
+pub mod resource_registry;
+pub mod server;
+pub mod tool_registry;
 
-pub fn smoke_message() -> String {
-    format!("{} {}", server_name(), delivery_core::VERSION)
-}
+pub use server::{run_stdio_server, LoomMcpServer};
