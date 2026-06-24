@@ -60,6 +60,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "architecture"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "delivery-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "state",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -712,6 +724,7 @@ name = "mcp-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "architecture",
  "brainstorm",
  "delivery-core",
  "knowledge",
@@ -851,6 +864,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "planning"
 version = "0.1.0"
 dependencies = [
+ "architecture",
  "contracts",
  "delivery-core",
  "schemars",

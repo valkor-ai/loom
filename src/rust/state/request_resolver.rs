@@ -484,6 +484,7 @@ fn dedupe(fields: Vec<String>) -> Vec<String> {
 
 fn extract_write_targets(root: &Value) -> Vec<Value> {
     root.get("writeTargets")
+        .or_else(|| root.pointer("/outputContract/writeTargets"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
@@ -491,6 +492,7 @@ fn extract_write_targets(root: &Value) -> Vec<Value> {
 
 fn extract_submit_tool(root: &Value) -> Option<String> {
     root.get("submitTool")
+        .or_else(|| root.pointer("/outputContract/submitTool"))
         .and_then(Value::as_str)
         .map(str::to_string)
 }

@@ -8,6 +8,7 @@ members = [
   "contracts",
   "brainstorm",
   "planning",
+  "architecture",
   "execution",
   "knowledge",
   "deploy",

@@ -1,6 +1,8 @@
+pub mod architecture;
 pub mod brainstorm;
 pub mod planning;
 
+pub use architecture::*;
 pub use brainstorm::*;
 pub use planning::*;
 

@@ -15,6 +15,7 @@ path = "main.rs"
 
 [dependencies]
 anyhow.workspace = true
+architecture = { path = "../architecture" }
 brainstorm = { path = "../brainstorm" }
 delivery-core = { path = "../core" }
 knowledge = { path = "../knowledge" }

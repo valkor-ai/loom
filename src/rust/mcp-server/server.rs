@@ -505,6 +505,9 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         "loom.repositoryContextAcceptFile" => {
             return accept_repository_context_file(&normalized_input, &authorized);
         }
+        "loom.architectureSectionSubmitFile" => {
+            return architecture::accept_architecture_section_file(&normalized_input, &authorized);
+        }
         _ => {}
     }
 

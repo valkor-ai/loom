@@ -1,20 +1,19 @@
 mod paths;
-mod pgc;
-mod repository_context;
-mod technical_baseline;
+mod request;
+mod submit;
 
+use contracts::ArchitectureSectionGroup;
 use delivery_core::{
     ArtifactKind, DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind,
     ValidatedPlanInput,
 };
 
-pub use repository_context::accept_repository_context_file;
-pub use technical_baseline::accept_technical_baseline_file;
+pub use submit::accept_architecture_section_file;
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct PlanningDomainDispatcher;
+pub struct ArchitectureDomainDispatcher;
 
-impl DomainDispatcher for PlanningDomainDispatcher {
+impl DomainDispatcher for ArchitectureDomainDispatcher {
     fn start_brainstorm(&self, input: &ValidatedPlanInput) -> LoomMcpActionResult {
         delivery_core::UnimplementedDomainDispatcher.start_brainstorm(input)
     }
@@ -27,22 +26,8 @@ impl DomainDispatcher for PlanningDomainDispatcher {
         action: &RouteAction,
     ) -> LoomMcpActionResult {
         match action.kind {
-            RouteActionKind::TechnicalBaselineRequest => {
-                technical_baseline::materialize_request(project_root, delivery_id, phase_id)
-            }
-            RouteActionKind::RepositoryContextRequest => {
-                repository_context::materialize_request(project_root, delivery_id, phase_id)
-            }
-            RouteActionKind::PlanningContractCreate => {
-                pgc::create_contract_and_route(project_root, delivery_id, phase_id)
-            }
             RouteActionKind::ArchitectureArtifactContract => {
-                architecture::ArchitectureDomainDispatcher.dispatch_route_action(
-                    project_root,
-                    delivery_id,
-                    phase_id,
-                    action,
-                )
+                request::materialize_request(project_root, delivery_id, phase_id)
             }
             RouteActionKind::TaskplanGeneration | RouteActionKind::ContinueExecution => {
                 delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
@@ -60,6 +45,16 @@ impl DomainDispatcher for PlanningDomainDispatcher {
             ),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct SectionOutput {
+    section: ArchitectureSectionGroup,
+    candidate_file: String,
+    schema_ref: String,
+    schema_shape: serde_json::Value,
+    enum_refs: serde_json::Value,
+    generation_rules: Vec<String>,
 }
 
 fn write_artifact_result(
@@ -82,14 +77,13 @@ fn write_artifact_result(
         .iter()
         .map(value_to_write_target)
         .collect::<Result<Vec<_>, _>>()?;
-    let write_mode = artifact_write_mode(artifact_kind);
     Ok(LoomMcpActionResult::AutoRunnable(
         delivery_core::LoomMcpAutoRunnableResult::new(
             project_root.to_string(),
             delivery_core::LoomMcpNextAction::WriteArtifact(delivery_core::WriteArtifactNext {
                 artifact_kind,
                 request_ref: request_ref.to_string(),
-                write_mode,
+                write_mode: delivery_core::WriteMode::ArchitectureSection,
                 write_targets,
                 read_groups: inspected.read_groups,
                 submit_tool,
@@ -132,24 +126,6 @@ fn value_to_write_target(
     })
 }
 
-fn artifact_write_mode(kind: ArtifactKind) -> delivery_core::WriteMode {
-    match kind {
-        ArtifactKind::TaskPlanCandidate => delivery_core::WriteMode::TaskplanGrouped,
-        ArtifactKind::ArchitectureSectionCandidate => delivery_core::WriteMode::ArchitectureSection,
-        ArtifactKind::TaskResult
-        | ArtifactKind::BrainstormCandidate
-        | ArtifactKind::KnowledgeSemanticPackResult
-        | ArtifactKind::TechnicalBaselineCandidate
-        | ArtifactKind::RepositoryContextCandidate
-        | ArtifactKind::ReviewResult
-        | ArtifactKind::ManualReviewResolution => delivery_core::WriteMode::SingleJson,
-        ArtifactKind::TaskResultRepair
-        | ArtifactKind::TaskplanRepair
-        | ArtifactKind::ArchitectureArtifactRepair
-        | ArtifactKind::DeployExecutionRepairResult => delivery_core::WriteMode::RepairJson,
-    }
-}
-
 pub fn module_name() -> &'static str {
-    "planning"
+    "architecture"
 }

@@ -1,6 +1,6 @@
 use std::sync::{Mutex, MutexGuard};
 
-use delivery_core::InspectRequestInput;
+use delivery_core::{InspectRequestInput, ReadRequestFieldsInput};
 use mcp_server::server::LoomMcpServer;
 use serde_json::{json, Value};
 use state::{store::write_json_atomic, write_native_request, NativeRequestInput};
@@ -190,78 +190,142 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
 #[test]
 fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
     let fixture = Fixture::new("repository-context-pgc");
-    write_json_atomic(
-        &fixture.root.join("package.json"),
-        &json!({ "name": "loom-fixture", "private": true }),
-    )
-    .expect("write package.json");
-    write_json_atomic(
-        &fixture.root.join("src/main.tsx"),
-        &json!("export const app = true;"),
-    )
-    .expect("write entrypoint");
-    let request_ref = start_brainstorm_request(&fixture);
-    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
 
-    let brainstorm_result = call_submit(
-        "loom.brainstormAcceptFile",
-        &request_ref,
-        fixture.root_str(),
-    );
-    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
-        .as_str()
-        .expect("baseline requestRef")
-        .to_string();
-    write_candidate_target(
-        &fixture,
-        &baseline_request_ref,
-        &technical_baseline_candidate_json("existing_project", "policy_auto_accept"),
-    );
-    let baseline_result = call_submit(
-        "loom.technicalBaselineAcceptFile",
-        &baseline_request_ref,
-        fixture.root_str(),
-    );
-    let repository_context_request_ref = baseline_result["next"]["requestRef"]
-        .as_str()
-        .expect(&format!(
-            "repository context requestRef: {baseline_result:#}"
-        ))
-        .to_string();
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref.clone(),
+    })
+    .expect("inspect architecture request");
 
-    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
-    let brainstorm_contract_ref =
-        latest_ref_for_phase(fixture.root_str(), &delivery_id, "brainstormContract");
-    let technical_baseline_ref =
-        latest_ref_for_phase(fixture.root_str(), &delivery_id, "technicalBaseline");
-    write_candidate_target(
-        &fixture,
-        &repository_context_request_ref,
-        &repository_context_candidate_json(
-            &repository_context_request_ref,
-            &brainstorm_contract_ref,
-            &technical_baseline_ref,
-        ),
-    );
-
-    let result = call_submit(
-        "loom.repositoryContextAcceptFile",
-        &repository_context_request_ref,
-        fixture.root_str(),
-    );
-
-    assert_eq!(result["state"], "failed");
-    assert_eq!(result["error"]["code"], "not_implemented_for_batch");
+    assert_eq!(inspected.request_kind, "architecture_sections_generation");
     assert_eq!(
-        result["error"]["routeAction"],
-        "architecture_artifact_contract"
+        inspected.write_targets[0]["targetId"],
+        json!("foundation"),
+        "{inspected:#?}"
     );
+    assert_eq!(
+        inspected.submit_tool.as_deref(),
+        Some("loom.architectureSectionSubmitFile")
+    );
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
     let planning_contract = fixture
         .root
         .join(".loom/deliveries")
         .join(&delivery_id)
         .join("contracts/planning/phase-1/pgc.json");
     assert!(planning_contract.exists());
+}
+
+#[test]
+fn architecture_section_submit_advances_same_request_to_next_section() {
+    let fixture = Fixture::new("architecture-next-section");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+
+    write_candidate_target(
+        &fixture,
+        &architecture_request_ref,
+        &architecture_section_candidate_json(&fixture, &architecture_request_ref),
+    );
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "write_artifact");
+    assert_eq!(
+        result["next"]["requestRef"],
+        json!(architecture_request_ref),
+        "{result:#}"
+    );
+    assert_eq!(
+        result["next"]["writeTargets"][0]["targetId"],
+        "domain_contract"
+    );
+
+    let continued = continue_delivery(fixture.root_str());
+    assert_eq!(continued["state"], "auto_runnable", "{continued:#}");
+    assert_eq!(
+        continued["next"]["requestRef"], result["next"]["requestRef"],
+        "{continued:#}"
+    );
+    assert_eq!(
+        continued["next"]["writeTargets"][0]["targetId"],
+        "domain_contract"
+    );
+}
+
+#[test]
+fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation() {
+    let fixture = Fixture::new("architecture-full-chain");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let current_request_ref = architecture_request_ref.clone();
+
+    for expected_section in [
+        "foundation",
+        "domain_contract",
+        "behavior",
+        "frontend_experience",
+        "runtime_delivery",
+        "coverage",
+    ] {
+        let inspected = state::inspect_request(InspectRequestInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: current_request_ref.clone(),
+        })
+        .expect("inspect current architecture request");
+        assert_eq!(
+            inspected.write_targets[0]["targetId"],
+            json!(expected_section)
+        );
+
+        write_candidate_target(
+            &fixture,
+            &current_request_ref,
+            &architecture_section_candidate_json(&fixture, &current_request_ref),
+        );
+
+        let result = call_submit(
+            "loom.architectureSectionSubmitFile",
+            &current_request_ref,
+            fixture.root_str(),
+        );
+
+        if expected_section != "coverage" {
+            assert_eq!(result["state"], "auto_runnable", "{result:#}");
+            assert_eq!(
+                result["next"]["requestRef"],
+                json!(current_request_ref),
+                "{result:#}"
+            );
+        } else {
+            assert_eq!(result["state"], "failed", "{result:#}");
+            assert_eq!(result["error"]["code"], "not_implemented_for_batch");
+            assert_eq!(result["error"]["routeAction"], "taskplan_generation");
+        }
+    }
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
+    assert_eq!(
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "architectureArtifact"),
+        format!(".loom/deliveries/{delivery_id}/contracts/architecture/phase-1/aac.json")
+    );
+    assert!(fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("contracts/architecture/phase-1/aac.json")
+        .exists());
+    assert!(fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("contracts/architecture/phase-1/latest.json")
+        .exists());
 }
 
 #[test]
@@ -341,11 +405,22 @@ fn write_brainstorm_request(
 }
 
 fn call_submit(tool_name: &str, request_ref: &str, project_root: &str) -> serde_json::Value {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect request for submit");
+    let written_target_ids = inspected
+        .write_targets
+        .iter()
+        .filter_map(|target| target.get("targetId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let server = LoomMcpServer::default();
     let arguments = json!({
         "projectRoot": project_root,
         "requestRef": request_ref,
-        "writtenTargetIds": ["candidate"]
+        "writtenTargetIds": written_target_ids
     })
     .as_object()
     .expect("arguments object")
@@ -401,6 +476,279 @@ fn write_candidate_target(fixture: &Fixture, request_ref: &str, value: &Value) {
     let target = inspected.write_targets.first().expect("write target");
     let path = target["path"].as_str().expect("target path");
     write_json_atomic(&fixture.root.join(path), value).expect("write candidate");
+}
+
+fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
+    write_json_atomic(
+        &fixture.root.join("package.json"),
+        &json!({ "name": "loom-fixture", "private": true }),
+    )
+    .expect("write package.json");
+    std::fs::create_dir_all(fixture.root.join("src")).expect("create src");
+    std::fs::write(
+        fixture.root.join("src/main.tsx"),
+        "export const app = true;\n",
+    )
+    .expect("write entrypoint");
+
+    let request_ref = start_brainstorm_request(fixture);
+    write_candidate_target(fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    write_candidate_target(
+        fixture,
+        &baseline_request_ref,
+        &technical_baseline_candidate_json("existing_project", "policy_auto_accept"),
+    );
+    let baseline_result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    let repository_context_request_ref = baseline_result["next"]["requestRef"]
+        .as_str()
+        .expect("repository context requestRef")
+        .to_string();
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let brainstorm_contract_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "brainstormContract");
+    let technical_baseline_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "technicalBaseline");
+    write_candidate_target(
+        fixture,
+        &repository_context_request_ref,
+        &repository_context_candidate_json(
+            &repository_context_request_ref,
+            &brainstorm_contract_ref,
+            &technical_baseline_ref,
+        ),
+    );
+
+    let repository_result = call_submit(
+        "loom.repositoryContextAcceptFile",
+        &repository_context_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        repository_result["state"], "auto_runnable",
+        "{repository_result:#}"
+    );
+    assert_eq!(
+        repository_result["next"]["artifactKind"],
+        "architecture_section_candidate"
+    );
+    repository_result["next"]["requestRef"]
+        .as_str()
+        .expect("architecture requestRef")
+        .to_string()
+}
+
+fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> Value {
+    let request_root = read_request_root_value(fixture.root_str(), request_ref);
+    let request_id = request_root["requestId"].as_str().expect("requestId");
+    let delivery_id = request_root["deliveryId"].as_str().expect("deliveryId");
+    let phase_id = request_root["phaseId"].as_str().expect("phaseId");
+    let section = request_root["sectionState"]["currentSection"]
+        .as_str()
+        .expect("currentSection");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "sourceRefs".to_string(),
+            "allowedRefs".to_string(),
+            "contextProjection.planningContractId".to_string(),
+            "contextProjection.technicalBaseline".to_string(),
+            "contextProjection.requirementDetailTransfer.acceptanceDetails".to_string(),
+            "contextProjection.requirementDetailTransfer.requirementDetails".to_string(),
+            "frontendExperienceSource".to_string(),
+        ],
+    })
+    .expect("read architecture request fields")
+    .fields;
+    let source_refs = &fields["sourceRefs"].value;
+    let allowed_refs = &fields["allowedRefs"].value;
+    let planning_contract_id = fields["contextProjection.planningContractId"]
+        .value
+        .as_str()
+        .expect("planningContractId");
+    let technical_baseline_id = fields["contextProjection.technicalBaseline"]
+        .value
+        .get("technicalBaselineId")
+        .and_then(Value::as_str)
+        .expect("technicalBaselineId");
+    let acceptance_details = fields
+        ["contextProjection.requirementDetailTransfer.acceptanceDetails"]
+        .value
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let acceptance_id = allowed_refs["acceptanceRefs"][0]
+        .as_str()
+        .expect("acceptanceRef");
+    let detail_id = allowed_refs["requirementDetailIds"][0]
+        .as_str()
+        .expect("detailId");
+    let acceptance_priority = acceptance_details
+        .first()
+        .and_then(|item| item.get("priority"))
+        .and_then(Value::as_str)
+        .unwrap_or("must");
+    let acceptance_statement = acceptance_details
+        .first()
+        .and_then(|item| item.get("statement"))
+        .and_then(Value::as_str)
+        .unwrap_or("Current phase acceptance is covered by the architecture.");
+    let frontend_source = &fields["frontendExperienceSource"].value;
+    let frontend_authority_ref = frontend_source
+        .get("confirmedFrontendExperienceRef")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            frontend_source
+                .get("currentFrontendExperienceRef")
+                .and_then(Value::as_str)
+        });
+    let technical_baseline_ref = source_refs
+        .get("technicalBaselineRef")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let content = match section {
+        "foundation" => json!({
+            "source": {
+                "planningGenerationContractId": planning_contract_id,
+                "technicalBaselineId": technical_baseline_id
+            },
+            "engineeringBoundary": {
+                "summary": "Current phase stays inside the confirmed account-delivery boundary.",
+                "applications": [],
+                "modules": []
+            },
+            "modules": [{
+                "moduleId": "module.account-service",
+                "name": "account-service",
+                "summary": "Handles the current phase account workflow."
+            }]
+        }),
+        "domain_contract" => json!({
+            "dataModel": {
+                "entities": [{
+                    "entityId": "entity.account",
+                    "name": "Account"
+                }],
+                "relationships": [],
+                "constraints": []
+            },
+            "interfaces": [{
+                "interfaceId": "api.account",
+                "name": "Account API"
+            }]
+        }),
+        "behavior" => json!({
+            "userFlows": [{
+                "flowId": "flow.account-lifecycle",
+                "name": "Account lifecycle"
+            }],
+            "stateMachines": [{
+                "machineId": "machine.account-status",
+                "name": "Account status"
+            }]
+        }),
+        "frontend_experience" => json!({
+            "frontendExperience": {
+                "required": true,
+                "surfaces": [],
+                "dataViews": [],
+                "actions": [],
+                "operationPaths": [],
+                "sourceRefs": {
+                    "brainstormFrontendExperienceRef": frontend_authority_ref
+                }
+            }
+        }),
+        "runtime_delivery" => json!({
+            "runtimeDelivery": {
+                "status": "modified",
+                "basis": {
+                    "technicalBaselineRef": technical_baseline_ref
+                },
+                "applications": [],
+                "requiredChecks": []
+            }
+        }),
+        "coverage" => json!({
+            "acceptanceMatrix": [{
+                "acceptanceId": acceptance_id,
+                "priority": acceptance_priority,
+                "statement": acceptance_statement,
+                "coverageStatus": "covered",
+                "coverage": [{
+                    "type": "module",
+                    "refs": ["module.account-service"],
+                    "description": "Covered by the account-service module."
+                }],
+                "verificationHints": []
+            }],
+            "detailCoverage": [{
+                "detailId": detail_id,
+                "coverageStatus": "covered",
+                "artifactRefs": {
+                    "modules": ["module.account-service"],
+                    "entities": [],
+                    "fields": [],
+                    "constraints": [],
+                    "interfaces": [],
+                    "userFlows": [],
+                    "stateMachines": [],
+                    "frontendDataViews": [],
+                    "frontendActions": [],
+                    "frontendOperationPaths": [],
+                    "acceptanceMatrix": [acceptance_id]
+                }
+            }],
+            "risksAndDecisions": {
+                "decisions": []
+            },
+            "handoff": {
+                "readyForTaskPlan": true,
+                "blockingReasons": [],
+                "nextNode": "task_plan"
+            }
+        }),
+        other => panic!("unexpected architecture section: {other}"),
+    };
+
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "section": section,
+        "status": "ready",
+        "content": content,
+        "createdAt": "2026-06-24T10:00:00+08:00"
+    })
+}
+
+fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
+    let request_id = request_ref
+        .split("/requests/")
+        .nth(1)
+        .expect("request id in ref");
+    let index = state::request_index::get_request_index_entry(project_root, request_id)
+        .expect("request index entry");
+    let request_path = std::path::Path::new(project_root).join(index.request_file);
+    serde_json::from_str(&std::fs::read_to_string(request_path).expect("read request file"))
+        .expect("parse request file")
 }
 
 fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {
