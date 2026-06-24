@@ -16,6 +16,7 @@ path = "main.rs"
 [dependencies]
 anyhow.workspace = true
 delivery-core = { path = "../core" }
+knowledge = { path = "../knowledge" }
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
@@ -42,3 +43,7 @@ path = "../../../tests/rust/mcp-server/plan_continue_tools.rs"
 [[test]]
 name = "submit_tools"
 path = "../../../tests/rust/mcp-server/submit_tools.rs"
+
+[[test]]
+name = "knowledge_tools"
+path = "../../../tests/rust/mcp-server/knowledge_tools.rs"

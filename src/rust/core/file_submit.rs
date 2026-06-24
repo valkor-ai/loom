@@ -31,6 +31,7 @@ pub struct SubmitPreflightSummary {
 }
 
 const BRAINSTORM_KINDS: &[ArtifactKind] = &[ArtifactKind::BrainstormCandidate];
+const KNOWLEDGE_SEMANTIC_KINDS: &[ArtifactKind] = &[ArtifactKind::KnowledgeSemanticPackResult];
 const TECHNICAL_BASELINE_KINDS: &[ArtifactKind] = &[ArtifactKind::TechnicalBaselineCandidate];
 const REPOSITORY_CONTEXT_KINDS: &[ArtifactKind] = &[ArtifactKind::RepositoryContextCandidate];
 const ARCHITECTURE_SECTION_KINDS: &[ArtifactKind] = &[ArtifactKind::ArchitectureSectionCandidate];
@@ -50,6 +51,11 @@ pub const SUBMIT_TOOL_SPECS: &[SubmitToolSpec] = &[
         name: "loom.brainstormAcceptFile",
         target_batch: 7,
         allowed_artifact_kinds: BRAINSTORM_KINDS,
+    },
+    SubmitToolSpec {
+        name: "loom.knowledgeSemanticSubmitFile",
+        target_batch: 6,
+        allowed_artifact_kinds: KNOWLEDGE_SEMANTIC_KINDS,
     },
     SubmitToolSpec {
         name: "loom.technicalBaselineAcceptFile",

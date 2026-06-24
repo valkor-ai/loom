@@ -7,6 +7,11 @@ use delivery_core::{
     OperationContext, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadRequestFieldsInput,
     SubmitAcceptedEvent, TransitionEngine, TransitionStore, UnimplementedDomainDispatcher,
 };
+use knowledge::mcp_models::{
+    KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
+    KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput, KnowledgeSemanticSubmitInput,
+    KnowledgeUpdateInput,
+};
 use rmcp::{
     model::{
         CallToolRequestMethod, CallToolRequestParams, CallToolResult, Implementation,
@@ -163,6 +168,138 @@ fn call_tool(
             structured(state::read_request_fields(parse_args::<
                 ReadRequestFieldsInput,
             >(request.arguments)?))
+        }
+        "loom.knowledgeAdd" => {
+            let input = parse_args::<KnowledgeAddInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge source registered.",
+                knowledge::add_source(input),
+            ))
+        }
+        "loom.knowledgeUpdate" => {
+            let input = parse_args::<KnowledgeUpdateInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge source updated.",
+                knowledge::update_source(input),
+            ))
+        }
+        "loom.knowledgePending" => {
+            let input = parse_args::<KnowledgeProjectInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge pending queue loaded.",
+                knowledge::pending_sources(input),
+            ))
+        }
+        "loom.knowledgeDiscard" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge pending operations discarded.",
+                knowledge::discard_pending(input),
+            ))
+        }
+        "loom.knowledgeBuild" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_result(
+                &project_root,
+                knowledge::build_source_from_input(input),
+            ))
+        }
+        "loom.knowledgeResume" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_result(
+                &project_root,
+                knowledge::resume_source_from_input(input),
+            ))
+        }
+        "loom.knowledgeList" => {
+            let input = parse_args::<KnowledgeProjectInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge sources listed.",
+                knowledge::list_sources(input),
+            ))
+        }
+        "loom.knowledgeStatus" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge source status loaded.",
+                knowledge::source_status(input),
+            ))
+        }
+        "loom.knowledgeRemove" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge source removed.",
+                knowledge::remove_source(input),
+            ))
+        }
+        "loom.knowledgeEnable" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge source enabled.",
+                knowledge::enable_source(input),
+            ))
+        }
+        "loom.knowledgeDisable" => {
+            let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge source disabled.",
+                knowledge::disable_source(input),
+            ))
+        }
+        "loom.knowledgeSearch" => {
+            let input = parse_args::<KnowledgeSearchInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge search completed.",
+                knowledge::search_knowledge(input),
+            ))
+        }
+        "loom.knowledgeBrainstormContext" => {
+            let input = parse_args::<KnowledgeBrainstormContextInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge Brainstorm context prepared.",
+                knowledge::brainstorm_context(input),
+            ))
+        }
+        "loom.knowledgeInspectChunk" => {
+            let input = parse_args::<KnowledgeInspectChunkInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_action(
+                &project_root,
+                "Knowledge chunk inspected.",
+                knowledge::inspect_chunk(input),
+            ))
+        }
+        "loom.knowledgeSemanticSubmitFile" => {
+            let input = parse_args::<KnowledgeSemanticSubmitInput>(request.arguments)?;
+            let project_root = input.project_root.clone();
+            action_result(knowledge_result(
+                &project_root,
+                knowledge::submit_semantic_pack_from_input(input),
+            ))
         }
         name if is_submit_tool(name) => action_result(submit_file_tool(
             name,
@@ -480,6 +617,43 @@ fn state_error(error: state::store::StateError) -> McpError {
     McpError::invalid_params(error.to_string(), None)
 }
 
+fn knowledge_action<T>(
+    project_root: &str,
+    summary: &str,
+    result: knowledge::KnowledgeResult<T>,
+) -> LoomMcpActionResult
+where
+    T: serde::Serialize,
+{
+    let normalized = match normalize_project_root(project_root) {
+        Ok(root) => root.display,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    match result {
+        Ok(details) => LoomMcpActionResult::Done(LoomMcpDoneResult {
+            project_root: normalized,
+            summary: summary.to_string(),
+            details: Some(serde_json::to_value(details).unwrap_or_else(|_| json!({}))),
+            warnings: vec![],
+        }),
+        Err(error) => knowledge_failure(normalized, error),
+    }
+}
+
+fn knowledge_result(
+    project_root: &str,
+    result: knowledge::KnowledgeResult<LoomMcpActionResult>,
+) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(project_root) {
+        Ok(root) => root.display,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    match result {
+        Ok(result) => result,
+        Err(error) => knowledge_failure(normalized, error),
+    }
+}
+
 fn state_failure(project_root: String, message: String) -> LoomMcpActionResult {
     LoomMcpActionResult::Failed(LoomMcpFailureResult {
         project_root,
@@ -488,6 +662,23 @@ fn state_failure(project_root: String, message: String) -> LoomMcpActionResult {
             message,
             target_batch: None,
             domain: Some("project_lifecycle".to_string()),
+            route_action: None,
+            recovery_tool: None,
+        },
+    })
+}
+
+fn knowledge_failure(
+    project_root: String,
+    error: knowledge::KnowledgeError,
+) -> LoomMcpActionResult {
+    LoomMcpActionResult::Failed(LoomMcpFailureResult {
+        project_root,
+        error: LoomMcpFailure {
+            code: "KNOWLEDGE_ERROR".to_string(),
+            message: error.to_string(),
+            target_batch: None,
+            domain: Some("knowledge".to_string()),
             route_action: None,
             recovery_tool: None,
         },

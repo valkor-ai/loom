@@ -224,10 +224,29 @@ fn sample_generate_knowledge_semantics_next() -> LoomMcpNextAction {
         source_id: "ksrc_1".to_string(),
         build_id: "kbld_1".to_string(),
         pack_id: "kpack_1".to_string(),
+        pack_index: 1,
+        pack_count: 1,
         request_ref: "loom://projects/project_1/requests/request_3".to_string(),
         result_file: ".loom/agent-writable/semantic-result.json".to_string(),
+        output_contract: serde_json::json!({
+            "resultTemplate": { "buildId": "kbld_1", "packId": "kpack_1", "chunkResults": [] }
+        }),
+        generation_rules: serde_json::json!({
+            "summaryLanguage": "preserve_source_language"
+        }),
         read_mode: KnowledgeReadMode::ChunkInspect,
-        chunk_read_plan: vec![],
+        chunk_read_plan: vec![delivery_core::KnowledgeChunkReadRef {
+            source_name: "domain".to_string(),
+            source_id: "ksrc_1".to_string(),
+            build_id: "kbld_1".to_string(),
+            chunk_id: "kchunk_000001".to_string(),
+            document_title: "doc".to_string(),
+            heading_path: vec![],
+            token_estimate: 100,
+            summary_language: "zh-CN".to_string(),
+            read_tool: "loom.knowledgeInspectChunk".to_string(),
+            resource_uri: "loom://knowledge/ksrc_1/builds/kbld_1/chunks/kchunk_000001".to_string(),
+        }],
         submit_tool: "loom.knowledgeSemanticSubmitFile".to_string(),
     })
 }

@@ -42,7 +42,21 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
             "loom.continue",
             "loom.initProject",
             "loom.inspectRequest",
+            "loom.knowledgeAdd",
+            "loom.knowledgeBrainstormContext",
+            "loom.knowledgeBuild",
+            "loom.knowledgeDisable",
+            "loom.knowledgeDiscard",
+            "loom.knowledgeEnable",
+            "loom.knowledgeInspectChunk",
+            "loom.knowledgeList",
+            "loom.knowledgePending",
+            "loom.knowledgeRemove",
+            "loom.knowledgeResume",
+            "loom.knowledgeSearch",
             "loom.knowledgeSemanticSubmitFile",
+            "loom.knowledgeStatus",
+            "loom.knowledgeUpdate",
             "loom.plan",
             "loom.readFieldGroup",
             "loom.readRequestFields",
@@ -96,6 +110,22 @@ fn submit_tools_use_file_submit_input_without_legacy_cli_paths() {
                 "{name} input schema must not expose {forbidden}: {schema_text}"
             );
         }
+    }
+
+    let knowledge_submit = tools
+        .iter()
+        .find(|tool| tool.name.as_ref() == "loom.knowledgeSemanticSubmitFile")
+        .expect("knowledge semantic submit tool");
+    let knowledge_schema =
+        serde_json::to_value(knowledge_submit).expect("tool json")["inputSchema"].to_string();
+    assert!(knowledge_schema.contains("projectRoot"));
+    assert!(knowledge_schema.contains("requestRef"));
+    assert!(!knowledge_schema.contains("writtenTargetIds"));
+    for forbidden in FORBIDDEN_SUBMIT_INPUT_KEYS {
+        assert!(
+            !knowledge_schema.contains(forbidden),
+            "knowledge semantic submit input schema must not expose {forbidden}: {knowledge_schema}"
+        );
     }
 }
 

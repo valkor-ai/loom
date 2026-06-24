@@ -25,6 +25,7 @@ pub struct WriteArtifactNext {
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     BrainstormCandidate,
+    KnowledgeSemanticPackResult,
     TechnicalBaselineCandidate,
     RepositoryContextCandidate,
     ArchitectureSectionCandidate,
@@ -160,8 +161,12 @@ pub struct GenerateKnowledgeSemanticsNext {
     pub source_id: String,
     pub build_id: String,
     pub pack_id: String,
+    pub pack_index: u32,
+    pub pack_count: u32,
     pub request_ref: String,
     pub result_file: String,
+    pub output_contract: serde_json::Value,
+    pub generation_rules: serde_json::Value,
     pub read_mode: KnowledgeReadMode,
     pub chunk_read_plan: Vec<KnowledgeChunkReadRef>,
     pub submit_tool: String,
@@ -176,7 +181,15 @@ pub enum KnowledgeReadMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeChunkReadRef {
+    pub source_name: String,
+    pub source_id: String,
+    pub build_id: String,
     pub chunk_id: String,
+    pub document_title: String,
+    pub heading_path: Vec<String>,
+    pub token_estimate: u32,
+    pub summary_language: String,
+    pub read_tool: String,
     pub resource_uri: String,
 }
 
