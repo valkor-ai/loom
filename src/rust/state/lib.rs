@@ -1,4 +1,5 @@
 pub mod boundary;
+mod field_projection;
 pub mod legacy_artifact_reader;
 pub mod legacy_ts_reader;
 pub mod lifecycle_store;

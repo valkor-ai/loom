@@ -1,4 +1,7 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use delivery_core::ReadGroupRef;
 use schemars::JsonSchema;
@@ -6,17 +9,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
-    paths::{from_project_relative, request_file_for_id, request_refs_dir, to_project_relative},
+    field_projection::{
+        select_compact_keyword_hints, select_compact_requirement_semantic_rules, select_value,
+        selector_parts,
+    },
+    paths::{
+        from_project_relative, request_file_for_id, request_refs_dir,
+        request_storage_manifest_file, to_project_relative,
+    },
     project::initialize_project,
     read_audit::{now_for_audit, record_request_size_audit, RequestSizeAudit},
     request_index::{
         upsert_request_index_entry, validate_request_id, RequestIndexEntry, RequestSourceProtocol,
     },
-    store::{now_string, write_json_atomic, StateError, StateResult},
+    store::{
+        now_string, read_json, read_json_value, read_text, write_json_atomic, StateError,
+        StateResult,
+    },
 };
 
-const DEFAULT_REF_KEYS: &[&str] = &[
-    "agentAction",
+const SPLITTABLE_REF_KEYS: &[&str] = &[
     "referencedArtifactReadGuide",
     "generationProtocol",
     "generationRules",
@@ -42,6 +54,19 @@ const DEFAULT_REF_KEYS: &[&str] = &[
     "blockedOutput",
 ];
 
+const FORBIDDEN_ROOT_KEYS: &[&str] = &["agentAction", "requestManifest", "submitCommand"];
+
+const FORBIDDEN_EXACT_READ_FIELDS: &[&str] = &[
+    "rules",
+    "outputContract.schemaShape",
+    "clarificationConversationProtocol",
+    "executionRules.rules",
+    "contextProjection.requirementDetailTransfer",
+];
+
+const MAX_READ_FIELD_BYTES: usize = 32 * 1024;
+const MAX_READ_GROUP_BYTES: usize = 96 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct NativeRequestInput {
     pub request_id: String,
@@ -64,16 +89,16 @@ pub struct StoredRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestManifest {
+pub(crate) struct RequestStorageManifest {
     schema_version: String,
-    ref_first: bool,
     protocol_authority: String,
-    refs: BTreeMap<String, RequestManifestRef>,
+    request_id: String,
+    refs: BTreeMap<String, RequestStorageManifestRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct RequestManifestRef {
+pub(crate) struct RequestStorageManifestRef {
     ref_key: String,
     r#ref: String,
     purpose: String,
@@ -106,7 +131,9 @@ pub fn write_native_request(
         "requestKind".to_string(),
         Value::String(input.request_kind.clone()),
     );
-    remove_agent_action_read(root_object);
+    reject_forbidden_root_keys(root_object)?;
+    reject_root_ref_aliases(root_object)?;
+    project_output_contract_submit_metadata(root_object);
 
     let read_groups = canonicalize_read_plan(
         root_object,
@@ -114,17 +141,31 @@ pub fn write_native_request(
         &config.project_id,
         &input.request_id,
     )?;
-    let manifest_refs = write_manifest_refs(&project_paths.root, &request_file, root_object)?;
+    canonicalize_context_refs(root_object, &read_groups);
+    let used_ref_keys = used_storage_ref_keys(root_object, &read_groups);
+    let manifest_refs = write_storage_refs(
+        &project_paths.root,
+        &request_file,
+        root_object,
+        &used_ref_keys,
+    )?;
+    validate_read_plan_contract(
+        &project_paths.root,
+        root_object,
+        &manifest_refs,
+        &read_groups,
+    )?;
     let ref_count = manifest_refs.len();
-    root_object.insert(
-        "requestManifest".to_string(),
-        serde_json::to_value(RequestManifest {
+    write_storage_manifest(
+        &project_paths.root,
+        &input.request_id,
+        RequestStorageManifest {
             schema_version: "1.0".to_string(),
-            ref_first: true,
-            protocol_authority: "request_manifest_refs".to_string(),
+            protocol_authority: "rust_private_request_storage_manifest".to_string(),
+            request_id: input.request_id.clone(),
             refs: manifest_refs,
-        })?,
-    );
+        },
+    )?;
 
     write_json_atomic(&request_file, &root)?;
     let compact_bytes = pretty_len(&root);
@@ -186,6 +227,22 @@ pub fn read_group_refs_from_root(
         .collect()
 }
 
+pub(crate) fn request_storage_ref(
+    project_root: &Path,
+    request_id: &str,
+    key: &str,
+) -> StateResult<Option<String>> {
+    let manifest = read_request_storage_manifest(project_root, request_id)?;
+    Ok(manifest.refs.get(key).map(|entry| entry.r#ref.clone()))
+}
+
+fn read_request_storage_manifest(
+    project_root: &Path,
+    request_id: &str,
+) -> StateResult<RequestStorageManifest> {
+    read_json(&request_storage_manifest_file(project_root, request_id))
+}
+
 fn canonicalize_read_plan(
     root_object: &mut Map<String, Value>,
     request_ref: &str,
@@ -243,6 +300,7 @@ fn read_group_ref_from_value(
         .as_object()
         .ok_or_else(|| StateError::InvalidArgument("read group must be an object".to_string()))?;
     let group_id = string_field(object, "groupId")?;
+    reject_read_group_sidecar_fields(&group_id, object)?;
     let fields = object
         .get("fields")
         .and_then(Value::as_array)
@@ -253,8 +311,10 @@ fn read_group_ref_from_value(
         .filter_map(Value::as_str)
         .map(str::trim)
         .filter(|field| !field.is_empty())
+        .map(validate_read_field_selector)
+        .collect::<StateResult<Vec<_>>>()?
+        .into_iter()
         .fold(Vec::<String>::new(), |mut acc, field| {
-            let field = field.to_string();
             if !acc.contains(&field) {
                 acc.push(field);
             }
@@ -291,65 +351,357 @@ fn read_group_ref_from_value(
     })
 }
 
-fn write_manifest_refs(
-    project_root: &std::path::Path,
-    request_file: &std::path::Path,
+fn write_storage_refs(
+    project_root: &Path,
+    request_file: &Path,
     root_object: &mut Map<String, Value>,
-) -> StateResult<BTreeMap<String, RequestManifestRef>> {
+    used_ref_keys: &BTreeSet<String>,
+) -> StateResult<BTreeMap<String, RequestStorageManifestRef>> {
     let refs_dir = request_refs_dir(request_file);
     let mut refs = BTreeMap::new();
-    for key in DEFAULT_REF_KEYS {
+    for key in SPLITTABLE_REF_KEYS {
         let Some(value) = root_object.remove(*key) else {
             continue;
         };
-        if key == &"agentAction" {
-            if let Some(mut object) = value.as_object().cloned() {
-                remove_agent_action_read(&mut object);
-                write_ref(
-                    project_root,
-                    &refs_dir,
-                    key,
-                    Value::Object(object),
-                    &mut refs,
-                )?;
-                continue;
-            }
+        if used_ref_keys.contains(*key) {
+            write_ref(project_root, &refs_dir, key, value, &mut refs)?;
         }
-        write_ref(project_root, &refs_dir, key, value, &mut refs)?;
     }
     Ok(refs)
 }
 
 fn write_ref(
-    project_root: &std::path::Path,
-    refs_dir: &std::path::Path,
+    project_root: &Path,
+    refs_dir: &Path,
     key: &str,
     value: Value,
-    refs: &mut BTreeMap<String, RequestManifestRef>,
+    refs: &mut BTreeMap<String, RequestStorageManifestRef>,
 ) -> StateResult<()> {
     let ref_file = refs_dir.join(format!("{}.json", kebab_case(key)));
     write_json_atomic(&ref_file, &value)?;
     let relative = to_project_relative(project_root, &ref_file)?;
     refs.insert(
         key.to_string(),
-        RequestManifestRef {
+        RequestStorageManifestRef {
             ref_key: format!("{key}Ref"),
             r#ref: relative.clone(),
-            purpose: format!(
-                "Internal storage ref for {key}. Use requestReadPlan.groups for normal reads."
-            ),
+            purpose: format!("Private storage ref for {key}. Not agent-facing."),
         },
     );
     Ok(())
 }
 
-fn remove_agent_action_read(root_object: &mut Map<String, Value>) {
-    if let Some(agent_action) = root_object
-        .get_mut("agentAction")
-        .and_then(Value::as_object_mut)
-    {
-        agent_action.remove("read");
+fn write_storage_manifest(
+    project_root: &Path,
+    request_id: &str,
+    manifest: RequestStorageManifest,
+) -> StateResult<()> {
+    write_json_atomic(
+        &request_storage_manifest_file(project_root, request_id),
+        &manifest,
+    )
+}
+
+fn reject_forbidden_root_keys(root_object: &Map<String, Value>) -> StateResult<()> {
+    for key in FORBIDDEN_ROOT_KEYS {
+        if root_object.contains_key(*key) {
+            return Err(StateError::InvalidArgument(format!(
+                "native MCP request root must not include {key}; use requestReadPlan.groups and submitTool/writeTargets only"
+            )));
+        }
     }
+    Ok(())
+}
+
+fn reject_root_ref_aliases(root_object: &Map<String, Value>) -> StateResult<()> {
+    let illegal = root_object
+        .keys()
+        .filter(|key| key.as_str() != "contextRefs" && key.ends_with("Ref"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !illegal.is_empty() {
+        return Err(StateError::InvalidArgument(format!(
+            "native MCP request root must not include root ref aliases: {}",
+            illegal.join(",")
+        )));
+    }
+    Ok(())
+}
+
+fn reject_read_group_sidecar_fields(
+    group_id: &str,
+    object: &Map<String, Value>,
+) -> StateResult<()> {
+    for key in ["readCommand", "fallbackRule"] {
+        if object.contains_key(key) {
+            return Err(StateError::InvalidArgument(format!(
+                "read group {group_id} must not include {key}; requestReadPlan.groups is the only read contract"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn project_output_contract_submit_metadata(root_object: &mut Map<String, Value>) {
+    let Some(contract) = root_object
+        .get("outputContract")
+        .and_then(Value::as_object)
+        .cloned()
+    else {
+        return;
+    };
+    for key in ["artifactKind", "submitTool", "writeTargets", "writeMode"] {
+        if !root_object.contains_key(key) {
+            if let Some(value) = contract.get(key) {
+                root_object.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+}
+
+fn canonicalize_context_refs(root_object: &mut Map<String, Value>, read_groups: &[ReadGroupRef]) {
+    let used = used_context_ref_keys(read_groups);
+    let Some(context_refs) = root_object
+        .get_mut("contextRefs")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let current_keys = context_refs.keys().cloned().collect::<Vec<_>>();
+    for key in current_keys {
+        if !used.contains(key.as_str()) {
+            context_refs.remove(&key);
+        }
+    }
+    if context_refs.is_empty() {
+        root_object.remove("contextRefs");
+    }
+}
+
+fn used_context_ref_keys(read_groups: &[ReadGroupRef]) -> BTreeSet<&'static str> {
+    let mut used = BTreeSet::new();
+    for field in read_groups.iter().flat_map(|group| group.fields.iter()) {
+        if field == "requirementContext.normalizedText" {
+            used.insert("normalizedRequirementTextRef");
+            continue;
+        }
+        let Some(root_key) = field.split('.').next() else {
+            continue;
+        };
+        match root_key {
+            "requirementContext" => {
+                used.insert("requirementContextRef");
+            }
+            "originalRequirementContext" => {
+                used.insert("originalRequirementContextRef");
+            }
+            "keywordHints" => {
+                used.insert("keywordHintsRef");
+            }
+            "deliveryContext" => {
+                used.insert("deliveryContextRef");
+            }
+            "latestRepositoryContext" => {
+                used.insert("latestRepositoryContextRef");
+            }
+            "latestConfirmedRequirementDecision" => {
+                used.insert("latestConfirmedRequirementDecisionRef");
+            }
+            "confirmedRequirementDecisionsIndex" => {
+                used.insert("confirmedRequirementDecisionsIndexRef");
+            }
+            "deliveryConceptGlossary" => {
+                used.insert("deliveryConceptGlossaryRef");
+            }
+            "phaseConceptGrounding" => {
+                used.insert("phaseConceptGroundingRef");
+            }
+            "currentFrontendExperience" => {
+                used.insert("currentFrontendExperienceRef");
+            }
+            _ => {}
+        }
+    }
+    used
+}
+
+fn used_storage_ref_keys(
+    root_object: &Map<String, Value>,
+    read_groups: &[ReadGroupRef],
+) -> BTreeSet<String> {
+    let splittable = SPLITTABLE_REF_KEYS.iter().copied().collect::<BTreeSet<_>>();
+    let mut used = read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .filter_map(|field| field.split('.').next())
+        .filter(|root_key| splittable.contains(root_key))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if root_object.contains_key("outputContract") {
+        used.insert("outputContract".to_string());
+    }
+    used
+}
+
+fn validate_read_plan_contract(
+    project_root: &Path,
+    root_object: &Map<String, Value>,
+    refs: &BTreeMap<String, RequestStorageManifestRef>,
+    read_groups: &[ReadGroupRef],
+) -> StateResult<()> {
+    for group in read_groups {
+        let mut group_bytes = 0usize;
+        for field in &group.fields {
+            let value = resolve_field_for_validation(project_root, root_object, refs, field)
+                .map_err(|error| {
+                    StateError::InvalidArgument(format!(
+                        "requestReadPlan field validation failed: request group {} field {}: {}",
+                        group.group_id, field, error
+                    ))
+                })?;
+            let field_bytes = pretty_len(&value);
+            if field_bytes > MAX_READ_FIELD_BYTES {
+                return Err(StateError::InvalidArgument(format!(
+                    "requestReadPlan field {} in group {} is too large: {} bytes > {} bytes",
+                    field, group.group_id, field_bytes, MAX_READ_FIELD_BYTES
+                )));
+            }
+            group_bytes += field_bytes;
+        }
+        if group_bytes > MAX_READ_GROUP_BYTES {
+            return Err(StateError::InvalidArgument(format!(
+                "requestReadPlan group {} is too large: {} bytes > {} bytes",
+                group.group_id, group_bytes, MAX_READ_GROUP_BYTES
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_field_for_validation(
+    project_root: &Path,
+    root_object: &Map<String, Value>,
+    refs: &BTreeMap<String, RequestStorageManifestRef>,
+    field: &str,
+) -> StateResult<Value> {
+    let parts = selector_parts(field)?;
+    if let Some(value) =
+        resolve_context_ref_for_validation(project_root, root_object, field, &parts)?
+    {
+        return Ok(value);
+    }
+    let root_key = parts.first().expect("selector has first part");
+    if let Some(ref_entry) = refs.get(root_key) {
+        let ref_file = from_project_relative(project_root, &ref_entry.r#ref)?;
+        let ref_value = read_json_value(&ref_file)?;
+        if root_key == "rules"
+            && parts[1..].join(".") == "requirementSemanticGrounding.compactRules"
+        {
+            return Ok(select_compact_requirement_semantic_rules(&ref_value));
+        }
+        return if parts.len() == 1 {
+            Ok(ref_value)
+        } else {
+            select_value(&ref_value, &parts[1..])
+        };
+    }
+    let root = Value::Object(root_object.clone());
+    if field == "rules.requirementSemanticGrounding.compactRules" {
+        Ok(select_compact_requirement_semantic_rules(
+            root.get("rules").unwrap_or(&Value::Null),
+        ))
+    } else {
+        select_value(&root, &parts)
+    }
+}
+
+fn resolve_context_ref_for_validation(
+    project_root: &Path,
+    root_object: &Map<String, Value>,
+    field: &str,
+    parts: &[String],
+) -> StateResult<Option<Value>> {
+    let Some(context_refs) = root_object.get("contextRefs").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    if field == "requirementContext.normalizedText" {
+        if let Some(relative) = context_refs
+            .get("normalizedRequirementTextRef")
+            .and_then(Value::as_str)
+        {
+            let text_file = from_project_relative(project_root, relative)?;
+            return Ok(Some(Value::String(read_text(&text_file)?)));
+        }
+    }
+    let aliases = [
+        ("requirementContext", "requirementContextRef"),
+        (
+            "originalRequirementContext",
+            "originalRequirementContextRef",
+        ),
+        ("keywordHints", "keywordHintsRef"),
+        ("deliveryContext", "deliveryContextRef"),
+        ("latestRepositoryContext", "latestRepositoryContextRef"),
+        (
+            "latestConfirmedRequirementDecision",
+            "latestConfirmedRequirementDecisionRef",
+        ),
+        (
+            "confirmedRequirementDecisionsIndex",
+            "confirmedRequirementDecisionsIndexRef",
+        ),
+        ("deliveryConceptGlossary", "deliveryConceptGlossaryRef"),
+        ("phaseConceptGrounding", "phaseConceptGroundingRef"),
+        ("currentFrontendExperience", "currentFrontendExperienceRef"),
+    ];
+    let Some((_alias, ref_field)) = aliases.iter().find(|(alias, _)| parts[0] == *alias) else {
+        return Ok(None);
+    };
+    let Some(relative) = context_refs.get(*ref_field).and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let ref_file = from_project_relative(project_root, relative)?;
+    let ref_value = read_json_value(&ref_file)?;
+    let value = if parts.len() == 1 {
+        ref_value
+    } else if parts[0] == "keywordHints" && parts.get(1).map(String::as_str) == Some("compact") {
+        select_compact_keyword_hints(&ref_value, &parts[2..])?
+    } else {
+        select_value(&ref_value, &parts[1..])?
+    };
+    Ok(Some(value))
+}
+
+fn validate_read_field_selector(field: &str) -> StateResult<String> {
+    let field = field.trim();
+    if field.is_empty() {
+        return Err(StateError::InvalidArgument(
+            "read group field selector is required".to_string(),
+        ));
+    }
+    if field.contains(".refs")
+        || field.contains("readCommand")
+        || field.contains("fallbackRule")
+        || field.contains("inspect")
+        || field.contains("jq")
+        || field.contains(" ")
+    {
+        return Err(StateError::InvalidArgument(format!(
+            "field is not allowed through requestReadPlan.groups: {field}"
+        )));
+    }
+    if FORBIDDEN_EXACT_READ_FIELDS.contains(&field) {
+        return Err(StateError::InvalidArgument(format!(
+            "read field is too broad for requestReadPlan.groups: {field}"
+        )));
+    }
+    let parts = selector_parts(field)?;
+    if parts[0] == "requestManifest" || parts[0] == "agentAction" {
+        return Err(StateError::InvalidArgument(format!(
+            "field is not allowed through request read protocol: {field}"
+        )));
+    }
+    Ok(field.to_string())
 }
 
 fn string_field(object: &Map<String, Value>, key: &str) -> StateResult<String> {

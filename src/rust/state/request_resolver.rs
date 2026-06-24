@@ -8,12 +8,16 @@ use delivery_core::{
 use serde_json::Value;
 
 use crate::{
+    field_projection::{
+        select_compact_keyword_hints, select_compact_requirement_semantic_rules, select_value,
+        selector_parts as projection_selector_parts,
+    },
     legacy_ts_reader::hydrate_legacy_request_value,
     paths::{from_project_relative, project_paths},
     project::read_project_config,
     read_audit::{now_for_audit, record_field_read_audit, FieldReadAudit},
     request_index::{get_request_index_entry, RequestSourceProtocol},
-    request_manifest::{encode_component, read_group_refs_from_root},
+    request_manifest::{encode_component, read_group_refs_from_root, request_storage_ref},
     store::{read_json_value, read_text, StateError, StateResult},
 };
 
@@ -29,6 +33,7 @@ struct LoadedRequest {
     request_id: String,
     project_id: String,
     request_kind: String,
+    source_protocol: RequestSourceProtocol,
     root: Value,
     read_groups: Vec<ReadGroupRef>,
 }
@@ -177,6 +182,7 @@ fn load_request(project_root: &str, request_ref: &str) -> StateResult<LoadedRequ
         request_id: parsed.request_id,
         project_id: parsed.project_id,
         request_kind: index_entry.request_kind,
+        source_protocol: index_entry.source_protocol,
         root,
         read_groups,
     })
@@ -204,7 +210,7 @@ fn resolve_field(
         return Ok(context_result);
     }
     let root_key = parts.first().expect("selector has first part");
-    if let Some(ref_entry) = request_manifest_ref(&request.root, root_key) {
+    if let Some(ref_entry) = request_storage_manifest_ref(project_root, request, root_key)? {
         let paths = project_paths(project_root)?;
         let ref_file = from_project_relative(&paths.root, &ref_entry)?;
         let ref_value = read_json_value(&ref_file)?;
@@ -331,7 +337,19 @@ fn field_result(
     }
 }
 
-fn request_manifest_ref(root: &Value, key: &str) -> Option<String> {
+fn request_storage_manifest_ref(
+    project_root: &str,
+    request: &LoadedRequest,
+    key: &str,
+) -> StateResult<Option<String>> {
+    if request.source_protocol == RequestSourceProtocol::RustMcpNative {
+        let paths = project_paths(project_root)?;
+        return request_storage_ref(&paths.root, &request.request_id, key);
+    }
+    Ok(legacy_request_manifest_ref(&request.root, key))
+}
+
+fn legacy_request_manifest_ref(root: &Value, key: &str) -> Option<String> {
     root.get("requestManifest")
         .and_then(|manifest| manifest.get("refs"))
         .and_then(|refs| refs.get(key))
@@ -340,227 +358,8 @@ fn request_manifest_ref(root: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn select_compact_keyword_hints(root: &Value, selector_parts: &[String]) -> StateResult<Value> {
-    let compact = compact_keyword_hints(root);
-    if selector_parts.is_empty() {
-        return Ok(compact);
-    }
-    select_value(&compact, selector_parts)
-}
-
-fn compact_keyword_hints(root: &Value) -> Value {
-    let Some(object) = root.as_object() else {
-        return serde_json::json!({
-            "usage": "advisory_only",
-            "status": "empty",
-            "languageHints": [],
-            "topKeywords": [],
-            "sectionKeywords": [],
-            "rules": keyword_hint_compact_rules(),
-        });
-    };
-    if let Some(compact) = object.get("compact").and_then(Value::as_object) {
-        return Value::Object(compact.clone());
-    }
-
-    let language_hints = object
-        .get("languageHints")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .take(5)
-                .map(|item| Value::String(item.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let top_keywords = object
-        .get("globalKeywords")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_object)
-                .take(16)
-                .filter_map(|hint| {
-                    let keyword = hint.get("keyword").and_then(Value::as_str)?;
-                    if keyword.is_empty() {
-                        return None;
-                    }
-                    let occurrences = hint.get("occurrences").and_then(Value::as_u64).unwrap_or(0);
-                    let source_item_ids = hint
-                        .get("sourceItemIds")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .take(3)
-                                .map(|item| Value::String(item.to_string()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    Some(serde_json::json!({
-                        "keyword": keyword,
-                        "occurrences": occurrences,
-                        "sourceItemIds": source_item_ids,
-                    }))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let section_keywords = object
-        .get("sectionKeywords")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_object)
-                .take(6)
-                .filter_map(|section| {
-                    let section_id = section
-                        .get("sectionId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let title = section.get("title").and_then(Value::as_str);
-                    let source_item_id = section
-                        .get("sourceItemId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let keywords = section
-                        .get("keywords")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_object)
-                                .take(6)
-                                .filter_map(|hint| hint.get("keyword").and_then(Value::as_str))
-                                .filter(|keyword| !keyword.is_empty())
-                                .map(|keyword| Value::String(keyword.to_string()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    if section_id.is_empty() && keywords.is_empty() {
-                        return None;
-                    }
-                    let mut value = serde_json::Map::new();
-                    value.insert(
-                        "sectionId".to_string(),
-                        Value::String(section_id.to_string()),
-                    );
-                    value.insert(
-                        "sourceItemId".to_string(),
-                        Value::String(source_item_id.to_string()),
-                    );
-                    if let Some(title) = title {
-                        value.insert("title".to_string(), Value::String(title.to_string()));
-                    }
-                    value.insert("keywords".to_string(), Value::Array(keywords));
-                    Some(Value::Object(value))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    serde_json::json!({
-        "usage": "advisory_only",
-        "status": if object.get("status").and_then(Value::as_str) == Some("completed") {
-            "completed"
-        } else {
-            "empty"
-        },
-        "languageHints": language_hints,
-        "topKeywords": top_keywords,
-        "sectionKeywords": section_keywords,
-        "rules": keyword_hint_compact_rules(),
-    })
-}
-
-fn keyword_hint_compact_rules() -> Value {
-    serde_json::json!({
-        "advisoryOnly": true,
-        "mustNotTreatAsScope": true,
-        "mustNotTreatAsAcceptance": true,
-        "ignoreWhenIrrelevant": true,
-    })
-}
-
-fn select_compact_requirement_semantic_rules(root: &Value) -> Value {
-    let Some(object) = root.as_object() else {
-        return Value::Array(vec![]);
-    };
-    let Some(semantic) = object
-        .get("requirementSemanticGrounding")
-        .and_then(Value::as_object)
-    else {
-        return Value::Array(vec![]);
-    };
-    if let Some(compact_rules) = semantic.get("compactRules").and_then(Value::as_array) {
-        return Value::Array(
-            compact_rules
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|item| Value::String(item.to_string()))
-                .collect(),
-        );
-    }
-    Value::Array(
-        semantic
-            .get("rules")
-            .and_then(Value::as_array)
-            .map(|rules| {
-                rules
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .take(7)
-                    .map(|item| Value::String(item.to_string()))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default(),
-    )
-}
-
-fn select_value(root: &Value, parts: &[String]) -> StateResult<Value> {
-    let mut current = root;
-    for part in parts {
-        match current {
-            Value::Object(object) => {
-                current = object.get(part).ok_or_else(|| {
-                    StateError::InvalidArgument(format!("FIELD_NOT_FOUND: {}", parts.join(".")))
-                })?;
-            }
-            Value::Array(array) => {
-                let index = part.parse::<usize>().map_err(|_| {
-                    StateError::InvalidArgument(format!("invalid array index in selector: {part}"))
-                })?;
-                current = array.get(index).ok_or_else(|| {
-                    StateError::InvalidArgument(format!("array index out of bounds: {part}"))
-                })?;
-            }
-            _ => {
-                return Err(StateError::InvalidArgument(format!(
-                    "selector cannot traverse non-container value at {part}"
-                )));
-            }
-        }
-    }
-    Ok(current.clone())
-}
-
 fn selector_parts(field: &str) -> StateResult<Vec<String>> {
-    let parts = field
-        .split('.')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return Err(StateError::InvalidArgument(
-            "field selector is required".to_string(),
-        ));
-    }
+    let parts = projection_selector_parts(field)?;
     if parts[0] == "requestManifest" || parts[0] == "agentAction" {
         return Err(StateError::InvalidArgument(format!(
             "field is not allowed through request read protocol: {field}"

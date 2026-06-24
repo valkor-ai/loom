@@ -11,7 +11,7 @@ use crate::{
     paths::{from_project_relative, project_paths},
     project::read_project_config,
     request_index::{get_request_index_entry, RequestSourceProtocol},
-    request_manifest::read_group_refs_from_root,
+    request_manifest::{read_group_refs_from_root, request_storage_ref},
     store::{path_exists, read_json_value, StateError},
 };
 
@@ -73,7 +73,7 @@ pub fn authorize_write_targets(
     let request_file =
         from_project_relative(&paths.root, &index_entry.request_file).map_err(fatal_state)?;
     let mut root = read_json_value(&request_file).map_err(fatal_state)?;
-    hydrate_submit_refs(&mut root, &paths.root)?;
+    hydrate_submit_refs(&mut root, &paths.root, &parsed.request_id)?;
     let read_groups = read_group_refs_from_root(&root, &parsed.project_id, &parsed.request_id)
         .map_err(fatal_state)?;
 
@@ -250,11 +250,14 @@ fn extract_next_action(root: &Value) -> Result<Option<RouteAction>, WriteTargetA
 fn hydrate_submit_refs(
     root: &mut Value,
     project_root: &Path,
+    request_id: &str,
 ) -> Result<(), WriteTargetAuthorizationError> {
     if root.get("outputContract").is_some() {
         return Ok(());
     }
-    let Some(relative) = request_manifest_ref(root, "outputContract") else {
+    let Some(relative) =
+        request_storage_ref(project_root, request_id, "outputContract").map_err(fatal_state)?
+    else {
         return Ok(());
     };
     let ref_file = from_project_relative(project_root, &relative).map_err(fatal_state)?;
@@ -267,15 +270,6 @@ fn hydrate_submit_refs(
     };
     object.insert("outputContract".to_string(), value);
     Ok(())
-}
-
-fn request_manifest_ref(root: &Value, key: &str) -> Option<String> {
-    root.get("requestManifest")
-        .and_then(|manifest| manifest.get("refs"))
-        .and_then(|refs| refs.get(key))
-        .and_then(|entry| entry.get("ref"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
 }
 
 fn validate_target_paths(

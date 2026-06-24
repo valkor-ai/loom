@@ -71,7 +71,7 @@ fn write_brainstorm_request(
                         "required": true,
                         "purpose": "Read core fields.",
                         "whenToRead": "Before writing.",
-                        "fields": ["outputContract.writeTargets"]
+                        "fields": ["writeTargets"]
                     }]
                 }
             }),

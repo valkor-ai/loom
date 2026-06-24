@@ -106,6 +106,13 @@ pub fn request_refs_dir(request_file: &Path) -> PathBuf {
     request_file.with_extension("refs")
 }
 
+pub fn request_storage_manifest_file(project_root: &Path, request_id: &str) -> PathBuf {
+    project_root
+        .join(LOOM_DIR)
+        .join("requests")
+        .join(format!("{request_id}.manifest.json"))
+}
+
 pub fn delivery_dir(project_root: &Path, delivery_id: &str) -> PathBuf {
     project_root
         .join(LOOM_DIR)
