@@ -1,11 +1,11 @@
 use std::future::{ready, Future};
 
 use delivery_core::{
-    normalize_project_root, status_details, validate_plan_input, DomainDispatcher,
-    InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpRuntimeContext, OperationContext, PlanToolInput, ProjectToolInput,
-    ReadFieldGroupInput, ReadRequestFieldsInput, TransitionEngine, TransitionStore,
-    UnimplementedDomainDispatcher,
+    is_submit_tool, normalize_project_root, status_details, submit_tool_spec, validate_plan_input,
+    DomainDispatcher, FileSubmitInput, InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpRuntimeContext,
+    OperationContext, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadRequestFieldsInput,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore, UnimplementedDomainDispatcher,
 };
 use rmcp::{
     model::{
@@ -164,6 +164,10 @@ fn call_tool(
                 ReadRequestFieldsInput,
             >(request.arguments)?))
         }
+        name if is_submit_tool(name) => action_result(submit_file_tool(
+            name,
+            parse_args::<FileSubmitInput>(request.arguments)?,
+        )),
         _ => server
             .tools
             .call_registered_placeholder(&request.name, request.arguments)
@@ -303,6 +307,117 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
             },
         }),
     }
+}
+
+fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    let normalized_input = FileSubmitInput {
+        project_root: normalized.display.clone(),
+        request_ref: input.request_ref,
+        written_target_ids: input.written_target_ids,
+    };
+    let authorized = match state::authorize_write_targets(&normalized_input, tool_name) {
+        Ok(authorized) => authorized,
+        Err(state::WriteTargetAuthorizationError::Repairable {
+            target_file,
+            target_ids,
+            issues,
+            read_groups,
+            resubmit_tool,
+        }) => {
+            return LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+                project_root: normalized.display,
+                target_file,
+                target_ids,
+                issues,
+                resubmit_tool,
+                fix_scope: Some(
+                    "Edit only the authorized artifact JSON target, then resubmit with the same Loom MCP submit tool."
+                        .to_string(),
+                ),
+                read_groups,
+            });
+        }
+        Err(state::WriteTargetAuthorizationError::Fatal { code, message }) => {
+            return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                project_root: normalized.display,
+                error: LoomMcpFailure {
+                    code: code.to_string(),
+                    message,
+                    target_batch: None,
+                    domain: Some("submit".to_string()),
+                    route_action: None,
+                    recovery_tool: None,
+                },
+            });
+        }
+    };
+
+    if let (Some(delivery_id), Some(phase_id), Some(next_action)) = (
+        authorized.delivery_id.clone(),
+        authorized.phase_id.clone(),
+        authorized.next_action.clone(),
+    ) {
+        let engine = TransitionEngine {
+            store: FileTransitionStore,
+            dispatcher: UnimplementedDomainDispatcher,
+        };
+        return match engine.advance_after_submit(
+            OperationContext {
+                project_root: normalized.display.clone(),
+            },
+            SubmitAcceptedEvent {
+                delivery_id,
+                phase_id,
+                source_tool: tool_name.to_string(),
+                accepted_artifact_ref: format!(
+                    "{}/targets/{}",
+                    authorized.request_ref,
+                    authorized
+                        .targets
+                        .first()
+                        .map(|target| target.target_id.as_str())
+                        .unwrap_or("artifact")
+                ),
+                next_action: Some(next_action),
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                project_root: normalized.display,
+                error: LoomMcpFailure {
+                    code: error.code().to_string(),
+                    message: error.message().to_string(),
+                    target_batch: None,
+                    domain: Some("transition".to_string()),
+                    route_action: None,
+                    recovery_tool: None,
+                },
+            }),
+        };
+    }
+
+    let target_batch = submit_tool_spec(tool_name)
+        .map(|spec| spec.target_batch)
+        .unwrap_or(5);
+    let summary = authorized.summary();
+    LoomMcpActionResult::Failed(LoomMcpFailureResult {
+        project_root: normalized.display,
+        error: LoomMcpFailure {
+            code: "not_implemented_for_batch".to_string(),
+            message: format!(
+                "{tool_name} passed MCP native submit preflight for {:?} targets {:?}, but its domain accept handler is assigned to batch {target_batch}.",
+                summary.artifact_kind, summary.target_ids
+            ),
+            target_batch: Some(target_batch),
+            domain: Some("submit".to_string()),
+            route_action: None,
+            recovery_tool: None,
+        },
+    })
 }
 
 fn read_resource(server: &LoomMcpServer, uri: &str) -> Result<ReadResourceResult, McpError> {

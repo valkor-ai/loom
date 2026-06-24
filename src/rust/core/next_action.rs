@@ -21,7 +21,7 @@ pub struct WriteArtifactNext {
     pub submit_tool: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     BrainstormCandidate,
@@ -29,18 +29,24 @@ pub enum ArtifactKind {
     RepositoryContextCandidate,
     ArchitectureSectionCandidate,
     TaskPlanCandidate,
+    TaskResult,
     ReviewResult,
     ManualReviewResolution,
     TaskResultRepair,
     TaskplanRepair,
     ArchitectureArtifactRepair,
+    DeployExecutionRepairResult,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WriteMode {
     CreateOrReplace,
     PatchExisting,
+    SingleJson,
+    ArchitectureSection,
+    TaskplanGrouped,
+    RepairJson,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

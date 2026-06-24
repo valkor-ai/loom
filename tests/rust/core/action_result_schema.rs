@@ -66,10 +66,13 @@ fn repairable_error_contains_resubmit_contract() {
         issues: vec![RepairIssue {
             code: "missing_required_field".to_string(),
             message: "field is required".to_string(),
+            target_id: Some("candidate".to_string()),
             field_path: Some("summary".to_string()),
         }],
         resubmit_tool: "loom.repairSubmitFile".to_string(),
         fix_scope: Some("Only edit the target file.".to_string()),
+        target_ids: vec!["candidate".to_string()],
+        read_groups: vec![],
     });
     let value = serde_json::to_value(result).expect("result json");
     assert_eq!(value["targetFile"], ".loom/agent-writable/result.json");
@@ -146,13 +149,16 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
         LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
             project_root: "/tmp/project".to_string(),
             target_file: ".loom/agent-writable/result.json".to_string(),
+            target_ids: vec![],
             issues: vec![RepairIssue {
                 code: "invalid_shape".to_string(),
                 message: "Invalid shape.".to_string(),
+                target_id: None,
                 field_path: None,
             }],
             resubmit_tool: "loom.repairSubmitFile".to_string(),
             fix_scope: None,
+            read_groups: vec![],
         }),
         LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: "/tmp/project".to_string(),

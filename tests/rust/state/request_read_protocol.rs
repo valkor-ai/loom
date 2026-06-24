@@ -3,7 +3,7 @@ use state::{
     legacy_ts_reader::register_legacy_ts_request,
     request_resolver::{read_field_by_resource_uri, read_field_group_by_resource_uri},
     store::{read_json_value, write_json_atomic, write_text_atomic},
-    write_native_request, NativeRequestInput,
+    write_native_request, NativeRequestInput, WriteTargetAuthorizationError,
 };
 use std::fs::read_to_string;
 use std::sync::{Mutex, MutexGuard};
@@ -250,6 +250,123 @@ fn legacy_ts_request_is_converted_without_rewriting_file() {
     })
     .expect("read legacy group");
     assert_eq!(group.fields["task.title"].value, "旧请求标题");
+}
+
+#[test]
+fn native_submit_authorizes_declared_write_targets() {
+    let fixture = Fixture::new("submit-native");
+    write_json_atomic(
+        &fixture.root.join(".loom/agent-writable/candidate.json"),
+        &json!({ "summary": "ok" }),
+    )
+    .expect("write target");
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_submit_1".to_string(),
+            request_kind: "brainstorm_candidate".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "artifactKind": "brainstorm_candidate",
+                "submitTool": "loom.brainstormAcceptFile",
+                "outputContract": {
+                    "writeMode": "single_json",
+                    "writeTargets": [{
+                        "targetId": "candidate",
+                        "path": ".loom/agent-writable/candidate.json",
+                        "required": true,
+                        "description": "Brainstorm candidate JSON."
+                    }]
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "core",
+                        "required": true,
+                        "purpose": "Read core fields.",
+                        "whenToRead": "Before writing.",
+                        "fields": ["outputContract.writeTargets"]
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write request");
+
+    let authorized = state::authorize_write_targets(
+        &delivery_core::FileSubmitInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: stored.request_ref,
+            written_target_ids: Some(vec!["candidate".to_string()]),
+        },
+        "loom.brainstormAcceptFile",
+    )
+    .expect("authorize submit");
+
+    assert_eq!(
+        authorized.artifact_kind,
+        delivery_core::ArtifactKind::BrainstormCandidate
+    );
+    assert_eq!(authorized.targets[0].target_id, "candidate");
+    assert_eq!(authorized.submit_tool, "loom.brainstormAcceptFile");
+}
+
+#[test]
+fn native_submit_rejects_legacy_ts_request_ref() {
+    let fixture = Fixture::new("submit-legacy");
+    let legacy_file = fixture.root.join(".loom/legacy/request.json");
+    write_json_atomic(
+        &legacy_file,
+        &json!({
+            "requestKind": "legacy_request",
+            "requestReadPlan": {
+                "groups": [{
+                    "groupId": "legacy_core",
+                    "fields": ["task.title"]
+                }]
+            },
+            "task": { "title": "旧请求标题" }
+        }),
+    )
+    .expect("write legacy request");
+    let request_ref = register_legacy_ts_request(fixture.root_str(), ".loom/legacy/request.json")
+        .expect("register legacy request");
+
+    let error = state::authorize_write_targets(
+        &delivery_core::FileSubmitInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref,
+            written_target_ids: None,
+        },
+        "loom.brainstormAcceptFile",
+    )
+    .expect_err("legacy request cannot be submitted");
+
+    let WriteTargetAuthorizationError::Fatal { code, message } = error else {
+        panic!("expected fatal legacy submit rejection");
+    };
+    assert_eq!(code, "LEGACY_REQUEST_NOT_ALLOWED");
+    assert!(message.contains("migration inputs"));
+}
+
+#[test]
+fn legacy_artifact_reader_is_read_only_migration_input() {
+    let fixture = Fixture::new("legacy-artifact");
+    write_json_atomic(
+        &fixture.root.join(".loom/legacy/artifact.json"),
+        &json!({ "summary": "old artifact" }),
+    )
+    .expect("write legacy artifact");
+
+    let artifact = state::read_legacy_ts_artifact(fixture.root_str(), ".loom/legacy/artifact.json")
+        .expect("read legacy artifact");
+
+    assert_eq!(artifact.artifact_file, ".loom/legacy/artifact.json");
+    assert_eq!(artifact.value["summary"], "old artifact");
+    let index =
+        state::request_index::load_request_index(fixture.root_str()).expect("request index loads");
+    assert!(index.requests.is_empty());
 }
 
 struct Fixture {

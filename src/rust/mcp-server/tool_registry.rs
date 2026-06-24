@@ -1,9 +1,9 @@
 use std::{borrow::Cow, sync::Arc};
 
 use delivery_core::{
-    normalize_project_root, InspectRequestInput, InspectRequestResult, LoomMcpActionResult,
-    PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadFieldGroupResult,
-    ReadRequestFieldsInput, ReadRequestFieldsResult,
+    normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestResult,
+    LoomMcpActionResult, PlanToolInput, ProjectToolInput, ReadFieldGroupInput,
+    ReadFieldGroupResult, ReadRequestFieldsInput, ReadRequestFieldsResult,
 };
 use rmcp::{
     handler::server::common::schema_for_type,
@@ -25,6 +25,7 @@ pub struct ToolRegistration {
 pub enum ToolInputKind {
     Project,
     Plan,
+    FileSubmit,
     InspectRequest,
     ReadFieldGroup,
     ReadRequestFields,
@@ -97,26 +98,82 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
+        name: "loom.brainstormAcceptFile",
+        description: "Submit a Brainstorm candidate file.",
+        target_batch: 7,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.technicalBaselineAcceptFile",
+        description: "Submit a technical baseline candidate file.",
+        target_batch: 8,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.repositoryContextAcceptFile",
+        description: "Submit a repository context candidate file.",
+        target_batch: 8,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.architectureSectionSubmitFile",
+        description: "Submit an architecture artifact section file.",
+        target_batch: 8,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.taskPlanAcceptFile",
+        description: "Submit a task plan candidate file.",
+        target_batch: 8,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
         name: "loom.recordTaskResultFile",
         description: "Submit a task execution result file.",
         target_batch: 8,
-        input_kind: ToolInputKind::Project,
+        input_kind: ToolInputKind::FileSubmit,
         output_kind: ToolOutputKind::ActionResult,
-        implemented: false,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.reviewAcceptFile",
+        description: "Submit a review result file.",
+        target_batch: 9,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.reviewResolveFile",
+        description: "Submit a manual review resolution file.",
+        target_batch: 9,
+        input_kind: ToolInputKind::FileSubmit,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.repairSubmitFile",
         description: "Submit a repair artifact file.",
         target_batch: 5,
-        input_kind: ToolInputKind::Project,
+        input_kind: ToolInputKind::FileSubmit,
         output_kind: ToolOutputKind::ActionResult,
-        implemented: false,
+        implemented: true,
     },
     ToolRegistration {
         name: "loom.knowledgeSemanticSubmitFile",
         description: "Submit a generated knowledge semantic pack result file.",
         target_batch: 6,
-        input_kind: ToolInputKind::Project,
+        input_kind: ToolInputKind::FileSubmit,
         output_kind: ToolOutputKind::ActionResult,
         implemented: false,
     },
@@ -152,8 +209,8 @@ impl ToolRegistry {
         let tool = self
             .get(name)
             .ok_or_else(|| rmcp::ErrorData::invalid_params("tool not found", None))?;
-        let project_root = match project_input_from_arguments(arguments) {
-            Ok(input) => match normalize_project_root(&input.project_root) {
+        let project_root = match project_root_from_arguments(arguments, tool.input_kind) {
+            Ok(project_root) => match normalize_project_root(&project_root) {
                 Ok(project_root) => project_root.display,
                 Err(message) => {
                     let result = LoomMcpActionResult::invalid_project_root(message);
@@ -190,6 +247,7 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
     match kind {
         ToolInputKind::Project => schema_for_type::<ProjectToolInput>(),
         ToolInputKind::Plan => schema_for_type::<PlanToolInput>(),
+        ToolInputKind::FileSubmit => schema_for_type::<FileSubmitInput>(),
         ToolInputKind::InspectRequest => schema_for_type::<InspectRequestInput>(),
         ToolInputKind::ReadFieldGroup => schema_for_type::<ReadFieldGroupInput>(),
         ToolInputKind::ReadRequestFields => schema_for_type::<ReadRequestFieldsInput>(),
@@ -216,12 +274,18 @@ where
     }
 }
 
-fn project_input_from_arguments(arguments: Option<JsonObject>) -> Result<ProjectToolInput, String> {
+fn project_root_from_arguments(
+    arguments: Option<JsonObject>,
+    _kind: ToolInputKind,
+) -> Result<String, String> {
     let Some(arguments) = arguments else {
         return Err("projectRoot is required.".to_string());
     };
-    let value = Value::Object(arguments);
-    serde_json::from_value(value).map_err(|error| format!("invalid tool input: {error}"))
+    arguments
+        .get("projectRoot")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "projectRoot is required.".to_string())
 }
 
 fn to_value(result: LoomMcpActionResult) -> Result<Value, rmcp::ErrorData> {
@@ -241,6 +305,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "loom.architectureSectionSubmitFile",
+                "loom.brainstormAcceptFile",
                 "loom.continue",
                 "loom.initProject",
                 "loom.inspectRequest",
@@ -250,7 +316,12 @@ mod tests {
                 "loom.readRequestFields",
                 "loom.recordTaskResultFile",
                 "loom.repairSubmitFile",
+                "loom.repositoryContextAcceptFile",
+                "loom.reviewAcceptFile",
+                "loom.reviewResolveFile",
                 "loom.status",
+                "loom.taskPlanAcceptFile",
+                "loom.technicalBaselineAcceptFile",
             ]
         );
     }

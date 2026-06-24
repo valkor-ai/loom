@@ -34,3 +34,7 @@ path = "../../../tests/rust/core/transition_continue.rs"
 [[test]]
 name = "advance_after_submit"
 path = "../../../tests/rust/core/advance_after_submit.rs"
+
+[[test]]
+name = "schema_projection"
+path = "../../../tests/rust/core/schema_projection.rs"

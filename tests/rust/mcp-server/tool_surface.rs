@@ -15,6 +15,21 @@ const FORBIDDEN_KEYS: &[&str] = &[
     "fallbackRule",
 ];
 
+const FORBIDDEN_SUBMIT_INPUT_KEYS: &[&str] = &[
+    "candidateFile",
+    "resultFile",
+    "requestId",
+    "repairId",
+    "section",
+    "groupId",
+    "path",
+    "submitCommand",
+    "argv",
+    "commandInvocation",
+    "run_cli",
+    "next-task",
+];
+
 #[test]
 fn batch_2_tool_surface_is_registered_without_cli_fields() {
     let tools = ToolRegistry::batch_2().list_tools();
@@ -22,6 +37,8 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
     assert_eq!(
         names,
         vec![
+            "loom.architectureSectionSubmitFile",
+            "loom.brainstormAcceptFile",
             "loom.continue",
             "loom.initProject",
             "loom.inspectRequest",
@@ -31,7 +48,12 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
             "loom.readRequestFields",
             "loom.recordTaskResultFile",
             "loom.repairSubmitFile",
+            "loom.repositoryContextAcceptFile",
+            "loom.reviewAcceptFile",
+            "loom.reviewResolveFile",
             "loom.status",
+            "loom.taskPlanAcceptFile",
+            "loom.technicalBaselineAcceptFile",
         ]
     );
 
@@ -42,6 +64,38 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
         assert!(value.get("outputSchema").is_some());
         assert!(value.to_string().contains("projectRoot"));
         assert!(!value.to_string().contains("host"));
+    }
+}
+
+#[test]
+fn submit_tools_use_file_submit_input_without_legacy_cli_paths() {
+    let tools = ToolRegistry::batch_2().list_tools();
+    for name in [
+        "loom.brainstormAcceptFile",
+        "loom.technicalBaselineAcceptFile",
+        "loom.repositoryContextAcceptFile",
+        "loom.architectureSectionSubmitFile",
+        "loom.taskPlanAcceptFile",
+        "loom.recordTaskResultFile",
+        "loom.reviewAcceptFile",
+        "loom.reviewResolveFile",
+        "loom.repairSubmitFile",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == name)
+            .unwrap_or_else(|| panic!("missing submit tool {name}"));
+        let value = serde_json::to_value(tool).expect("tool json");
+        let schema_text = value["inputSchema"].to_string();
+        assert!(schema_text.contains("projectRoot"));
+        assert!(schema_text.contains("requestRef"));
+        assert!(schema_text.contains("writtenTargetIds"));
+        for forbidden in FORBIDDEN_SUBMIT_INPUT_KEYS {
+            assert!(
+                !schema_text.contains(forbidden),
+                "{name} input schema must not expose {forbidden}: {schema_text}"
+            );
+        }
     }
 }
 

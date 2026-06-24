@@ -127,9 +127,13 @@ pub struct LoomMcpBlockedResult {
 pub struct LoomMcpRepairableErrorResult {
     pub project_root: String,
     pub target_file: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_ids: Vec<String>,
     pub issues: Vec<RepairIssue>,
     pub resubmit_tool: String,
     pub fix_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub read_groups: Vec<crate::ReadGroupRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -137,6 +141,7 @@ pub struct LoomMcpRepairableErrorResult {
 pub struct RepairIssue {
     pub code: String,
     pub message: String,
+    pub target_id: Option<String>,
     pub field_path: Option<String>,
 }
 
