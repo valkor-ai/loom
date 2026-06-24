@@ -317,6 +317,24 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
         .chunks
         .iter()
         .all(|chunk| chunk.inspect.source_name == "page-paths"));
+    let query_file = fixture.root.join(
+        ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/frontend_experience/frontend_paths/query.json",
+    );
+    let result_file = fixture.root.join(
+        ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/frontend_experience/frontend_paths/result.json",
+    );
+    assert!(query_file.exists());
+    assert!(result_file.exists());
+    let persisted_query: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&query_file).expect("read query"))
+            .expect("parse query");
+    assert_eq!(persisted_query["block"], "frontend_experience");
+    assert_eq!(persisted_query["stepId"], "frontend_paths");
+    let persisted_result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&result_file).expect("read result"))
+            .expect("parse result");
+    assert_eq!(persisted_result["requestRef"], context.request_ref);
+    assert_eq!(persisted_result["status"], "available");
 
     let wrong_step = brainstorm_context(KnowledgeBrainstormContextInput {
         project_root: fixture.root_str().to_string(),

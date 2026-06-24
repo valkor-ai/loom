@@ -127,6 +127,8 @@ where
                 {
                     return Ok(user_gate_result(
                         ctx.project_root,
+                        &delivery.delivery_id,
+                        &delivery.active_phase_id,
                         active_phase
                             .next_action
                             .as_ref()
@@ -198,9 +200,12 @@ where
         }
 
         let result = match active_phase.next_action.as_ref() {
-            Some(action) if action.kind.clone().is_user_gate() => {
-                user_gate_result(ctx.project_root.clone(), action)
-            }
+            Some(action) if action.kind.clone().is_user_gate() => user_gate_result(
+                ctx.project_root.clone(),
+                &delivery.delivery_id,
+                &delivery.active_phase_id,
+                action,
+            ),
             Some(action) if action.kind == RouteActionKind::Done => {
                 LoomMcpActionResult::Done(LoomMcpDoneResult {
                     project_root: ctx.project_root.clone(),
@@ -287,7 +292,12 @@ where
     }
 }
 
-fn user_gate_result(project_root: String, action: &RouteAction) -> LoomMcpActionResult {
+fn user_gate_result(
+    project_root: String,
+    delivery_id: &str,
+    phase_id: &str,
+    action: &RouteAction,
+) -> LoomMcpActionResult {
     LoomMcpActionResult::UserGate(crate::LoomMcpUserGateResult {
         project_root,
         prompt: action.prompt.clone().unwrap_or_else(|| {
@@ -298,6 +308,10 @@ fn user_gate_result(project_root: String, action: &RouteAction) -> LoomMcpAction
         } else {
             action.accepted_responses.clone()
         },
+        request_ref: action.request_ref.clone(),
+        delivery_id: Some(delivery_id.to_string()),
+        phase_id: Some(phase_id.to_string()),
+        gate: action.details.clone(),
     })
 }
 

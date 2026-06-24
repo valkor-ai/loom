@@ -110,7 +110,18 @@ dependencies = [
 name = "brainstorm"
 version = "0.1.0"
 dependencies = [
+ "algorithm-client",
+ "contracts",
  "delivery-core",
+ "pdf-extract",
+ "quick-xml",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "state",
+ "thiserror",
+ "zip",
 ]
 
 [[package]]
@@ -208,6 +219,9 @@ name = "contracts"
 version = "0.1.0"
 dependencies = [
  "delivery-core",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -697,6 +711,7 @@ name = "mcp-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "brainstorm",
  "delivery-core",
  "knowledge",
  "rmcp",

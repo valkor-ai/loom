@@ -58,6 +58,8 @@ fn continue_returns_active_operation_for_fresh_lease() {
         reason: "need baseline".to_string(),
         prompt: None,
         accepted_responses: vec![],
+        request_ref: None,
+        details: None,
         target_phase_id: None,
     });
     apply_delivery_index(&mut status, &delivery);
@@ -100,23 +102,29 @@ fn continue_activates_next_phase_before_dispatching() {
         phases: vec![
             DeliveryPhaseState {
                 phase_id: "phase_1".to_string(),
+                latest_refs: Default::default(),
                 next_action: Some(RouteAction {
                     kind: RouteActionKind::ContinueToNextPhase,
                     source: "review".to_string(),
                     reason: "approved".to_string(),
                     prompt: None,
                     accepted_responses: vec![],
+                    request_ref: None,
+                    details: None,
                     target_phase_id: Some("phase_2".to_string()),
                 }),
             },
             DeliveryPhaseState {
                 phase_id: "phase_2".to_string(),
+                latest_refs: Default::default(),
                 next_action: Some(RouteAction {
                     kind: RouteActionKind::TechnicalBaselineRequest,
                     source: "phase_2".to_string(),
                     reason: "baseline".to_string(),
                     prompt: None,
                     accepted_responses: vec![],
+                    request_ref: None,
+                    details: None,
                     target_phase_id: None,
                 }),
             },
@@ -150,6 +158,7 @@ fn sample_delivery(next_action: RouteAction) -> DeliveryIndex {
         status: DeliveryLifecycleStatus::Planning,
         phases: vec![DeliveryPhaseState {
             phase_id: "phase_1".to_string(),
+            latest_refs: Default::default(),
             next_action: Some(next_action),
         }],
         updated_at: "1".to_string(),

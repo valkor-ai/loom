@@ -1,11 +1,12 @@
 use std::future::{ready, Future};
 
+use brainstorm::{accept_brainstorm_file, BrainstormDomainDispatcher};
 use delivery_core::{
     is_submit_tool, normalize_project_root, status_details, submit_tool_spec, validate_plan_input,
     DomainDispatcher, FileSubmitInput, InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult,
     LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpRuntimeContext,
     OperationContext, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadRequestFieldsInput,
-    SubmitAcceptedEvent, TransitionEngine, TransitionStore, UnimplementedDomainDispatcher,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use knowledge::mcp_models::{
     KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
@@ -416,7 +417,7 @@ fn plan_tool(input: PlanToolInput) -> LoomMcpActionResult {
     if let Err(error) = init_project_state(&validated.project_root) {
         return state_failure(validated.project_root, error.to_string());
     }
-    UnimplementedDomainDispatcher.start_brainstorm(&validated)
+    BrainstormDomainDispatcher.start_brainstorm(&validated)
 }
 
 fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
@@ -426,7 +427,7 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
     };
     let engine = TransitionEngine {
         store: FileTransitionStore,
-        dispatcher: UnimplementedDomainDispatcher,
+        dispatcher: BrainstormDomainDispatcher,
     };
     match engine.continue_current(OperationContext {
         project_root: normalized.display.clone(),
@@ -493,6 +494,10 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         }
     };
 
+    if tool_name == "loom.brainstormAcceptFile" {
+        return accept_brainstorm_file(&normalized_input, &authorized);
+    }
+
     if let (Some(delivery_id), Some(phase_id), Some(next_action)) = (
         authorized.delivery_id.clone(),
         authorized.phase_id.clone(),
@@ -500,7 +505,7 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
     ) {
         let engine = TransitionEngine {
             store: FileTransitionStore,
-            dispatcher: UnimplementedDomainDispatcher,
+            dispatcher: BrainstormDomainDispatcher,
         };
         return match engine.advance_after_submit(
             OperationContext {

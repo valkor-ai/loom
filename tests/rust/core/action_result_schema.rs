@@ -120,6 +120,10 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
             project_root: "/tmp/project".to_string(),
             prompt: "Confirm scope.".to_string(),
             accepted_responses: vec!["confirm".to_string()],
+            request_ref: None,
+            delivery_id: None,
+            phase_id: None,
+            gate: None,
         }),
         LoomMcpActionResult::ActiveOperation(LoomMcpActiveOperationResult {
             project_root: "/tmp/project".to_string(),

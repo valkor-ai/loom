@@ -18,6 +18,7 @@ fn advance_after_submit_updates_phase_and_returns_next_result() {
         status: DeliveryLifecycleStatus::Planning,
         phases: vec![DeliveryPhaseState {
             phase_id: "phase_1".to_string(),
+            latest_refs: Default::default(),
             next_action: None,
         }],
         updated_at: "1".to_string(),
@@ -45,6 +46,8 @@ fn advance_after_submit_updates_phase_and_returns_next_result() {
                     reason: "baseline_accepted".to_string(),
                     prompt: None,
                     accepted_responses: vec![],
+                    request_ref: None,
+                    details: None,
                     target_phase_id: None,
                 }),
             },

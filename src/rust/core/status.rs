@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,6 +21,8 @@ pub enum DeliveryLifecycleStatus {
 #[serde(rename_all = "camelCase")]
 pub struct DeliveryPhaseState {
     pub phase_id: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub latest_refs: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_action: Option<RouteAction>,
 }

@@ -15,6 +15,7 @@ path = "main.rs"
 
 [dependencies]
 anyhow.workspace = true
+brainstorm = { path = "../brainstorm" }
 delivery-core = { path = "../core" }
 knowledge = { path = "../knowledge" }
 rmcp.workspace = true

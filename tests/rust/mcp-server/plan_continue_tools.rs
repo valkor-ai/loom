@@ -1,9 +1,10 @@
+use delivery_core::InspectRequestInput;
 use mcp_server::LoomMcpServer;
 use serde_json::{json, Value};
 use std::sync::{Mutex, MutexGuard};
 
 #[test]
-fn plan_returns_batch_seven_failure_without_creating_delivery() {
+fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     let fixture = Fixture::new("plan-tool");
     let server = LoomMcpServer::default();
 
@@ -18,11 +19,63 @@ fn plan_returns_batch_seven_failure_without_creating_delivery() {
         .expect("plan call");
     let value = structured(result);
 
-    assert_eq!(value["state"], "failed");
-    assert_eq!(value["error"]["code"], "not_implemented_for_batch");
-    assert_eq!(value["error"]["targetBatch"], 7);
-    assert_eq!(value["error"]["domain"], "brainstorm");
-    assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 0);
+    assert_eq!(value["state"], "user_gate");
+    assert_eq!(value["gate"]["currentBlock"], "phase_scope");
+    let request_ref = value["requestRef"].as_str().expect("requestRef");
+    assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 1);
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect request");
+    let group_ids = inspected
+        .read_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        group_ids,
+        vec![
+            "conversation_protocol",
+            "requirement_context",
+            "phase_scope_rules",
+            "knowledge_context_plan",
+            "concept_grounding_rules",
+            "frontend_experience_rules",
+            "final_summary_rules",
+            "candidate_write_contract",
+        ]
+    );
+}
+
+#[test]
+fn continue_replays_current_brainstorm_gate_after_plan() {
+    let fixture = Fixture::new("continue-after-plan");
+    let server = LoomMcpServer::default();
+
+    let planned = structured(
+        server
+            .invoke_tool(
+                "loom.plan",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestText": "实现证券账户开户流程"
+                }))),
+            )
+            .expect("plan call"),
+    );
+    let continued = structured(
+        server
+            .invoke_tool(
+                "loom.continue",
+                Some(args(json!({ "projectRoot": fixture.root_str() }))),
+            )
+            .expect("continue call"),
+    );
+
+    assert_eq!(continued["state"], "user_gate");
+    assert_eq!(continued["requestRef"], planned["requestRef"]);
+    assert_eq!(continued["gate"]["currentBlock"], "phase_scope");
 }
 
 #[test]

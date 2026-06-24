@@ -75,6 +75,14 @@ pub struct LoomMcpUserGateResult {
     pub project_root: String,
     pub prompt: String,
     pub accepted_responses: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gate: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

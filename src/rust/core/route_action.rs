@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +36,10 @@ pub struct RouteAction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_responses: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub target_phase_id: Option<String>,
 }
 
@@ -46,6 +51,8 @@ impl RouteAction {
             reason: reason.into(),
             prompt: None,
             accepted_responses: vec![],
+            request_ref: None,
+            details: None,
             target_phase_id: None,
         }
     }

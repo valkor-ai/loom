@@ -72,6 +72,7 @@ pub fn brainstorm_context(
         &input.block,
         &input.step_id,
     )?;
+    let request_scope = resolve_brainstorm_request_scope(&input.project_root, &input.request_ref)?;
     let cards = search_cards(
         &input.project_root,
         &format!("{} {}", input.query_subject, input.natural_language_query),
@@ -104,7 +105,7 @@ pub fn brainstorm_context(
             })
             .collect(),
     };
-    Ok(KnowledgeBrainstormContextResult {
+    let result = KnowledgeBrainstormContextResult {
         status: if matched_sources.is_empty() {
             "empty".to_string()
         } else {
@@ -118,7 +119,9 @@ pub fn brainstorm_context(
         semantic_focus: input.semantic_focus,
         matched_sources,
         read_plan,
-    })
+    };
+    persist_brainstorm_context(&input.project_root, &request_scope, &result)?;
+    Ok(result)
 }
 
 fn search_cards(
@@ -519,6 +522,69 @@ fn validate_brainstorm_request_scope(
     Ok(())
 }
 
+fn resolve_brainstorm_request_scope(
+    project_root: &str,
+    request_ref: &str,
+) -> KnowledgeResult<BrainstormRequestScope> {
+    let request_id = parse_request_id(request_ref)?;
+    let request_index = state::request_index::get_request_index_entry(project_root, &request_id)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    let delivery_id = request_index.delivery_id.ok_or_else(|| {
+        KnowledgeError::invalid(format!(
+            "requestRef {request_ref} is missing deliveryId in request index"
+        ))
+    })?;
+    let phase_id = request_index.phase_id.ok_or_else(|| {
+        KnowledgeError::invalid(format!(
+            "requestRef {request_ref} is missing phaseId in request index"
+        ))
+    })?;
+    Ok(BrainstormRequestScope {
+        request_id,
+        delivery_id,
+        phase_id,
+    })
+}
+
+fn persist_brainstorm_context(
+    project_root: &str,
+    scope: &BrainstormRequestScope,
+    result: &KnowledgeBrainstormContextResult,
+) -> KnowledgeResult<()> {
+    let project_paths = state::paths::project_paths(project_root)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    let locator = state::paths::DeliveryPhaseLocator {
+        delivery_id: scope.delivery_id.clone(),
+        phase_id: scope.phase_id.clone(),
+    };
+    let step_dir = state::paths::workspace_dir(&project_paths.root, &locator)
+        .join("brainstorm-knowledge")
+        .join(&scope.request_id)
+        .join(&result.block)
+        .join(&result.step_id);
+    state::store::ensure_dir(&step_dir)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    state::store::write_json_atomic(
+        &step_dir.join("query.json"),
+        &serde_json::json!({
+            "schemaVersion": "1.0",
+            "requestRef": result.request_ref,
+            "requestId": scope.request_id,
+            "deliveryId": scope.delivery_id,
+            "phaseId": scope.phase_id,
+            "block": result.block,
+            "stepId": result.step_id,
+            "querySubject": result.query_subject,
+            "naturalLanguageQuery": result.natural_language_query,
+            "semanticFocus": result.semantic_focus,
+        }),
+    )
+    .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    state::store::write_json_atomic(&step_dir.join("result.json"), result)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    Ok(())
+}
+
 fn parse_request_id(request_ref: &str) -> KnowledgeResult<String> {
     let rest = request_ref
         .strip_prefix("loom://projects/")
@@ -596,6 +662,13 @@ fn algorithm_client() -> KnowledgeResult<AlgorithmClient> {
         .find(|path| path.exists())
         .ok_or_else(|| KnowledgeError::invalid("Python algorithm worker not found"))?;
     Ok(AlgorithmClient::new(python, worker))
+}
+
+#[derive(Debug, Clone)]
+struct BrainstormRequestScope {
+    request_id: String,
+    delivery_id: String,
+    phase_id: String,
 }
 
 #[derive(Debug, Clone)]
