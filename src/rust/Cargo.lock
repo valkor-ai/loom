@@ -114,6 +114,7 @@ dependencies = [
  "contracts",
  "delivery-core",
  "pdf-extract",
+ "planning",
  "quick-xml",
  "schemars",
  "serde",
@@ -714,6 +715,7 @@ dependencies = [
  "brainstorm",
  "delivery-core",
  "knowledge",
+ "planning",
  "rmcp",
  "schemars",
  "serde",
@@ -849,7 +851,12 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "planning"
 version = "0.1.0"
 dependencies = [
+ "contracts",
  "delivery-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "state",
 ]
 
 [[package]]

@@ -13,6 +13,7 @@ use knowledge::mcp_models::{
     KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput, KnowledgeSemanticSubmitInput,
     KnowledgeUpdateInput,
 };
+use planning::{accept_repository_context_file, accept_technical_baseline_file};
 use rmcp::{
     model::{
         CallToolRequestMethod, CallToolRequestParams, CallToolResult, Implementation,
@@ -494,8 +495,17 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         }
     };
 
-    if tool_name == "loom.brainstormAcceptFile" {
-        return accept_brainstorm_file(&normalized_input, &authorized);
+    match tool_name {
+        "loom.brainstormAcceptFile" => {
+            return accept_brainstorm_file(&normalized_input, &authorized);
+        }
+        "loom.technicalBaselineAcceptFile" => {
+            return accept_technical_baseline_file(&normalized_input, &authorized);
+        }
+        "loom.repositoryContextAcceptFile" => {
+            return accept_repository_context_file(&normalized_input, &authorized);
+        }
+        _ => {}
     }
 
     if let (Some(delivery_id), Some(phase_id), Some(next_action)) = (
