@@ -658,6 +658,78 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
 }
 
 #[test]
+fn taskplan_request_omits_null_optional_projection_reads() {
+    let fixture = Fixture::new("taskplan-no-optional-projections");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    assert_eq!(
+        taskplan_result["state"], "auto_runnable",
+        "{taskplan_result:#}"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
+    let aac_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "architectureArtifact");
+    let aac_path = fixture.root.join(&aac_ref);
+    let mut aac: Value =
+        serde_json::from_str(&std::fs::read_to_string(&aac_path).expect("read AAC"))
+            .expect("parse AAC");
+    aac["frontendExperience"] = Value::Null;
+    aac["runtimeDelivery"] = Value::Null;
+    write_json_atomic(&aac_path, &aac).expect("write AAC without optional projections");
+
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let mut index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read index"))
+            .expect("parse index");
+    let latest_refs = index["phases"]
+        .as_array_mut()
+        .expect("phases")
+        .iter_mut()
+        .find(|phase| phase["phaseId"].as_str() == Some("phase-1"))
+        .expect("phase-1")["latestRefs"]
+        .as_object_mut()
+        .expect("latestRefs object");
+    latest_refs.remove("taskPlanRequestId");
+    latest_refs.remove("taskPlanRequestRef");
+    write_json_atomic(&index_path, &index).expect("write index without taskplan request");
+
+    let result = execution::ExecutionDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &RouteAction {
+            kind: RouteActionKind::TaskplanGeneration,
+            source: "test".to_string(),
+            reason: "regenerate_taskplan_request".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: None,
+            target_phase_id: None,
+        },
+    );
+    let result = serde_json::to_value(result).expect("serialize taskplan result");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect taskplan request");
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "taskplan_optional_projection"));
+    assert!(!inspected.read_groups.iter().any(|group| group
+        .fields
+        .iter()
+        .any(|field| field == "outputContract.runtimeDeliveryClosureTaskTemplate")));
+}
+
+#[test]
 fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
     let fixture = Fixture::new("failed-task-result-repair");
     let execution_request_ref = start_planned_task_execution(&fixture);

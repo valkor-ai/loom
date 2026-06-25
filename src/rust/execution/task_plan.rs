@@ -184,6 +184,7 @@ fn build_request_root(
     let group_schema = serde_json::to_value(schema_for!(TaskPlanGroupCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let requirement_transfer = requirement_detail_transfer(pgc, aac);
+    let runtime_closure_template = runtime_delivery_closure_task_template(aac);
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -269,7 +270,7 @@ fn build_request_root(
             },
             "frontendExperienceProjection": aac.frontend_experience,
             "runtimeDeliveryProjection": aac.runtime_delivery,
-            "runtimeDeliveryClosureTaskTemplate": runtime_delivery_closure_task_template(aac)
+            "runtimeDeliveryClosureTaskTemplate": runtime_closure_template
         },
         "blockedOutput": {
             "status": "blocked",
@@ -277,73 +278,99 @@ fn build_request_root(
             "nextNode": "architecture_artifact_repair"
         },
         "requestReadPlan": {
-            "groups": [
-                {
-                    "groupId": "taskplan_core_context",
-                    "required": true,
-                    "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
-                    "whenToRead": "Read first.",
-                    "fields": [
-                        "sourceRefs",
-                        "contextProjection.phaseId",
-                        "contextProjection.planningContractId",
-                        "contextProjection.architectureArtifactContractId",
-                        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-                        "contextProjection.requirementDetailTransfer.currentPhaseScope",
-                        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                        "contextProjection.requirementDetailTransfer.businessFlowDetails",
-                        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-                        "contextProjection.requirementDetailTransfer.architectureDetails",
-                        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-                        "contextProjection.requirementDetailTransfer.conceptRefs",
-                        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
-                        "allowedRefs"
-                    ]
-                },
-                {
-                    "groupId": "taskplan_generation_rules",
-                    "required": true,
-                    "purpose": "Read grouping, reference, verification, frontend, workflow, and runtime rules.",
-                    "whenToRead": "Read after core context and before writing group files.",
-                    "fields": [
-                        "generationRules.groupedOutputRules",
-                        "generationRules.scopeAndReferenceRules",
-                        "generationRules.writeBoundaryRules",
-                        "generationRules.verificationEvidenceRules",
-                        "generationRules.conceptGroundingRules",
-                        "generationRules.frontendExperienceRules",
-                        "generationRules.workflowClosureRules",
-                        "generationRules.runtimeDeliveryRules"
-                    ]
-                },
-                {
-                    "groupId": "taskplan_candidate_contract",
-                    "required": true,
-                    "purpose": "Read output paths, schema shapes, and enum refs before writing candidates.",
-                    "whenToRead": "Read before writing output files.",
-                    "fields": [
-                        "enumRefs",
-                        "outputContract.outlineFile",
-                        "outputContract.groupFilePattern",
-                        "outputContract.pathAuthority",
-                        "outputContract.outlineResultTemplate",
-                        "outputContract.groupResultTemplate",
-                        "outputContract.runtimeDeliveryClosureTaskTemplate"
-                    ]
-                },
-                {
-                    "groupId": "taskplan_optional_projection",
-                    "required": false,
-                    "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
-                    "whenToRead": "Read on demand.",
-                    "fields": [
-                        "outputContract.frontendExperienceProjection",
-                        "outputContract.runtimeDeliveryProjection"
-                    ]
-                }
-            ]
+            "groups": taskplan_read_groups(aac, &runtime_closure_template)
         }
     })
+}
+
+fn taskplan_read_groups(
+    aac: &ArchitectureArtifactContract,
+    runtime_closure_template: &Value,
+) -> Value {
+    let mut groups = vec![
+        json!({
+            "groupId": "taskplan_core_context",
+            "required": true,
+            "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
+            "whenToRead": "Read first.",
+            "fields": [
+                "sourceRefs",
+                "contextProjection.phaseId",
+                "contextProjection.planningContractId",
+                "contextProjection.architectureArtifactContractId",
+                "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+                "contextProjection.requirementDetailTransfer.currentPhaseScope",
+                "contextProjection.requirementDetailTransfer.acceptanceDetails",
+                "contextProjection.requirementDetailTransfer.businessFlowDetails",
+                "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+                "contextProjection.requirementDetailTransfer.architectureDetails",
+                "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+                "contextProjection.requirementDetailTransfer.conceptRefs",
+                "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
+                "allowedRefs"
+            ]
+        }),
+        json!({
+            "groupId": "taskplan_generation_rules",
+            "required": true,
+            "purpose": "Read grouping, reference, verification, frontend, workflow, and runtime rules.",
+            "whenToRead": "Read after core context and before writing group files.",
+            "fields": [
+                "generationRules.groupedOutputRules",
+                "generationRules.scopeAndReferenceRules",
+                "generationRules.writeBoundaryRules",
+                "generationRules.verificationEvidenceRules",
+                "generationRules.conceptGroundingRules",
+                "generationRules.frontendExperienceRules",
+                "generationRules.workflowClosureRules",
+                "generationRules.runtimeDeliveryRules"
+            ]
+        }),
+        json!({
+            "groupId": "taskplan_candidate_contract",
+            "required": true,
+            "purpose": "Read output paths, schema shapes, and enum refs before writing candidates.",
+            "whenToRead": "Read before writing output files.",
+            "fields": taskplan_candidate_contract_fields(runtime_closure_template)
+        }),
+    ];
+    let optional_fields = taskplan_optional_projection_fields(aac);
+    if !optional_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "taskplan_optional_projection",
+            "required": false,
+            "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
+            "whenToRead": "Read on demand.",
+            "fields": optional_fields
+        }));
+    }
+    Value::Array(groups)
+}
+
+fn taskplan_candidate_contract_fields(runtime_closure_template: &Value) -> Vec<&'static str> {
+    let mut fields = vec![
+        "enumRefs",
+        "outputContract.outlineFile",
+        "outputContract.groupFilePattern",
+        "outputContract.pathAuthority",
+        "outputContract.outlineResultTemplate",
+        "outputContract.groupResultTemplate",
+    ];
+    if !runtime_closure_template.is_null() {
+        fields.push("outputContract.runtimeDeliveryClosureTaskTemplate");
+    }
+    fields
+}
+
+fn taskplan_optional_projection_fields(aac: &ArchitectureArtifactContract) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if aac.frontend_experience.is_some() {
+        fields.push("outputContract.frontendExperienceProjection");
+    }
+    if aac.runtime_delivery.is_some() {
+        fields.push("outputContract.runtimeDeliveryProjection");
+    }
+    fields
 }
 
 pub fn accept_task_plan_file<D>(

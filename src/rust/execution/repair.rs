@@ -621,12 +621,14 @@ fn materialize_taskplan_repair_request(
         .get("outputContract.runtimeDeliveryProjection")
         .map(|field| field.value.clone())
         .unwrap_or(Value::Null);
+    let optional_projection_fields =
+        taskplan_repair_optional_projection_fields(&frontend_projection, &runtime_projection);
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let group_schema = serde_json::to_value(schema_for!(TaskPlanGroupCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
 
-    let request_root = json!({
+    let mut request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_repair",
         "requestId": request_id,
@@ -744,20 +746,23 @@ fn materialize_taskplan_repair_request(
                         "outputContract.outlineResultTemplate",
                         "outputContract.groupResultTemplate"
                     ]
-                },
-                {
-                    "groupId": "taskplan_optional_projection",
-                    "required": false,
-                    "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
-                    "whenToRead": "Read on demand.",
-                    "fields": [
-                        "outputContract.frontendExperienceProjection",
-                        "outputContract.runtimeDeliveryProjection"
-                    ]
                 }
             ]
         }
     });
+    if !optional_projection_fields.is_empty() {
+        request_root
+            .pointer_mut("/requestReadPlan/groups")
+            .and_then(Value::as_array_mut)
+            .expect("taskplan repair requestReadPlan groups")
+            .push(json!({
+                "groupId": "taskplan_optional_projection",
+                "required": false,
+                "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
+                "whenToRead": "Read on demand.",
+                "fields": optional_projection_fields
+            }));
+    }
     let stored = state::write_native_request(
         project_root,
         state::NativeRequestInput {
@@ -1111,6 +1116,20 @@ fn field_value(
                 "replacement source field {field} is missing"
             ))
         })
+}
+
+fn taskplan_repair_optional_projection_fields(
+    frontend_projection: &Value,
+    runtime_projection: &Value,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if !frontend_projection.is_null() {
+        fields.push("outputContract.frontendExperienceProjection");
+    }
+    if !runtime_projection.is_null() {
+        fields.push("outputContract.runtimeDeliveryProjection");
+    }
+    fields
 }
 
 fn build_architecture_repair_section_outputs(
