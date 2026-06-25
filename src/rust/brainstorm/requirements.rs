@@ -514,20 +514,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn algorithm_client() -> StateResult<AlgorithmClient> {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let candidates = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../python/algorithms/worker.py"),
-        PathBuf::from("src/python/algorithms/worker.py"),
-        PathBuf::from("../python/algorithms/worker.py"),
-        PathBuf::from("../../src/python/algorithms/worker.py"),
-    ];
-    let worker = candidates
-        .into_iter()
-        .find(|path| path.exists())
-        .ok_or_else(|| {
-            StateError::InvalidArgument("Python algorithm worker not found".to_string())
-        })?;
-    Ok(AlgorithmClient::new(python, worker))
+    AlgorithmClient::from_environment()
+        .map_err(|error| StateError::InvalidArgument(error.to_string()))
 }
 
 #[derive(Debug, Clone)]

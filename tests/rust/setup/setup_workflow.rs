@@ -1,6 +1,6 @@
 use setup::{
-    archive_package_layout, install, package_file_names, purge, AgentKind, ReleaseManifest,
-    SetupEnvironment, SetupError, TargetPlatform, VERSION,
+    archive_package_layout, install, package_file_names, purge, write_package_layout, AgentKind,
+    ReleaseManifest, SetupEnvironment, SetupError, TargetPlatform, VERSION,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -212,6 +212,40 @@ fn archive_package_layout_rejects_legacy_cli_launcher_entries() {
         }
         other => panic!("expected InvalidArgument, got {other:?}"),
     }
+}
+
+#[test]
+fn package_layout_copies_current_runtime_and_plugin_sources() {
+    let fixture = Fixture::new("package_layout_sources");
+    let binary_dir = fixture.root.join("built-bin");
+    write_file(&binary_dir.join("loom-mcp-server"), "#!/bin/sh\n");
+    write_file(&binary_dir.join("loom-setup"), "#!/bin/sh\n");
+    std::env::set_var("LOOM_SETUP_BINARY_DIR", &binary_dir);
+
+    let package = write_package_layout(
+        &fixture.root.join("package-out"),
+        TargetPlatform::DarwinArm64,
+    );
+    std::env::remove_var("LOOM_SETUP_BINARY_DIR");
+    let package = package.unwrap();
+    assert!(package.join("bin/loom-mcp-server").is_file());
+    assert!(package.join("bin/loom-setup").is_file());
+    assert!(package.join("python/algorithms/worker.py").is_file());
+    assert!(package.join("python/runtime/README").is_file());
+    assert!(package.join("plugins/codex/skills/loom/SKILL.md").is_file());
+    assert!(package
+        .join("plugins/claude-code/commands/loom.md")
+        .is_file());
+    assert!(package
+        .join("plugins/opencode/.opencode/plugins/loom.js")
+        .is_file());
+    assert!(package
+        .join("plugins/shared/loom/references/uix/core.md")
+        .is_file());
+    assert!(package
+        .join("plugins/shared/loom-deploy/references/compose.md")
+        .is_file());
+    assert!(package.join("checksums.txt").is_file());
 }
 
 #[test]

@@ -649,19 +649,7 @@ fn round_score(value: f64) -> f64 {
 }
 
 fn algorithm_client() -> KnowledgeResult<AlgorithmClient> {
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-    let candidates = [
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../python/algorithms/worker.py"),
-        std::path::PathBuf::from("src/python/algorithms/worker.py"),
-        std::path::PathBuf::from("../python/algorithms/worker.py"),
-        std::path::PathBuf::from("../../src/python/algorithms/worker.py"),
-    ];
-    let worker = candidates
-        .into_iter()
-        .find(|path| path.exists())
-        .ok_or_else(|| KnowledgeError::invalid("Python algorithm worker not found"))?;
-    Ok(AlgorithmClient::new(python, worker))
+    AlgorithmClient::from_environment().map_err(|error| KnowledgeError::invalid(error.to_string()))
 }
 
 #[derive(Debug, Clone)]

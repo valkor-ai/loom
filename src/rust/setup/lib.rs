@@ -96,14 +96,6 @@ impl AgentKind {
             Self::Opencode => "opencode",
         }
     }
-
-    fn template_key(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::ClaudeCode => "claude-code",
-            Self::Opencode => "opencode",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,6 +331,33 @@ fn env_path(name: &str) -> Option<PathBuf> {
 fn package_root_from_current_exe() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     exe.parent()?.parent().map(Path::to_path_buf)
+}
+
+fn repo_root() -> Result<PathBuf, SetupError> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| SetupError::InvalidArgument("failed to resolve repository root".into()))
+}
+
+fn current_binary_dir() -> Result<PathBuf, SetupError> {
+    if let Some(path) = env_path("LOOM_SETUP_BINARY_DIR") {
+        return Ok(path);
+    }
+    let exe = std::env::current_exe().map_err(|source| SetupError::Io {
+        path: PathBuf::from("<current_exe>"),
+        source,
+    })?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| SetupError::InvalidArgument("current executable has no parent".into()))?;
+    if dir.file_name().and_then(|name| name.to_str()) == Some("deps") {
+        return dir.parent().map(Path::to_path_buf).ok_or_else(|| {
+            SetupError::InvalidArgument("failed to resolve cargo target directory".into())
+        });
+    }
+    Ok(dir.to_path_buf())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -624,35 +643,64 @@ pub fn write_package_layout(
     platform: TargetPlatform,
 ) -> Result<PathBuf, SetupError> {
     let package_dir = output_dir.join(format!("loom-{}-{}", VERSION, platform.as_str()));
-    fs::create_dir_all(package_dir.join("bin")).map_err(|source| SetupError::Io {
-        path: package_dir.join("bin"),
-        source,
-    })?;
-    fs::create_dir_all(package_dir.join("python/runtime")).map_err(|source| SetupError::Io {
-        path: package_dir.join("python/runtime"),
-        source,
-    })?;
-    fs::create_dir_all(package_dir.join("python/algorithms")).map_err(|source| SetupError::Io {
-        path: package_dir.join("python/algorithms"),
-        source,
-    })?;
-    for agent in AgentKind::all() {
-        fs::create_dir_all(package_dir.join("plugins").join(agent.template_key())).map_err(
-            |source| SetupError::Io {
-                path: package_dir.join("plugins").join(agent.template_key()),
-                source,
-            },
-        )?;
+    if package_dir.exists() {
+        remove_path(&package_dir)?;
     }
-    for shared in [SHARED_LOOM_REFERENCES, SHARED_DEPLOY_REFERENCES] {
-        fs::create_dir_all(package_dir.join(shared)).map_err(|source| SetupError::Io {
-            path: package_dir.join(shared),
-            source,
-        })?;
-    }
+    let repo = repo_root()?;
+    let binary_dir = current_binary_dir()?;
     let manifest = ReleaseManifest::for_platform(platform);
+    let mcp_server_source = binary_dir.join(executable_path("loom-mcp-server"));
+    let setup_source = binary_dir.join(executable_path("loom-setup"));
+
+    copy_required(
+        &mcp_server_source,
+        &package_dir.join(&manifest.binaries.mcp_server),
+    )?;
+    copy_required(&setup_source, &package_dir.join(&manifest.binaries.setup))?;
+    set_executable(&package_dir.join(&manifest.binaries.mcp_server))?;
+    set_executable(&package_dir.join(&manifest.binaries.setup))?;
+
+    copy_required(
+        &repo.join("src/python/algorithms"),
+        &package_dir.join(&manifest.python.algorithms),
+    )?;
+    remove_pycache_dirs(&package_dir.join(&manifest.python.algorithms))?;
+    fs::create_dir_all(package_dir.join(&manifest.python.runtime)).map_err(|source| {
+        SetupError::Io {
+            path: package_dir.join(&manifest.python.runtime),
+            source,
+        }
+    })?;
+    write_text(
+        &package_dir.join(&manifest.python.runtime).join("README"),
+        "This local development package uses the host python3 runtime when a bundled Python runtime is not present.\n",
+    )?;
+
+    copy_required(
+        &repo.join(&manifest.plugins.codex),
+        &package_dir.join(&manifest.plugins.codex),
+    )?;
+    copy_required(
+        &repo.join(&manifest.plugins.claude_code),
+        &package_dir.join(&manifest.plugins.claude_code),
+    )?;
+    copy_required(
+        &repo.join(&manifest.plugins.opencode),
+        &package_dir.join(&manifest.plugins.opencode),
+    )?;
+    copy_required(
+        &repo.join(SHARED_LOOM_REFERENCES),
+        &package_dir.join(SHARED_LOOM_REFERENCES),
+    )?;
+    copy_required(
+        &repo.join(SHARED_DEPLOY_REFERENCES),
+        &package_dir.join(SHARED_DEPLOY_REFERENCES),
+    )?;
+
     write_json(&package_dir.join("manifest.json"), &manifest)?;
     write_checksums(&package_dir)?;
+    validate_package(&package_dir, &manifest)?;
+    verify_checksums(&package_dir)?;
     Ok(package_dir)
 }
 
@@ -1613,6 +1661,13 @@ fn copy_path(source: &Path, target: &Path) -> Result<(), SetupError> {
     }
 }
 
+fn copy_required(source: &Path, target: &Path) -> Result<(), SetupError> {
+    if !source.exists() {
+        return Err(SetupError::MissingPackageEntry(source.to_path_buf()));
+    }
+    copy_path(source, target)
+}
+
 fn copy_dir(source: &Path, target: &Path) -> Result<(), SetupError> {
     fs::create_dir_all(target).map_err(|source_error| SetupError::Io {
         path: target.to_path_buf(),
@@ -1649,6 +1704,30 @@ fn remove_path(path: &Path) -> Result<(), SetupError> {
             source,
         })
     }
+}
+
+fn remove_pycache_dirs(root: &Path) -> Result<(), SetupError> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root).map_err(|source| SetupError::Io {
+        path: root.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| SetupError::Io {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().and_then(|name| name.to_str()) == Some("__pycache__") {
+                remove_path(&path)?;
+            } else {
+                remove_pycache_dirs(&path)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn is_symlink(path: &Path) -> bool {
