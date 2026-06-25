@@ -23,8 +23,8 @@ pub fn deploy_inspect(input: DeployToolInput) -> LoomMcpActionResult {
     }
     let paths = deployment_paths(project_root);
     let spec = read_spec(project_root).ok();
-    let repair = if path_exists(&paths.repair_file) {
-        read_json_value(&paths.repair_file).ok()
+    let repair = if path_exists(&paths.repair_action_file) {
+        read_json_value(&paths.repair_action_file).ok()
     } else {
         None
     };

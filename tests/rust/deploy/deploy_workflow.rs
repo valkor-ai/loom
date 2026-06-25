@@ -5,7 +5,7 @@ use std::{
 
 use contracts::{
     DeploymentErrorWindow, DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentRepairRequest, DeploymentRepairRoute, DeploymentShape, DeploymentSpec,
+    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -98,7 +98,7 @@ fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
         healthcheck: None,
         provider_policy: None,
     });
-    fixture.write_repair_request(
+    fixture.write_repair_action(
         DeploymentRepairRoute::DeployRepair,
         DeploymentFailureOwner::DeploymentAssets,
     );
@@ -135,7 +135,7 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
         provider_policy: None,
     });
     fixture.write_failure_report();
-    fixture.write_repair_request(
+    fixture.write_repair_action(
         DeploymentRepairRoute::ExecutionRepair,
         DeploymentFailureOwner::ApplicationCode,
     );
@@ -345,13 +345,13 @@ impl Fixture {
         read_json(&self.root.join(".loom/deployment/specs/local.json")).expect("spec")
     }
 
-    fn write_repair_request(&self, route: DeploymentRepairRoute, owner: DeploymentFailureOwner) {
+    fn write_repair_action(&self, route: DeploymentRepairRoute, owner: DeploymentFailureOwner) {
         let spec = self.read_spec();
         let paths = self.root.join(".loom/deployment/state");
         ensure_dir(&paths).expect("repair state dir");
         write_json_atomic(
-            &paths.join("repair-request.json"),
-            &DeploymentRepairRequest {
+            &paths.join("repair-action.json"),
+            &DeploymentRepairAction {
                 schema_version: 1,
                 repair_id: "deploy-repair-1".to_string(),
                 created_at: now_string(),
@@ -393,7 +393,7 @@ impl Fixture {
                 status: "pending".to_string(),
             },
         )
-        .expect("write repair request");
+        .expect("write repair action");
     }
 
     fn write_failure_report(&self) {

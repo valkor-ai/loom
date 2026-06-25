@@ -14,7 +14,7 @@ pub struct DeploymentPaths {
     pub active_operation_file: PathBuf,
     pub stale_operation_file: PathBuf,
     pub log_file: PathBuf,
-    pub repair_file: PathBuf,
+    pub repair_action_file: PathBuf,
     pub failure_file: PathBuf,
     pub code_evidence_file: PathBuf,
     pub generated_dir: PathBuf,
@@ -36,7 +36,7 @@ pub fn deployment_paths(project_root: &Path) -> DeploymentPaths {
         active_operation_file: state_dir.join("active-operation.json"),
         stale_operation_file: state_dir.join("last-stale-operation.json"),
         log_file: logs_dir.join("local.log"),
-        repair_file: state_dir.join("repair-request.json"),
+        repair_action_file: state_dir.join("repair-action.json"),
         failure_file: state_dir.join("latest-failure.json"),
         code_evidence_file: evidence_dir.join("latest-code-evidence.json"),
         compose_file: generated_dir.join("compose.yaml"),
@@ -70,7 +70,7 @@ pub fn deploy_execution_repair_result_file(project_root: &Path, request_id: &str
         .join("deploy-execution-repair-result.json")
 }
 
-pub fn deploy_execution_repair_request_file(project_root: &Path, request_id: &str) -> PathBuf {
+pub fn deploy_execution_repair_action_file(project_root: &Path, request_id: &str) -> PathBuf {
     deployment_paths(project_root)
         .repairs_dir
         .join(request_id)

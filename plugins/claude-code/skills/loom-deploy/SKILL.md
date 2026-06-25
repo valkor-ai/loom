@@ -15,7 +15,7 @@ Do not infer stack topology, generated file paths, preview URLs, ports, or repai
 
 The current MCP deploy result remains the authority. Load no reference by default; load references only when the current deploy action matches the trigger.
 
-- `references/repair.md`: executing a returned deploy repair request.
+- `references/repair.md`: executing a returned deploy repair action.
 - `references/compose.md`: editing Compose files, service wiring, build contexts, ports, or environment blocks.
 - `references/dockerfile.md`: editing Dockerfiles or Docker ignore files.
 - `references/environment.md`: missing env, secrets, framework config, or runtime configuration.

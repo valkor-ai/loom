@@ -144,7 +144,6 @@ pub struct ExecuteVerificationPolicy {
 #[serde(rename_all = "camelCase")]
 pub struct RepairContext {
     pub repair_origin: RepairOrigin,
-    pub repair_request_ref: String,
     pub source_task_id: String,
     pub issues: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

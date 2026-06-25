@@ -1,6 +1,6 @@
 # Deployment Repair Reference
 
-Use this reference when executing a loom deployment repair request.
+Use this reference when the current Loom MCP deploy action asks for deployment repair.
 
 ## Failure Kinds
 
@@ -15,7 +15,7 @@ Use this reference when executing a loom deployment repair request.
 - `logs`: verify the Compose project/service still exists before editing files.
 - `docker_unavailable`: do not edit files. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works from the same terminal/session, and enable full local access or Docker command permission if Docker works outside the agent chat but not inside it.
 - `registry_network`: do not edit files; Docker could not reach or authenticate with the image registry. Ask the user to retry, pre-pull the blocked image, configure Docker registry mirrors/proxy, or fix registry credentials/network access.
-- `build_command_failed`, `start_command_failed`, `http_probe_failed`, `preview_not_verified`: if the repair request reports `repairRoute=execution_repair`, do not edit deploy assets. Run the provided `repair request --source deploy` command, execute the synthetic repair request, submit it with `repair submit --source deploy`, then retry `deploy run`.
+- `build_command_failed`, `start_command_failed`, `http_probe_failed`, `preview_not_verified`: if the current MCP action reports `repairRoute=execution_repair`, do not edit deploy assets. Execute the returned repair action, write its result, submit with the returned submit tool, then retry through the returned deploy action.
 - `unknown`: classify from stdout/stderr before editing.
 
 ## Platform-Specific Native Dependency Failures
@@ -54,14 +54,14 @@ Use this reference when executing a loom deployment repair request.
 - Edit only files listed in `editableFiles`.
 - If `editableFiles` is empty because the failure is routed to deploy-sourced execution repair, the allowed edit boundary comes from the synthetic execution request, not from deploy repair.
 - Treat `protectedFiles` as read-only unless the user explicitly approves editing them.
-- Do not edit app source, package scripts, or environment files unless the user approves and the repair request cannot be solved in deployment files.
+- Do not edit app source, package scripts, or environment files unless the user approves and the current repair action cannot be solved in deployment files.
 - Do not run migration/bootstrap commands automatically. If diagnostics point to missing tables or pending migrations, explain the command from `bootstrap.tasks` and ask for approval.
 - Do not read, print, or bake real local `.env` values into generated deployment files. Use variable names and safe local placeholders only.
 - Preserve generated file locations under `.loom/deployment/specs/generated/`.
 
 ## Retry Rules
 
-- For plain deploy requests, prefer `loom deploy run --project-root /abs/project`; it prepares, builds, starts, validates, reports status, and returns a repair request when the full flow cannot complete.
+- For plain deploy requests, use the MCP deploy run action; it prepares, builds, starts, validates, reports status, and returns the next repair action when the full flow cannot complete.
 - After each repair edit, run `loom deploy up --project-root /abs/project`.
 - If it succeeds, run `loom deploy status --project-root /abs/project`.
 - If it fails, run `loom deploy repair --project-root /abs/project` again and use the new request.

@@ -11,9 +11,9 @@ Provider order:
 1. Reuse root-level Compose files without overwriting them.
 2. Reuse root-level Dockerfiles and generate only a local Compose wrapper.
 3. Generate deterministic Dockerfile/Compose files for known or unknown stacks.
-4. Write a bounded repair request when build, boot, log, or health validation fails.
+4. Return a bounded MCP repair action when build, boot, log, or health validation fails.
 
-`loom deploy run` is the preferred high-level command for normal agent use. It composes prepare, build/start, validate, status, and repair-request reporting without hiding provider choice or switching builders.
+`loom deploy run` is the preferred high-level command for normal agent use. It composes prepare, build/start, validate, status, and repair action reporting without hiding provider choice or switching builders.
 
 `providerCandidates` in `.loom/deployment/specs/local.json` should describe the Compose/Dockerfile providers that were selected, available, or skipped, plus the commands that validate/build them.
 
@@ -43,4 +43,4 @@ Provider candidates should explain policy skips so repair/inspect output can tel
 - Do not automatically switch provider after a failure.
 - Do not introduce external builders unless the product explicitly adds them as a future provider family.
 - Do not overwrite existing `Dockerfile` or Compose files without explicit user approval.
-- A failure should produce a clear repair request for a coding agent, not a chain of hidden retry strategies.
+- A failure should produce a clear MCP repair action for a coding agent, not a chain of hidden retry strategies.

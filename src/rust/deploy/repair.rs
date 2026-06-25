@@ -2,8 +2,8 @@ use std::path::Path;
 
 use contracts::{
     DeployExecutionRepairTaskResult, DeploymentErrorWindow, DeploymentFailureKind,
-    DeploymentFailureOwner, DeploymentFailureReport, DeploymentRepairRequest,
-    DeploymentRepairRoute, DeploymentSpec,
+    DeploymentFailureOwner, DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute,
+    DeploymentSpec,
 };
 use delivery_core::{
     ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
@@ -25,7 +25,7 @@ use state::{
 
 use crate::{
     paths::{
-        deploy_execution_repair_request_file, deploy_execution_repair_result_file, deployment_paths,
+        deploy_execution_repair_action_file, deploy_execution_repair_result_file, deployment_paths,
     },
     prepare::read_spec,
     run::deploy_retry_after_repair,
@@ -34,11 +34,11 @@ use crate::{
 
 pub fn deploy_repair(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root = Path::new(&input.project_root);
-    match latest_repair_request(project_root) {
+    match latest_repair_action(project_root) {
         Ok(Some(request)) => repair_next(project_root, &request),
         Ok(None) => LoomMcpActionResult::Done(LoomMcpDoneResult {
             project_root: input.project_root,
-            summary: "No deployment repair request is pending.".to_string(),
+            summary: "No deployment repair action is pending.".to_string(),
             details: None,
             warnings: vec![],
         }),
@@ -50,7 +50,7 @@ pub fn deploy_repair(input: DeployToolInput) -> LoomMcpActionResult {
     }
 }
 
-pub fn write_repair_request(
+pub fn write_repair_action(
     project_root: &Path,
     spec: &DeploymentSpec,
     failure_kind: DeploymentFailureKind,
@@ -94,7 +94,7 @@ pub fn write_repair_request(
     } else {
         None
     };
-    let request = DeploymentRepairRequest {
+    let request = DeploymentRepairAction {
         schema_version: 1,
         repair_id: format!("deploy_repair_{}", now_millis()),
         created_at: now_string(),
@@ -117,11 +117,11 @@ pub fn write_repair_request(
         attempts: 0,
         status: "pending".to_string(),
     };
-    write_json_atomic(&paths.repair_file, &request)?;
+    write_json_atomic(&paths.repair_action_file, &request)?;
     Ok(repair_next(project_root, &request))
 }
 
-pub fn repair_next(project_root: &Path, request: &DeploymentRepairRequest) -> LoomMcpActionResult {
+pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> LoomMcpActionResult {
     match request.repair_route {
         DeploymentRepairRoute::DeployRepair => {
             let spec = read_spec(project_root).ok();
@@ -151,10 +151,10 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairRequest) -> Lo
                     diagnostics_ref: Some(
                         to_project_relative(
                             project_root,
-                            &deployment_paths(project_root).repair_file,
+                            &deployment_paths(project_root).repair_action_file,
                         )
                         .unwrap_or_else(|_| {
-                            ".loom/deployment/state/repair-request.json".to_string()
+                            ".loom/deployment/state/repair-action.json".to_string()
                         }),
                     ),
                     error_window: request.error_window.as_ref().map(|window| {
@@ -242,7 +242,7 @@ fn accept_deploy_execution_repair_file_inner(
         .and_then(|field| field.value.as_str())
         .ok_or_else(|| {
             StateError::StateCorrupted(
-                "repair request missing outputContract.repairId.".to_string(),
+                "deploy repair action missing outputContract.repairId.".to_string(),
             )
         })?;
     let deployment_failure_ref = request_fields
@@ -250,7 +250,9 @@ fn accept_deploy_execution_repair_file_inner(
         .get("outputContract.deploymentFailureRef")
         .and_then(|field| field.value.as_str())
         .ok_or_else(|| {
-            StateError::StateCorrupted("repair request missing deploymentFailureRef.".to_string())
+            StateError::StateCorrupted(
+                "deploy repair action missing deploymentFailureRef.".to_string(),
+            )
         })?;
     if result.repair_id != repair_id {
         return Err(StateError::InvalidArgument(
@@ -303,7 +305,7 @@ fn accept_deploy_execution_repair_file_inner(
 
 fn materialize_deploy_execution_repair(
     project_root: &Path,
-    request: &DeploymentRepairRequest,
+    request: &DeploymentRepairAction,
 ) -> StateResult<LoomMcpActionResult> {
     let failure_ref = request.failure_ref.clone().ok_or_else(|| {
         StateError::StateCorrupted("execution repair is missing failureRef.".to_string())
@@ -317,7 +319,7 @@ fn materialize_deploy_execution_repair(
     )?;
     let request_file = to_project_relative(
         project_root,
-        &deploy_execution_repair_request_file(project_root, &request_id),
+        &deploy_execution_repair_action_file(project_root, &request_id),
     )?;
     let protected_paths = failure.must_not_edit.clone();
     let schema_shape = serde_json::to_value(schema_for!(DeployExecutionRepairTaskResult))
@@ -330,7 +332,6 @@ fn materialize_deploy_execution_repair(
         "executionKind": "deploy_execution_repair",
         "repairContext": {
             "repairOrigin": "deploy_failure",
-            "repairRequestRef": to_project_relative(project_root, &deployment_paths(project_root).repair_file)?,
             "deploymentFailureRef": failure_ref,
             "failureKind": failure.failure_kind,
             "failureOwner": failure.failure_owner,
@@ -411,7 +412,7 @@ fn materialize_deploy_execution_repair(
         &project_root.to_string_lossy(),
         state::NativeRequestInput {
             request_id: request_id.clone(),
-            request_kind: "deploy_execution_repair_request".to_string(),
+            request_kind: "deploy_execution_repair".to_string(),
             request_file: Some(request_file),
             delivery_id: None,
             phase_id: None,
@@ -448,10 +449,6 @@ fn materialize_deploy_execution_repair(
                 },
                 repair_context: Some(RepairContext {
                     repair_origin: RepairOrigin::DeployFailure,
-                    repair_request_ref: to_project_relative(
-                        project_root,
-                        &deployment_paths(project_root).repair_file,
-                    )?,
                     source_task_id: "deploy-execution-repair".to_string(),
                     issues: vec![enum_string(&failure.failure_kind)],
                     review_result_ref: None,
@@ -470,8 +467,8 @@ fn materialize_deploy_execution_repair(
     ))
 }
 
-fn latest_repair_request(project_root: &Path) -> StateResult<Option<DeploymentRepairRequest>> {
-    let path = deployment_paths(project_root).repair_file;
+fn latest_repair_action(project_root: &Path) -> StateResult<Option<DeploymentRepairAction>> {
+    let path = deployment_paths(project_root).repair_action_file;
     if !path_exists(&path) {
         return Ok(None);
     }

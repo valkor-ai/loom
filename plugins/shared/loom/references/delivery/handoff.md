@@ -16,6 +16,6 @@ Use this reference before final responses, blocked reports, handoff notes, or co
 
 ## Prepare the next agent
 
-- Name the source of truth for the next step: `continue`, a specific repair request, a result artifact, or a blocker.
+- Name the source of truth for the next step: the current MCP action, a result artifact, or a blocker.
 - Mention residual risks as concrete checks, not vague warnings.
 - If work is incomplete, record the partial state in the Loom result path before asking the user to continue later.

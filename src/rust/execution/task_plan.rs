@@ -426,7 +426,7 @@ impl TaskPlanSubmitMode {
     fn latest_ref_key(self) -> &'static str {
         match self {
             Self::Generation => "taskPlanRequestRef",
-            Self::Repair => "repairRequestRef",
+            Self::Repair => "activeRepairActionRef",
         }
     }
 

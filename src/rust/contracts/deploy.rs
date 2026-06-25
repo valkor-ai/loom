@@ -419,7 +419,7 @@ pub struct DeploymentErrorWindow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct DeploymentRepairRequest {
+pub struct DeploymentRepairAction {
     pub schema_version: u32,
     pub repair_id: String,
     pub created_at: String,

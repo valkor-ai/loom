@@ -15,7 +15,7 @@ use crate::{
     active_operation::{acquire_operation, active_operation_result},
     paths::deployment_paths,
     prepare::{deploy_prepare_inner, read_spec},
-    repair::write_repair_request,
+    repair::write_repair_action,
     validate::{deploy_validate_inner, DeploymentValidationResult},
     DeployToolInput,
 };
@@ -73,7 +73,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     let compose_file = match from_project_relative(project_root, &spec.files.compose_path) {
         Ok(file) => file,
         Err(error) => {
-            return write_repair_request(
+            return write_repair_action(
                 project_root,
                 &spec,
                 DeploymentFailureKind::ComposeConfig,
@@ -93,7 +93,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     match compose_config {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
-            return write_repair_request(
+            return write_repair_action(
                 project_root,
                 &spec,
                 DeploymentFailureKind::ComposeConfig,
@@ -109,7 +109,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
         Err(error) => {
-            return write_repair_request(
+            return write_repair_action(
                 project_root,
                 &spec,
                 DeploymentFailureKind::DockerUnavailable,
@@ -136,7 +136,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             let kind = classify_compose_up_failure(&stdout, &stderr);
-            return write_repair_request(
+            return write_repair_action(
                 project_root,
                 &spec,
                 kind,
@@ -152,7 +152,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
         Err(error) => {
-            return write_repair_request(
+            return write_repair_action(
                 project_root,
                 &spec,
                 DeploymentFailureKind::DockerUnavailable,
@@ -171,7 +171,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     let validation = match deploy_validate_inner(project_root) {
         Ok(validation) => validation,
         Err(error) => {
-            return write_repair_request(
+            return write_repair_action(
                 project_root,
                 &spec,
                 DeploymentFailureKind::DeployAssetInvalid,
@@ -185,7 +185,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     };
     if !validation.valid {
         let kind = validation_failure_kind(&validation);
-        return write_repair_request(
+        return write_repair_action(
             project_root,
             &spec,
             kind,
@@ -232,7 +232,7 @@ fn docker_available(
     let output = Command::new("docker").arg("--version").output();
     match output {
         Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(write_repair_request(
+        Ok(output) => Err(write_repair_action(
             project_root,
             spec,
             DeploymentFailureKind::DockerUnavailable,
@@ -242,7 +242,7 @@ fn docker_available(
             &String::from_utf8_lossy(&output.stderr),
         )
         .unwrap_or_else(|error| failed(project_root, error.to_string()))),
-        Err(error) => Err(write_repair_request(
+        Err(error) => Err(write_repair_action(
             project_root,
             spec,
             DeploymentFailureKind::DockerUnavailable,

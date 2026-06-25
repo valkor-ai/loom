@@ -4,7 +4,7 @@ Use this reference for bug fixes, failed checks, regressions, review repairs, an
 
 ## Stay inside loom
 
-- Treat the current `instruction`, `TaskExecutionRequest`, repair request, and editable file list as the boundary.
+- Treat the current MCP action, `requestRef`, `requestReadPlan`, and editable file list as the boundary.
 - Do not change unrelated files to make the failure disappear.
 - Record the repair path and verification evidence in the returned `TaskResult` or repair result.
 

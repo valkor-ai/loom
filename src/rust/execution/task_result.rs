@@ -93,7 +93,7 @@ where
         )
     })?;
     if repair_submit {
-        if let Some(stale) = ensure_latest_task_result_repair_request(
+        if let Some(stale) = ensure_latest_task_result_repair_action(
             &input.project_root,
             &delivery_id,
             &phase_id,
@@ -1137,12 +1137,12 @@ fn materialize_task_result_repair(
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
-            "TaskResult repair request missing deliveryId".to_string(),
+            "TaskResult repair action missing deliveryId".to_string(),
         )
     })?;
     let phase_id = authorized.phase_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
-            "TaskResult repair request missing phaseId".to_string(),
+            "TaskResult repair action missing phaseId".to_string(),
         )
     })?;
     let root = Path::new(&input.project_root);
@@ -1255,7 +1255,7 @@ fn materialize_task_result_repair(
             root: root_value,
         },
     )?;
-    update_latest_task_result_repair_request(
+    update_latest_task_result_repair_action(
         &input.project_root,
         &delivery_id,
         &phase_id,
@@ -1284,7 +1284,7 @@ fn materialize_task_result_repair(
     ))
 }
 
-fn update_latest_task_result_repair_request(
+fn update_latest_task_result_repair_action(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -1300,7 +1300,7 @@ fn update_latest_task_result_repair_request(
         .find(|phase| phase.phase_id == phase_id)
     {
         phase.latest_refs.insert(
-            "taskResultRepairRequestRef".to_string(),
+            "activeTaskResultRepairActionRef".to_string(),
             request_ref.to_string(),
         );
         phase.next_action = Some(RouteAction {
@@ -1401,7 +1401,7 @@ fn ensure_latest_request(
     Ok(None)
 }
 
-fn ensure_latest_task_result_repair_request(
+fn ensure_latest_task_result_repair_action(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -1415,13 +1415,13 @@ fn ensure_latest_task_result_repair_request(
         .phases
         .iter()
         .find(|phase| phase.phase_id == phase_id)
-        .and_then(|phase| phase.latest_refs.get("taskResultRepairRequestRef"))
+        .and_then(|phase| phase.latest_refs.get("activeTaskResultRepairActionRef"))
         .map(String::as_str);
     if latest != Some(request_ref) {
         return Ok(Some(failed(
             project_root,
-            "STALE_TASK_RESULT_REPAIR_REQUEST",
-            "TaskResult repair submit must use the active phase latest taskResultRepair requestRef."
+            "STALE_TASK_RESULT_REPAIR_ACTION",
+            "TaskResult repair submit must use the active phase task result repair action requestRef."
                 .to_string(),
             "task_result_repair_submit",
         )));

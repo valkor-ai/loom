@@ -593,14 +593,14 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         "loom.repairSubmitFile"
     );
 
-    let task_result_repair_request_ref = invalid_task_result["next"]["requestRef"]
+    let task_result_repair_action_ref = invalid_task_result["next"]["requestRef"]
         .as_str()
-        .expect("task result repair requestRef")
+        .expect("task result repair action requestRef")
         .to_string();
-    write_task_result_candidate(&fixture, &task_result_repair_request_ref);
+    write_task_result_candidate(&fixture, &task_result_repair_action_ref);
     let task_result = call_submit(
         "loom.repairSubmitFile",
-        &task_result_repair_request_ref,
+        &task_result_repair_action_ref,
         fixture.root_str(),
     );
 
@@ -753,10 +753,12 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         result["next"]["repairContext"]["sourceTaskId"],
         result["next"]["taskId"]
     );
-    assert!(result["next"]["repairContext"]["repairRequestRef"]
-        .as_str()
-        .unwrap()
-        .starts_with("loom://projects/"));
+    assert!(
+        result["next"]["repairContext"]
+            .get("repairRequestRef")
+            .is_none(),
+        "{result:#}"
+    );
     assert!(result["next"]["repairContext"]["failedTaskResultRef"]
         .as_str()
         .unwrap()
@@ -1068,15 +1070,15 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
     assert_eq!(repair_result["state"], "auto_runnable", "{repair_result:#}");
     assert_eq!(repair_result["next"]["artifactKind"], "taskplan_repair");
     assert_eq!(repair_result["next"]["submitTool"], "loom.repairSubmitFile");
-    let repair_request_ref = repair_result["next"]["requestRef"]
+    let repair_action_ref = repair_result["next"]["requestRef"]
         .as_str()
-        .expect("repair requestRef")
+        .expect("repair action requestRef")
         .to_string();
-    write_taskplan_grouped_candidates(&fixture, &repair_request_ref);
+    write_taskplan_grouped_candidates(&fixture, &repair_action_ref);
 
     let result = call_submit(
         "loom.repairSubmitFile",
-        &repair_request_ref,
+        &repair_action_ref,
         fixture.root_str(),
     );
 
@@ -1116,11 +1118,11 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         "architecture_artifact_repair"
     );
     assert_eq!(repair_result["next"]["submitTool"], "loom.repairSubmitFile");
-    let repair_request_ref = repair_result["next"]["requestRef"]
+    let repair_action_ref = repair_result["next"]["requestRef"]
         .as_str()
-        .expect("repair requestRef")
+        .expect("repair action requestRef")
         .to_string();
-    let result = complete_architecture_sections(&fixture, &repair_request_ref);
+    let result = complete_architecture_sections(&fixture, &repair_action_ref);
 
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
     assert_eq!(result["next"]["kind"], "write_artifact");

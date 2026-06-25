@@ -32,9 +32,7 @@ impl DomainDispatcher for ArchitectureDomainDispatcher {
                         project_root: project_root.to_string(),
                         request_ref: request_ref.to_string(),
                     }) {
-                        Ok(request)
-                            if request.request_kind == "architecture_artifact_repair_request" =>
-                        {
+                        Ok(request) if request.request_kind == "architecture_artifact_repair" => {
                             write_artifact_result(
                                 project_root,
                                 request_ref,

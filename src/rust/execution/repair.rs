@@ -126,12 +126,12 @@ where
         state::store::StateError::InvalidArgument("Repair target is missing".to_string())
     })?;
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
-        state::store::StateError::InvalidArgument("Repair request missing deliveryId".to_string())
+        state::store::StateError::InvalidArgument("Repair action missing deliveryId".to_string())
     })?;
     let phase_id = authorized.phase_id.clone().ok_or_else(|| {
-        state::store::StateError::InvalidArgument("Repair request missing phaseId".to_string())
+        state::store::StateError::InvalidArgument("Repair action missing phaseId".to_string())
     })?;
-    if let Some(stale) = ensure_latest_repair_request(
+    if let Some(stale) = ensure_latest_repair_action(
         &input.project_root,
         &delivery_id,
         &phase_id,
@@ -260,11 +260,6 @@ fn materialize_delivery_execution_repair_inner(
         safe_id(&task.task_id),
         state::store::now_millis()
     );
-    let project = state::initialize_project(project_root)?;
-    let repair_request_ref = format!(
-        "loom://projects/{}/requests/{request_id}",
-        project.project_id
-    );
     let result_file = to_project_relative(
         root,
         &task_execution_result_candidate_file(root, &request_id),
@@ -283,7 +278,6 @@ fn materialize_delivery_execution_repair_inner(
         &run,
         &task,
         repair_origin.clone(),
-        &repair_request_ref,
         source_ref.clone(),
         finding_refs.clone(),
         attempt_count,
@@ -292,7 +286,7 @@ fn materialize_delivery_execution_repair_inner(
         project_root,
         state::NativeRequestInput {
             request_id: request_id.clone(),
-            request_kind: "delivery_execution_repair_request".to_string(),
+            request_kind: "delivery_execution_repair".to_string(),
             request_file: Some(request_file),
             delivery_id: Some(delivery_id.to_string()),
             phase_id: Some(phase_id.to_string()),
@@ -346,7 +340,6 @@ fn materialize_delivery_execution_repair_inner(
                 },
                 repair_context: Some(RepairContext {
                     repair_origin: repair_origin.clone(),
-                    repair_request_ref,
                     source_task_id: task.task_id.clone(),
                     issues: vec![origin.to_string()],
                     review_result_ref: if origin == "review_result" {
@@ -390,7 +383,6 @@ fn build_repair_execution_request(
     run: &TaskPlanRun,
     task: &TaskDefinition,
     repair_origin: RepairOrigin,
-    repair_request_ref: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
     attempt_count: u32,
@@ -413,7 +405,6 @@ fn build_repair_execution_request(
         },
         "task": task,
         "repairContext": {
-            "repairRequestRef": repair_request_ref,
             "sourceTaskId": task.task_id,
             "repairOrigin": repair_origin,
             "attemptCount": attempt_count,
@@ -519,7 +510,7 @@ pub fn materialize_taskplan_repair(
     phase_id: &str,
     source_ref: Option<String>,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
-    materialize_taskplan_repair_request(project_root, delivery_id, phase_id, source_ref)
+    materialize_taskplan_repair_action(project_root, delivery_id, phase_id, source_ref)
 }
 
 pub fn materialize_architecture_repair(
@@ -528,10 +519,10 @@ pub fn materialize_architecture_repair(
     phase_id: &str,
     source_ref: Option<String>,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
-    materialize_architecture_repair_request(project_root, delivery_id, phase_id, source_ref)
+    materialize_architecture_repair_action(project_root, delivery_id, phase_id, source_ref)
 }
 
-fn materialize_taskplan_repair_request(
+fn materialize_taskplan_repair_action(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -754,7 +745,7 @@ fn materialize_taskplan_repair_request(
         request_root
             .pointer_mut("/requestReadPlan/groups")
             .and_then(Value::as_array_mut)
-            .expect("taskplan repair requestReadPlan groups")
+            .expect("taskplan repair action requestReadPlan groups")
             .push(json!({
                 "groupId": "taskplan_optional_projection",
                 "required": false,
@@ -767,7 +758,7 @@ fn materialize_taskplan_repair_request(
         project_root,
         state::NativeRequestInput {
             request_id: request_id.clone(),
-            request_kind: "taskplan_repair_request".to_string(),
+            request_kind: "taskplan_repair".to_string(),
             request_file: Some(request_file),
             delivery_id: Some(delivery_id.to_string()),
             phase_id: Some(phase_id.to_string()),
@@ -780,7 +771,7 @@ fn materialize_taskplan_repair_request(
     if let Some(parent) = from_project_relative(root, &group_file_pattern)?.parent() {
         state::store::ensure_dir(parent)?;
     }
-    update_latest_repair_request(
+    update_latest_repair_action(
         project_root,
         &locator,
         &stored.request_ref,
@@ -809,7 +800,7 @@ fn materialize_taskplan_repair_request(
     ))
 }
 
-fn materialize_architecture_repair_request(
+fn materialize_architecture_repair_action(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -1040,7 +1031,7 @@ fn materialize_architecture_repair_request(
         project_root,
         state::NativeRequestInput {
             request_id: request_id.clone(),
-            request_kind: "architecture_artifact_repair_request".to_string(),
+            request_kind: "architecture_artifact_repair".to_string(),
             request_file: Some(request_file),
             delivery_id: Some(delivery_id.to_string()),
             phase_id: Some(phase_id.to_string()),
@@ -1052,7 +1043,7 @@ fn materialize_architecture_repair_request(
             state::store::ensure_dir(parent)?;
         }
     }
-    update_latest_repair_request(
+    update_latest_repair_action(
         project_root,
         &locator,
         &stored.request_ref,
@@ -1259,7 +1250,7 @@ fn update_latest_execution_request(
         .map_err(to_state_error)
 }
 
-fn update_latest_repair_request(
+fn update_latest_repair_action(
     project_root: &str,
     locator: &DeliveryPhaseLocator,
     request_ref: &str,
@@ -1276,7 +1267,7 @@ fn update_latest_repair_request(
     {
         phase
             .latest_refs
-            .insert("repairRequestRef".to_string(), request_ref.to_string());
+            .insert("activeRepairActionRef".to_string(), request_ref.to_string());
         phase.next_action = Some(RouteAction {
             kind: match repair_type {
                 "taskplan_repair" => RouteActionKind::TaskplanRepair,
@@ -1284,7 +1275,7 @@ fn update_latest_repair_request(
                 "task_result_repair" => RouteActionKind::TaskResultRepair,
                 _ => RouteActionKind::ExecutionRepair,
             },
-            source: "repair_request".to_string(),
+            source: "repair_action".to_string(),
             reason: repair_type.to_string(),
             prompt: None,
             accepted_responses: vec![],
@@ -1299,7 +1290,7 @@ fn update_latest_repair_request(
         .map_err(to_state_error)
 }
 
-fn ensure_latest_repair_request(
+fn ensure_latest_repair_action(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -1313,13 +1304,13 @@ fn ensure_latest_repair_request(
         .phases
         .iter()
         .find(|phase| phase.phase_id == phase_id)
-        .and_then(|phase| phase.latest_refs.get("repairRequestRef"))
+        .and_then(|phase| phase.latest_refs.get("activeRepairActionRef"))
         .map(String::as_str);
     if latest != Some(request_ref) {
         return Ok(Some(failed(
             project_root,
-            "STALE_REPAIR_REQUEST",
-            "Repair submit must use the active phase latest repairRequestRef.".to_string(),
+            "STALE_REPAIR_ACTION",
+            "Repair submit must use the active phase repair action requestRef.".to_string(),
             "repair_submit",
         )));
     }

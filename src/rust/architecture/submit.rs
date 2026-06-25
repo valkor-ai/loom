@@ -94,7 +94,7 @@ impl ArchitectureSubmitMode {
     fn latest_ref_key(self) -> &'static str {
         match self {
             Self::Generation => "architectureRequestRef",
-            Self::Repair => "repairRequestRef",
+            Self::Repair => "activeRepairActionRef",
         }
     }
 
