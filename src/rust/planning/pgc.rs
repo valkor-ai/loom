@@ -13,17 +13,18 @@ use delivery_core::{
 };
 use state::{lifecycle_store::FileTransitionStore, paths::DeliveryPhaseLocator};
 
-use crate::{
-    paths::{planning_contract_file, planning_latest_file},
-    PlanningDomainDispatcher,
-};
+use crate::paths::{planning_contract_file, planning_latest_file};
 
-pub fn create_contract_and_route(
+pub fn create_contract_and_route<D>(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
-) -> LoomMcpActionResult {
-    match create_contract_and_route_inner(project_root, delivery_id, phase_id) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher + Clone,
+{
+    match create_contract_and_route_inner(project_root, delivery_id, phase_id, dispatcher) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: project_root.to_string(),
@@ -39,11 +40,15 @@ pub fn create_contract_and_route(
     }
 }
 
-fn create_contract_and_route_inner(
+fn create_contract_and_route_inner<D>(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher + Clone,
+{
     let root = Path::new(project_root);
     let store = FileTransitionStore;
     let mut status = store.load_status(project_root).map_err(to_state_error)?;
@@ -261,14 +266,7 @@ fn create_contract_and_route_inner(
     store
         .save_status(project_root, &status)
         .map_err(to_state_error)?;
-    Ok(
-        PlanningDomainDispatcher.dispatch_route_action(
-            project_root,
-            delivery_id,
-            phase_id,
-            &action,
-        ),
-    )
+    Ok(dispatcher.dispatch_route_action(project_root, delivery_id, phase_id, &action))
 }
 
 fn filter_scope_items(items: &[ScopeItem], current_scope_ids: &[String]) -> Vec<ScopeItem> {

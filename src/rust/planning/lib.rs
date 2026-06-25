@@ -8,8 +8,11 @@ use delivery_core::{
     ValidatedPlanInput,
 };
 
+pub use pgc::create_contract_and_route;
 pub use repository_context::accept_repository_context_file;
+pub use repository_context::materialize_request as materialize_repository_context_request;
 pub use technical_baseline::accept_technical_baseline_file;
+pub use technical_baseline::materialize_request as materialize_technical_baseline_request;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlanningDomainDispatcher;
@@ -33,24 +36,7 @@ impl DomainDispatcher for PlanningDomainDispatcher {
             RouteActionKind::RepositoryContextRequest => {
                 repository_context::materialize_request(project_root, delivery_id, phase_id)
             }
-            RouteActionKind::PlanningContractCreate => {
-                pgc::create_contract_and_route(project_root, delivery_id, phase_id)
-            }
-            RouteActionKind::ArchitectureArtifactContract => {
-                architecture::ArchitectureDomainDispatcher.dispatch_route_action(
-                    project_root,
-                    delivery_id,
-                    phase_id,
-                    action,
-                )
-            }
-            RouteActionKind::TaskplanGeneration
-            | RouteActionKind::ContinueExecution
-            | RouteActionKind::Review
-            | RouteActionKind::ExecutionRepair
-            | RouteActionKind::TaskResultRepair
-            | RouteActionKind::TaskplanRepair
-            | RouteActionKind::ArchitectureArtifactRepair => execution::ExecutionDomainDispatcher
+            RouteActionKind::PlanningContractCreate => delivery_core::UnimplementedDomainDispatcher
                 .dispatch_route_action(project_root, delivery_id, phase_id, action),
             _ => delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
                 project_root,

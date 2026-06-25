@@ -126,7 +126,6 @@ dependencies = [
  "contracts",
  "delivery-core",
  "pdf-extract",
- "planning",
  "quick-xml",
  "schemars",
  "serde",
@@ -749,6 +748,7 @@ dependencies = [
  "serde_json",
  "state",
  "tokio",
+ "workflow",
 ]
 
 [[package]]
@@ -878,10 +878,8 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "planning"
 version = "0.1.0"
 dependencies = [
- "architecture",
  "contracts",
  "delivery-core",
- "execution",
  "schemars",
  "serde",
  "serde_json",
@@ -1588,6 +1586,17 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "workflow"
+version = "0.1.0"
+dependencies = [
+ "architecture",
+ "brainstorm",
+ "delivery-core",
+ "execution",
+ "planning",
+]
 
 [[package]]
 name = "zerocopy"

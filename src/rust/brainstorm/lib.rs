@@ -7,9 +7,7 @@ mod requirements;
 mod start;
 mod validation;
 
-use delivery_core::{
-    DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, ValidatedPlanInput,
-};
+use delivery_core::{DomainDispatcher, LoomMcpActionResult, RouteAction, ValidatedPlanInput};
 
 pub use accept::accept_brainstorm_file;
 
@@ -28,26 +26,12 @@ impl DomainDispatcher for BrainstormDomainDispatcher {
         phase_id: &str,
         action: &RouteAction,
     ) -> LoomMcpActionResult {
-        match action.kind {
-            RouteActionKind::TechnicalBaselineRequest
-            | RouteActionKind::RepositoryContextRequest
-            | RouteActionKind::PlanningContractCreate
-            | RouteActionKind::ArchitectureArtifactContract
-            | RouteActionKind::TaskplanGeneration
-            | RouteActionKind::ContinueExecution
-            | RouteActionKind::Review
-            | RouteActionKind::ExecutionRepair
-            | RouteActionKind::TaskResultRepair
-            | RouteActionKind::TaskplanRepair
-            | RouteActionKind::ArchitectureArtifactRepair => planning::PlanningDomainDispatcher
-                .dispatch_route_action(project_root, delivery_id, phase_id, action),
-            _ => delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
-                project_root,
-                delivery_id,
-                phase_id,
-                action,
-            ),
-        }
+        delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
+            project_root,
+            delivery_id,
+            phase_id,
+            action,
+        )
     }
 }
 

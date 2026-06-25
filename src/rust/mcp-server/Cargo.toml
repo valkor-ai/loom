@@ -28,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 state = { path = "../state" }
 tokio.workspace = true
+workflow = { path = "../workflow" }
 
 [[test]]
 name = "tool_surface"

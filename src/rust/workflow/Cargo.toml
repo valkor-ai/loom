@@ -1,0 +1,17 @@
+[package]
+name = "workflow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "workflow"
+path = "lib.rs"
+
+[dependencies]
+architecture = { path = "../architecture" }
+brainstorm = { path = "../brainstorm" }
+delivery-core = { path = "../core" }
+execution = { path = "../execution" }
+planning = { path = "../planning" }

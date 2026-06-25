@@ -4,7 +4,7 @@ use contracts::{
     BrainstormCandidateAgentWritable, RequirementSourceItem, UserFacingLanguageConstraint,
 };
 use delivery_core::{
-    FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
+    DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
     LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, SubmitAcceptedEvent,
     TransitionEngine, TransitionStore,
 };
@@ -20,11 +20,15 @@ use crate::{
     validation::{gate_check, validate_candidate},
 };
 
-pub fn accept_brainstorm_file(
+pub fn accept_brainstorm_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_brainstorm_file_inner(input, authorized) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher + Clone,
+{
+    match accept_brainstorm_file_inner(input, authorized, dispatcher) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -40,10 +44,14 @@ pub fn accept_brainstorm_file(
     }
 }
 
-fn accept_brainstorm_file_inner(
+fn accept_brainstorm_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher + Clone,
+{
     let Some(target) = authorized.targets.first() else {
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
@@ -260,7 +268,7 @@ fn accept_brainstorm_file_inner(
 
     let engine = TransitionEngine {
         store: FileTransitionStore,
-        dispatcher: crate::BrainstormDomainDispatcher,
+        dispatcher,
     };
     engine
         .advance_after_submit(

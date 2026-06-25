@@ -5,9 +5,9 @@ use contracts::{
     TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
-    ArtifactKind, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, RouteAction,
-    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
+    LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -22,7 +22,7 @@ use crate::{
         repository_context_file, technical_baseline_candidate_file, technical_baseline_file,
         technical_baseline_request_file,
     },
-    write_artifact_result, PlanningDomainDispatcher,
+    write_artifact_result,
 };
 
 pub fn materialize_request(
@@ -354,11 +354,15 @@ fn build_request_root(
     })
 }
 
-pub fn accept_technical_baseline_file(
+pub fn accept_technical_baseline_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_technical_baseline_file_inner(input, authorized) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher + Clone,
+{
+    match accept_technical_baseline_file_inner(input, authorized, dispatcher) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -374,10 +378,14 @@ pub fn accept_technical_baseline_file(
     }
 }
 
-fn accept_technical_baseline_file_inner(
+fn accept_technical_baseline_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher + Clone,
+{
     let Some(target) = authorized.targets.first() else {
         return Ok(repairable(
             input,
@@ -561,7 +569,7 @@ fn accept_technical_baseline_file_inner(
 
     let engine = TransitionEngine {
         store: FileTransitionStore,
-        dispatcher: PlanningDomainDispatcher,
+        dispatcher,
     };
     engine
         .advance_after_submit(

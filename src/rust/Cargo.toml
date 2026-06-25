@@ -6,6 +6,7 @@ members = [
   "core",
   "state",
   "contracts",
+  "workflow",
   "brainstorm",
   "planning",
   "architecture",

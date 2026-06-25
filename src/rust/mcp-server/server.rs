@@ -1,6 +1,6 @@
 use std::future::{ready, Future};
 
-use brainstorm::{accept_brainstorm_file, BrainstormDomainDispatcher};
+use brainstorm::accept_brainstorm_file;
 use delivery_core::{
     is_submit_tool, normalize_project_root, status_details, submit_tool_spec, validate_plan_input,
     DomainDispatcher, FileSubmitInput, InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult,
@@ -28,6 +28,7 @@ use rmcp::{
 };
 use serde_json::json;
 use state::lifecycle_store::{init_project_state, FileTransitionStore};
+use workflow::WorkflowDomainDispatcher;
 
 use crate::{resource_registry::ResourceRegistry, tool_registry::ToolRegistry};
 
@@ -465,7 +466,7 @@ fn plan_tool(input: PlanToolInput) -> LoomMcpActionResult {
     if let Err(error) = init_project_state(&validated.project_root) {
         return state_failure(validated.project_root, error.to_string());
     }
-    BrainstormDomainDispatcher.start_brainstorm(&validated)
+    WorkflowDomainDispatcher.start_brainstorm(&validated)
 }
 
 fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
@@ -475,7 +476,7 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
     };
     let engine = TransitionEngine {
         store: FileTransitionStore,
-        dispatcher: BrainstormDomainDispatcher,
+        dispatcher: WorkflowDomainDispatcher,
     };
     match engine.continue_current(OperationContext {
         project_root: normalized.display.clone(),
@@ -544,19 +545,31 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
 
     match tool_name {
         "loom.brainstormAcceptFile" => {
-            return accept_brainstorm_file(&normalized_input, &authorized);
+            return accept_brainstorm_file(
+                &normalized_input,
+                &authorized,
+                WorkflowDomainDispatcher,
+            );
         }
         "loom.technicalBaselineAcceptFile" => {
-            return accept_technical_baseline_file(&normalized_input, &authorized);
+            return accept_technical_baseline_file(
+                &normalized_input,
+                &authorized,
+                WorkflowDomainDispatcher,
+            );
         }
         "loom.repositoryContextAcceptFile" => {
-            return accept_repository_context_file(&normalized_input, &authorized);
+            return accept_repository_context_file(
+                &normalized_input,
+                &authorized,
+                WorkflowDomainDispatcher,
+            );
         }
         "loom.architectureSectionSubmitFile" => {
             return architecture::accept_architecture_section_file(
                 &normalized_input,
                 &authorized,
-                BrainstormDomainDispatcher,
+                WorkflowDomainDispatcher,
             );
         }
         "loom.taskPlanAcceptFile" => {
@@ -576,7 +589,7 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
                 return architecture::accept_architecture_repair_file(
                     &normalized_input,
                     &authorized,
-                    BrainstormDomainDispatcher,
+                    WorkflowDomainDispatcher,
                 );
             }
             if authorized.artifact_kind == delivery_core::ArtifactKind::DeployExecutionRepairResult
@@ -586,7 +599,7 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
             return execution::accept_repair_file(
                 &normalized_input,
                 &authorized,
-                BrainstormDomainDispatcher,
+                WorkflowDomainDispatcher,
             );
         }
         _ => {}
@@ -599,7 +612,7 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
     ) {
         let engine = TransitionEngine {
             store: FileTransitionStore,
-            dispatcher: BrainstormDomainDispatcher,
+            dispatcher: WorkflowDomainDispatcher,
         };
         return match engine.advance_after_submit(
             OperationContext {
