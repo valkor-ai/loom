@@ -7,6 +7,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use toml_edit::{DocumentMut, Item};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -314,6 +315,10 @@ impl SetupEnvironment {
         }
     }
 
+    pub fn codex_config_path(&self) -> PathBuf {
+        self.codex_home.join("config.toml")
+    }
+
     pub fn common_registration_path(&self, agent: AgentKind) -> PathBuf {
         self.loom_home
             .join("mcp-registrations")
@@ -446,6 +451,10 @@ pub enum SetupError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    Toml {
+        path: PathBuf,
+        source: toml_edit::TomlError,
+    },
     ChecksumMismatch {
         path: PathBuf,
         expected: String,
@@ -462,6 +471,7 @@ impl fmt::Display for SetupError {
             Self::InvalidArgument(message) => write!(formatter, "{message}"),
             Self::Io { path, source } => write!(formatter, "{}: {source}", path.display()),
             Self::Json { path, source } => write!(formatter, "{}: {source}", path.display()),
+            Self::Toml { path, source } => write!(formatter, "{}: {source}", path.display()),
             Self::ChecksumMismatch {
                 path,
                 expected,
@@ -547,7 +557,7 @@ pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupRepo
             InstalledAgent {
                 agent: agent.as_str().to_string(),
                 plugin_root: path_string(env.agent_plugin_root(*agent)),
-                mcp_registration: path_string(env.agent_mcp_registration_path(*agent)),
+                mcp_registration: path_string(effective_mcp_registration_path(env, *agent)),
                 installed_at: now_string(),
             },
         );
@@ -617,11 +627,9 @@ pub fn doctor(
             &env.agent_plugin_root(*agent),
             "agent plugin files",
         ));
-        report.checks.push(check_path(
-            &format!("{}.mcpRegistration", agent.as_str()),
-            &env.agent_mcp_registration_path(*agent),
-            "agent MCP registration",
-        ));
+        report
+            .checks
+            .push(check_agent_mcp_registration(env, *agent, &server_binary));
     }
     let failed: Vec<DoctorCheck> = report
         .checks
@@ -1088,8 +1096,72 @@ fn write_mcp_registration(
         }
     });
     write_json(&env.common_registration_path(agent), &registration)?;
-    write_json(&env.agent_mcp_registration_path(agent), &registration)?;
+    match agent {
+        AgentKind::Codex => write_codex_mcp_config(env, &command, agent)?,
+        AgentKind::ClaudeCode | AgentKind::Opencode => {
+            write_json(&env.agent_mcp_registration_path(agent), &registration)?;
+        }
+    }
     Ok(())
+}
+
+fn effective_mcp_registration_path(env: &SetupEnvironment, agent: AgentKind) -> PathBuf {
+    match agent {
+        AgentKind::Codex => env.codex_config_path(),
+        AgentKind::ClaudeCode | AgentKind::Opencode => env.agent_mcp_registration_path(agent),
+    }
+}
+
+fn write_codex_mcp_config(
+    env: &SetupEnvironment,
+    command: &Path,
+    agent: AgentKind,
+) -> Result<(), SetupError> {
+    let path = env.codex_config_path();
+    let mut document = read_toml_document(&path)?;
+    let snippet = format!(
+        "[mcp_servers.loom]\ncommand = {command}\nargs = []\nstartup_timeout_sec = 30\n\n[mcp_servers.loom.env]\nLOOM_RUNTIME_HOME = {runtime}\nLOOM_HOME = {home}\nLOOM_HOST = {host}\n",
+        command = toml_string(&path_string(command)),
+        runtime = toml_string(&path_string(env.runtime_current())),
+        home = toml_string(&path_string(&env.loom_home)),
+        host = toml_string(agent.host_env()),
+    );
+    let snippet_document = parse_toml_document(&path, &snippet)?;
+    document["mcp_servers"]["loom"] = snippet_document["mcp_servers"]["loom"].clone();
+    write_toml_document(&path, &document)?;
+    remove_generated_codex_mcp_json(env)?;
+    Ok(())
+}
+
+fn read_toml_document(path: &Path) -> Result<DocumentMut, SetupError> {
+    if !path.exists() {
+        return Ok(DocumentMut::new());
+    }
+    let text = fs::read_to_string(path).map_err(|source| SetupError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    parse_toml_document(path, &text)
+}
+
+fn parse_toml_document(path: &Path, text: &str) -> Result<DocumentMut, SetupError> {
+    text.parse::<DocumentMut>()
+        .map_err(|source| SetupError::Toml {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+fn write_toml_document(path: &Path, document: &DocumentMut) -> Result<(), SetupError> {
+    let mut text = document.to_string();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    write_text(path, &text)
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a string cannot fail")
 }
 
 fn cleanup_agent_session(env: &SetupEnvironment, agent: AgentKind) -> Result<(), SetupError> {
@@ -1306,6 +1378,12 @@ fn uninstall_agent(env: &SetupEnvironment, agent: AgentKind) -> Result<Vec<Strin
                 env.user_home.join(".agents/plugins/marketplace.json"),
             ));
         }
+        if remove_codex_mcp_config(env)? {
+            removed.push(path_string(env.codex_config_path()));
+        }
+        if remove_generated_codex_mcp_json(env)? {
+            removed.push(path_string(env.agent_mcp_registration_path(agent)));
+        }
     }
     for path in uninstall_files_for_agent(env, agent) {
         if path.exists() && is_confirmed_loom_generated(&path)? {
@@ -1313,11 +1391,14 @@ fn uninstall_agent(env: &SetupEnvironment, agent: AgentKind) -> Result<Vec<Strin
             removed.push(path_string(path));
         }
     }
-    for path in [
+    let mut cleanup_paths = vec![
         env.common_registration_path(agent),
-        env.agent_mcp_registration_path(agent),
         env.agent_session_root(agent),
-    ] {
+    ];
+    if !matches!(agent, AgentKind::Codex) {
+        cleanup_paths.push(env.agent_mcp_registration_path(agent));
+    }
+    for path in cleanup_paths {
         if path.exists() {
             remove_path(&path)?;
             removed.push(path_string(path));
@@ -1360,6 +1441,48 @@ fn remove_codex_marketplace_entry(env: &SetupEnvironment) -> Result<bool, SetupE
     }
     write_json(&path, &value)?;
     Ok(true)
+}
+
+fn remove_codex_mcp_config(env: &SetupEnvironment) -> Result<bool, SetupError> {
+    let path = env.codex_config_path();
+    if !path.exists() {
+        return Ok(false);
+    }
+    let mut document = read_toml_document(&path)?;
+    let removed = document
+        .get_mut("mcp_servers")
+        .and_then(Item::as_table_like_mut)
+        .and_then(|servers| servers.remove("loom"))
+        .is_some();
+    if removed {
+        write_toml_document(&path, &document)?;
+    }
+    Ok(removed)
+}
+
+fn remove_generated_codex_mcp_json(env: &SetupEnvironment) -> Result<bool, SetupError> {
+    let path = env.agent_mcp_registration_path(AgentKind::Codex);
+    if !path.exists() || !is_loom_mcp_registration_json(&path)? {
+        return Ok(false);
+    }
+    remove_path(&path)?;
+    Ok(true)
+}
+
+fn is_loom_mcp_registration_json(path: &Path) -> Result<bool, SetupError> {
+    let bytes = fs::read(path).map_err(|source| SetupError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(false);
+    };
+    let is_loom = value.get("name").and_then(Value::as_str) == Some("loom");
+    let command_matches = value
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| command.contains("loom-mcp-server"));
+    Ok(is_loom && command_matches)
 }
 
 fn read_registry(env: &SetupEnvironment) -> Result<InstallRegistry, SetupError> {
@@ -1467,6 +1590,54 @@ fn check_python_worker(env: &SetupEnvironment) -> DoctorCheck {
             status: "failed".to_string(),
             detail: error.to_string(),
         },
+    }
+}
+
+fn check_agent_mcp_registration(
+    env: &SetupEnvironment,
+    agent: AgentKind,
+    server_binary: &Path,
+) -> DoctorCheck {
+    match agent {
+        AgentKind::Codex => check_codex_mcp_config(env, server_binary),
+        AgentKind::ClaudeCode | AgentKind::Opencode => check_path(
+            &format!("{}.mcpRegistration", agent.as_str()),
+            &env.agent_mcp_registration_path(agent),
+            "agent MCP registration",
+        ),
+    }
+}
+
+fn check_codex_mcp_config(env: &SetupEnvironment, server_binary: &Path) -> DoctorCheck {
+    let path = env.codex_config_path();
+    let name = "codex.mcpRegistration".to_string();
+    let document = match read_toml_document(&path) {
+        Ok(document) => document,
+        Err(error) => {
+            return DoctorCheck {
+                name,
+                status: "failed".to_string(),
+                detail: error.to_string(),
+            }
+        }
+    };
+    let command = document["mcp_servers"]["loom"]["command"].as_str();
+    let host = document["mcp_servers"]["loom"]["env"]["LOOM_HOST"].as_str();
+    if command == Some(path_string(server_binary).as_str()) && host == Some("codex") {
+        DoctorCheck {
+            name,
+            status: "passed".to_string(),
+            detail: format!(
+                "Codex config contains [mcp_servers.loom]: {}",
+                path.display()
+            ),
+        }
+    } else {
+        DoctorCheck {
+            name,
+            status: "failed".to_string(),
+            detail: format!("missing or stale [mcp_servers.loom] in {}", path.display()),
+        }
     }
 }
 

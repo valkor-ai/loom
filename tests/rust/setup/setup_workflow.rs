@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use toml_edit::DocumentMut;
 
 #[test]
 fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
@@ -30,6 +31,23 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
         "LOOM_AGENT_PROFILE=codex",
     )
     .unwrap();
+    fs::create_dir_all(fixture.user_home.join(".codex")).unwrap();
+    fs::write(
+        fixture.user_home.join(".codex/config.toml"),
+        "model = \"gpt-5\"\n\n[mcp_servers.existing]\ncommand = \"existing-server\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(fixture.user_home.join(".codex/mcp")).unwrap();
+    fs::write(
+        fixture.user_home.join(".codex/mcp/loom.json"),
+        serde_json::json!({
+            "name": "loom",
+            "transport": "stdio",
+            "command": "/old/runtime/bin/loom-mcp-server"
+        })
+        .to_string(),
+    )
+    .unwrap();
 
     let env = fixture.env();
     let report = install(&env, &[AgentKind::Codex]).unwrap();
@@ -41,17 +59,32 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
         .join(".loom-mcp-install.json")
         .exists());
     assert!(!fixture.loom_home.join("bin/loom-cli").exists());
+    assert!(!env.agent_mcp_registration_path(AgentKind::Codex).exists());
 
-    let registration: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(env.agent_mcp_registration_path(AgentKind::Codex)).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(registration["transport"], "stdio");
-    assert_eq!(registration["env"]["LOOM_HOST"], "codex");
-    assert!(registration["command"]
-        .as_str()
-        .unwrap()
-        .contains("runtime/current/bin/loom-mcp-server"));
+    let codex_config_text = fs::read_to_string(env.codex_config_path()).unwrap();
+    let codex_config = codex_config_text.parse::<DocumentMut>().unwrap();
+    assert_eq!(codex_config["model"].as_str(), Some("gpt-5"));
+    assert_eq!(
+        codex_config["mcp_servers"]["existing"]["command"].as_str(),
+        Some("existing-server")
+    );
+    assert_eq!(
+        codex_config["mcp_servers"]["loom"]["command"].as_str(),
+        Some(path_string_for_test(&env.runtime_current().join("bin/loom-mcp-server")).as_str())
+    );
+    assert_eq!(
+        codex_config["mcp_servers"]["loom"]["env"]["LOOM_HOST"].as_str(),
+        Some("codex")
+    );
+    assert_eq!(
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "codex.mcpRegistration")
+            .unwrap()
+            .status,
+        "passed"
+    );
 }
 
 #[test]
@@ -546,6 +579,10 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) {
         path,
         &format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
     );
+}
+
+fn path_string_for_test(path: &Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
 fn collect_files(root: &Path) -> Vec<PathBuf> {
