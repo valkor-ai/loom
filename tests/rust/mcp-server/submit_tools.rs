@@ -188,6 +188,74 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
 }
 
 #[test]
+fn technical_baseline_conflict_with_previous_baseline_requires_user_gate() {
+    let fixture = Fixture::new("technical-baseline-previous-conflict");
+    write_json_atomic(
+        &fixture.root.join("package.json"),
+        &json!({ "name": "loom-fixture", "private": true }),
+    )
+    .expect("write package.json");
+    let request_ref = start_brainstorm_request(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    write_previous_technical_baseline(&fixture, &delivery_id);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let previous = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: baseline_request_ref.clone(),
+        fields: vec!["previousBaselineContext".to_string()],
+    })
+    .expect("read previous baseline context");
+    assert_eq!(
+        previous.fields["previousBaselineContext"].value["previousBaselineRef"],
+        json!(format!(
+            ".loom/deliveries/{delivery_id}/contracts/technical-baseline.json"
+        ))
+    );
+
+    write_candidate_target(
+        &fixture,
+        &baseline_request_ref,
+        &technical_baseline_candidate_json("existing_project", "policy_auto_accept"),
+    );
+    let conflict = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(conflict["state"], "user_gate", "{conflict:#}");
+    assert_eq!(
+        conflict["gate"]["gateId"],
+        "previous_baseline_change_confirmation"
+    );
+
+    write_candidate_target(
+        &fixture,
+        &baseline_request_ref,
+        &technical_baseline_candidate_json("existing_project", "user_confirmed"),
+    );
+    let confirmed = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(confirmed["state"], "auto_runnable", "{confirmed:#}");
+    assert_eq!(
+        confirmed["next"]["artifactKind"],
+        "repository_context_candidate"
+    );
+}
+
+#[test]
 fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
     let fixture = Fixture::new("repository-context-pgc");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -263,51 +331,12 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
 fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation() {
     let fixture = Fixture::new("architecture-full-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
-    let current_request_ref = architecture_request_ref.clone();
+    let result = complete_architecture_sections(&fixture, &architecture_request_ref);
 
-    for expected_section in [
-        "foundation",
-        "domain_contract",
-        "behavior",
-        "frontend_experience",
-        "runtime_delivery",
-        "coverage",
-    ] {
-        let inspected = state::inspect_request(InspectRequestInput {
-            project_root: fixture.root_str().to_string(),
-            request_ref: current_request_ref.clone(),
-        })
-        .expect("inspect current architecture request");
-        assert_eq!(
-            inspected.write_targets[0]["targetId"],
-            json!(expected_section)
-        );
-
-        write_candidate_target(
-            &fixture,
-            &current_request_ref,
-            &architecture_section_candidate_json(&fixture, &current_request_ref),
-        );
-
-        let result = call_submit(
-            "loom.architectureSectionSubmitFile",
-            &current_request_ref,
-            fixture.root_str(),
-        );
-
-        if expected_section != "coverage" {
-            assert_eq!(result["state"], "auto_runnable", "{result:#}");
-            assert_eq!(
-                result["next"]["requestRef"],
-                json!(current_request_ref),
-                "{result:#}"
-            );
-        } else {
-            assert_eq!(result["state"], "failed", "{result:#}");
-            assert_eq!(result["error"]["code"], "not_implemented_for_batch");
-            assert_eq!(result["error"]["routeAction"], "taskplan_generation");
-        }
-    }
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "write_artifact");
+    assert_eq!(result["next"]["artifactKind"], "task_plan_candidate");
+    assert_eq!(result["next"]["submitTool"], "loom.taskPlanAcceptFile");
 
     let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
     assert_eq!(
@@ -325,6 +354,124 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .join(".loom/deliveries")
         .join(&delivery_id)
         .join("contracts/architecture/phase-1/latest.json")
+        .exists());
+    let taskplan_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+    })
+    .expect("inspect taskplan request");
+    assert_eq!(inspected.request_kind, "taskplan_generation_request");
+    assert!(inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "taskplan_core_context"));
+    assert!(inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .all(|field| field != "outputContract.outlineSchemaShape"
+            && field != "outputContract.groupSchemaShape"));
+}
+
+#[test]
+fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
+    let fixture = Fixture::new("taskplan-execution-chain");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    assert_eq!(execution_result["next"]["kind"], "execute_task");
+    assert_eq!(
+        execution_result["next"]["submitTool"],
+        "loom.recordTaskResultFile"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let execution_inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+    })
+    .expect("inspect execution request");
+    assert_eq!(execution_inspected.request_kind, "task_execution_request");
+    assert!(execution_inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "task_execution_result_contract"));
+    assert!(execution_inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .all(|field| field != "outputContract.schemaShape"));
+
+    write_task_result_candidate_without_requirement_detail_evidence(
+        &fixture,
+        &execution_request_ref,
+    );
+    let invalid_task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        invalid_task_result["state"], "repairable_error",
+        "{invalid_task_result:#}"
+    );
+    assert!(invalid_task_result["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "TASK_RESULT_DETAIL_EVIDENCE_INVALID"));
+
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(task_result["state"], "failed", "{task_result:#}");
+    assert_eq!(task_result["error"]["code"], "not_implemented_for_batch");
+    assert_eq!(task_result["error"]["targetBatch"], 9);
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    assert_eq!(index["phases"][0]["nextAction"]["kind"], "review");
+    assert!(fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("tasks/phase-1/taskplans/latest.json")
+        .exists());
+    assert!(fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("tasks/phase-1/runs/latest.json")
         .exists());
 }
 
@@ -550,6 +697,262 @@ fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
         .as_str()
         .expect("architecture requestRef")
         .to_string()
+}
+
+fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &str) -> Value {
+    let current_request_ref = architecture_request_ref.to_string();
+    let mut last = json!(null);
+    for expected_section in [
+        "foundation",
+        "domain_contract",
+        "behavior",
+        "frontend_experience",
+        "runtime_delivery",
+        "coverage",
+    ] {
+        let inspected = state::inspect_request(InspectRequestInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: current_request_ref.clone(),
+        })
+        .expect("inspect current architecture request");
+        assert_eq!(
+            inspected.write_targets[0]["targetId"],
+            json!(expected_section)
+        );
+
+        write_candidate_target(
+            fixture,
+            &current_request_ref,
+            &architecture_section_candidate_json(fixture, &current_request_ref),
+        );
+
+        last = call_submit(
+            "loom.architectureSectionSubmitFile",
+            &current_request_ref,
+            fixture.root_str(),
+        );
+
+        if expected_section != "coverage" {
+            assert_eq!(last["state"], "auto_runnable", "{last:#}");
+            assert_eq!(
+                last["next"]["requestRef"],
+                json!(current_request_ref),
+                "{last:#}"
+            );
+        }
+    }
+    last
+}
+
+fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
+    let request_root = read_request_root_value(fixture.root_str(), request_ref);
+    let request_id = request_root["requestId"].as_str().expect("requestId");
+    let delivery_id = request_root["deliveryId"].as_str().expect("deliveryId");
+    let phase_id = request_root["phaseId"].as_str().expect("phaseId");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "allowedRefs".to_string(),
+            "outputContract.outlineFile".to_string(),
+            "outputContract.groupFilePattern".to_string(),
+        ],
+    })
+    .expect("read taskplan fields")
+    .fields;
+    let allowed_refs = &fields["allowedRefs"].value;
+    let scope_id = allowed_refs["scopeRefs"][0].as_str().expect("scope ref");
+    let acceptance_id = allowed_refs["acceptanceRefs"][0]
+        .as_str()
+        .expect("acceptance ref");
+    let detail_id = allowed_refs["requirementDetailIds"][0]
+        .as_str()
+        .expect("detail id");
+    let outline_file = fields["outputContract.outlineFile"]
+        .value
+        .as_str()
+        .expect("outline file");
+    let group_pattern = fields["outputContract.groupFilePattern"]
+        .value
+        .as_str()
+        .expect("group file pattern");
+    let group_id = "group-account";
+    let task_id = "task-account-001";
+    write_json_atomic(
+        &fixture.root.join(outline_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "taskPlanId": "taskplan-phase-1",
+            "groups": [{
+                "groupId": group_id,
+                "title": "Account capability",
+                "objective": "Implement the account capability slice.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [task_id]
+            }],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write taskplan outline");
+    let group_file = group_pattern.replace("{groupId}", group_id);
+    write_json_atomic(
+        &fixture.root.join(group_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "group": {
+                "groupId": group_id,
+                "title": "Account capability",
+                "objective": "Implement the account capability slice.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [task_id]
+            },
+            "tasks": [{
+                "taskId": task_id,
+                "groupId": group_id,
+                "title": "Implement account flow",
+                "taskKind": "feature_increment",
+                "implementationActions": ["create_or_update_interface", "add_or_update_tests"],
+                "objective": "Implement account lifecycle behavior with success feedback.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "requirementDetailRefs": [detail_id],
+                "writeBoundary": {
+                    "forbiddenPaths": [".loom"],
+                    "artifactRefs": {
+                        "modules": ["module.account-service"],
+                        "entities": [],
+                        "interfaces": [],
+                        "userFlows": [],
+                        "stateMachines": [],
+                        "decisions": [],
+                        "risks": []
+                    }
+                },
+                "verificationIntents": [{
+                    "verificationId": "verify-account-001",
+                    "acceptanceRefs": [acceptance_id],
+                    "requirementDetailRefs": [detail_id],
+                    "behavior": "Verify account lifecycle behavior and visible success feedback.",
+                    "preferredEvidence": ["static_check"],
+                    "acceptableEvidence": ["static_check", "manual_command_output"]
+                }],
+                "conceptRefs": [],
+                "conceptResponsibilities": [],
+                "conceptVerificationIntents": []
+            }],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write taskplan group");
+}
+
+fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
+    write_task_result_candidate_with_detail_evidence(fixture, request_ref, true);
+}
+
+fn write_task_result_candidate_without_requirement_detail_evidence(
+    fixture: &Fixture,
+    request_ref: &str,
+) {
+    write_task_result_candidate_with_detail_evidence(fixture, request_ref, false);
+}
+
+fn write_task_result_candidate_with_detail_evidence(
+    fixture: &Fixture,
+    request_ref: &str,
+    include_detail_evidence: bool,
+) {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "source.taskPlanId".to_string(),
+            "source.taskId".to_string(),
+            "task".to_string(),
+            "outputContract.resultFile".to_string(),
+        ],
+    })
+    .expect("read execution request fields")
+    .fields;
+    let task_plan_id = fields["source.taskPlanId"]
+        .value
+        .as_str()
+        .expect("taskPlanId");
+    let task_id = fields["source.taskId"].value.as_str().expect("taskId");
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("resultFile");
+    let task = &fields["task"].value;
+    let detail_id = task["requirementDetailRefs"][0]
+        .as_str()
+        .expect("requirement detail id");
+    let verification_id = task["verificationIntents"][0]["verificationId"]
+        .as_str()
+        .expect("verification id");
+    let requirement_detail_evidence = if include_detail_evidence {
+        json!([{
+            "detailId": detail_id,
+            "status": "satisfied",
+            "verificationIds": [verification_id],
+            "evidenceRefs": ["src/main.tsx"],
+            "summary": "The account lifecycle detail is covered by the implemented flow and static verification."
+        }])
+    } else {
+        json!([])
+    };
+    write_json_atomic(
+        &fixture.root.join(result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "taskResultId": "result-task-account-001",
+            "taskId": task_id,
+            "taskPlanId": task_plan_id,
+            "status": "completed",
+            "changedFiles": ["src/main.tsx"],
+            "noChangeReason": null,
+            "verificationResults": [{
+                "verificationId": "verify-account-001",
+                "status": "passed",
+                "evidenceType": "static_check",
+                "summary": "Static verification passed for the account flow."
+            }],
+            "selfRepairSummary": {
+                "attempted": false,
+                "attemptCount": 0,
+                "stopReason": "not_attempted",
+                "progressObserved": false
+            },
+            "failure": null,
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none",
+                "notes": []
+            },
+            "notes": [],
+            "frontendExperienceSelfCheck": null,
+            "runtimeDeliveryEvidence": null,
+            "requirementDetailEvidence": requirement_detail_evidence,
+            "conceptEvidence": [],
+            "blockedReasons": [],
+            "createdAt": "2026-06-24T10:05:00+08:00",
+            "updatedAt": "2026-06-24T10:05:00+08:00"
+        }),
+    )
+    .expect("write task result");
 }
 
 fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> Value {
@@ -807,6 +1210,49 @@ fn technical_baseline_candidate_json(project_kind: &str, approval_type: &str) ->
         ],
         "alternatives": []
     })
+}
+
+fn write_previous_technical_baseline(fixture: &Fixture, delivery_id: &str) {
+    let baseline_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(delivery_id)
+        .join("contracts/technical-baseline.json");
+    std::fs::create_dir_all(baseline_path.parent().expect("baseline parent"))
+        .expect("create baseline parent");
+    write_json_atomic(
+        &baseline_path,
+        &json!({
+            "schemaVersion": "1.0",
+            "technicalBaselineId": "tb_previous",
+            "deliveryId": delivery_id,
+            "phaseId": "phase-1",
+            "status": "confirmed",
+            "source": "user_confirmed",
+            "projectKind": "existing_project",
+            "scope": "project",
+            "stack": {
+                "frontend": "plain-html",
+                "backend": "none"
+            },
+            "constraints": [],
+            "evidence": [{
+                "path": "README.md",
+                "reason": "Previous baseline was confirmed earlier."
+            }],
+            "approval": {
+                "type": "user_confirmed",
+                "reason": "Existing baseline fixture."
+            },
+            "confidence": "high",
+            "requiresUserConfirmation": false,
+            "reasoningSummary": ["Previous baseline fixture."],
+            "alternatives": [],
+            "createdAt": "2026-06-24T09:00:00+08:00",
+            "updatedAt": "2026-06-24T09:00:00+08:00"
+        }),
+    )
+    .expect("write previous technical baseline");
 }
 
 fn repository_context_candidate_json(

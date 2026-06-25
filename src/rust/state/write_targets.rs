@@ -105,7 +105,7 @@ pub fn authorize_write_targets(
     validate_target_paths(&paths.root, &all_targets)?;
 
     let selected_targets = select_targets(&all_targets, input.written_target_ids.as_deref())?;
-    let repair_issues = validate_target_files(&paths.root, &selected_targets);
+    let repair_issues = validate_target_files(&paths.root, &selected_targets, write_mode);
     if !repair_issues.is_empty() {
         let target_file = selected_targets
             .first()
@@ -342,9 +342,15 @@ fn select_targets(
 fn validate_target_files(
     project_root: &std::path::Path,
     targets: &[WriteTarget],
+    write_mode: WriteMode,
 ) -> Vec<RepairIssue> {
     let mut issues = Vec::new();
     for target in targets {
+        if write_mode == WriteMode::TaskplanGrouped
+            && (target.path.contains('{') || target.path.contains('}'))
+        {
+            continue;
+        }
         let Ok(absolute) = from_project_relative(project_root, &target.path) else {
             issues.push(issue(
                 "TARGET_PATH_INVALID",

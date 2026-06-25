@@ -111,7 +111,14 @@ fn materialize_request_inner(
         root,
         &technical_baseline_request_file(root, &locator, &request_id),
     )?;
-    let baseline_exists = technical_baseline_file(root, delivery_id).exists();
+    let previous_baseline_file = technical_baseline_file(root, delivery_id);
+    let previous_baseline = if previous_baseline_file.exists() {
+        let previous_baseline_ref = to_project_relative(root, &previous_baseline_file)?;
+        let previous: TechnicalBaselineContract = state::store::read_json(&previous_baseline_file)?;
+        Some((previous_baseline_ref, previous))
+    } else {
+        None
+    };
     let request_root = build_request_root(
         &brainstorm,
         delivery_id,
@@ -119,7 +126,7 @@ fn materialize_request_inner(
         &request_id,
         &candidate_file,
         project_kind,
-        baseline_exists,
+        previous_baseline.as_ref(),
     );
     let stored = state::write_native_request(
         project_root,
@@ -163,10 +170,24 @@ fn build_request_root(
     request_id: &str,
     candidate_file: &str,
     project_kind: ProjectKind,
-    baseline_exists: bool,
+    previous_baseline: Option<&(String, TechnicalBaselineContract)>,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(TechnicalBaselineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    let baseline_exists = previous_baseline.is_some();
+    let previous_baseline_context = previous_baseline.map(|(previous_ref, previous)| {
+        json!({
+            "previousBaselineRef": previous_ref,
+            "technicalBaselineId": previous.technical_baseline_id,
+            "status": previous.status,
+            "projectKind": previous.project_kind,
+            "scope": previous.scope,
+            "stack": previous.stack,
+            "constraints": previous.constraints,
+            "confidence": previous.confidence,
+            "updatedAt": previous.updated_at
+        })
+    });
     let selection_guidance = if matches!(project_kind, ProjectKind::Greenfield) {
         Some(json!({
             "userFacingConfirmationProtocol": {
@@ -220,6 +241,7 @@ fn build_request_root(
             "acceptanceRefs": brainstorm.phase_plan.current.acceptance_refs,
         },
         "decisionNeeds": technical_baseline_decision_needs(project_kind, baseline_exists),
+        "previousBaselineContext": previous_baseline_context,
         "constraints": {
             "mustUse": [],
             "mustAvoid": [],
@@ -285,6 +307,7 @@ fn build_request_root(
                         "brainstormLens.userFacingLanguage",
                         "currentPhaseLens",
                         "decisionNeeds",
+                        "previousBaselineContext",
                         "constraints"
                     ]
                 },
@@ -437,6 +460,24 @@ fn accept_technical_baseline_file_inner(
             "technical_baseline_confirmation".to_string(),
         ));
     }
+    let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
+    if previous_baseline_file.exists() {
+        let previous: TechnicalBaselineContract = state::store::read_json(&previous_baseline_file)?;
+        if technical_baseline_conflicts(&previous, &candidate)
+            && !matches!(
+                candidate.approval.r#type,
+                TechnicalBaselineApprovalType::UserConfirmed
+                    | TechnicalBaselineApprovalType::ManualOverride
+            )
+        {
+            return Ok(technical_baseline_user_gate(
+                input,
+                authorized,
+                "TechnicalBaseline changes an existing baseline. Present the previous baseline and proposed change to the user, then rewrite the same candidate with approval.type=user_confirmed after explicit confirmation.".to_string(),
+                "previous_baseline_change_confirmation".to_string(),
+            ));
+        }
+    }
 
     let now = state::store::now_string();
     let persisted = TechnicalBaselineContract {
@@ -579,6 +620,16 @@ fn technical_baseline_decision_needs(
         needs.push("confirm_project_kind".to_string());
     }
     needs
+}
+
+fn technical_baseline_conflicts(
+    previous: &TechnicalBaselineContract,
+    candidate: &TechnicalBaselineCandidateAgentWritable,
+) -> bool {
+    previous.project_kind != candidate.project_kind
+        || previous.scope != candidate.scope
+        || previous.stack != candidate.stack
+        || previous.constraints != candidate.constraints
 }
 
 fn infer_project_kind(project_root: &Path) -> ProjectKind {

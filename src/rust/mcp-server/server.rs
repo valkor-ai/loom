@@ -508,6 +508,12 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         "loom.architectureSectionSubmitFile" => {
             return architecture::accept_architecture_section_file(&normalized_input, &authorized);
         }
+        "loom.taskPlanAcceptFile" => {
+            return execution::accept_task_plan_file(&normalized_input, &authorized);
+        }
+        "loom.recordTaskResultFile" => {
+            return execution::accept_task_result_file(&normalized_input, &authorized);
+        }
         _ => {}
     }
 

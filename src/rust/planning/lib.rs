@@ -45,7 +45,7 @@ impl DomainDispatcher for PlanningDomainDispatcher {
                 )
             }
             RouteActionKind::TaskplanGeneration | RouteActionKind::ContinueExecution => {
-                delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
+                execution::ExecutionDomainDispatcher.dispatch_route_action(
                     project_root,
                     delivery_id,
                     phase_id,

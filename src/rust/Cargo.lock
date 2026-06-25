@@ -65,6 +65,7 @@ version = "0.1.0"
 dependencies = [
  "contracts",
  "delivery-core",
+ "execution",
  "schemars",
  "serde",
  "serde_json",
@@ -424,7 +425,12 @@ dependencies = [
 name = "execution"
 version = "0.1.0"
 dependencies = [
+ "contracts",
  "delivery-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "state",
 ]
 
 [[package]]
@@ -727,6 +733,7 @@ dependencies = [
  "architecture",
  "brainstorm",
  "delivery-core",
+ "execution",
  "knowledge",
  "planning",
  "rmcp",
@@ -867,6 +874,7 @@ dependencies = [
  "architecture",
  "contracts",
  "delivery-core",
+ "execution",
  "schemars",
  "serde",
  "serde_json",

@@ -1,12 +1,13 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
+    BrainstormContract, BrainstormStatus, ClarificationBlockName,
     RepositoryContextCandidateAgentWritable, RepositoryContextContract, TechnicalBaselineContract,
 };
 use delivery_core::{
     ArtifactKind, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpRepairableErrorResult, OperationContext, RouteAction, RouteActionKind,
-    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, RouteAction,
+    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -340,6 +341,14 @@ fn accept_repository_context_file_inner(
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
     }
+    if !current_phase_scope_confirmed(&input.project_root, &delivery_id, &phase_id)? {
+        return Ok(repository_context_user_gate(
+            input,
+            authorized,
+            "Current phase scope is not confirmed yet. Return to Brainstorm phase_scope confirmation before accepting RepositoryContext and creating the planning contract.".to_string(),
+            "phase_scope_confirmation_required".to_string(),
+        ));
+    }
     let now = state::store::now_string();
     let persisted = RepositoryContextContract {
         schema_version: "1.0".to_string(),
@@ -427,6 +436,42 @@ fn read_baseline(
     delivery_id: &str,
 ) -> Result<TechnicalBaselineContract, state::store::StateError> {
     state::store::read_json(&technical_baseline_file(project_root, delivery_id))
+}
+
+fn current_phase_scope_confirmed(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> Result<bool, state::store::StateError> {
+    let store = FileTransitionStore;
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let Some(phase) = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+    else {
+        return Ok(false);
+    };
+    let Some(brainstorm_ref) = phase.latest_refs.get("brainstormContract") else {
+        return Ok(false);
+    };
+    let root = Path::new(project_root);
+    let brainstorm: BrainstormContract =
+        state::store::read_json(&from_project_relative(root, brainstorm_ref)?)?;
+    if !matches!(brainstorm.status, BrainstormStatus::Confirmed) {
+        return Ok(false);
+    }
+    Ok(brainstorm
+        .clarification_progress
+        .as_ref()
+        .map(|progress| {
+            progress.confirmed_blocks.iter().any(|block| {
+                block.block == ClarificationBlockName::PhaseScope && block.confirmed_by_user
+            })
+        })
+        .unwrap_or(false))
 }
 
 fn validate_repository_context(
@@ -600,6 +645,26 @@ fn repairable(
         resubmit_tool: "loom.repositoryContextAcceptFile".to_string(),
         fix_scope: Some("repository_context_candidate_only".to_string()),
         read_groups: authorized.read_groups.clone(),
+    })
+}
+
+fn repository_context_user_gate(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+    prompt: String,
+    gate_id: String,
+) -> LoomMcpActionResult {
+    LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
+        project_root: input.project_root.clone(),
+        prompt,
+        accepted_responses: vec!["reply_in_chat".to_string()],
+        request_ref: Some(input.request_ref.clone()),
+        delivery_id: authorized.delivery_id.clone(),
+        phase_id: authorized.phase_id.clone(),
+        gate: Some(json!({
+            "gateId": gate_id,
+            "kind": "repository_context_scope_confirmation"
+        })),
     })
 }
 

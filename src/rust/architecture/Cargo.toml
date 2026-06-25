@@ -12,6 +12,7 @@ path = "lib.rs"
 [dependencies]
 contracts = { path = "../contracts" }
 delivery-core = { path = "../core" }
+execution = { path = "../execution" }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
