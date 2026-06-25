@@ -34,7 +34,12 @@ impl DomainDispatcher for BrainstormDomainDispatcher {
             | RouteActionKind::PlanningContractCreate
             | RouteActionKind::ArchitectureArtifactContract
             | RouteActionKind::TaskplanGeneration
-            | RouteActionKind::ContinueExecution => planning::PlanningDomainDispatcher
+            | RouteActionKind::ContinueExecution
+            | RouteActionKind::Review
+            | RouteActionKind::ExecutionRepair
+            | RouteActionKind::TaskResultRepair
+            | RouteActionKind::TaskplanRepair
+            | RouteActionKind::ArchitectureArtifactRepair => planning::PlanningDomainDispatcher
                 .dispatch_route_action(project_root, delivery_id, phase_id, action),
             _ => delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
                 project_root,

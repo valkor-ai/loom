@@ -5,10 +5,12 @@ use contracts::{
     TaskResultStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, DeliveryLifecycleStatus, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, RouteAction,
-    RouteActionKind, TransitionStore,
+    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, RouteAction,
+    RouteActionKind, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
+use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -26,7 +28,7 @@ pub fn accept_task_result_file(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
 ) -> LoomMcpActionResult {
-    match accept_task_result_file_inner(input, authorized) {
+    match accept_task_result_file_inner(input, authorized, false) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -42,9 +44,30 @@ pub fn accept_task_result_file(
     }
 }
 
+pub fn accept_task_result_repair_file(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+) -> LoomMcpActionResult {
+    match accept_task_result_file_inner(input, authorized, true) {
+        Ok(result) => result,
+        Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
+            project_root: input.project_root.clone(),
+            error: LoomMcpFailure {
+                code: "TASK_RESULT_REPAIR_ACCEPT_FAILED".to_string(),
+                message: error.to_string(),
+                target_batch: Some(9),
+                domain: Some("execution".to_string()),
+                route_action: Some("task_result_repair_submit".to_string()),
+                recovery_tool: Some("loom.continue".to_string()),
+            },
+        }),
+    }
+}
+
 fn accept_task_result_file_inner(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
+    repair_submit: bool,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
@@ -56,13 +79,24 @@ fn accept_task_result_file_inner(
             "TaskResult request is missing phaseId".to_string(),
         )
     })?;
-    if let Some(stale) = ensure_latest_request(
-        &input.project_root,
-        &delivery_id,
-        &phase_id,
-        &input.request_ref,
-    )? {
-        return Ok(stale);
+    if repair_submit {
+        if let Some(stale) = ensure_latest_task_result_repair_request(
+            &input.project_root,
+            &delivery_id,
+            &phase_id,
+            &input.request_ref,
+        )? {
+            return Ok(stale);
+        }
+    } else {
+        if let Some(stale) = ensure_latest_request(
+            &input.project_root,
+            &delivery_id,
+            &phase_id,
+            &input.request_ref,
+        )? {
+            return Ok(stale);
+        }
     }
     let target = authorized.targets.first().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
@@ -74,7 +108,7 @@ fn accept_task_result_file_inner(
     let result: TaskResult = match serde_json::from_value(raw_result.clone()) {
         Ok(result) => result,
         Err(error) => {
-            return Ok(repairable(
+            return repair_task_result_or_error(
                 input,
                 authorized,
                 target.path.clone(),
@@ -83,7 +117,9 @@ fn accept_task_result_file_inner(
                     "$",
                     &format!("TaskResult JSON has an invalid schema: {error}"),
                 )],
-            ))
+                repair_submit,
+                None,
+            )
         }
     };
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
@@ -130,7 +166,22 @@ fn accept_task_result_file_inner(
         &target.path,
     );
     if !issues.is_empty() {
-        return Ok(repairable(input, authorized, target.path.clone(), issues));
+        return repair_task_result_or_error(
+            input,
+            authorized,
+            target.path.clone(),
+            issues,
+            repair_submit,
+            Some(RepairContextInput {
+                task_plan_id,
+                task_id,
+                run_id,
+                task,
+                result_file,
+                required_top_level_fields,
+                blocked_output,
+            }),
+        );
     }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
@@ -236,21 +287,14 @@ fn accept_task_result_file_inner(
         &persisted_ref,
     )?;
 
-    if matches!(run.status, TaskPlanRunStatus::Running) {
-        continue_execution(&input.project_root, &delivery_id, &phase_id).into_result()
-    } else {
-        Ok(LoomMcpActionResult::Failed(LoomMcpFailureResult {
-            project_root: input.project_root.clone(),
-            error: LoomMcpFailure {
-                code: "not_implemented_for_batch".to_string(),
-                message: "review and repair routing are recorded, but their domain handlers belong to batch 9.".to_string(),
-                target_batch: Some(9),
-                domain: Some("execution".to_string()),
-                route_action: run.next_action.as_ref().map(|action| action.r#type.clone()),
-                recovery_tool: Some("loom.continue".to_string()),
-            },
-        }))
-    }
+    route_after_task_result(
+        &input.project_root,
+        &delivery_id,
+        &phase_id,
+        &run,
+        &result,
+        &persisted_ref,
+    )
 }
 
 fn validate_result(
@@ -866,6 +910,334 @@ fn next_action_for_run(run: &contracts::TaskPlanRun) -> Option<TaskPlanRunNextAc
     }
 }
 
+fn route_after_task_result(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    run: &contracts::TaskPlanRun,
+    result: &TaskResult,
+    result_ref: &str,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
+    match run.status {
+        TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted => {
+            continue_execution(project_root, delivery_id, phase_id).into_result()
+        }
+        TaskPlanRunStatus::Completed | TaskPlanRunStatus::CompletedWithNotes => {
+            crate::review::materialize_review_request(project_root, delivery_id, phase_id)
+                .into_result()
+        }
+        TaskPlanRunStatus::Failed => {
+            let attempt_count = run
+                .task_states
+                .iter()
+                .find(|state| state.task_id == result.task_id)
+                .map(|state| state.attempts.len())
+                .unwrap_or(0);
+            if attempt_count <= 2 {
+                Ok(crate::repair::materialize_delivery_execution_repair(
+                    project_root,
+                    delivery_id,
+                    phase_id,
+                    "task_failure",
+                    Some(result_ref.to_string()),
+                    vec![],
+                ))
+            } else {
+                crate::review::materialize_review_request(project_root, delivery_id, phase_id)
+                    .into_result()
+            }
+        }
+        TaskPlanRunStatus::Blocked => {
+            route_blocked_task_result(project_root, delivery_id, phase_id, result, result_ref)
+        }
+    }
+}
+
+fn route_blocked_task_result(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    result: &TaskResult,
+    result_ref: &str,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
+    let next_node = result
+        .blocked_reasons
+        .iter()
+        .map(|reason| reason.next_node.as_str())
+        .find(|node| !node.is_empty())
+        .unwrap_or("needs_user_decision");
+    match next_node {
+        "taskplan_repair" => crate::repair::materialize_taskplan_repair(
+            project_root,
+            delivery_id,
+            phase_id,
+            Some(result_ref.to_string()),
+        ),
+        "architecture_artifact_repair" => crate::repair::materialize_architecture_repair(
+            project_root,
+            delivery_id,
+            phase_id,
+            Some(result_ref.to_string()),
+        ),
+        "execution_repair" => Ok(LoomMcpActionResult::Failed(LoomMcpFailureResult {
+            project_root: project_root.to_string(),
+            error: LoomMcpFailure {
+                code: "BLOCKED_TASK_CANNOT_ROUTE_EXECUTION_REPAIR".to_string(),
+                message: "Blocked TaskResult must route to taskplan_repair, architecture_artifact_repair, or needs_user_decision instead of execution_repair.".to_string(),
+                target_batch: Some(9),
+                domain: Some("execution".to_string()),
+                route_action: Some("blocked_task_result".to_string()),
+                recovery_tool: Some("loom.continue".to_string()),
+            },
+        })),
+        _ => Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
+            project_root: project_root.to_string(),
+            prompt: result
+                .blocked_reasons
+                .first()
+                .map(|reason| reason.message.clone())
+                .unwrap_or_else(|| {
+                    "TaskResult is blocked and requires user decision.".to_string()
+                }),
+            accepted_responses: vec!["confirm".to_string(), "request_changes".to_string()],
+            request_ref: Some(result_ref.to_string()),
+            delivery_id: Some(delivery_id.to_string()),
+            phase_id: Some(phase_id.to_string()),
+            gate: Some(json!({
+                "kind": "task_result_blocked",
+                "taskResultRef": result_ref,
+                "blockedReasons": result.blocked_reasons
+            })),
+        })),
+    }
+}
+
+struct RepairContextInput {
+    task_plan_id: String,
+    task_id: String,
+    run_id: String,
+    task: TaskDefinition,
+    result_file: String,
+    required_top_level_fields: Vec<String>,
+    blocked_output: Value,
+}
+
+fn repair_task_result_or_error(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+    target_file: String,
+    issues: Vec<delivery_core::RepairIssue>,
+    repair_submit: bool,
+    context: Option<RepairContextInput>,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
+    if repair_submit {
+        return Ok(repairable_with_tool(
+            input,
+            authorized,
+            target_file,
+            issues,
+            "loom.repairSubmitFile",
+            "task_result_repair_candidate_only",
+        ));
+    }
+    let Some(context) = context else {
+        return Ok(repairable(input, authorized, target_file, issues));
+    };
+    materialize_task_result_repair(input, authorized, target_file, issues, context)
+}
+
+fn materialize_task_result_repair(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+    target_file: String,
+    issues: Vec<delivery_core::RepairIssue>,
+    context: RepairContextInput,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
+    let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
+        state::store::StateError::InvalidArgument(
+            "TaskResult repair request missing deliveryId".to_string(),
+        )
+    })?;
+    let phase_id = authorized.phase_id.clone().ok_or_else(|| {
+        state::store::StateError::InvalidArgument(
+            "TaskResult repair request missing phaseId".to_string(),
+        )
+    })?;
+    let root = Path::new(&input.project_root);
+    let request_id = format!(
+        "task_result_repair_{}_{}",
+        safe_id(&context.task_id),
+        state::store::now_millis()
+    );
+    let request_file = to_project_relative(
+        root,
+        &state::paths::delivery_dir(root, &delivery_id)
+            .join("repairs")
+            .join(&phase_id)
+            .join("requests")
+            .join(format!("{request_id}.json")),
+    )?;
+    let schema_shape = serde_json::to_value(schema_for!(TaskResult))
+        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let root_value = json!({
+        "schemaVersion": "1.0",
+        "requestType": "task_result_repair",
+        "requestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "artifactKind": ArtifactKind::TaskResultRepair,
+        "source": {
+            "taskExecutionRequestRef": input.request_ref,
+            "taskPlanId": context.task_plan_id,
+            "taskId": context.task_id,
+            "taskPlanRunId": context.run_id,
+            "originalResultFile": target_file,
+            "issues": issues
+        },
+        "task": context.task,
+        "blockedOutput": context.blocked_output,
+        "repairRules": {
+            "rule": "Rewrite the TaskResult JSON so it satisfies the original TaskExecutionRequest output contract. Do not edit source files for this repair."
+        },
+        "outputContract": {
+            "artifactKind": ArtifactKind::TaskResultRepair,
+            "writeMode": "single_json",
+            "submitTool": "loom.repairSubmitFile",
+            "resultFile": context.result_file,
+            "writeTargets": [{
+                "targetId": "result",
+                "path": context.result_file,
+                "required": true,
+                "description": "Rewrite the TaskResult JSON for the original task execution request."
+            }],
+            "requiredTopLevelFields": context.required_top_level_fields,
+            "schemaShape": schema_shape,
+            "resultRules": [
+                "The replacement must be a TaskResult JSON, not a repair summary.",
+                "Runtime, frontend, requirement detail, and concept evidence must follow the original output contract."
+            ]
+        },
+        "requestReadPlan": {
+            "groups": [
+                {
+                    "groupId": "task_result_repair_context",
+                    "required": true,
+                    "purpose": "Read the original TaskResult validation issues and task contract.",
+                    "whenToRead": "Read before rewriting TaskResult.",
+                    "fields": [
+                        "source",
+                        "source.taskPlanId",
+                        "source.taskId",
+                        "source.taskPlanRunId",
+                        "task",
+                        "blockedOutput",
+                        "repairRules"
+                    ]
+                },
+                {
+                    "groupId": "task_result_repair_write_contract",
+                    "required": true,
+                    "purpose": "Read the TaskResult replacement output contract.",
+                    "whenToRead": "Read before writing replacement TaskResult.",
+                    "fields": [
+                        "outputContract.resultFile",
+                        "outputContract.writeTargets",
+                        "outputContract.requiredTopLevelFields",
+                        "outputContract.schemaShape.properties.status",
+                        "outputContract.schemaShape.properties.changedFiles",
+                        "outputContract.schemaShape.properties.noChangeReason",
+                        "outputContract.schemaShape.properties.verificationResults",
+                        "outputContract.schemaShape.properties.selfRepairSummary",
+                        "outputContract.schemaShape.properties.failure",
+                        "outputContract.schemaShape.properties.executionContinuity",
+                        "outputContract.schemaShape.properties.notes",
+                        "outputContract.schemaShape.properties.frontendExperienceSelfCheck",
+                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
+                        "outputContract.schemaShape.properties.requirementDetailEvidence",
+                        "outputContract.schemaShape.properties.conceptEvidence",
+                        "outputContract.schemaShape.properties.blockedReasons",
+                        "outputContract.resultRules"
+                    ]
+                }
+            ]
+        }
+    });
+    let stored = state::write_native_request(
+        &input.project_root,
+        state::NativeRequestInput {
+            request_id,
+            request_kind: "task_result_repair".to_string(),
+            request_file: Some(request_file),
+            delivery_id: Some(delivery_id.clone()),
+            phase_id: Some(phase_id.clone()),
+            root: root_value,
+        },
+    )?;
+    update_latest_task_result_repair_request(
+        &input.project_root,
+        &delivery_id,
+        &phase_id,
+        &stored.request_ref,
+    )?;
+    let inspected = state::inspect_request(delivery_core::InspectRequestInput {
+        project_root: input.project_root.clone(),
+        request_ref: stored.request_ref.clone(),
+    })?;
+    Ok(LoomMcpActionResult::AutoRunnable(
+        LoomMcpAutoRunnableResult::new(
+            input.project_root.clone(),
+            LoomMcpNextAction::WriteArtifact(WriteArtifactNext {
+                artifact_kind: ArtifactKind::TaskResultRepair,
+                request_ref: stored.request_ref,
+                write_mode: WriteMode::SingleJson,
+                write_targets: inspected
+                    .write_targets
+                    .iter()
+                    .map(value_to_write_target)
+                    .collect::<Result<Vec<_>, _>>()?,
+                read_groups: inspected.read_groups,
+                submit_tool: "loom.repairSubmitFile".to_string(),
+            }),
+        ),
+    ))
+}
+
+fn update_latest_task_result_repair_request(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    request_ref: &str,
+) -> Result<(), state::store::StateError> {
+    let store = FileTransitionStore;
+    let mut delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    if let Some(phase) = delivery
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase_id == phase_id)
+    {
+        phase.latest_refs.insert(
+            "taskResultRepairRequestRef".to_string(),
+            request_ref.to_string(),
+        );
+        phase.next_action = Some(RouteAction {
+            kind: RouteActionKind::TaskResultRepair,
+            source: "task_result_validation".to_string(),
+            reason: "task_result_contract_invalid".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(request_ref.to_string()),
+            details: None,
+            target_phase_id: None,
+        });
+    }
+    delivery.updated_at = state::store::now_string();
+    store
+        .save_delivery_index(project_root, &delivery)
+        .map_err(to_state_error)
+}
+
 fn update_delivery_after_result(
     project_root: &str,
     delivery_id: &str,
@@ -972,6 +1344,34 @@ fn ensure_latest_request(
     Ok(None)
 }
 
+fn ensure_latest_task_result_repair_request(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    request_ref: &str,
+) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
+    let store = FileTransitionStore;
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let latest = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+        .and_then(|phase| phase.latest_refs.get("taskResultRepairRequestRef"))
+        .map(String::as_str);
+    if latest != Some(request_ref) {
+        return Ok(Some(failed(
+            project_root,
+            "STALE_TASK_RESULT_REPAIR_REQUEST",
+            "TaskResult repair submit must use the active phase latest taskResultRepair requestRef."
+                .to_string(),
+            "task_result_repair_submit",
+        )));
+    }
+    Ok(None)
+}
+
 fn failed(
     project_root: &str,
     code: &str,
@@ -1006,6 +1406,24 @@ fn repairable(
     target_file: String,
     issues: Vec<delivery_core::RepairIssue>,
 ) -> LoomMcpActionResult {
+    repairable_with_tool(
+        input,
+        authorized,
+        target_file,
+        issues,
+        "loom.recordTaskResultFile",
+        "task_result_candidate_only",
+    )
+}
+
+fn repairable_with_tool(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+    target_file: String,
+    issues: Vec<delivery_core::RepairIssue>,
+    resubmit_tool: &str,
+    fix_scope: &str,
+) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
         target_file,
@@ -1015,10 +1433,53 @@ fn repairable(
             .map(|target| target.target_id.clone())
             .collect(),
         issues,
-        resubmit_tool: "loom.recordTaskResultFile".to_string(),
-        fix_scope: Some("task_result_candidate_only".to_string()),
+        resubmit_tool: resubmit_tool.to_string(),
+        fix_scope: Some(fix_scope.to_string()),
         read_groups: authorized.read_groups.clone(),
     })
+}
+
+fn value_to_write_target(value: &Value) -> Result<WriteTarget, state::store::StateError> {
+    Ok(WriteTarget {
+        target_id: value
+            .get("targetId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                state::store::StateError::InvalidArgument(
+                    "write target missing targetId".to_string(),
+                )
+            })?
+            .to_string(),
+        path: value
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                state::store::StateError::InvalidArgument("write target missing path".to_string())
+            })?
+            .to_string(),
+        required: value
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        description: value
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("Write TaskResult.")
+            .to_string(),
+    })
+}
+
+fn safe_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn string_field(

@@ -1,6 +1,6 @@
 use std::sync::{Mutex, MutexGuard};
 
-use delivery_core::{InspectRequestInput, ReadRequestFieldsInput};
+use delivery_core::{DomainDispatcher, InspectRequestInput, ReadRequestFieldsInput};
 use mcp_server::server::LoomMcpServer;
 use serde_json::{json, Value};
 use state::{store::write_json_atomic, write_native_request, NativeRequestInput};
@@ -432,25 +432,59 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         fixture.root_str(),
     );
     assert_eq!(
-        invalid_task_result["state"], "repairable_error",
+        invalid_task_result["state"], "auto_runnable",
         "{invalid_task_result:#}"
     );
-    assert!(invalid_task_result["issues"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|issue| issue["code"] == "TASK_RESULT_DETAIL_EVIDENCE_INVALID"));
+    assert_eq!(invalid_task_result["next"]["kind"], "write_artifact");
+    assert_eq!(
+        invalid_task_result["next"]["artifactKind"],
+        "task_result_repair"
+    );
+    assert_eq!(
+        invalid_task_result["next"]["submitTool"],
+        "loom.repairSubmitFile"
+    );
 
-    write_task_result_candidate(&fixture, &execution_request_ref);
+    let task_result_repair_request_ref = invalid_task_result["next"]["requestRef"]
+        .as_str()
+        .expect("task result repair requestRef")
+        .to_string();
+    write_task_result_candidate(&fixture, &task_result_repair_request_ref);
     let task_result = call_submit(
-        "loom.recordTaskResultFile",
-        &execution_request_ref,
+        "loom.repairSubmitFile",
+        &task_result_repair_request_ref,
         fixture.root_str(),
     );
 
-    assert_eq!(task_result["state"], "failed", "{task_result:#}");
-    assert_eq!(task_result["error"]["code"], "not_implemented_for_batch");
-    assert_eq!(task_result["error"]["targetBatch"], 9);
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    assert_eq!(task_result["next"]["kind"], "write_artifact");
+    assert_eq!(task_result["next"]["artifactKind"], "review_result");
+    assert_eq!(task_result["next"]["submitTool"], "loom.reviewAcceptFile");
+    let review_request_ref = task_result["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef");
+    let review_inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+    })
+    .expect("inspect review request");
+    assert_eq!(review_inspected.request_kind, "review_request");
+    let review_group_ids = review_inspected
+        .read_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        review_group_ids,
+        vec![
+            "review_scope",
+            "review_packets",
+            "change_context",
+            "review_matrices",
+            "review_rules",
+            "review_write_contract"
+        ]
+    );
     let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
     let index_path = fixture
         .root
@@ -473,6 +507,408 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .join(&delivery_id)
         .join("tasks/phase-1/runs/latest.json")
         .exists());
+}
+
+#[test]
+fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
+    let fixture = Fixture::new("failed-task-result-repair");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_failed_task_result_candidate(&fixture, &execution_request_ref);
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "execute_task");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(result["next"]["repairOrigin"], "task_failure");
+    assert_eq!(
+        result["next"]["repairContext"]["repairOrigin"],
+        "task_failure"
+    );
+    assert_eq!(
+        result["next"]["repairContext"]["sourceTaskId"],
+        result["next"]["taskId"]
+    );
+    assert!(result["next"]["repairContext"]["repairRequestRef"]
+        .as_str()
+        .unwrap()
+        .starts_with("loom://projects/"));
+    assert!(result["next"]["repairContext"]["failedTaskResultRef"]
+        .as_str()
+        .unwrap()
+        .contains("/tasks/phase-1/results/"));
+    assert_eq!(result["next"]["repairContext"]["attemptCount"], 1);
+}
+
+#[test]
+fn blocked_task_result_routes_to_taskplan_repair() {
+    let fixture = Fixture::new("blocked-task-result-taskplan");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_blocked_task_result_candidate(
+        &fixture,
+        &execution_request_ref,
+        "TASKPLAN_INVALID",
+        "taskplan_repair",
+    );
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "write_artifact");
+    assert_eq!(result["next"]["artifactKind"], "taskplan_repair");
+    assert_eq!(result["next"]["submitTool"], "loom.repairSubmitFile");
+}
+
+#[test]
+fn blocked_task_result_routes_to_architecture_repair() {
+    let fixture = Fixture::new("blocked-task-result-architecture");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_blocked_task_result_candidate(
+        &fixture,
+        &execution_request_ref,
+        "DESIGN_INSUFFICIENT",
+        "architecture_artifact_repair",
+    );
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "write_artifact");
+    assert_eq!(
+        result["next"]["artifactKind"],
+        "architecture_artifact_repair"
+    );
+    assert_eq!(result["next"]["submitTool"], "loom.repairSubmitFile");
+}
+
+#[test]
+fn review_accept_approved_marks_delivery_done() {
+    let fixture = Fixture::new("review-approved");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+
+    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "done", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    assert_eq!(
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult"),
+        format!(".loom/deliveries/{delivery_id}/reviews/phase-1/results/review-phase-1.json")
+    );
+    let continued = continue_delivery(fixture.root_str());
+    assert_eq!(continued["state"], "done", "{continued:#}");
+}
+
+#[test]
+fn review_accept_continue_to_next_phase_records_phase_transition() {
+    let fixture = Fixture::new("review-continue-phase");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    append_done_phase(&fixture, &delivery_id, "phase-2");
+
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "approved",
+        "continue_to_next_phase",
+        vec![],
+    );
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "done", "{result:#}");
+    let continued = continue_delivery(fixture.root_str());
+    assert_eq!(continued["state"], "done", "{continued:#}");
+    assert_eq!(
+        active_phase_id(fixture.root_str(), &delivery_id),
+        "phase-2".to_string()
+    );
+}
+
+#[test]
+fn review_environment_blocker_cannot_route_execution_repair() {
+    let fixture = Fixture::new("review-env-blocker");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-env",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "review_limitation",
+            "failureClass": "environment_blocker",
+            "category": "environment_or_dependency",
+            "summary": "Local browser dependency is unavailable.",
+            "evidence": "The verification environment is unavailable.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "current_task",
+            "scopeRelation": "in_scope",
+            "introducedByCurrentTask": "no",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
+            && issue["fieldPath"] == "findings[].failureClass"
+    }));
+}
+
+#[test]
+fn repeated_invalid_review_result_falls_back_to_manual_review() {
+    let fixture = Fixture::new("review-invalid-fallback");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_candidate_target(
+        &fixture,
+        &review_request_ref,
+        &json!({ "schemaVersion": "1.0" }),
+    );
+
+    let first = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    let second = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    let third = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(first["state"], "repairable_error", "{first:#}");
+    assert_eq!(second["state"], "repairable_error", "{second:#}");
+    assert_eq!(third["state"], "user_gate", "{third:#}");
+    assert_eq!(third["gate"]["kind"], "manual_review");
+    assert_eq!(third["gate"]["submitTool"], "loom.reviewResolveFile");
+}
+
+#[test]
+fn review_execution_repair_materializes_repair_task() {
+    let fixture = Fixture::new("review-execution-repair");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-product",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "code",
+            "failureClass": "product_defect",
+            "category": "functional_correctness",
+            "summary": "The implemented flow misses a required behavior.",
+            "evidence": "Task result evidence does not cover the required behavior.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "current_task",
+            "scopeRelation": "in_scope",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "execute_task");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(result["next"]["repairOrigin"], "review_result");
+    assert_eq!(
+        result["next"]["repairContext"]["reviewResultRef"],
+        latest_ref_for_phase(
+            fixture.root_str(),
+            &request_delivery_id(fixture.root_str(), &review_request_ref),
+            "reviewResult"
+        )
+    );
+    assert_eq!(
+        result["next"]["repairContext"]["findingRefs"],
+        json!(["finding-product"])
+    );
+}
+
+#[test]
+fn manual_review_resolution_routes_to_execution_repair() {
+    let fixture = Fixture::new("manual-review-resolution");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "blocked",
+        "manual_review",
+        vec![json!({
+            "findingId": "finding-manual",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "manual",
+            "failureClass": "contract_gap",
+            "category": "review_limitation",
+            "summary": "Manual decision is required.",
+            "evidence": "The review requires user judgment.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "current_task",
+            "scopeRelation": "in_scope",
+            "introducedByCurrentTask": "no",
+            "recommendedNextAction": "manual_review"
+        })],
+    );
+    let gate = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(gate["state"], "user_gate", "{gate:#}");
+    let manual_request_ref = gate["requestRef"]
+        .as_str()
+        .expect("manual review requestRef")
+        .to_string();
+    write_manual_review_resolution_candidate(&fixture, &manual_request_ref);
+
+    let result = call_submit(
+        "loom.reviewResolveFile",
+        &manual_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "execute_task");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(result["next"]["repairOrigin"], "manual_review_resolution");
+    assert!(result["next"]["repairContext"]["manualReviewResolutionRef"]
+        .as_str()
+        .unwrap()
+        .contains("/manual-resolutions/"));
+    assert_eq!(
+        result["next"]["repairContext"]["userChangeSummary"],
+        "修复当前实现问题。"
+    );
+}
+
+#[test]
+fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
+    let fixture = Fixture::new("repair-submit-taskplan");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    let old_run_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlanRun");
+    let repair_result = execution::ExecutionDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &delivery_core::RouteAction {
+            kind: delivery_core::RouteActionKind::TaskplanRepair,
+            source: "test".to_string(),
+            reason: "taskplan repair".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: None,
+            target_phase_id: None,
+        },
+    );
+    let repair_result = serde_json::to_value(repair_result).expect("repair result value");
+    assert_eq!(repair_result["state"], "auto_runnable", "{repair_result:#}");
+    assert_eq!(repair_result["next"]["artifactKind"], "taskplan_repair");
+    assert_eq!(repair_result["next"]["submitTool"], "loom.repairSubmitFile");
+    let repair_request_ref = repair_result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef")
+        .to_string();
+    write_taskplan_grouped_candidates(&fixture, &repair_request_ref);
+
+    let result = call_submit(
+        "loom.repairSubmitFile",
+        &repair_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "execute_task");
+    assert_eq!(result["next"]["executionKind"], "planned_task");
+    let new_run_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlanRun");
+    assert_ne!(new_run_ref, old_run_ref);
+}
+
+#[test]
+fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
+    let fixture = Fixture::new("repair-submit-architecture");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    let old_taskplan_request_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlanRequestRef");
+    let repair_result = execution::ExecutionDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &delivery_core::RouteAction {
+            kind: delivery_core::RouteActionKind::ArchitectureArtifactRepair,
+            source: "test".to_string(),
+            reason: "architecture repair".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: None,
+            target_phase_id: None,
+        },
+    );
+    let repair_result = serde_json::to_value(repair_result).expect("repair result value");
+    assert_eq!(repair_result["state"], "auto_runnable", "{repair_result:#}");
+    assert_eq!(
+        repair_result["next"]["artifactKind"],
+        "architecture_artifact_repair"
+    );
+    assert_eq!(repair_result["next"]["submitTool"], "loom.repairSubmitFile");
+    let repair_request_ref = repair_result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef")
+        .to_string();
+    let result = complete_architecture_sections(&fixture, &repair_request_ref);
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "write_artifact");
+    assert_eq!(result["next"]["artifactKind"], "task_plan_candidate");
+    assert_eq!(result["next"]["submitTool"], "loom.taskPlanAcceptFile");
+    let new_taskplan_request_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlanRequestRef");
+    assert_ne!(new_taskplan_request_ref, old_taskplan_request_ref);
 }
 
 #[test]
@@ -726,11 +1162,8 @@ fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &
             &architecture_section_candidate_json(fixture, &current_request_ref),
         );
 
-        last = call_submit(
-            "loom.architectureSectionSubmitFile",
-            &current_request_ref,
-            fixture.root_str(),
-        );
+        let submit_tool = inspected.submit_tool.as_deref().expect("submit tool");
+        last = call_submit(submit_tool, &current_request_ref, fixture.root_str());
 
         if expected_section != "coverage" {
             assert_eq!(last["state"], "auto_runnable", "{last:#}");
@@ -955,6 +1388,298 @@ fn write_task_result_candidate_with_detail_evidence(
     .expect("write task result");
 }
 
+fn complete_task_execution_to_review(fixture: &Fixture) -> String {
+    let execution_request_ref = start_planned_task_execution(fixture);
+    write_task_result_candidate(fixture, &execution_request_ref);
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    assert_eq!(task_result["next"]["artifactKind"], "review_result");
+    task_result["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef")
+        .to_string()
+}
+
+fn start_planned_task_execution(fixture: &Fixture) -> String {
+    let architecture_request_ref = start_existing_project_architecture_flow(fixture);
+    let taskplan_result = complete_architecture_sections(fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+    write_taskplan_grouped_candidates(fixture, &taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    execution_request_ref
+}
+
+fn write_failed_task_result_candidate(fixture: &Fixture, request_ref: &str) {
+    let fields = execution_result_fields(fixture, request_ref);
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("resultFile");
+    let task_plan_id = fields["source.taskPlanId"]
+        .value
+        .as_str()
+        .expect("taskPlanId");
+    let task_id = fields["source.taskId"].value.as_str().expect("taskId");
+    write_json_atomic(
+        &fixture.root.join(result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "taskResultId": "result-failed-task-account-001",
+            "taskId": task_id,
+            "taskPlanId": task_plan_id,
+            "status": "failed",
+            "changedFiles": [],
+            "noChangeReason": null,
+            "verificationResults": [{
+                "verificationId": "verify-account-001",
+                "status": "failed",
+                "evidenceType": "static_check",
+                "summary": "Static verification failed."
+            }],
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_failed",
+                "progressObserved": true
+            },
+            "failure": {
+                "code": "VERIFICATION_FAILED",
+                "summary": "Verification failed for the current task."
+            },
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none",
+                "notes": []
+            },
+            "notes": [],
+            "frontendExperienceSelfCheck": null,
+            "runtimeDeliveryEvidence": null,
+            "requirementDetailEvidence": [],
+            "conceptEvidence": [],
+            "blockedReasons": [],
+            "createdAt": "2026-06-24T10:06:00+08:00",
+            "updatedAt": "2026-06-24T10:06:00+08:00"
+        }),
+    )
+    .expect("write failed task result");
+}
+
+fn write_blocked_task_result_candidate(
+    fixture: &Fixture,
+    request_ref: &str,
+    code: &str,
+    next_node: &str,
+) {
+    let fields = execution_result_fields(fixture, request_ref);
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("resultFile");
+    let task_plan_id = fields["source.taskPlanId"]
+        .value
+        .as_str()
+        .expect("taskPlanId");
+    let task_id = fields["source.taskId"].value.as_str().expect("taskId");
+    write_json_atomic(
+        &fixture.root.join(result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "taskResultId": format!("result-blocked-{code}"),
+            "taskId": task_id,
+            "taskPlanId": task_plan_id,
+            "status": "blocked",
+            "changedFiles": [],
+            "noChangeReason": {
+                "code": "BLOCKED",
+                "summary": "The task is blocked by an upstream contract issue."
+            },
+            "verificationResults": [{
+                "verificationId": "verify-account-001",
+                "status": "not_run",
+                "evidenceType": "static_check",
+                "summary": "Verification was not run because the task is blocked."
+            }],
+            "selfRepairSummary": {
+                "attempted": false,
+                "attemptCount": 0,
+                "stopReason": "not_attempted",
+                "progressObserved": false
+            },
+            "failure": null,
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none",
+                "notes": []
+            },
+            "notes": [],
+            "frontendExperienceSelfCheck": null,
+            "runtimeDeliveryEvidence": null,
+            "requirementDetailEvidence": [],
+            "conceptEvidence": [],
+            "blockedReasons": [{
+                "code": code,
+                "nextNode": next_node,
+                "message": "The task is blocked by an upstream contract issue.",
+                "details": {}
+            }],
+            "createdAt": "2026-06-24T10:06:00+08:00",
+            "updatedAt": "2026-06-24T10:06:00+08:00"
+        }),
+    )
+    .expect("write blocked task result");
+}
+
+fn execution_result_fields(
+    fixture: &Fixture,
+    request_ref: &str,
+) -> std::collections::BTreeMap<String, delivery_core::FieldReadResult> {
+    state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "source.taskPlanId".to_string(),
+            "source.taskId".to_string(),
+            "outputContract.resultFile".to_string(),
+        ],
+    })
+    .expect("read execution request fields")
+    .fields
+}
+
+fn write_review_result_candidate(
+    fixture: &Fixture,
+    request_ref: &str,
+    decision: &str,
+    next_action: &str,
+    findings: Vec<Value>,
+) {
+    let finding_ids = findings
+        .iter()
+        .filter_map(|finding| finding.get("findingId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "source".to_string(),
+            "outputContract.resultFile".to_string(),
+        ],
+    })
+    .expect("read review fields")
+    .fields;
+    let source = fields["source"].value.clone();
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("review result file");
+    write_json_atomic(
+        &fixture.root.join(result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "reviewId": "review-phase-1",
+            "source": {
+                "requestId": request_id_from_ref(request_ref),
+                "phaseId": source["phaseId"],
+                "taskPlanId": source["taskPlanId"],
+                "taskPlanRunId": source["taskPlanRunId"]
+            },
+            "decision": decision,
+            "findings": findings,
+            "coverageAssessment": {
+                "mustAcceptance": [],
+                "summary": {
+                    "totalMust": 0,
+                    "satisfied": 0,
+                    "insufficientEvidence": 0,
+                    "notSatisfied": 0,
+                    "notReviewed": 0
+                }
+            },
+            "limitations": [],
+            "pendingActions": [],
+            "nextAction": {
+                "type": next_action,
+                "reason": "Review selected the next route.",
+                "targetPhaseId": if next_action == "continue_to_next_phase" { json!("phase-2") } else { Value::Null },
+                "findingRefs": if next_action == "done" || next_action == "continue_to_next_phase" { json!([]) } else { json!(finding_ids.clone()) }
+            },
+            "createdAt": "2026-06-24T10:10:00+08:00",
+            "updatedAt": "2026-06-24T10:10:00+08:00"
+        }),
+    )
+    .expect("write review result");
+}
+
+fn write_manual_review_resolution_candidate(fixture: &Fixture, request_ref: &str) {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["outputContract.resultFile".to_string()],
+    })
+    .expect("read manual review fields")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("manual review resolution file");
+    write_json_atomic(
+        &fixture.root.join(result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "manualReviewResolutionId": "manual-review-resolution-001",
+            "manualReviewRequestId": request_id_from_ref(request_ref),
+            "deliveryId": request_delivery_id(fixture.root_str(), request_ref),
+            "phaseId": "phase-1",
+            "userAnswer": {
+                "text": "需要修改，请修复当前实现问题。",
+                "selectedShortReply": "request_changes"
+            },
+            "decision": "request_changes",
+            "changeRequest": {
+                "summary": "修复当前实现问题。",
+                "route": "execution_repair",
+                "reason": "需要修改代码或验证证据。",
+                "details": {}
+            },
+            "nextAction": {
+                "type": "execution_repair",
+                "targetNode": "execution",
+                "reason": "User requested execution repair."
+            },
+            "createdAt": "2026-06-24T10:12:00+08:00"
+        }),
+    )
+    .expect("write manual review resolution");
+}
+
+fn request_id_from_ref(request_ref: &str) -> String {
+    request_ref
+        .split("/requests/")
+        .nth(1)
+        .expect("request id in ref")
+        .to_string()
+}
+
 fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> Value {
     let request_root = read_request_root_value(fixture.root_str(), request_ref);
     let request_id = request_root["requestId"].as_str().expect("requestId");
@@ -1166,6 +1891,41 @@ fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> Str
         .as_str()
         .expect("latest ref")
         .to_string()
+}
+
+fn active_phase_id(project_root: &str, delivery_id: &str) -> String {
+    let index_path = std::path::Path::new(project_root)
+        .join(".loom/deliveries")
+        .join(delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    index["activePhaseId"]
+        .as_str()
+        .expect("active phase id")
+        .to_string()
+}
+
+fn append_done_phase(fixture: &Fixture, delivery_id: &str, phase_id: &str) {
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(delivery_id)
+        .join("index.json");
+    let mut index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read index"))
+            .expect("parse index");
+    index["phases"].as_array_mut().expect("phases").push(json!({
+        "phaseId": phase_id,
+        "latestRefs": {},
+        "nextAction": {
+            "kind": "done",
+            "source": "test",
+            "reason": "phase_done"
+        }
+    }));
+    write_json_atomic(&index_path, &index).expect("write delivery index");
 }
 
 fn request_delivery_id(project_root: &str, request_ref: &str) -> String {

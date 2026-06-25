@@ -8,7 +8,7 @@ use delivery_core::{
     ValidatedPlanInput,
 };
 
-pub use submit::accept_architecture_section_file;
+pub use submit::{accept_architecture_repair_file, accept_architecture_section_file};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ArchitectureDomainDispatcher;
@@ -26,9 +26,69 @@ impl DomainDispatcher for ArchitectureDomainDispatcher {
         action: &RouteAction,
     ) -> LoomMcpActionResult {
         match action.kind {
-            RouteActionKind::ArchitectureArtifactContract => {
-                request::materialize_request(project_root, delivery_id, phase_id)
-            }
+            RouteActionKind::ArchitectureArtifactContract => match action.request_ref.as_deref() {
+                Some(request_ref) => {
+                    match state::inspect_request(delivery_core::InspectRequestInput {
+                        project_root: project_root.to_string(),
+                        request_ref: request_ref.to_string(),
+                    }) {
+                        Ok(request)
+                            if request.request_kind == "architecture_artifact_repair_request" =>
+                        {
+                            write_artifact_result(
+                                project_root,
+                                request_ref,
+                                ArtifactKind::ArchitectureArtifactRepair,
+                            )
+                            .unwrap_or_else(|error| {
+                                delivery_core::LoomMcpActionResult::Failed(
+                                    delivery_core::LoomMcpFailureResult {
+                                        project_root: project_root.to_string(),
+                                        error: delivery_core::LoomMcpFailure {
+                                            code: "ARCHITECTURE_REPAIR_RESUME_FAILED".to_string(),
+                                            message: error.to_string(),
+                                            target_batch: Some(9),
+                                            domain: Some("architecture".to_string()),
+                                            route_action: Some(
+                                                "architecture_artifact_repair".to_string(),
+                                            ),
+                                            recovery_tool: Some("loom.continue".to_string()),
+                                        },
+                                    },
+                                )
+                            })
+                        }
+                        Ok(request)
+                            if request.request_kind == "architecture_sections_generation" =>
+                        {
+                            write_artifact_result(
+                                project_root,
+                                request_ref,
+                                ArtifactKind::ArchitectureSectionCandidate,
+                            )
+                            .unwrap_or_else(|error| {
+                                delivery_core::LoomMcpActionResult::Failed(
+                                    delivery_core::LoomMcpFailureResult {
+                                        project_root: project_root.to_string(),
+                                        error: delivery_core::LoomMcpFailure {
+                                            code: "ARCHITECTURE_RESUME_FAILED".to_string(),
+                                            message: error.to_string(),
+                                            target_batch: Some(8),
+                                            domain: Some("architecture".to_string()),
+                                            route_action: Some(
+                                                "architecture_artifact_contract".to_string(),
+                                            ),
+                                            recovery_tool: Some("loom.continue".to_string()),
+                                        },
+                                    },
+                                )
+                            })
+                        }
+                        _ => request::materialize_request(project_root, delivery_id, phase_id),
+                    }
+                }
+                None => request::materialize_request(project_root, delivery_id, phase_id),
+            },
             RouteActionKind::TaskplanGeneration | RouteActionKind::ContinueExecution => {
                 execution::ExecutionDomainDispatcher.dispatch_route_action(
                     project_root,

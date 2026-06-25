@@ -44,14 +44,14 @@ impl DomainDispatcher for PlanningDomainDispatcher {
                     action,
                 )
             }
-            RouteActionKind::TaskplanGeneration | RouteActionKind::ContinueExecution => {
-                execution::ExecutionDomainDispatcher.dispatch_route_action(
-                    project_root,
-                    delivery_id,
-                    phase_id,
-                    action,
-                )
-            }
+            RouteActionKind::TaskplanGeneration
+            | RouteActionKind::ContinueExecution
+            | RouteActionKind::Review
+            | RouteActionKind::ExecutionRepair
+            | RouteActionKind::TaskResultRepair
+            | RouteActionKind::TaskplanRepair
+            | RouteActionKind::ArchitectureArtifactRepair => execution::ExecutionDomainDispatcher
+                .dispatch_route_action(project_root, delivery_id, phase_id, action),
             _ => delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
                 project_root,
                 delivery_id,

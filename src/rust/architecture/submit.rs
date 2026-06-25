@@ -31,7 +31,11 @@ pub fn accept_architecture_section_file(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
 ) -> LoomMcpActionResult {
-    match accept_architecture_section_file_inner(input, authorized) {
+    match accept_architecture_section_file_inner(
+        input,
+        authorized,
+        ArchitectureSubmitMode::Generation,
+    ) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -47,9 +51,88 @@ pub fn accept_architecture_section_file(
     }
 }
 
+pub fn accept_architecture_repair_file(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+) -> LoomMcpActionResult {
+    match accept_architecture_section_file_inner(input, authorized, ArchitectureSubmitMode::Repair)
+    {
+        Ok(result) => result,
+        Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
+            project_root: input.project_root.clone(),
+            error: LoomMcpFailure {
+                code: "ARCHITECTURE_REPAIR_ACCEPT_FAILED".to_string(),
+                message: error.to_string(),
+                target_batch: Some(9),
+                domain: Some("architecture".to_string()),
+                route_action: Some("architecture_artifact_repair".to_string()),
+                recovery_tool: None,
+            },
+        }),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ArchitectureSubmitMode {
+    Generation,
+    Repair,
+}
+
+impl ArchitectureSubmitMode {
+    fn latest_ref_key(self) -> &'static str {
+        match self {
+            Self::Generation => "architectureRequestRef",
+            Self::Repair => "repairRequestRef",
+        }
+    }
+
+    fn resubmit_tool(self) -> &'static str {
+        match self {
+            Self::Generation => "loom.architectureSectionSubmitFile",
+            Self::Repair => "loom.repairSubmitFile",
+        }
+    }
+
+    fn fix_scope(self) -> &'static str {
+        match self {
+            Self::Generation => "architecture_section_candidate_only",
+            Self::Repair => "architecture_repair_section_candidate_only",
+        }
+    }
+
+    fn stale_code(self) -> &'static str {
+        match self {
+            Self::Generation => "STALE_ARCHITECTURE_REQUEST",
+            Self::Repair => "STALE_ARCHITECTURE_REPAIR_REQUEST",
+        }
+    }
+
+    fn target_batch(self) -> u32 {
+        match self {
+            Self::Generation => 8,
+            Self::Repair => 9,
+        }
+    }
+
+    fn artifact_source(self) -> &'static str {
+        match self {
+            Self::Generation => "architecture_section_submit",
+            Self::Repair => "architecture_repair_section_submit",
+        }
+    }
+
+    fn next_reason(self, section: ArchitectureSectionGroup) -> String {
+        match self {
+            Self::Generation => format!("{}_ready", section_name(section)),
+            Self::Repair => format!("{}_repair_ready", section_name(section)),
+        }
+    }
+}
+
 fn accept_architecture_section_file_inner(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
+    mode: ArchitectureSubmitMode,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let Some(target) = authorized.targets.first() else {
         return Ok(repairable(
@@ -61,6 +144,7 @@ fn accept_architecture_section_file_inner(
                 "candidate",
                 "No authorized Architecture section target was written.",
             )],
+            mode,
         ));
     };
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
@@ -74,6 +158,7 @@ fn accept_architecture_section_file_inner(
         &delivery_id,
         &phase_id,
         &input.request_ref,
+        mode,
     )? {
         return Ok(result);
     }
@@ -96,6 +181,7 @@ fn accept_architecture_section_file_inner(
                             "Architecture section candidate JSON has an invalid schema: {error}"
                         ),
                     )],
+                    mode,
                 ));
             }
         };
@@ -163,7 +249,13 @@ fn accept_architecture_section_file_inner(
         issues.extend(validate_coverage_section(&candidate.content, &allowed_refs));
     }
     if !issues.is_empty() {
-        return Ok(repairable(input, authorized, target.path.clone(), issues));
+        return Ok(repairable(
+            input,
+            authorized,
+            target.path.clone(),
+            issues,
+            mode,
+        ));
     }
 
     let locator = DeliveryPhaseLocator {
@@ -219,8 +311,8 @@ fn accept_architecture_section_file_inner(
                     ),
                     next_action: Some(RouteAction {
                         kind: RouteActionKind::ArchitectureArtifactContract,
-                        source: "architecture_section_submit".to_string(),
-                        reason: format!("{}_ready", section_name(candidate.section)),
+                        source: mode.artifact_source().to_string(),
+                        reason: mode.next_reason(candidate.section),
                         prompt: None,
                         accepted_responses: vec![],
                         request_ref: Some(input.request_ref.clone()),
@@ -265,6 +357,12 @@ fn accept_architecture_section_file_inner(
         phase
             .latest_refs
             .insert("architectureArtifact".to_string(), contract_ref.clone());
+        if matches!(mode, ArchitectureSubmitMode::Repair) {
+            phase.latest_refs.remove("taskPlanRequestId");
+            phase.latest_refs.remove("taskPlanRequestRef");
+            phase.latest_refs.remove("taskPlan");
+            phase.latest_refs.remove("taskPlanRun");
+        }
     }
     delivery.updated_at = state::store::now_string();
     store
@@ -290,8 +388,12 @@ fn accept_architecture_section_file_inner(
                 ),
                 next_action: Some(RouteAction {
                     kind: RouteActionKind::TaskplanGeneration,
-                    source: "architecture_section_submit".to_string(),
-                    reason: "architecture_ready".to_string(),
+                    source: mode.artifact_source().to_string(),
+                    reason: if matches!(mode, ArchitectureSubmitMode::Repair) {
+                        "architecture_repair_ready".to_string()
+                    } else {
+                        "architecture_ready".to_string()
+                    },
                     prompt: None,
                     accepted_responses: vec![],
                     request_ref: Some(contract_ref),
@@ -976,6 +1078,7 @@ fn repairable(
     authorized: &AuthorizedWriteSet,
     target_file: String,
     issues: Vec<delivery_core::RepairIssue>,
+    mode: ArchitectureSubmitMode,
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
@@ -986,8 +1089,8 @@ fn repairable(
             .map(|target| target.target_id.clone())
             .collect(),
         issues,
-        resubmit_tool: "loom.architectureSectionSubmitFile".to_string(),
-        fix_scope: Some("architecture_section_candidate_only".to_string()),
+        resubmit_tool: mode.resubmit_tool().to_string(),
+        fix_scope: Some(mode.fix_scope().to_string()),
         read_groups: authorized.read_groups.clone(),
     })
 }
@@ -997,6 +1100,7 @@ fn ensure_latest_request(
     delivery_id: &str,
     phase_id: &str,
     request_ref: &str,
+    mode: ArchitectureSubmitMode,
 ) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
     let store = FileTransitionStore;
     let delivery = store
@@ -1006,6 +1110,7 @@ fn ensure_latest_request(
         return Ok(Some(stale_failure(
             project_root,
             "Architecture submit must bind to the active phase.".to_string(),
+            mode,
         )));
     }
     let Some(phase) = delivery
@@ -1016,31 +1121,37 @@ fn ensure_latest_request(
         return Ok(Some(stale_failure(
             project_root,
             format!("delivery {} is missing phase {}", delivery_id, phase_id),
+            mode,
         )));
     };
     if phase
         .latest_refs
-        .get("architectureRequestRef")
+        .get(mode.latest_ref_key())
         .map(String::as_str)
         != Some(request_ref)
     {
         return Ok(Some(stale_failure(
             project_root,
             "Architecture submit must use the active phase latest requestRef.".to_string(),
+            mode,
         )));
     }
     Ok(None)
 }
 
-fn stale_failure(project_root: &str, message: String) -> LoomMcpActionResult {
+fn stale_failure(
+    project_root: &str,
+    message: String,
+    mode: ArchitectureSubmitMode,
+) -> LoomMcpActionResult {
     LoomMcpActionResult::Failed(LoomMcpFailureResult {
         project_root: project_root.to_string(),
         error: LoomMcpFailure {
-            code: "STALE_ARCHITECTURE_REQUEST".to_string(),
+            code: mode.stale_code().to_string(),
             message,
-            target_batch: Some(8),
+            target_batch: Some(mode.target_batch()),
             domain: Some("architecture".to_string()),
-            route_action: Some("architecture_section_submit".to_string()),
+            route_action: Some(mode.artifact_source().to_string()),
             recovery_tool: Some("loom.continue".to_string()),
         },
     })

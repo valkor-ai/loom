@@ -352,7 +352,7 @@ pub fn accept_task_plan_file(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
 ) -> LoomMcpActionResult {
-    match accept_task_plan_file_inner(input, authorized) {
+    match accept_task_plan_file_inner(input, authorized, TaskPlanSubmitMode::Generation) {
         Ok(result) => result,
         Err(error) => failed(
             &input.project_root,
@@ -363,9 +363,82 @@ pub fn accept_task_plan_file(
     }
 }
 
+pub fn accept_task_plan_repair_file(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+) -> LoomMcpActionResult {
+    match accept_task_plan_file_inner(input, authorized, TaskPlanSubmitMode::Repair) {
+        Ok(result) => result,
+        Err(error) => failed(
+            &input.project_root,
+            "TASKPLAN_REPAIR_ACCEPT_FAILED",
+            error.to_string(),
+            "taskplan_repair_accept",
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TaskPlanSubmitMode {
+    Generation,
+    Repair,
+}
+
+impl TaskPlanSubmitMode {
+    fn latest_ref_key(self) -> &'static str {
+        match self {
+            Self::Generation => "taskPlanRequestRef",
+            Self::Repair => "repairRequestRef",
+        }
+    }
+
+    fn resubmit_tool(self) -> &'static str {
+        match self {
+            Self::Generation => "loom.taskPlanAcceptFile",
+            Self::Repair => "loom.repairSubmitFile",
+        }
+    }
+
+    fn fix_scope(self) -> &'static str {
+        match self {
+            Self::Generation => "taskplan_grouped_candidates_only",
+            Self::Repair => "taskplan_repair_grouped_candidates_only",
+        }
+    }
+
+    fn stale_code(self) -> &'static str {
+        match self {
+            Self::Generation => "STALE_TASKPLAN_REQUEST",
+            Self::Repair => "STALE_TASKPLAN_REPAIR_REQUEST",
+        }
+    }
+
+    fn route_action(self) -> &'static str {
+        match self {
+            Self::Generation => "taskplan_accept",
+            Self::Repair => "taskplan_repair_accept",
+        }
+    }
+
+    fn next_source(self) -> &'static str {
+        match self {
+            Self::Generation => "task_plan_accept",
+            Self::Repair => "taskplan_repair_accept",
+        }
+    }
+
+    fn next_reason(self) -> &'static str {
+        match self {
+            Self::Generation => "taskplan_ready",
+            Self::Repair => "taskplan_repair_ready",
+        }
+    }
+}
+
 fn accept_task_plan_file_inner(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
+    mode: TaskPlanSubmitMode,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
@@ -380,6 +453,7 @@ fn accept_task_plan_file_inner(
         &delivery_id,
         &phase_id,
         &input.request_ref,
+        mode,
     )? {
         return Ok(stale);
     }
@@ -407,7 +481,7 @@ fn accept_task_plan_file_inner(
     let outline: TaskPlanOutlineCandidateAgentWritable = read_project_json(root, &outline_ref)?;
     let mut issues = validate_outline(&outline, &authorized.request_id, &delivery_id, &phase_id);
     if !issues.is_empty() {
-        return Ok(repairable(input, authorized, outline_ref, issues));
+        return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
     if outline.status != "ready" {
         issues.push(issue(
@@ -416,7 +490,7 @@ fn accept_task_plan_file_inner(
             "TaskPlan outline must be ready before it can be accepted.",
             Some("outline"),
         ));
-        return Ok(repairable(input, authorized, outline_ref, issues));
+        return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
     let mut groups = Vec::new();
@@ -437,7 +511,7 @@ fn accept_task_plan_file_inner(
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     if !issues.is_empty() {
-        return Ok(repairable(input, authorized, outline_ref, issues));
+        return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
     let source_refs = fields
@@ -576,8 +650,8 @@ fn accept_task_plan_file_inner(
         phase.latest_refs.insert("taskPlanRun".to_string(), run_ref);
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ContinueExecution,
-            source: "task_plan_accept".to_string(),
-            reason: "taskplan_ready".to_string(),
+            source: mode.next_source().to_string(),
+            reason: mode.next_reason().to_string(),
             prompt: None,
             accepted_responses: vec![],
             request_ref: Some(input.request_ref.clone()),
@@ -1367,6 +1441,7 @@ fn ensure_latest_request(
     delivery_id: &str,
     phase_id: &str,
     request_ref: &str,
+    mode: TaskPlanSubmitMode,
 ) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
     let store = FileTransitionStore;
     let delivery = store
@@ -1380,17 +1455,19 @@ fn ensure_latest_request(
         return Ok(Some(stale_failure(
             project_root,
             "TaskPlan submit phase does not exist.".to_string(),
+            mode,
         )));
     };
     if phase
         .latest_refs
-        .get("taskPlanRequestRef")
+        .get(mode.latest_ref_key())
         .map(String::as_str)
         != Some(request_ref)
     {
         return Ok(Some(stale_failure(
             project_root,
             "TaskPlan submit must use the active phase latest requestRef.".to_string(),
+            mode,
         )));
     }
     Ok(None)
@@ -1401,6 +1478,7 @@ fn repairable(
     authorized: &AuthorizedWriteSet,
     target_file: String,
     issues: Vec<delivery_core::RepairIssue>,
+    mode: TaskPlanSubmitMode,
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
@@ -1411,18 +1489,22 @@ fn repairable(
             .map(|target| target.target_id.clone())
             .collect(),
         issues,
-        resubmit_tool: "loom.taskPlanAcceptFile".to_string(),
-        fix_scope: Some("taskplan_grouped_candidates_only".to_string()),
+        resubmit_tool: mode.resubmit_tool().to_string(),
+        fix_scope: Some(mode.fix_scope().to_string()),
         read_groups: authorized.read_groups.clone(),
     })
 }
 
-fn stale_failure(project_root: &str, message: String) -> LoomMcpActionResult {
+fn stale_failure(
+    project_root: &str,
+    message: String,
+    mode: TaskPlanSubmitMode,
+) -> LoomMcpActionResult {
     failed(
         project_root,
-        "STALE_TASKPLAN_REQUEST",
+        mode.stale_code(),
         message,
-        "taskplan_accept",
+        mode.route_action(),
     )
 }
 

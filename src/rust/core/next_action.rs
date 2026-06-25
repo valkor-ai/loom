@@ -143,8 +143,28 @@ pub struct ExecuteVerificationPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RepairContext {
-    pub origin: RepairOrigin,
+    pub repair_origin: RepairOrigin,
+    pub repair_request_ref: String,
+    pub source_task_id: String,
     pub issues: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_result_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finding_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manual_review_resolution_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_change_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_task_result_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_failure_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_contract_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_code_level_checks: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

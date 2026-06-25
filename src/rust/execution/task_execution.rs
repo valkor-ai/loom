@@ -57,17 +57,11 @@ fn continue_execution_inner(
     let (task_plan, mut run) = load_current_plan_and_run(root, &locator)?;
     let Some(task_id) = running_or_ready_task_id(&run) else {
         update_route_for_review(project_root, delivery_id, phase_id)?;
-        return Ok(LoomMcpActionResult::Failed(LoomMcpFailureResult {
-            project_root: project_root.to_string(),
-            error: LoomMcpFailure {
-                code: "not_implemented_for_batch".to_string(),
-                message: "review requires the review domain handler.".to_string(),
-                target_batch: Some(9),
-                domain: Some("execution".to_string()),
-                route_action: Some("review".to_string()),
-                recovery_tool: None,
-            },
-        }));
+        return Ok(crate::review::materialize_review_request(
+            project_root,
+            delivery_id,
+            phase_id,
+        ));
     };
     let task = task_plan
         .tasks

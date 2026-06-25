@@ -514,6 +514,25 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         "loom.recordTaskResultFile" => {
             return execution::accept_task_result_file(&normalized_input, &authorized);
         }
+        "loom.reviewAcceptFile" => {
+            return execution::accept_review_result_file(&normalized_input, &authorized);
+        }
+        "loom.reviewResolveFile" => {
+            return execution::accept_manual_review_resolution_file(&normalized_input, &authorized);
+        }
+        "loom.repairSubmitFile" => {
+            if authorized.artifact_kind == delivery_core::ArtifactKind::ArchitectureArtifactRepair {
+                return architecture::accept_architecture_repair_file(
+                    &normalized_input,
+                    &authorized,
+                );
+            }
+            return execution::accept_repair_file(
+                &normalized_input,
+                &authorized,
+                BrainstormDomainDispatcher,
+            );
+        }
         _ => {}
     }
 
