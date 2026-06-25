@@ -1,0 +1,41 @@
+{
+  "description": "Loom workflow guards for Claude Code. These hooks keep active Loom runs on the agent-neutral protocol while allowing Claude internal task and subagent tools as implementation aids.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|EnterPlanMode|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/loom-workflow-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/loom-workflow-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/loom-workflow-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "loom",
+  "version": "0.1.0",
+  "description": "A Codex adapter for Loom that routes explicit @loom commands through the local delivery control CLI.",
+  "author": {
+    "name": "Loom"
+  },
+  "license": "UNLICENSED",
+  "keywords": [
+    "codex",
+    "delivery",
+    "planning",
+    "verification",
+    "deployment"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Loom",
+    "shortDescription": "Route @loom commands through the local delivery control CLI.",
+    "longDescription": "Loom is an agent-neutral delivery control layer. This plugin is the Codex adapter: it routes explicit @loom commands through the local Loom CLI with the Codex agent profile, using delivery-scoped state, Brainstorm confirmation, structured contract requests, task execution requests, review, repair, and continue routing.",
+    "developerName": "Loom",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "@loom plan this feature",
+      "@loom status",
+      "@loom continue"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

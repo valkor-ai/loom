@@ -22,7 +22,8 @@
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
     <a href="https://discord.gg/Yr7UjwbYPC"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white"></a>
-    <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white">
+    <img alt="Rust" src="https://img.shields.io/badge/Rust-MCP%20runtime-b7410e?logo=rust&logoColor=white">
+    <img alt="Python" src="https://img.shields.io/badge/Python-algorithms-3776AB?logo=python&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
 </div>
@@ -31,7 +32,7 @@
 
 Loom is an open-source delivery harness for existing coding agents. It does not replace the model or editor you already use; it turns each delivery goal into a structured loop of planning, building, verification, repair, preview, and handoff.
 
-Loom uses dynamic workflows to choose the right delivery path for each goal, then makes that path durable: project context, task contracts, backend state, test results, preview evidence, repair notes, and handoff reports are persisted so the next session, agent, or CLI can continue without starting over.
+Loom uses dynamic workflows to choose the right delivery path for each goal, then makes that path durable: project context, task contracts, backend state, test results, preview evidence, repair notes, and handoff reports are persisted so the next session or agent can continue without starting over.
 
 Instead of a one-shot prompt chain, Loom treats delivery as a loop: route the next step, execute, verify, record evidence, repair when needed, and continue from saved state.
 
@@ -53,9 +54,9 @@ Self-check bias | Review, verification, repair requests, and evidence records se
 Token waste | Project summaries, task graphs, backend/runtime state, test results, and deployment evidence reduce repeated whole-repo reads.
 Handoff gaps | Delivery reports, preview checks, logs, and repair history make the final state inspectable by humans and other agents.
 
-The hard part is the harness around the model: durable state, scoped work, routing, verification, recovery, and human-readable evidence. Loom uses dynamic workflows as the operating pattern, then lifts them to the project level so delivery can survive interruptions, compaction, adapter switches, and future handoffs.
+The hard part is the harness around the model: durable state, scoped work, routing, verification, recovery, and human-readable evidence. Loom uses dynamic workflows as the operating pattern, then lifts them to the project level so delivery can survive interruptions, compaction, agent switches, and future handoffs.
 
-That is where Loom is different from prompt files, one-off workflows, and single-agent scripts: it stores delivery state in `.loom/`, exposes an agent-neutral CLI, and makes verification, repair, preview, and handoff first-class protocol steps.
+That is where Loom is different from prompt files, one-off workflows, and single-agent scripts: it stores delivery state in `.loom/`, exposes an MCP tool protocol to coding agents, and makes verification, repair, preview, and handoff first-class protocol steps.
 
 ## From Demo to Delivery
 
@@ -79,7 +80,7 @@ Requirement intelligence | Turns clarification from a chat step into a delivery-
 Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and let requirement clarification pull only matching chunks into the right step without making the knowledge base a hidden requirement source.
 Token-saving context | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents do not reread the whole repository every turn.
 Task contracts | Turn broad goals into bounded tasks with source refs, acceptance intent, result files, and continuation rules.
-Executable tools | Give agents CLI commands for context collection, task routing, result recording, deployment checks, and delivery evidence.
+Executable tools | Give agents MCP tools for context collection, task routing, result recording, deployment checks, and delivery evidence.
 Backend readiness | Track databases, auth, storage, functions, environment variables, services, and runtime requirements as part of the delivery state.
 UIX guidance | Preserve visual direction, interaction flows, responsive states, accessibility expectations, and product-specific interface details as delivery requirements.
 Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
@@ -91,7 +92,7 @@ High-level context path:
 
 ```text
 Your coding agent / app
-(Codex, Claude Code, OpenCode, future adapters...)
+(Codex, Claude Code, OpenCode, future agents...)
         |
         | delivery goal . repo context . logs . tests . preview evidence
         v
@@ -100,15 +101,15 @@ Your coding agent / app
 |----------------------------------------------------------------------------|
 | Dynamic workflow router -> Request manifest -> Agent read plan              |
 |                              |                                             |
-|                              |- .refs/*.json        full authority          |
-|                              |- fieldGroups         grouped required reads  |
-|                              |- inspect selectors   targeted retrieval      |
-|                              `- compact envelope    next action + refs      |
+|                              |- requestReadPlan     grouped required reads  |
+|                              |- MCP field resources targeted retrieval      |
+|                              |- write targets       authorized artifact I/O |
+|                              `- action result       next tool + compact view |
 |                                                                            |
 | Task contracts . evidence windows . fullLogRef . review/repair/resume state |
 +----------------------------------------------------------------------------+
         |
-        | compact instruction + selected refs + retrieval path
+        | compact instruction + selected field groups + retrieval path
         v
 Agent turn / LLM context
 ```
@@ -117,39 +118,47 @@ In the latest 11-case agent-run benchmark, Codex + Loom used 15.8% fewer tokens 
 
 ## Prerequisites
 
-- Node.js >= 20
-- npm
-- The coding agent CLI for the adapter you install: Codex CLI for Codex, Claude Code CLI for Claude Code, or OpenCode CLI for OpenCode
+- One supported coding agent installed locally: Codex, Claude Code, or OpenCode
 - Docker for `loom deploy`
 
 ## Quick Start
 
+Install Loom for the coding agent you use. The installer downloads the platform package, installs the Rust MCP server, bundles the Python algorithm runtime, writes the agent MCP registration, and refreshes the local plugin.
+
+Codex:
+
 ```bash
-# 1. Clone Loom and install dependencies
-git clone https://github.com/valkor-ai/loom.git
-cd loom
-npm install
-
-# 2. Install or refresh the local adapter you use
-
-# Codex: installs or updates the Codex local plugin and the shared launcher.
-npm run plugin:install-codex
-
-# Claude Code: installs the Claude Code plugin package, skills, hooks, and launcher.
-npm run plugin:install-claude
-
-# OpenCode: installs local slash commands, plugin hook, references, and launcher.
-npm run plugin:install-opencode
-
-# All adapters: useful when developing or testing multiple agents on this machine.
-npm run plugin:install-adapters
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent codex
 ```
 
-Each adapter install script builds the CLI, writes the stable launcher at `~/.loom/bin/loom-cli`, records adapter metadata under `~/.loom/adapters/<agent>`, and refreshes that agent's local adapter files. Agent-facing commands use this launcher instead of depending on a `loom` binary in your shell `PATH`.
+Claude Code:
 
-`plugin:install-adapters` installs or refreshes Codex, Claude Code, and OpenCode together.
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent claude-code
+```
 
-After installing or updating an adapter, open a new agent session in the target project so the refreshed local plugin is loaded.
+OpenCode:
+
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent opencode
+```
+
+All supported agents on the same machine:
+
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent all
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/valkor-ai/loom/releases/latest/download/install.ps1 -OutFile install.ps1
+.\install.ps1 -agent codex
+```
+
+Run the same install command again to upgrade. The installer removes Loom-owned legacy CLI plugin artifacts before installing the MCP runtime. If it finds files it cannot prove are Loom-owned, it stops and tells you what to remove manually instead of overwriting user files.
+
+After installing or updating an agent plugin, open a new agent session in the target project so the refreshed MCP registration and plugin files are loaded.
 
 To verify the install without starting a delivery, use the Loom command inside your coding agent:
 
@@ -158,13 +167,13 @@ To verify the install without starting a delivery, use the Loom command inside y
 /loom status     # Claude Code and OpenCode
 ```
 
-`status` is read-only. In a project that has not used Loom yet, `STATE_NOT_INITIALIZED` is a valid smoke-check result: it means the adapter command is available and no delivery has been started.
+`status` is read-only. In a project that has not used Loom yet, `STATE_NOT_INITIALIZED` is a valid smoke-check result: it means the plugin command is available and no delivery has been started.
 
 You normally do not initialize `.loom/` by hand. Starting a delivery from the agent, such as `@loom build ...` or `/loom build ...`, initializes the project-local delivery state when needed.
 
 ## How to Use
 
-Loom is meant to be used through the local plugin inside your coding agent. Use `@loom` in Codex and `/loom` in Claude Code or OpenCode; the CLI launcher is wired by the adapter and is not the normal user-facing workflow.
+Loom is meant to be used through the local plugin inside your coding agent. Use `@loom` in Codex and `/loom` in Claude Code or OpenCode. The Rust MCP server is started by the agent MCP registration; users do not start it by hand.
 
 ### Use Knowledge Sources
 
@@ -250,16 +259,16 @@ Claude Code and OpenCode:
 /loom deploy
 ```
 
-In all adapters, the command starts the same Loom delivery protocol. The adapter sets its own agent profile and uses the shared launcher installed by the adapter install scripts.
+In all agents, the command starts the same Loom MCP delivery protocol. The plugin routes the request to Loom tools and follows the structured next action returned by the MCP server.
 
-Use `continue` whenever you want Loom to resume or advance the current delivery safely. This is the right first action after reopening an agent session, after an interruption, after a command succeeds but the agent does not keep going, or when you are not sure which internal step is next. Do not guess internal commands such as `next-task`, `review`, or `repair` first; run `continue` and follow the returned instruction.
+Use `continue` whenever you want Loom to resume or advance the current delivery safely. This is the right first action after reopening an agent session, after an interruption, after a tool action succeeds but the agent does not keep going, or when you are not sure which step is next.
 
 ```text
 @loom continue     # Codex
 /loom continue     # Claude Code and OpenCode
 ```
 
-Agent adapters set the Loom agent profile and routing environment for you. Use the agent command surface for normal work; the underlying CLI launcher is an adapter implementation detail.
+Agent plugins set the Loom routing environment for you. Use the agent command surface for normal work; Loom's product runtime is the MCP server installed by `loom-setup`.
 
 ## How It Works
 
@@ -278,10 +287,10 @@ Loom creates project-local delivery state under `.loom/` and uses it as the sour
 Need | Command or file
 --- | ---
 Check Loom plugin availability | `@loom status` in Codex, or `/loom status` in Claude Code and OpenCode
-Install or refresh all adapters | `npm run plugin:install-adapters`
-Install or refresh Codex adapter | `npm run plugin:install-codex`
-Install or refresh Claude Code adapter | `npm run plugin:install-claude`
-Install or refresh OpenCode adapter | `npm run plugin:install-opencode`
+Install or upgrade Codex plugin | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent codex`
+Install or upgrade Claude Code plugin | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent claude-code`
+Install or upgrade OpenCode plugin | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent opencode`
+Install or upgrade all supported plugins | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent all`
 Run a local deployment preview | `@loom deploy` in Codex, or `/loom deploy` in Claude Code and OpenCode
 
 ## FAQ
@@ -289,7 +298,7 @@ Run a local deployment preview | `@loom deploy` in Codex, or `/loom deploy` in C
 <details>
 <summary>How is Loom different from <code>CLAUDE.md</code>, <code>AGENTS.md</code>, or <code>.cursorrules</code>?</summary>
 
-Those files are useful entry points, but they tend to become large prompts. Loom adds stateful delivery routing, task artifacts, review results, repair requests, deployment evidence, and agent-neutral CLI commands around them.
+Those files are useful entry points, but they tend to become large prompts. Loom adds stateful delivery routing, task artifacts, review results, repair requests, deployment evidence, and MCP tools around them.
 
 </details>
 
@@ -307,25 +316,31 @@ Not yet. Production deployment will be added later. Current deployment support f
 
 </details>
 
-## Uninstalling Local Adapters
+## Uninstalling Loom
 
-If you need to remove a local adapter from this machine, use the matching uninstall command:
-
-```bash
-npm run plugin:uninstall-codex
-npm run plugin:uninstall-claude
-npm run plugin:uninstall-opencode
-```
-
-To remove all local Loom adapters from this machine:
+If you need to remove Loom from one local agent, use `loom-setup`:
 
 ```bash
-npm run plugin:uninstall-adapters
+~/.loom/bin/loom-setup uninstall --agent codex
+~/.loom/bin/loom-setup uninstall --agent claude-code
+~/.loom/bin/loom-setup uninstall --agent opencode
 ```
 
-The uninstall scripts remove only user-level adapter install artifacts, such as Codex plugin source/cache entries, Claude Code commands/skills, OpenCode commands/plugins/references, and `~/.loom/adapters/<agent>` metadata. They do not delete project-local `.loom/` delivery state. The shared launcher `~/.loom/bin/loom-cli` is removed only when no Loom adapter metadata remains under `~/.loom/adapters/`.
+To remove all local Loom agent plugins from this machine:
 
-After uninstalling an adapter, open a new agent session so that agent reloads its local command/plugin state.
+```bash
+~/.loom/bin/loom-setup uninstall --all
+```
+
+To remove Loom user-level runtime data, including installed runtimes and user-level knowledge indexes:
+
+```bash
+~/.loom/bin/loom-setup purge
+```
+
+`uninstall` keeps project-local `.loom/` delivery state. `purge` is intentionally broader and should be used only when you want to remove Loom's user-level runtime and indexes from this machine.
+
+After uninstalling a plugin, open a new agent session so that agent reloads its local command/plugin state.
 
 ## Related Work
 

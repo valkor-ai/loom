@@ -677,6 +677,45 @@ fn validate_package(package_root: &Path, manifest: &ReleaseManifest) -> Result<(
             return Err(SetupError::MissingPackageEntry(path));
         }
     }
+    audit_package_contents(package_root)?;
+    Ok(())
+}
+
+fn audit_package_contents(package_root: &Path) -> Result<(), SetupError> {
+    let forbidden_prefixes = [
+        "src/",
+        "tests/",
+        "node_modules/",
+        "dist/",
+        ".git/",
+        "scripts/refresh-local-codex-plugin.js",
+        "scripts/refresh-local-claude-plugin.js",
+        "scripts/refresh-local-opencode-plugin.js",
+        "scripts/uninstall-local-adapter.js",
+        "scripts/lib/loom-user-install.js",
+    ];
+    let forbidden_exact = [
+        "package-lock.json",
+        "tsconfig.json",
+        "dist/cli.js",
+        "bin/loom-cli",
+    ];
+    for path in collect_files(package_root)? {
+        let relative = path
+            .strip_prefix(package_root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if forbidden_exact.contains(&relative.as_str())
+            || forbidden_prefixes
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
+        {
+            return Err(SetupError::InvalidArgument(format!(
+                "release package must not include legacy or source-only entry: {relative}"
+            )));
+        }
+    }
     Ok(())
 }
 

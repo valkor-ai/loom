@@ -3,45 +3,10 @@
   "version": "0.1.0",
   "description": "A delivery layer for coding agents that turns product requests into planned, verified, deployable software changes.",
   "license": "Apache-2.0",
-  "bin": {
-    "loom": "./dist/cli.js"
-  },
+  "private": true,
   "scripts": {
-    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.json && chmod +x dist/cli.js",
-    "check": "npm run build && node tests/run-suite.js project delivery-reference-sync && node tests/run-suite.js knowledge adapter-routing",
-    "test": "npm run build && node tests/run-suite.js all",
-    "test:deploy": "npm run build && node tests/run-suite.js deploy",
-    "test:brainstorm": "npm run build && node tests/run-suite.js brainstorm",
-    "test:architecture": "npm run build && node tests/run-suite.js architecture",
-    "test:task": "npm run build && node tests/run-suite.js task",
-    "test:knowledge": "npm run build && node tests/run-suite.js knowledge",
-    "test:protocol": "npm run build && node tests/run-suite.js protocol",
-    "test:adapters": "npm run build && node tests/run-suite.js adapters",
-    "test:review": "npm run build && node tests/run-suite.js review",
-    "test:project": "npm run build && node tests/run-suite.js project",
-    "agent:e2e-guard": "node tests/tools/agent-e2e-process-guard.js",
-    "audit:claude-log": "node tests/tools/audit-claude-session.js",
-    "plugin:install-codex": "npm run build && node scripts/refresh-local-codex-plugin.js",
-    "plugin:install-claude": "npm run build && node scripts/refresh-local-claude-plugin.js",
-    "plugin:install-opencode": "npm run build && node scripts/refresh-local-opencode-plugin.js",
-    "plugin:install-adapters": "npm run build && node scripts/refresh-local-codex-plugin.js && node scripts/refresh-local-claude-plugin.js && node scripts/refresh-local-opencode-plugin.js",
-    "plugin:uninstall-codex": "node scripts/uninstall-local-adapter.js codex",
-    "plugin:uninstall-claude": "node scripts/uninstall-local-adapter.js claude",
-    "plugin:uninstall-opencode": "node scripts/uninstall-local-adapter.js opencode",
-    "plugin:uninstall-adapters": "node scripts/uninstall-local-adapter.js all"
-  },
-  "dependencies": {
-    "commander": "^12.0.0",
-    "mammoth": "^1.12.0",
-    "pdf-parse": "^2.4.5",
-    "yaml": "^2.9.0",
-    "yauzl": "^3.3.1",
-    "zod": "^3.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/yauzl": "^2.10.3",
-    "typescript": "^5.0.0"
+    "rust:test": "cargo test --manifest-path src/rust/Cargo.toml",
+    "python:test": "python -m pytest tests/python",
+    "reference:typescript": "npm --prefix src/ts/reference test"
   }
 }

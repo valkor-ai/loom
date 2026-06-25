@@ -1,0 +1,9 @@
+{
+  "name": "loom",
+  "version": "0.1.0",
+  "description": "A Claude Code adapter for Loom that routes /loom commands through the local delivery control CLI.",
+  "hooks": "./hooks/hooks.json",
+  "author": {
+    "name": "Loom"
+  }
+}

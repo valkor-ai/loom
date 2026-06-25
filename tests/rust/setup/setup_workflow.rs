@@ -127,6 +127,53 @@ fn archive_package_layout_writes_windows_zip_artifact() {
 }
 
 #[test]
+fn archive_package_layout_rejects_legacy_typescript_runtime_entries() {
+    let fixture = Fixture::new("archive_rejects_legacy_runtime");
+    fixture.write_package();
+    write_file(
+        &fixture.package_root.join("src/ts/reference/cli.ts"),
+        "console.log('legacy cli');\n",
+    );
+    fixture.write_checksums();
+
+    let error = archive_package_layout(
+        &fixture.package_root,
+        &fixture.root.join("release"),
+        TargetPlatform::DarwinArm64,
+    )
+    .unwrap_err();
+    match error {
+        SetupError::InvalidArgument(message) => {
+            assert!(message.contains("release package must not include"));
+            assert!(message.contains("src/ts/reference/cli.ts"));
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+#[test]
+fn archive_package_layout_rejects_legacy_cli_launcher_entries() {
+    let fixture = Fixture::new("archive_rejects_legacy_launcher");
+    fixture.write_package();
+    write_file(&fixture.package_root.join("bin/loom-cli"), "#!/bin/sh\n");
+    fixture.write_checksums();
+
+    let error = archive_package_layout(
+        &fixture.package_root,
+        &fixture.root.join("release"),
+        TargetPlatform::LinuxX64,
+    )
+    .unwrap_err();
+    match error {
+        SetupError::InvalidArgument(message) => {
+            assert!(message.contains("release package must not include"));
+            assert!(message.contains("bin/loom-cli"));
+        }
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+}
+
+#[test]
 fn plugin_templates_do_not_expose_legacy_protocol_terms() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -169,6 +216,55 @@ fn plugin_templates_do_not_expose_legacy_protocol_terms() {
             );
         }
     }
+}
+
+#[test]
+fn product_docs_do_not_expose_legacy_install_or_protocol_paths() {
+    let repo = repo_root();
+    let files = [
+        "README.md",
+        "README.zh-CN.md",
+        "scripts/README.md",
+        "tests/README.md",
+    ];
+    let forbidden = [
+        "npm run plugin:",
+        "loom-cli",
+        "LOOM_AGENT_PROFILE",
+        "LOOM_COMPACT_OUTPUT",
+        "commandInvocation",
+        "submitCommand.argv",
+        "retryCommand.argv",
+        "CLI envelope",
+        "dist/cli.js",
+        "agent-neutral CLI",
+        "next-task",
+        "readCommand.argv",
+        "agentAction.read",
+        ".refs",
+    ];
+    for file in files {
+        let path = repo.join(file);
+        let content = fs::read_to_string(&path).unwrap();
+        for term in forbidden {
+            assert!(
+                !content.contains(term),
+                "{} must not contain legacy product term {term}",
+                path.display()
+            );
+        }
+    }
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 struct Fixture {

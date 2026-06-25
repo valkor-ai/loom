@@ -1,22 +1,18 @@
 # Loom Tests
 
-Loom keeps verification code under `tests/` so `scripts/` can stay focused on local maintenance tasks.
-
-Run grouped suites through the shared runner:
+Product verification is split by runtime:
 
 ```bash
-npm run test:deploy
-npm run test:knowledge
-npm run test:brainstorm
+npm run rust:test
+npm run python:test
 ```
 
-Run a single test file by filter:
+Rust tests cover the MCP server, state protocol, request read contracts, setup/install behavior, knowledge, planning, execution, review, repair, and deploy runtime behavior. Python tests cover algorithm-worker behavior.
+
+The previous TypeScript CLI test lane is archived under `tests/ts/reference/` and runs only as a migration comparison suite:
 
 ```bash
-node tests/run-suite.js deploy smoke
-node tests/run-suite.js knowledge registration
+npm run reference:typescript
 ```
 
-Use `tests/harness/` for common repository paths, Loom CLI execution, temporary project roots, and project JSON fixtures. New tests should not copy local `repoRoot`/`cli` runners unless the scenario genuinely needs a different process contract.
-
-`tests/tools/` contains agent/plugin E2E support tools. They are not part of the default test suite because they inspect local agent processes or local agent logs.
+Reference tests are not product runtime tests and must not be used as a fallback for MCP behavior.

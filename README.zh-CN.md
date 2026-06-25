@@ -22,7 +22,8 @@
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
     <a href="https://discord.gg/Yr7UjwbYPC"><img alt="Discord" src="https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white"></a>
-    <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white">
+    <img alt="Rust" src="https://img.shields.io/badge/Rust-MCP%20runtime-b7410e?logo=rust&logoColor=white">
+    <img alt="Python" src="https://img.shields.io/badge/Python-algorithms-3776AB?logo=python&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
 </div>
@@ -31,7 +32,7 @@
 
 Loom 是一套面向现有 coding agents 的开源交付 harness。它不替代你正在使用的模型或编辑器，而是把每个交付目标变成一条结构化循环：规划、构建、验证、修复、预览和交接。
 
-Loom 使用 dynamic workflows 为每个交付目标选择合适路径，并让这条路径变得持久：项目上下文、任务 contracts、后端状态、测试结果、预览证据、修复记录和交接报告都会被保存下来，让下一次会话、另一个 agent 或 CLI 不需要从头开始。
+Loom 使用 dynamic workflows 为每个交付目标选择合适路径，并让这条路径变得持久：项目上下文、任务 contracts、后端状态、测试结果、预览证据、修复记录和交接报告都会被保存下来，让下一次会话或另一个 agent 不需要从头开始。
 
 Loom 不是一次性的 prompt chain，而是把交付变成一个 loop：路由下一步、执行、验证、记录证据、在需要时修复，并从已保存状态继续推进。
 
@@ -53,9 +54,9 @@ Coding agents 已经会写代码。Loom 帮助它们从 idea 到 release 都守�
 Token 浪费 | 项目摘要、任务图、后端/运行时状态、测试结果和部署证据，减少反复读取全仓库。
 交付交接缺口 | 交付报告、预览检查、日志和修复历史，让最终状态可以被人和其他 agent 检查。
 
-真正难的是模型外围的 harness：持久状态、有边界的任务、路由、验证、恢复，以及人能读懂的交付证据。Loom 把 dynamic workflows 作为运行模式，再提升到项目级交付 harness，让交付过程可以跨越中断、compaction、adapter 切换和后续交接。
+真正难的是模型外围的 harness：持久状态、有边界的任务、路由、验证、恢复，以及人能读懂的交付证据。Loom 把 dynamic workflows 作为运行模式，再提升到项目级交付 harness，让交付过程可以跨越中断、compaction、agent 切换和后续交接。
 
-这也是 Loom 和 prompt 文件、一次性 workflow、单 agent 脚本的区别：它把交付状态写入 `.loom/`，通过 agent-neutral CLI 暴露流程，并把验证、修复、预览和交接变成协议里的一级步骤。
+这也是 Loom 和 prompt 文件、一次性 workflow、单 agent 脚本的区别：它把交付状态写入 `.loom/`，通过 MCP tool 协议暴露给 coding agent，并把验证、修复、预览和交接变成协议里的一级步骤。
 
 ## 从 Demo 到交付
 
@@ -81,7 +82,7 @@ Requirement intelligence | 把需求澄清从普通聊天确认变成交付质�
 Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段，提升业务理解质量，同时避免把知识库变成隐藏需求来源。
 Token-saving context | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，减少 agent 反复读取全仓库。
 Task contracts | 将宽泛目标拆成有边界的任务，并带上 source refs、验收意图、结果文件和 continuation rules。
-Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 CLI 命令。
+Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 MCP tools。
 Backend readiness | 将数据库、Auth、Storage、Functions、环境变量、服务和运行时需求纳入交付状态。
 UIX guidance | 将视觉方向、交互流程、响应式状态、可访问性期望和产品特定界面细节作为交付要求沉淀下来。
 Verification loop | 把 smoke test、Playwright 类验证、日志、错误摘要、修复请求和再次验证串成闭环。
@@ -93,7 +94,7 @@ Multi-agent protocol | 让 Claude Code、Codex、OpenCode 等工具共享同一�
 
 ```text
 Your coding agent / app
-(Codex, Claude Code, OpenCode, future adapters...)
+(Codex, Claude Code, OpenCode, future agents...)
         |
         | delivery goal . repo context . logs . tests . preview evidence
         v
@@ -102,15 +103,15 @@ Your coding agent / app
 |----------------------------------------------------------------------------|
 | Dynamic workflow router -> Request manifest -> Agent read plan              |
 |                              |                                             |
-|                              |- .refs/*.json        full authority          |
-|                              |- fieldGroups         grouped required reads  |
-|                              |- inspect selectors   targeted retrieval      |
-|                              `- compact envelope    next action + refs      |
+|                              |- requestReadPlan     grouped required reads  |
+|                              |- MCP field resources targeted retrieval      |
+|                              |- write targets       authorized artifact I/O |
+|                              `- action result       next tool + compact view |
 |                                                                            |
 | Task contracts . evidence windows . fullLogRef . review/repair/resume state |
 +----------------------------------------------------------------------------+
         |
-        | compact instruction + selected refs + retrieval path
+        | compact instruction + selected field groups + retrieval path
         v
 Agent turn / LLM context
 ```
@@ -119,39 +120,47 @@ Agent turn / LLM context
 
 ## 前置条件
 
-- Node.js >= 20
-- npm
-- 你要安装的 adapter 对应的 coding agent CLI：Codex 需要 Codex CLI，Claude Code 需要 Claude Code CLI，OpenCode 需要 OpenCode CLI
+- 本机已安装一种受支持的 coding agent：Codex、Claude Code 或 OpenCode
 - 使用 `loom deploy` 时需要 Docker
 
 ## 快速开始
 
+按你使用的 coding agent 安装 Loom。安装脚本会下载对应平台包，安装 Rust MCP server，携带受控 Python 算法运行时，写入 agent 的 MCP registration，并刷新本地插件。
+
+Codex：
+
 ```bash
-# 1. 克隆 Loom 并安装依赖
-git clone https://github.com/valkor-ai/loom.git
-cd loom
-npm install
-
-# 2. 安装或刷新你要使用的本地 adapter
-
-# Codex：安装或更新 Codex 本地插件和共享 launcher。
-npm run plugin:install-codex
-
-# Claude Code：安装 Claude Code 插件包、skills、hooks 和 launcher。
-npm run plugin:install-claude
-
-# OpenCode：安装本地 slash commands、plugin hook、references 和 launcher。
-npm run plugin:install-opencode
-
-# 全部 adapters：适合在本机开发或测试多个 agents 时使用。
-npm run plugin:install-adapters
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent codex
 ```
 
-每个 adapter 安装脚本都会构建 CLI，在 `~/.loom/bin/loom-cli` 写入稳定 launcher，在 `~/.loom/adapters/<agent>` 记录 adapter 元数据，并刷新对应 agent 的本地 adapter 文件。面向 agent 的命令会使用这个 launcher，不依赖用户 shell `PATH` 里的裸 `loom`。
+Claude Code：
 
-`plugin:install-adapters` 会一次性安装或刷新 Codex、Claude Code 和 OpenCode。
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent claude-code
+```
 
-安装或更新 adapter 后，请在目标项目里打开一个新的 agent 会话，让本地插件重新加载。
+OpenCode：
+
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent opencode
+```
+
+同一台机器安装全部受支持 agent：
+
+```bash
+curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent all
+```
+
+Windows PowerShell：
+
+```powershell
+Invoke-WebRequest https://github.com/valkor-ai/loom/releases/latest/download/install.ps1 -OutFile install.ps1
+.\install.ps1 -agent codex
+```
+
+重复执行同一条安装命令就是升级。安装器会在安装 MCP runtime 前清理确认属于 Loom 的旧 CLI 插件产物；如果发现无法确认归属的文件，会停止并提示人工处理路径，而不是覆盖用户文件。
+
+安装或更新 agent 插件后，请在目标项目里打开一个新的 agent 会话，让新的 MCP registration 和插件文件重新加载。
 
 如果只想验证安装是否正常、但还不想开始需求交付，请在 coding agent 里使用 Loom 命令：
 
@@ -160,13 +169,13 @@ npm run plugin:install-adapters
 /loom status     # Claude Code 和 OpenCode
 ```
 
-`status` 是只读命令。对于还没有使用过 Loom 的项目，返回 `STATE_NOT_INITIALIZED` 也属于正常的 smoke check 结果：这说明 adapter 命令可用，并且没有启动任何交付流程。
+`status` 是只读命令。对于还没有使用过 Loom 的项目，返回 `STATE_NOT_INITIALIZED` 也属于正常的 smoke check 结果：这说明插件命令可用，并且没有启动任何交付流程。
 
 正常使用时不需要手动初始化 `.loom/`。从 agent 发起交付，例如 `@loom build ...` 或 `/loom build ...`，会在需要时自动为当前项目初始化本地交付状态。
 
 ## 如何使用
 
-Loom 的正常使用入口是 code agent 里的本地插件。Codex 使用 `@loom`，Claude Code 和 OpenCode 使用 `/loom`；底层 CLI launcher 由 adapter 接好，不是普通用户的主要操作入口。
+Loom 的正常使用入口是 code agent 里的本地插件。Codex 使用 `@loom`，Claude Code 和 OpenCode 使用 `/loom`。Rust MCP server 由 agent 的 MCP registration 自动启动，用户不需要手动启动。
 
 ### 使用知识库
 
@@ -252,16 +261,16 @@ Claude Code 和 OpenCode：
 /loom deploy
 ```
 
-不同 adapter 的入口不同，但都会进入同一套 Loom 交付协议。adapter 会自动设置自己的 agent profile，并使用 adapter 安装脚本写入的共享 launcher。
+不同 agent 的入口不同，但都会进入同一套 Loom MCP 交付协议。插件会把请求路由到 Loom tools，并按 MCP server 返回的结构化 next action 继续执行。
 
-当你希望 Loom 安全恢复或推进当前交付时，优先使用 `continue`。例如重新打开 agent 会话、任务中断、某个命令成功后 agent 没继续往下走，或者你不确定下一步内部流程是什么时，都应该先用 `continue`。不要先手动猜 `next-task`、`review`、`repair` 这类内部命令；先运行 `continue`，再按返回的 instruction 执行。
+当你希望 Loom 安全恢复或推进当前交付时，优先使用 `continue`。例如重新打开 agent 会话、任务中断、某个 tool action 成功后 agent 没继续往下走，或者你不确定下一步是什么时，都应该先用 `continue`。
 
 ```text
 @loom continue     # Codex
 /loom continue     # Claude Code 和 OpenCode
 ```
 
-Agent adapter 会自动设置 Loom 所需的 agent profile 和路由环境。正常使用时请走 agent 命令入口；底层 CLI launcher 是 adapter 实现细节。
+Agent 插件会自动设置 Loom 所需的路由环境。正常使用时请走 agent 命令入口；Loom 的产品运行时是 `loom-setup` 安装的 MCP server。
 
 ## 工作方式
 
@@ -280,10 +289,10 @@ Loom 在项目本地创建 `.loom/` 交付状态，并把它作为 agent 下一�
 需求 | 命令或文件
 --- | ---
 检查 Loom 插件可用性 | Codex 使用 `@loom status`，Claude Code 和 OpenCode 使用 `/loom status`
-安装或刷新全部 adapters | `npm run plugin:install-adapters`
-安装或刷新 Codex adapter | `npm run plugin:install-codex`
-安装或刷新 Claude Code adapter | `npm run plugin:install-claude`
-安装或刷新 OpenCode adapter | `npm run plugin:install-opencode`
+安装或升级 Codex 插件 | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent codex`
+安装或升级 Claude Code 插件 | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent claude-code`
+安装或升级 OpenCode 插件 | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent opencode`
+安装或升级全部受支持插件 | `curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh \| bash -s -- --agent all`
 运行本地部署预览 | Codex 使用 `@loom deploy`，Claude Code 和 OpenCode 使用 `/loom deploy`
 
 ## FAQ
@@ -291,7 +300,7 @@ Loom 在项目本地创建 `.loom/` 交付状态，并把它作为 agent 下一�
 <details>
 <summary>Loom 和 <code>CLAUDE.md</code>、<code>AGENTS.md</code>、<code>.cursorrules</code> 有什么不同？</summary>
 
-这些文件适合作为入口，但很容易变成越来越大的 prompt。Loom 在它们之外增加了有状态交付路由、任务 artifacts、review 结果、修复请求、部署证据和 agent-neutral CLI 命令。
+这些文件适合作为入口，但很容易变成越来越大的 prompt。Loom 在它们之外增加了有状态交付路由、任务 artifacts、review 结果、修复请求、部署证据和 MCP tools。
 
 </details>
 
@@ -309,25 +318,31 @@ Loom 会把项目本地交付状态保存到 `.loom/`，包括上下文、任务
 
 </details>
 
-## 卸载本地 Adapter
+## 卸载 Loom
 
-如果你需要从本机移除某个本地 adapter，可以使用对应的卸载命令：
-
-```bash
-npm run plugin:uninstall-codex
-npm run plugin:uninstall-claude
-npm run plugin:uninstall-opencode
-```
-
-如果需要移除本机全部 Loom adapters：
+如果你需要从本机移除某个 agent 的 Loom 插件，请使用 `loom-setup`：
 
 ```bash
-npm run plugin:uninstall-adapters
+~/.loom/bin/loom-setup uninstall --agent codex
+~/.loom/bin/loom-setup uninstall --agent claude-code
+~/.loom/bin/loom-setup uninstall --agent opencode
 ```
 
-卸载脚本只会删除用户级 adapter 安装产物，例如 Codex plugin source/cache entry、Claude Code commands/skills、OpenCode commands/plugins/references，以及 `~/.loom/adapters/<agent>` 元数据。它不会删除任何项目目录里的 `.loom/` 交付状态。只有当 `~/.loom/adapters/` 下已经没有其他 Loom adapter 元数据时，共享 launcher `~/.loom/bin/loom-cli` 才会被删除。
+如果需要移除本机全部 Loom agent 插件：
 
-卸载 adapter 后，请打开新的 agent 会话，让对应 agent 重新加载本地 command/plugin 状态。
+```bash
+~/.loom/bin/loom-setup uninstall --all
+```
+
+如果需要删除 Loom 的用户级 runtime 数据，包括已安装 runtime 和用户级知识库索引：
+
+```bash
+~/.loom/bin/loom-setup purge
+```
+
+`uninstall` 会保留项目本地 `.loom/` 交付状态。`purge` 的范围更大，只应在你确认要移除本机 Loom 用户级 runtime 和索引时使用。
+
+卸载插件后，请打开新的 agent 会话，让对应 agent 重新加载本地 command/plugin 状态。
 
 ## 相关工作
 
