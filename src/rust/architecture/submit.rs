@@ -6,7 +6,7 @@ use contracts::{
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, ArchitectureSectionStatus,
 };
 use delivery_core::{
-    FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
+    DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
     LoomMcpFailureResult, LoomMcpRepairableErrorResult, OperationContext, ReadRequestFieldsInput,
     RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
@@ -24,17 +24,21 @@ use crate::{
         section_name,
     },
     request::{required_content_keys, section_order},
-    ArchitectureDomainDispatcher,
 };
 
-pub fn accept_architecture_section_file(
+pub fn accept_architecture_section_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher + Clone,
+{
     match accept_architecture_section_file_inner(
         input,
         authorized,
         ArchitectureSubmitMode::Generation,
+        dispatcher,
     ) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
@@ -51,12 +55,20 @@ pub fn accept_architecture_section_file(
     }
 }
 
-pub fn accept_architecture_repair_file(
+pub fn accept_architecture_repair_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_architecture_section_file_inner(input, authorized, ArchitectureSubmitMode::Repair)
-    {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher + Clone,
+{
+    match accept_architecture_section_file_inner(
+        input,
+        authorized,
+        ArchitectureSubmitMode::Repair,
+        dispatcher,
+    ) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -129,11 +141,15 @@ impl ArchitectureSubmitMode {
     }
 }
 
-fn accept_architecture_section_file_inner(
+fn accept_architecture_section_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
     mode: ArchitectureSubmitMode,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher + Clone,
+{
     let Some(target) = authorized.targets.first() else {
         return Ok(repairable(
             input,
@@ -294,7 +310,7 @@ fn accept_architecture_section_file_inner(
         save_request_root(&input.project_root, &authorized.request_id, &updated_root)?;
         let engine = TransitionEngine {
             store: FileTransitionStore,
-            dispatcher: ArchitectureDomainDispatcher,
+            dispatcher: dispatcher.clone(),
         };
         return engine
             .advance_after_submit(
@@ -371,7 +387,7 @@ fn accept_architecture_section_file_inner(
 
     let engine = TransitionEngine {
         store: FileTransitionStore,
-        dispatcher: ArchitectureDomainDispatcher,
+        dispatcher,
     };
     engine
         .advance_after_submit(

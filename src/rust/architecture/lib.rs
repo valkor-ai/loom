@@ -89,14 +89,6 @@ impl DomainDispatcher for ArchitectureDomainDispatcher {
                 }
                 None => request::materialize_request(project_root, delivery_id, phase_id),
             },
-            RouteActionKind::TaskplanGeneration | RouteActionKind::ContinueExecution => {
-                execution::ExecutionDomainDispatcher.dispatch_route_action(
-                    project_root,
-                    delivery_id,
-                    phase_id,
-                    action,
-                )
-            }
             _ => delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
                 project_root,
                 delivery_id,

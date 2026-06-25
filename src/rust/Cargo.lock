@@ -65,7 +65,6 @@ version = "0.1.0"
 dependencies = [
  "contracts",
  "delivery-core",
- "execution",
  "schemars",
  "serde",
  "serde_json",

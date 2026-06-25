@@ -553,7 +553,11 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
             return accept_repository_context_file(&normalized_input, &authorized);
         }
         "loom.architectureSectionSubmitFile" => {
-            return architecture::accept_architecture_section_file(&normalized_input, &authorized);
+            return architecture::accept_architecture_section_file(
+                &normalized_input,
+                &authorized,
+                BrainstormDomainDispatcher,
+            );
         }
         "loom.taskPlanAcceptFile" => {
             return execution::accept_task_plan_file(&normalized_input, &authorized);
@@ -572,6 +576,7 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
                 return architecture::accept_architecture_repair_file(
                     &normalized_input,
                     &authorized,
+                    BrainstormDomainDispatcher,
                 );
             }
             if authorized.artifact_kind == delivery_core::ArtifactKind::DeployExecutionRepairResult
