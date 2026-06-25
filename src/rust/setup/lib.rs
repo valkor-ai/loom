@@ -12,6 +12,41 @@ use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PACKAGE_SCHEMA_VERSION: &str = "1.0";
 const INSTALL_STAMP: &str = ".loom-mcp-install.json";
+const SHARED_LOOM_REFERENCES: &str = "plugins/shared/loom/references";
+const SHARED_DEPLOY_REFERENCES: &str = "plugins/shared/loom-deploy/references";
+const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
+    "plugins/shared/loom/references/delivery/design.md",
+    "plugins/shared/loom/references/delivery/domain.md",
+    "plugins/shared/loom/references/delivery/handoff.md",
+    "plugins/shared/loom/references/delivery/planning.md",
+    "plugins/shared/loom/references/delivery/repair.md",
+    "plugins/shared/loom/references/delivery/review.md",
+    "plugins/shared/loom/references/delivery/testing.md",
+    "plugins/shared/loom/references/uix/content.md",
+    "plugins/shared/loom/references/uix/core.md",
+    "plugins/shared/loom/references/uix/data.md",
+    "plugins/shared/loom/references/uix/frameworks.md",
+    "plugins/shared/loom/references/uix/interaction.md",
+    "plugins/shared/loom/references/uix/mobile.md",
+    "plugins/shared/loom/references/uix/system.md",
+    "plugins/shared/loom/references/uix/verification.md",
+    "plugins/shared/loom-deploy/references/bootstrap.md",
+    "plugins/shared/loom-deploy/references/compose.md",
+    "plugins/shared/loom-deploy/references/dockerfile.md",
+    "plugins/shared/loom-deploy/references/dotnet.md",
+    "plugins/shared/loom-deploy/references/environment.md",
+    "plugins/shared/loom-deploy/references/external-references.md",
+    "plugins/shared/loom-deploy/references/go.md",
+    "plugins/shared/loom-deploy/references/java.md",
+    "plugins/shared/loom-deploy/references/node.md",
+    "plugins/shared/loom-deploy/references/php.md",
+    "plugins/shared/loom-deploy/references/providers.md",
+    "plugins/shared/loom-deploy/references/python.md",
+    "plugins/shared/loom-deploy/references/repair.md",
+    "plugins/shared/loom-deploy/references/ruby.md",
+    "plugins/shared/loom-deploy/references/static.md",
+    "plugins/shared/loom-deploy/references/workspaces.md",
+];
 const LEGACY_MARKERS: &[&str] = &[
     "~/.loom/bin/loom-cli",
     "/.loom/bin/loom-cli",
@@ -609,6 +644,12 @@ pub fn write_package_layout(
             },
         )?;
     }
+    for shared in [SHARED_LOOM_REFERENCES, SHARED_DEPLOY_REFERENCES] {
+        fs::create_dir_all(package_dir.join(shared)).map_err(|source| SetupError::Io {
+            path: package_dir.join(shared),
+            source,
+        })?;
+    }
     let manifest = ReleaseManifest::for_platform(platform);
     write_json(&package_dir.join("manifest.json"), &manifest)?;
     write_checksums(&package_dir)?;
@@ -670,10 +711,18 @@ fn validate_package(package_root: &Path, manifest: &ReleaseManifest) -> Result<(
         manifest.plugins.codex.as_str(),
         manifest.plugins.claude_code.as_str(),
         manifest.plugins.opencode.as_str(),
+        SHARED_LOOM_REFERENCES,
+        SHARED_DEPLOY_REFERENCES,
     ];
     for relative in required {
         let path = package_root.join(relative);
         if !path.exists() {
+            return Err(SetupError::MissingPackageEntry(path));
+        }
+    }
+    for relative in REQUIRED_SHARED_REFERENCE_FILES {
+        let path = package_root.join(relative);
+        if !path.is_file() {
             return Err(SetupError::MissingPackageEntry(path));
         }
     }
@@ -832,6 +881,7 @@ fn install_codex_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), S
     let target = env.agent_plugin_root(AgentKind::Codex);
     prepare_generated_target(&target)?;
     copy_dir(template, &target)?;
+    install_skill_references(env, &target)?;
     write_install_stamp(&target, AgentKind::Codex)?;
     update_codex_marketplace(env)?;
     Ok(())
@@ -875,6 +925,7 @@ fn install_claude_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), 
     let target = env.agent_plugin_root(AgentKind::ClaudeCode);
     prepare_generated_target(&target)?;
     copy_dir(template, &target)?;
+    install_skill_references(env, &target)?;
     write_install_stamp(&target, AgentKind::ClaudeCode)?;
     let commands_root = env.claude_home.join("commands");
     fs::create_dir_all(&commands_root).map_err(|source| SetupError::Io {
@@ -913,6 +964,18 @@ fn install_opencode_plugin(env: &SetupEnvironment, template: &Path) -> Result<()
         &template.join(".opencode/plugins/loom.js"),
         &plugin_root.join("loom.js"),
     )?;
+    install_standalone_references(
+        env,
+        SHARED_LOOM_REFERENCES,
+        &env.opencode_home.join("references/loom"),
+        AgentKind::Opencode,
+    )?;
+    install_standalone_references(
+        env,
+        SHARED_DEPLOY_REFERENCES,
+        &env.opencode_home.join("references/loom-deploy"),
+        AgentKind::Opencode,
+    )?;
     write_json(
         &env.opencode_home.join(".loom-opencode-mcp-install.json"),
         &json!({
@@ -924,6 +987,39 @@ fn install_opencode_plugin(env: &SetupEnvironment, template: &Path) -> Result<()
         }),
     )?;
     Ok(())
+}
+
+fn install_skill_references(env: &SetupEnvironment, plugin_root: &Path) -> Result<(), SetupError> {
+    copy_shared_references(
+        env,
+        SHARED_LOOM_REFERENCES,
+        &plugin_root.join("skills/loom/references"),
+    )?;
+    copy_shared_references(
+        env,
+        SHARED_DEPLOY_REFERENCES,
+        &plugin_root.join("skills/loom-deploy/references"),
+    )
+}
+
+fn install_standalone_references(
+    env: &SetupEnvironment,
+    shared_relative: &str,
+    target: &Path,
+    agent: AgentKind,
+) -> Result<(), SetupError> {
+    prepare_generated_target(target)?;
+    copy_shared_references(env, shared_relative, target)?;
+    write_install_stamp(target, agent)
+}
+
+fn copy_shared_references(
+    env: &SetupEnvironment,
+    shared_relative: &str,
+    target: &Path,
+) -> Result<(), SetupError> {
+    let source = env.runtime_current().join(shared_relative);
+    copy_dir(&source, target)
 }
 
 fn write_mcp_registration(
@@ -1193,6 +1289,8 @@ fn uninstall_files_for_agent(env: &SetupEnvironment, agent: AgentKind) -> Vec<Pa
             env.opencode_home.join("commands/loom.md"),
             env.opencode_home.join("commands/loom-deploy.md"),
             env.opencode_home.join("plugins/loom.js"),
+            env.opencode_home.join("references/loom"),
+            env.opencode_home.join("references/loom-deploy"),
             env.opencode_home.join(".loom-opencode-mcp-install.json"),
         ],
     }

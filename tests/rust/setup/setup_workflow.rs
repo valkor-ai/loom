@@ -55,6 +55,47 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
 }
 
 #[test]
+fn install_projects_shared_references_to_agent_read_paths() {
+    let fixture = Fixture::new("install_shared_references");
+    fixture.write_package();
+    let env = fixture.env();
+
+    install(&env, &AgentKind::all()).unwrap();
+
+    for agent in [AgentKind::Codex, AgentKind::ClaudeCode] {
+        let root = env.agent_plugin_root(agent);
+        assert!(root.join("skills/loom/references/uix/core.md").exists());
+        assert!(root
+            .join("skills/loom/references/delivery/planning.md")
+            .exists());
+        assert!(root
+            .join("skills/loom-deploy/references/compose.md")
+            .exists());
+    }
+
+    assert!(env
+        .opencode_home
+        .join("references/loom/uix/core.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/delivery/planning.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom-deploy/compose.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/.loom-mcp-install.json")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom-deploy/.loom-mcp-install.json")
+        .exists());
+}
+
+#[test]
 fn install_blocks_unowned_existing_plugin() {
     let fixture = Fixture::new("install_blocks_unowned");
     fixture.write_package();
@@ -315,6 +356,7 @@ impl Fixture {
         self.write_codex_template();
         self.write_claude_template();
         self.write_opencode_template();
+        self.write_shared_references();
         let manifest = ReleaseManifest::for_platform(TargetPlatform::DarwinArm64);
         write_json(&self.package_root.join("manifest.json"), &manifest);
         self.write_checksums();
@@ -379,6 +421,61 @@ impl Fixture {
                 .join("plugins/opencode/.opencode/plugins/loom.js"),
             "export const LoomPlugin = async () => ({});\n",
         );
+    }
+
+    fn write_shared_references(&self) {
+        for name in [
+            "design", "domain", "handoff", "planning", "repair", "review", "testing",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/references/delivery/{name}.md")),
+                &format!("# {name} Reference\n"),
+            );
+        }
+        for name in [
+            "content",
+            "core",
+            "data",
+            "frameworks",
+            "interaction",
+            "mobile",
+            "system",
+            "verification",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/references/uix/{name}.md")),
+                &format!("# {name} Reference\n"),
+            );
+        }
+        for name in [
+            "bootstrap",
+            "compose",
+            "dockerfile",
+            "dotnet",
+            "environment",
+            "external-references",
+            "go",
+            "java",
+            "node",
+            "php",
+            "providers",
+            "python",
+            "repair",
+            "ruby",
+            "static",
+            "workspaces",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom-deploy/references/{name}.md")),
+                &format!("# {name} Reference\n"),
+            );
+        }
     }
 
     fn write_checksums(&self) {

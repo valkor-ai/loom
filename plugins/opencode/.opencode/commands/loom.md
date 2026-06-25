@@ -19,3 +19,5 @@ Call the matching Loom MCP tool for the current project directory before doing a
 After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`, ask only for `user_gate`, repair only returned targets for `repairable_error`, and stop only for `done`, `blocked`, or `failed`.
 
 Use `requestReadPlan.groups` through `loom.inspectRequest` and `loom.readFieldGroup`. Write only to returned `writeTargets` and submit only through the returned MCP submit tool.
+
+The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`; load only the smallest matching UIX or delivery file when the current action needs frontend quality guidance or delivery method guidance.

@@ -25,6 +25,13 @@ When a result contains `requestRef`, use `loom.inspectRequest` and `loom.readFie
 
 Do not search `.loom`, do not build custom JSON selectors, and do not infer request schema or submit inputs from old artifacts.
 
+## Optional References
+
+The current MCP request/result remains the authority. References are optional execution guidance; load only the smallest matching file.
+
+- User-visible frontend work: `references/uix/core.md`, then one focused UIX file when needed: `interaction.md`, `system.md`, `mobile.md`, `frameworks.md`, `content.md`, `data.md`, or `verification.md`.
+- Delivery method guidance: `references/delivery/planning.md`, `design.md`, `domain.md`, `testing.md`, `review.md`, `repair.md`, or `handoff.md`.
+
 ## Writing And Submit
 
 Write only to returned `writeTargets`. Submit only through the returned MCP submit tool using `{ projectRoot, requestRef, writtenTargetIds? }`.

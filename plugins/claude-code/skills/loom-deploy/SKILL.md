@@ -10,3 +10,11 @@ Deployment is controlled by Loom MCP deploy tools. Use the matching `loom.deploy
 During `active_operation`, call only the observation tools named by the result. During asset repair, edit only the returned generated deployment assets. During deploy execution repair, edit only the returned application/runtime files and submit through the returned repair submit tool.
 
 Do not infer stack topology, generated file paths, preview URLs, ports, or repair scope outside the current MCP result.
+
+## Optional References
+
+The current MCP deploy result remains the authority. References are optional execution guidance; load only the smallest matching file from `references/`.
+
+- Asset repair: `repair.md`, `compose.md`, `dockerfile.md`, or `environment.md`.
+- Runtime family guidance: `node.md`, `python.md`, `go.md`, `java.md`, `dotnet.md`, `php.md`, `ruby.md`, or `static.md`.
+- Workspace, bootstrap, provider, and external guidance: `workspaces.md`, `bootstrap.md`, `providers.md`, or `external-references.md`.
