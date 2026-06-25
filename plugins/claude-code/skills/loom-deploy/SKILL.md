@@ -13,8 +13,14 @@ Do not infer stack topology, generated file paths, preview URLs, ports, or repai
 
 ## Optional References
 
-The current MCP deploy result remains the authority. References are optional execution guidance; load only the smallest matching file from `references/`.
+The current MCP deploy result remains the authority. Load no reference by default; load references only when the current deploy action matches the trigger.
 
-- Asset repair: `repair.md`, `compose.md`, `dockerfile.md`, or `environment.md`.
-- Runtime family guidance: `node.md`, `python.md`, `go.md`, `java.md`, `dotnet.md`, `php.md`, `ruby.md`, or `static.md`.
-- Workspace, bootstrap, provider, and external guidance: `workspaces.md`, `bootstrap.md`, `providers.md`, or `external-references.md`.
+- `references/repair.md`: executing a returned deploy repair request.
+- `references/compose.md`: editing Compose files, service wiring, build contexts, ports, or environment blocks.
+- `references/dockerfile.md`: editing Dockerfiles or Docker ignore files.
+- `references/environment.md`: missing env, secrets, framework config, or runtime configuration.
+- `references/workspaces.md`: monorepo/workspace roots, app paths, or generated context paths.
+- `references/bootstrap.md`: database schema setup, migrations, seed/bootstrap tasks, or missing tables.
+- `references/providers.md`: provider selection or provider reuse guardrails.
+- `references/external-references.md`: comparing external Docker/agent skill guidance before absorbing it.
+- Runtime family files: load exactly the detected family file when stack-specific behavior is needed: `node.md`, `python.md`, `go.md`, `java.md`, `dotnet.md`, `php.md`, `ruby.md`, or `static.md`.

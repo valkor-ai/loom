@@ -27,10 +27,26 @@ Do not search `.loom`, do not build custom JSON selectors, and do not infer requ
 
 ## Optional References
 
-The current MCP request/result remains the authority. References are optional execution guidance; load only the smallest matching file.
+The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
 
-- User-visible frontend work: `references/uix/core.md`, then one focused UIX file when needed: `interaction.md`, `system.md`, `mobile.md`, `frameworks.md`, `content.md`, `data.md`, or `verification.md`.
-- Delivery method guidance: `references/delivery/planning.md`, `design.md`, `domain.md`, `testing.md`, `review.md`, `repair.md`, or `handoff.md`.
+UIX references:
+- `references/uix/core.md`: writing or reviewing user-visible frontend artifacts.
+- `references/uix/interaction.md`: forms, flows, search/filter, loading, empty, error, or recovery states.
+- `references/uix/system.md`: design system, tokens, components, icons, theming, motion, or localization.
+- `references/uix/mobile.md`: mobile, tablet, responsive, PWA, or touch behavior.
+- `references/uix/frameworks.md`: framework or component-library-specific frontend work.
+- `references/uix/content.md`: UX writing, labels, empty states, errors, CTAs, onboarding, or terminology.
+- `references/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
+- `references/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
+
+Delivery references:
+- `references/delivery/planning.md`: Brainstorm scope, candidates, dependencies, task planning, or phase continuation.
+- `references/delivery/design.md`: modules, interfaces, adapters, data flow, or test seams.
+- `references/delivery/domain.md`: domain terms, objects, rules, or user/code disagreements.
+- `references/delivery/testing.md`: test design, verification seam, or evidence recording.
+- `references/delivery/review.md`: review findings, manual review summaries, or repairable issues.
+- `references/delivery/repair.md`: bug fixes, failed checks, regressions, or repair loops.
+- `references/delivery/handoff.md`: final response, blocked report, handoff note, or continuation summary.
 
 ## Writing And Submit
 

@@ -20,4 +20,4 @@ Call the matching Loom MCP deploy tool for the current project directory.
 
 Follow the returned action result. Do not invent deployment assets, topology, repair scope, preview URLs, or ports outside that MCP result.
 
-The current MCP deploy result remains the authority. Optional deploy references are installed under `../references/loom-deploy/`; load only the smallest matching file for asset repair, environment, Compose, Dockerfile, workspace, bootstrap, provider, or runtime-family guidance.
+The current MCP deploy result remains the authority. Optional deploy references are installed under `../references/loom-deploy/`; load none by default. Load one file for the matching deploy action: repair, compose, dockerfile, environment, workspace, bootstrap, provider, external-reference review, or the detected runtime family.

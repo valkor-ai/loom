@@ -20,4 +20,4 @@ After the tool returns, follow `LoomMcpActionResult.state`: continue immediately
 
 Use `requestReadPlan.groups` through `loom.inspectRequest` and `loom.readFieldGroup`. Write only to returned `writeTargets` and submit only through the returned MCP submit tool.
 
-The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`; load only the smallest matching UIX or delivery file when the current action needs frontend quality guidance or delivery method guidance.
+The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`; load none by default. Load `uix/core.md` for user-visible frontend artifacts, then one focused UIX file for interaction, system, mobile, framework, content, data, or verification work. Load one delivery file for the matching action: planning, design, domain, testing, review, repair, or handoff.
