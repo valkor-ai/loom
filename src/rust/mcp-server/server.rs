@@ -8,6 +8,7 @@ use delivery_core::{
     OperationContext, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadRequestFieldsInput,
     SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
+use deploy::{DeployBootstrapInput, DeployToolInput};
 use knowledge::mcp_models::{
     KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
     KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput, KnowledgeSemanticSubmitInput,
@@ -303,6 +304,52 @@ fn call_tool(
                 knowledge::submit_semantic_pack_from_input(input),
             ))
         }
+        "loom.deployPrepare" => action_result(deploy::deploy_prepare(normalize_deploy_input(
+            parse_args::<DeployToolInput>(request.arguments)?,
+        )?)),
+        "loom.deployRun" => {
+            action_result(deploy::deploy_run(normalize_deploy_input(parse_args::<
+                DeployToolInput,
+            >(
+                request.arguments,
+            )?)?))
+        }
+        "loom.deployUp" => action_result(deploy::deploy_up(normalize_deploy_input(parse_args::<
+            DeployToolInput,
+        >(
+            request.arguments,
+        )?)?)),
+        "loom.deployStatus" => action_result(deploy::deploy_status(normalize_deploy_input(
+            parse_args::<DeployToolInput>(request.arguments)?,
+        )?)),
+        "loom.deployInspect" => action_result(deploy::deploy_inspect(normalize_deploy_input(
+            parse_args::<DeployToolInput>(request.arguments)?,
+        )?)),
+        "loom.deployValidate" => action_result(deploy::deploy_validate(normalize_deploy_input(
+            parse_args::<DeployToolInput>(request.arguments)?,
+        )?)),
+        "loom.deployLogs" => {
+            action_result(deploy::deploy_logs(normalize_deploy_input(parse_args::<
+                DeployToolInput,
+            >(
+                request.arguments,
+            )?)?))
+        }
+        "loom.deployBootstrap" => {
+            action_result(deploy::deploy_bootstrap(normalize_deploy_bootstrap_input(
+                parse_args::<DeployBootstrapInput>(request.arguments)?,
+            )?))
+        }
+        "loom.deployDown" => {
+            action_result(deploy::deploy_down(normalize_deploy_input(parse_args::<
+                DeployToolInput,
+            >(
+                request.arguments,
+            )?)?))
+        }
+        "loom.deployRepair" => action_result(deploy::deploy_repair(normalize_deploy_input(
+            parse_args::<DeployToolInput>(request.arguments)?,
+        )?)),
         name if is_submit_tool(name) => action_result(submit_file_tool(
             name,
             parse_args::<FileSubmitInput>(request.arguments)?,
@@ -527,6 +574,10 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
                     &authorized,
                 );
             }
+            if authorized.artifact_kind == delivery_core::ArtifactKind::DeployExecutionRepairResult
+            {
+                return deploy::accept_deploy_execution_repair_file(&normalized_input, &authorized);
+            }
             return execution::accept_repair_file(
                 &normalized_input,
                 &authorized,
@@ -598,6 +649,22 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
             recovery_tool: None,
         },
     })
+}
+
+fn normalize_deploy_input(mut input: DeployToolInput) -> Result<DeployToolInput, McpError> {
+    let normalized = normalize_project_root(&input.project_root)
+        .map_err(|message| McpError::invalid_params(message, None))?;
+    input.project_root = normalized.display;
+    Ok(input)
+}
+
+fn normalize_deploy_bootstrap_input(
+    mut input: DeployBootstrapInput,
+) -> Result<DeployBootstrapInput, McpError> {
+    let normalized = normalize_project_root(&input.project_root)
+        .map_err(|message| McpError::invalid_params(message, None))?;
+    input.project_root = normalized.display;
+    Ok(input)
 }
 
 fn read_resource(server: &LoomMcpServer, uri: &str) -> Result<ReadResourceResult, McpError> {

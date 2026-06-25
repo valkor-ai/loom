@@ -341,7 +341,14 @@ dependencies = [
 name = "deploy"
 version = "0.1.0"
 dependencies = [
+ "contracts",
  "delivery-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "state",
+ "thiserror",
 ]
 
 [[package]]
@@ -733,6 +740,7 @@ dependencies = [
  "architecture",
  "brainstorm",
  "delivery-core",
+ "deploy",
  "execution",
  "knowledge",
  "planning",

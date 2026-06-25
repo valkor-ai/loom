@@ -222,6 +222,12 @@ pub struct DeployRepairAssetsNext {
     pub repair_route: String,
     pub editable_files: Vec<String>,
     pub protected_files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_model_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generated_file_refs: Vec<String>,
     pub diagnostics_ref: Option<String>,
     pub error_window: Option<DeploymentErrorWindow>,
     pub retry_tool: String,
@@ -233,4 +239,10 @@ pub struct DeploymentErrorWindow {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub lines: Vec<String>,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub total_line_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matched_patterns: Vec<String>,
 }

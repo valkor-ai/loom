@@ -263,9 +263,12 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
         repair_route: "asset_repair".to_string(),
         editable_files: vec!["deploy/nginx.conf".to_string()],
         protected_files: vec!["src".to_string()],
+        source_model_ref: Some(".loom/deployment/specs/generated/source-model.json".to_string()),
+        topology_ref: Some(".loom/deployment/specs/generated/topology.json".to_string()),
+        generated_file_refs: vec![".loom/deployment/specs/generated/compose.yaml".to_string()],
         diagnostics_ref: None,
         error_window: None,
-        retry_tool: "loom.deployRun".to_string(),
+        retry_tool: "loom.deployUp".to_string(),
     })
 }
 
