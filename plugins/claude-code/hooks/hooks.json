@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|EnterPlanMode|ExitPlanMode",
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
@@ -26,6 +26,18 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/loom-workflow-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
       {
         "matcher": "*",
         "hooks": [

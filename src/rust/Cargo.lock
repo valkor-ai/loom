@@ -1154,7 +1154,13 @@ dependencies = [
 name = "setup"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "delivery-core",
+ "mcp-server",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zip",
 ]
 
 [[package]]

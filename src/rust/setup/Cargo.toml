@@ -5,9 +5,23 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "setup"
+path = "lib.rs"
+
 [[bin]]
 name = "loom-setup"
 path = "main.rs"
 
 [dependencies]
 delivery-core = { path = "../core" }
+mcp-server = { path = "../mcp-server" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zip.workspace = true
+
+[[test]]
+name = "setup_workflow"
+path = "../../../tests/rust/setup/setup_workflow.rs"

@@ -41,8 +41,11 @@ pub struct LoomMcpRuntimeContext {
 
 impl LoomMcpRuntimeContext {
     pub fn from_env() -> Self {
+        let host = std::env::var("LOOM_HOST")
+            .ok()
+            .or_else(|| std::env::var("LOOM_MCP_HOST").ok());
         Self {
-            host: HostKind::from_env_value(std::env::var("LOOM_MCP_HOST").ok().as_deref()),
+            host: HostKind::from_env_value(host.as_deref()),
             locale: std::env::var("LANG").ok(),
             time_zone: std::env::var("TZ").ok(),
         }
