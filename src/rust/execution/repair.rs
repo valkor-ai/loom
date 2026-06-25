@@ -95,13 +95,13 @@ pub fn accept_repair_file<D>(
     dispatcher: D,
 ) -> LoomMcpActionResult
 where
-    D: DomainDispatcher,
+    D: DomainDispatcher + Copy,
 {
     if authorized.artifact_kind == ArtifactKind::TaskResultRepair {
-        return crate::task_result::accept_task_result_repair_file(input, authorized);
+        return crate::task_result::accept_task_result_repair_file(input, authorized, dispatcher);
     }
     if authorized.artifact_kind == ArtifactKind::TaskplanRepair {
-        return crate::task_plan::accept_task_plan_repair_file(input, authorized);
+        return crate::task_plan::accept_task_plan_repair_file(input, authorized, dispatcher);
     }
     match accept_repair_file_inner(input, authorized, dispatcher) {
         Ok(result) => result,

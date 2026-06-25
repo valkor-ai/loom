@@ -8,6 +8,7 @@ mod task_result;
 use delivery_core::{
     DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, ValidatedPlanInput,
 };
+use serde_json::Value;
 
 pub use repair::accept_repair_file;
 pub use review::{accept_manual_review_resolution_file, accept_review_result_file};
@@ -39,14 +40,17 @@ impl DomainDispatcher for ExecutionDomainDispatcher {
             RouteActionKind::Review => {
                 review::materialize_review_request(project_root, delivery_id, phase_id)
             }
-            RouteActionKind::ExecutionRepair => repair::materialize_delivery_execution_repair(
-                project_root,
-                delivery_id,
-                phase_id,
-                "task_failure",
-                action.request_ref.clone(),
-                vec![],
-            ),
+            RouteActionKind::ExecutionRepair => {
+                let (origin, finding_refs) = execution_repair_context(action);
+                repair::materialize_delivery_execution_repair(
+                    project_root,
+                    delivery_id,
+                    phase_id,
+                    origin,
+                    action.request_ref.clone(),
+                    finding_refs,
+                )
+            }
             RouteActionKind::TaskResultRepair
             | RouteActionKind::TaskplanRepair
             | RouteActionKind::ArchitectureArtifactRepair => {
@@ -64,4 +68,26 @@ impl DomainDispatcher for ExecutionDomainDispatcher {
 
 pub fn module_name() -> &'static str {
     "execution"
+}
+
+fn execution_repair_context(action: &RouteAction) -> (&'static str, Vec<String>) {
+    let origin = match action.source.as_str() {
+        "review_result" => "review_result",
+        "manual_review_resolution" => "manual_review_resolution",
+        _ => "task_failure",
+    };
+    let finding_refs = action
+        .details
+        .as_ref()
+        .and_then(|details| {
+            details
+                .pointer("/nextAction/findingRefs")
+                .or_else(|| details.get("findingRefs"))
+        })
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect();
+    (origin, finding_refs)
 }

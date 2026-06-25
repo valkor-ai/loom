@@ -11,10 +11,11 @@ use contracts::{
     TaskRunStatus,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, ExecuteEditBoundary,
-    ExecuteVerificationPolicy, FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult,
-    PostSubmitAction, RouteAction, RouteActionKind, TransitionStore,
+    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
+    ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput, LoomMcpActionResult,
+    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
+    LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction, RouteAction, RouteActionKind,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -24,13 +25,10 @@ use state::{
     write_targets::AuthorizedWriteSet,
 };
 
-use crate::{
-    paths::{
-        task_plan_file, task_plan_group_pattern, task_plan_latest_file,
-        task_plan_outline_candidate_file, task_plan_request_file, task_plan_run_file,
-        task_plan_run_latest_file,
-    },
-    task_execution,
+use crate::paths::{
+    task_plan_file, task_plan_group_pattern, task_plan_latest_file,
+    task_plan_outline_candidate_file, task_plan_request_file, task_plan_run_file,
+    task_plan_run_latest_file,
 };
 
 pub fn materialize_request(
@@ -348,11 +346,20 @@ fn build_request_root(
     })
 }
 
-pub fn accept_task_plan_file(
+pub fn accept_task_plan_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_task_plan_file_inner(input, authorized, TaskPlanSubmitMode::Generation) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher,
+{
+    match accept_task_plan_file_inner(
+        input,
+        authorized,
+        TaskPlanSubmitMode::Generation,
+        dispatcher,
+    ) {
         Ok(result) => result,
         Err(error) => failed(
             &input.project_root,
@@ -363,11 +370,15 @@ pub fn accept_task_plan_file(
     }
 }
 
-pub fn accept_task_plan_repair_file(
+pub fn accept_task_plan_repair_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_task_plan_file_inner(input, authorized, TaskPlanSubmitMode::Repair) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher,
+{
+    match accept_task_plan_file_inner(input, authorized, TaskPlanSubmitMode::Repair, dispatcher) {
         Ok(result) => result,
         Err(error) => failed(
             &input.project_root,
@@ -435,11 +446,15 @@ impl TaskPlanSubmitMode {
     }
 }
 
-fn accept_task_plan_file_inner(
+fn accept_task_plan_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
     mode: TaskPlanSubmitMode,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher,
+{
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
             "TaskPlan request is missing deliveryId".to_string(),
@@ -639,6 +654,16 @@ fn accept_task_plan_file_inner(
     let mut delivery = store
         .load_delivery_index(&input.project_root, &delivery_id)
         .map_err(to_state_error)?;
+    let next_action = RouteAction {
+        kind: RouteActionKind::ContinueExecution,
+        source: mode.next_source().to_string(),
+        reason: mode.next_reason().to_string(),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: Some(input.request_ref.clone()),
+        details: None,
+        target_phase_id: None,
+    };
     if let Some(phase) = delivery
         .phases
         .iter_mut()
@@ -646,18 +671,9 @@ fn accept_task_plan_file_inner(
     {
         phase
             .latest_refs
-            .insert("taskPlan".to_string(), task_plan_ref);
+            .insert("taskPlan".to_string(), task_plan_ref.clone());
         phase.latest_refs.insert("taskPlanRun".to_string(), run_ref);
-        phase.next_action = Some(RouteAction {
-            kind: RouteActionKind::ContinueExecution,
-            source: mode.next_source().to_string(),
-            reason: mode.next_reason().to_string(),
-            prompt: None,
-            accepted_responses: vec![],
-            request_ref: Some(input.request_ref.clone()),
-            details: None,
-            target_phase_id: None,
-        });
+        phase.next_action = Some(next_action.clone());
     }
     delivery.status = DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
@@ -669,7 +685,24 @@ fn accept_task_plan_file_inner(
         .save_status(&input.project_root, &status)
         .map_err(to_state_error)?;
 
-    task_execution::continue_execution(&input.project_root, &delivery_id, &phase_id).into_result()
+    let engine = TransitionEngine {
+        store: FileTransitionStore,
+        dispatcher,
+    };
+    engine
+        .advance_after_submit(
+            OperationContext {
+                project_root: input.project_root.clone(),
+            },
+            SubmitAcceptedEvent {
+                delivery_id,
+                phase_id,
+                source_tool: mode.resubmit_tool().to_string(),
+                accepted_artifact_ref: task_plan_ref,
+                next_action: Some(next_action),
+            },
+        )
+        .map_err(to_state_error)
 }
 
 fn write_taskplan_result(
@@ -1570,16 +1603,6 @@ fn read_project_json<T: serde::de::DeserializeOwned>(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
-}
-
-trait IntoStateResult {
-    fn into_result(self) -> Result<LoomMcpActionResult, state::store::StateError>;
-}
-
-impl IntoStateResult for LoomMcpActionResult {
-    fn into_result(self) -> Result<LoomMcpActionResult, state::store::StateError> {
-        Ok(self)
-    }
 }
 
 pub(crate) fn execute_task_next_from_request(

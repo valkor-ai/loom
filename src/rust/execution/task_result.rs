@@ -5,10 +5,11 @@ use contracts::{
     TaskResultStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, FileSubmitInput,
+    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher, FileSubmitInput,
     LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, RouteAction,
-    RouteActionKind, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, RouteAction,
+    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore, WriteArtifactNext,
+    WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -20,15 +21,19 @@ use state::{
 
 use crate::{
     paths::task_result_file,
-    task_execution::{continue_execution, load_current_plan_and_run, save_run},
+    task_execution::{load_current_plan_and_run, save_run},
     task_plan::update_run_summary,
 };
 
-pub fn accept_task_result_file(
+pub fn accept_task_result_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_task_result_file_inner(input, authorized, false) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher,
+{
+    match accept_task_result_file_inner(input, authorized, false, dispatcher) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -44,11 +49,15 @@ pub fn accept_task_result_file(
     }
 }
 
-pub fn accept_task_result_repair_file(
+pub fn accept_task_result_repair_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_task_result_file_inner(input, authorized, true) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher,
+{
+    match accept_task_result_file_inner(input, authorized, true, dispatcher) {
         Ok(result) => result,
         Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: input.project_root.clone(),
@@ -64,11 +73,15 @@ pub fn accept_task_result_repair_file(
     }
 }
 
-fn accept_task_result_file_inner(
+fn accept_task_result_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
     repair_submit: bool,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher,
+{
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
             "TaskResult request is missing deliveryId".to_string(),
@@ -279,22 +292,53 @@ fn accept_task_result_file_inner(
     run.next_action = next_action_for_run(&run);
     run.updated_at = now;
     save_run(root, &locator, &run)?;
+    let Some(next_action) = route_action_for_task_result(&run, &result, &persisted_ref)? else {
+        update_delivery_after_result(
+            &input.project_root,
+            &delivery_id,
+            &phase_id,
+            &run,
+            &persisted_ref,
+            None,
+        )?;
+        return Ok(failed(
+            &input.project_root,
+            "BLOCKED_TASK_CANNOT_ROUTE_EXECUTION_REPAIR",
+            "Blocked TaskResult must route to taskplan_repair, architecture_artifact_repair, or needs_user_decision instead of execution_repair.".to_string(),
+            "blocked_task_result",
+        ));
+    };
     update_delivery_after_result(
         &input.project_root,
         &delivery_id,
         &phase_id,
         &run,
         &persisted_ref,
+        Some(&next_action),
     )?;
 
-    route_after_task_result(
-        &input.project_root,
-        &delivery_id,
-        &phase_id,
-        &run,
-        &result,
-        &persisted_ref,
-    )
+    let engine = TransitionEngine {
+        store: FileTransitionStore,
+        dispatcher,
+    };
+    engine
+        .advance_after_submit(
+            OperationContext {
+                project_root: input.project_root.clone(),
+            },
+            SubmitAcceptedEvent {
+                delivery_id,
+                phase_id,
+                source_tool: if repair_submit {
+                    "loom.repairSubmitFile".to_string()
+                } else {
+                    "loom.recordTaskResultFile".to_string()
+                },
+                accepted_artifact_ref: persisted_ref,
+                next_action: Some(next_action),
+            },
+        )
+        .map_err(to_state_error)
 }
 
 fn validate_result(
@@ -910,21 +954,41 @@ fn next_action_for_run(run: &contracts::TaskPlanRun) -> Option<TaskPlanRunNextAc
     }
 }
 
-fn route_after_task_result(
-    project_root: &str,
-    delivery_id: &str,
-    phase_id: &str,
+fn route_action_for_task_result(
     run: &contracts::TaskPlanRun,
     result: &TaskResult,
     result_ref: &str,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+) -> Result<Option<RouteAction>, state::store::StateError> {
     match run.status {
-        TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted => {
-            continue_execution(project_root, delivery_id, phase_id).into_result()
-        }
+        TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted => Ok(Some(RouteAction {
+            kind: RouteActionKind::ContinueExecution,
+            source: "task_result".to_string(),
+            reason: run
+                .next_action
+                .as_ref()
+                .map(|action| action.reason.clone())
+                .unwrap_or_else(|| "NEXT_TASK_READY".to_string()),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(result_ref.to_string()),
+            details: Some(task_result_route_details(run)),
+            target_phase_id: None,
+        })),
         TaskPlanRunStatus::Completed | TaskPlanRunStatus::CompletedWithNotes => {
-            crate::review::materialize_review_request(project_root, delivery_id, phase_id)
-                .into_result()
+            Ok(Some(RouteAction {
+                kind: RouteActionKind::Review,
+                source: "task_result".to_string(),
+                reason: run
+                    .next_action
+                    .as_ref()
+                    .map(|action| action.reason.clone())
+                    .unwrap_or_else(|| "RUN_READY_FOR_REVIEW".to_string()),
+                prompt: None,
+                accepted_responses: vec![],
+                request_ref: Some(result_ref.to_string()),
+                details: Some(task_result_route_details(run)),
+                target_phase_id: None,
+            }))
         }
         TaskPlanRunStatus::Failed => {
             let attempt_count = run
@@ -934,32 +998,37 @@ fn route_after_task_result(
                 .map(|state| state.attempts.len())
                 .unwrap_or(0);
             if attempt_count <= 2 {
-                Ok(crate::repair::materialize_delivery_execution_repair(
-                    project_root,
-                    delivery_id,
-                    phase_id,
-                    "task_failure",
-                    Some(result_ref.to_string()),
-                    vec![],
-                ))
+                Ok(Some(RouteAction {
+                    kind: RouteActionKind::ExecutionRepair,
+                    source: "task_result".to_string(),
+                    reason: "TASK_FAILED".to_string(),
+                    prompt: None,
+                    accepted_responses: vec![],
+                    request_ref: Some(result_ref.to_string()),
+                    details: Some(task_result_route_details(run)),
+                    target_phase_id: None,
+                }))
             } else {
-                crate::review::materialize_review_request(project_root, delivery_id, phase_id)
-                    .into_result()
+                Ok(Some(RouteAction {
+                    kind: RouteActionKind::Review,
+                    source: "task_result".to_string(),
+                    reason: "TASK_FAILED_RETRY_LIMIT_REACHED".to_string(),
+                    prompt: None,
+                    accepted_responses: vec![],
+                    request_ref: Some(result_ref.to_string()),
+                    details: Some(task_result_route_details(run)),
+                    target_phase_id: None,
+                }))
             }
         }
-        TaskPlanRunStatus::Blocked => {
-            route_blocked_task_result(project_root, delivery_id, phase_id, result, result_ref)
-        }
+        TaskPlanRunStatus::Blocked => route_blocked_task_result(result, result_ref),
     }
 }
 
 fn route_blocked_task_result(
-    project_root: &str,
-    delivery_id: &str,
-    phase_id: &str,
     result: &TaskResult,
     result_ref: &str,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+) -> Result<Option<RouteAction>, state::store::StateError> {
     let next_node = result
         .blocked_reasons
         .iter()
@@ -967,49 +1036,62 @@ fn route_blocked_task_result(
         .find(|node| !node.is_empty())
         .unwrap_or("needs_user_decision");
     match next_node {
-        "taskplan_repair" => crate::repair::materialize_taskplan_repair(
-            project_root,
-            delivery_id,
-            phase_id,
-            Some(result_ref.to_string()),
-        ),
-        "architecture_artifact_repair" => crate::repair::materialize_architecture_repair(
-            project_root,
-            delivery_id,
-            phase_id,
-            Some(result_ref.to_string()),
-        ),
-        "execution_repair" => Ok(LoomMcpActionResult::Failed(LoomMcpFailureResult {
-            project_root: project_root.to_string(),
-            error: LoomMcpFailure {
-                code: "BLOCKED_TASK_CANNOT_ROUTE_EXECUTION_REPAIR".to_string(),
-                message: "Blocked TaskResult must route to taskplan_repair, architecture_artifact_repair, or needs_user_decision instead of execution_repair.".to_string(),
-                target_batch: Some(9),
-                domain: Some("execution".to_string()),
-                route_action: Some("blocked_task_result".to_string()),
-                recovery_tool: Some("loom.continue".to_string()),
-            },
+        "taskplan_repair" => Ok(Some(RouteAction {
+            kind: RouteActionKind::TaskplanRepair,
+            source: "task_result".to_string(),
+            reason: "TASK_BLOCKED".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(result_ref.to_string()),
+            details: Some(blocked_task_route_details(result)),
+            target_phase_id: None,
         })),
-        _ => Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-            project_root: project_root.to_string(),
-            prompt: result
-                .blocked_reasons
-                .first()
-                .map(|reason| reason.message.clone())
-                .unwrap_or_else(|| {
-                    "TaskResult is blocked and requires user decision.".to_string()
-                }),
+        "architecture_artifact_repair" => Ok(Some(RouteAction {
+            kind: RouteActionKind::ArchitectureArtifactRepair,
+            source: "task_result".to_string(),
+            reason: "TASK_BLOCKED".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(result_ref.to_string()),
+            details: Some(blocked_task_route_details(result)),
+            target_phase_id: None,
+        })),
+        "execution_repair" => Ok(None),
+        _ => Ok(Some(RouteAction {
+            kind: RouteActionKind::NeedsUserDecision,
+            source: "task_result".to_string(),
+            reason: "TASK_BLOCKED".to_string(),
+            prompt: Some(
+                result
+                    .blocked_reasons
+                    .first()
+                    .map(|reason| reason.message.clone())
+                    .unwrap_or_else(|| {
+                        "TaskResult is blocked and requires user decision.".to_string()
+                    }),
+            ),
             accepted_responses: vec!["confirm".to_string(), "request_changes".to_string()],
             request_ref: Some(result_ref.to_string()),
-            delivery_id: Some(delivery_id.to_string()),
-            phase_id: Some(phase_id.to_string()),
-            gate: Some(json!({
-                "kind": "task_result_blocked",
-                "taskResultRef": result_ref,
-                "blockedReasons": result.blocked_reasons
-            })),
+            details: Some(blocked_task_route_details(result)),
+            target_phase_id: None,
         })),
     }
+}
+
+fn task_result_route_details(run: &contracts::TaskPlanRun) -> Value {
+    json!({
+        "taskPlanRunId": run.run_id,
+        "runStatus": run.status,
+        "summary": run.summary
+    })
+}
+
+fn blocked_task_route_details(result: &TaskResult) -> Value {
+    json!({
+        "kind": "task_result_blocked",
+        "taskResultId": result.task_result_id,
+        "blockedReasons": result.blocked_reasons
+    })
 }
 
 struct RepairContextInput {
@@ -1244,6 +1326,7 @@ fn update_delivery_after_result(
     phase_id: &str,
     run: &contracts::TaskPlanRun,
     result_ref: &str,
+    next_action: Option<&RouteAction>,
 ) -> Result<(), state::store::StateError> {
     let store = FileTransitionStore;
     let mut status = store.load_status(project_root).map_err(to_state_error)?;
@@ -1258,33 +1341,7 @@ fn update_delivery_after_result(
         phase
             .latest_refs
             .insert("latestTaskResult".to_string(), result_ref.to_string());
-        let kind = match run
-            .next_action
-            .as_ref()
-            .map(|action| action.r#type.as_str())
-        {
-            Some("review") => RouteActionKind::Review,
-            Some("execution_repair") => RouteActionKind::ExecutionRepair,
-            _ => RouteActionKind::ContinueExecution,
-        };
-        phase.next_action = Some(RouteAction {
-            kind,
-            source: "task_result".to_string(),
-            reason: run
-                .next_action
-                .as_ref()
-                .map(|action| action.reason.clone())
-                .unwrap_or_else(|| "task_result_recorded".to_string()),
-            prompt: None,
-            accepted_responses: vec![],
-            request_ref: Some(result_ref.to_string()),
-            details: Some(json!({
-                "taskPlanRunId": run.run_id,
-                "runStatus": run.status,
-                "summary": run.summary
-            })),
-            target_phase_id: None,
-        });
+        phase.next_action = next_action.cloned();
     }
     delivery.status = if matches!(
         run.status,
@@ -1523,14 +1580,4 @@ fn read_project_json_value(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
-}
-
-trait IntoStateResult {
-    fn into_result(self) -> Result<LoomMcpActionResult, state::store::StateError>;
-}
-
-impl IntoStateResult for LoomMcpActionResult {
-    fn into_result(self) -> Result<LoomMcpActionResult, state::store::StateError> {
-        Ok(self)
-    }
 }

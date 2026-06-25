@@ -36,6 +36,29 @@ fn workflow_owns_cross_stage_delivery_routing() {
     );
 }
 
+#[test]
+fn post_taskplan_submits_advance_through_workflow_dispatcher() {
+    let root = repo_root();
+    let server_rs = fs::read_to_string(root.join("src/rust/mcp-server/server.rs")).unwrap();
+
+    for accept_call in [
+        "execution::accept_task_plan_file",
+        "execution::accept_task_result_file",
+        "execution::accept_review_result_file",
+        "execution::accept_manual_review_resolution_file",
+        "execution::accept_repair_file",
+    ] {
+        let offset = server_rs
+            .find(accept_call)
+            .unwrap_or_else(|| panic!("{accept_call} must be called by the MCP submit router"));
+        let call_window = &server_rs[offset..server_rs.len().min(offset + 260)];
+        assert!(
+            call_window.contains("WorkflowDomainDispatcher"),
+            "{accept_call} must receive WorkflowDomainDispatcher so submit-to-next routing stays in workflow"
+        );
+    }
+}
+
 fn assert_crate_omits_dependency(root: &PathBuf, crate_name: &str, forbidden: &str) {
     let crate_root = root.join("src/rust").join(crate_name);
     let cargo_toml = fs::read_to_string(crate_root.join("Cargo.toml")).unwrap();

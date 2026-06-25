@@ -5,10 +5,11 @@ use contracts::{
     TaskResult,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, RouteAction,
-    RouteActionKind, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    apply_delivery_index, ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
+    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
+    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, RouteAction,
+    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore, WriteArtifactNext,
+    WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -354,11 +355,15 @@ fn build_review_request(
     }))
 }
 
-pub fn accept_review_result_file(
+pub fn accept_review_result_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_review_result_file_inner(input, authorized) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher,
+{
+    match accept_review_result_file_inner(input, authorized, dispatcher) {
         Ok(result) => result,
         Err(error) => failed(
             &input.project_root,
@@ -369,11 +374,15 @@ pub fn accept_review_result_file(
     }
 }
 
-pub fn accept_manual_review_resolution_file(
+pub fn accept_manual_review_resolution_file<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> LoomMcpActionResult {
-    match accept_manual_review_resolution_file_inner(input, authorized) {
+    dispatcher: D,
+) -> LoomMcpActionResult
+where
+    D: DomainDispatcher,
+{
+    match accept_manual_review_resolution_file_inner(input, authorized, dispatcher) {
         Ok(result) => result,
         Err(error) => failed(
             &input.project_root,
@@ -384,10 +393,14 @@ pub fn accept_manual_review_resolution_file(
     }
 }
 
-fn accept_review_result_file_inner(
+fn accept_review_result_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher,
+{
     let target = authorized.targets.first().ok_or_else(|| {
         state::store::StateError::InvalidArgument("ReviewResult target is missing".to_string())
     })?;
@@ -466,7 +479,15 @@ fn accept_review_result_file_inner(
         &result,
         &result_ref,
     )?;
-    route_after_review(input, authorized, &result, result_ref)
+    route_after_review(
+        input,
+        authorized,
+        &delivery_id,
+        &phase_id,
+        &result,
+        result_ref,
+        dispatcher,
+    )
 }
 
 fn validate_review_result(
@@ -749,64 +770,59 @@ fn validate_review_signals(
     }
 }
 
-fn route_after_review(
+fn route_after_review<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
+    delivery_id: &str,
+    phase_id: &str,
     result: &ReviewResult,
     result_ref: String,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
-    match result.next_action.r#type.as_str() {
-        "done" => Ok(LoomMcpActionResult::Done(LoomMcpDoneResult {
-            project_root: input.project_root.clone(),
-            summary: "Review approved the current phase.".to_string(),
-            details: Some(json!({
-                "reviewResultRef": result_ref,
-                "decision": result.decision
-            })),
-            warnings: vec![],
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher,
+{
+    let next_action = review_route_action(result, &result_ref);
+    if matches!(
+        next_action.kind,
+        RouteActionKind::ManualReview | RouteActionKind::NeedsUserDecision
+    ) {
+        return materialize_manual_review_request(input, authorized, result, result_ref);
+    }
+    let engine = TransitionEngine {
+        store: FileTransitionStore,
+        dispatcher,
+    };
+    engine
+        .advance_after_submit(
+            OperationContext {
+                project_root: input.project_root.clone(),
+            },
+            SubmitAcceptedEvent {
+                delivery_id: delivery_id.to_string(),
+                phase_id: phase_id.to_string(),
+                source_tool: "loom.reviewAcceptFile".to_string(),
+                accepted_artifact_ref: result_ref,
+                next_action: Some(next_action),
+            },
+        )
+        .map_err(to_state_error)
+}
+
+fn review_route_action(result: &ReviewResult, result_ref: &str) -> RouteAction {
+    RouteAction {
+        kind: route_kind_for_review_action(&result.next_action.r#type),
+        source: "review_result".to_string(),
+        reason: result.next_action.reason.clone(),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: Some(result_ref.to_string()),
+        details: Some(json!({
+            "reviewId": result.review_id,
+            "decision": result.decision,
+            "nextAction": result.next_action
         })),
-        "continue_to_next_phase" => Ok(LoomMcpActionResult::Done(LoomMcpDoneResult {
-            project_root: input.project_root.clone(),
-            summary: "Review approved the current phase and marked the delivery ready for the next phase.".to_string(),
-            details: Some(json!({
-                "reviewResultRef": result_ref,
-                "decision": result.decision,
-                "nextAction": result.next_action
-            })),
-            warnings: vec![],
-        })),
-        "manual_review" | "needs_user_decision" => materialize_manual_review_request(
-            input,
-            authorized,
-            result,
-            result_ref,
-        ),
-        "execution_repair" => Ok(crate::repair::materialize_delivery_execution_repair(
-            &input.project_root,
-            authorized.delivery_id.as_deref().unwrap_or_default(),
-            authorized.phase_id.as_deref().unwrap_or_default(),
-            "review_result",
-            Some(result_ref),
-            result.next_action.finding_refs.clone(),
-        )),
-        "taskplan_repair" => crate::repair::materialize_taskplan_repair(
-            &input.project_root,
-            authorized.delivery_id.as_deref().unwrap_or_default(),
-            authorized.phase_id.as_deref().unwrap_or_default(),
-            Some(result_ref),
-        ),
-        "architecture_artifact_repair" => crate::repair::materialize_architecture_repair(
-            &input.project_root,
-            authorized.delivery_id.as_deref().unwrap_or_default(),
-            authorized.phase_id.as_deref().unwrap_or_default(),
-            Some(result_ref),
-        ),
-        _ => Ok(failed(
-            &input.project_root,
-            "REVIEW_ROUTE_UNSUPPORTED",
-            format!("Unsupported ReviewResult nextAction {}", result.next_action.r#type),
-            "review_accept",
-        )),
+        target_phase_id: result.next_action.target_phase_id.clone(),
     }
 }
 
@@ -1001,10 +1017,14 @@ fn build_manual_review_request(
     })
 }
 
-fn accept_manual_review_resolution_file_inner(
+fn accept_manual_review_resolution_file_inner<D>(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher,
+{
     let target = authorized.targets.first().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
             "ManualReviewResolution target is missing".to_string(),
@@ -1085,10 +1105,10 @@ fn accept_manual_review_resolution_file_inner(
     )?;
     route_after_manual_review(
         input,
-        authorized,
         &resolution,
         resolution_ref,
         effective_action,
+        dispatcher,
     )
 }
 
@@ -1219,68 +1239,35 @@ fn effective_manual_review_action(resolution: &ManualReviewResolution) -> RouteA
     }
 }
 
-fn route_after_manual_review(
+fn route_after_manual_review<D>(
     input: &FileSubmitInput,
-    authorized: &AuthorizedWriteSet,
     resolution: &ManualReviewResolution,
     resolution_ref: String,
-    effective_action: RouteAction,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
-    match effective_action.kind {
-        RouteActionKind::Done | RouteActionKind::ContinueToNextPhase => {
-            Ok(LoomMcpActionResult::Done(LoomMcpDoneResult {
+    mut effective_action: RouteAction,
+    dispatcher: D,
+) -> Result<LoomMcpActionResult, state::store::StateError>
+where
+    D: DomainDispatcher,
+{
+    effective_action.request_ref = Some(resolution_ref.clone());
+    let engine = TransitionEngine {
+        store: FileTransitionStore,
+        dispatcher,
+    };
+    engine
+        .advance_after_submit(
+            OperationContext {
                 project_root: input.project_root.clone(),
-                summary: "Manual review resolution accepted.".to_string(),
-                details: Some(json!({
-                    "manualReviewResolutionRef": resolution_ref,
-                    "decision": resolution.decision,
-                    "nextAction": resolution.next_action
-                })),
-                warnings: vec![],
-            }))
-        }
-        RouteActionKind::ExecutionRepair => {
-            Ok(crate::repair::materialize_delivery_execution_repair(
-                &input.project_root,
-                authorized.delivery_id.as_deref().unwrap_or_default(),
-                authorized.phase_id.as_deref().unwrap_or_default(),
-                "manual_review_resolution",
-                Some(resolution_ref),
-                vec![],
-            ))
-        }
-        RouteActionKind::TaskplanRepair => crate::repair::materialize_taskplan_repair(
-            &input.project_root,
-            authorized.delivery_id.as_deref().unwrap_or_default(),
-            authorized.phase_id.as_deref().unwrap_or_default(),
-            Some(resolution_ref),
-        ),
-        RouteActionKind::ArchitectureArtifactRepair => {
-            crate::repair::materialize_architecture_repair(
-                &input.project_root,
-                authorized.delivery_id.as_deref().unwrap_or_default(),
-                authorized.phase_id.as_deref().unwrap_or_default(),
-                Some(resolution_ref),
-            )
-        }
-        RouteActionKind::NeedsUserDecision | RouteActionKind::ManualReview => {
-            Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-                project_root: input.project_root.clone(),
-                prompt: effective_action.reason,
-                accepted_responses: vec!["confirm".to_string()],
-                request_ref: Some(input.request_ref.clone()),
-                delivery_id: authorized.delivery_id.clone(),
-                phase_id: authorized.phase_id.clone(),
-                gate: effective_action.details,
-            }))
-        }
-        _ => Ok(failed(
-            &input.project_root,
-            "MANUAL_REVIEW_ROUTE_UNSUPPORTED",
-            "ManualReviewResolution resolved to an unsupported route.".to_string(),
-            "manual_review_resolve",
-        )),
-    }
+            },
+            SubmitAcceptedEvent {
+                delivery_id: resolution.delivery_id.clone(),
+                phase_id: resolution.phase_id.clone(),
+                source_tool: "loom.reviewResolveFile".to_string(),
+                accepted_artifact_ref: resolution_ref,
+                next_action: Some(effective_action),
+            },
+        )
+        .map_err(to_state_error)
 }
 
 fn update_delivery_after_review(
