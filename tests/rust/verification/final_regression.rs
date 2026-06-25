@@ -14,7 +14,7 @@ use verification::{
 
 #[test]
 fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
-    let fixture = Fixture::new("final-regression");
+    let fixture = Fixture::persistent("final-regression");
     let server = LoomMcpServer::default();
 
     let first = structured(
@@ -227,22 +227,25 @@ fn structured(result: rmcp::model::CallToolResult) -> Value {
 
 struct Fixture {
     root: std::path::PathBuf,
+    preserve: bool,
     _guard: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
-    fn new(name: &str) -> Self {
+    fn persistent(name: &str) -> Self {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
         let guard = ENV_LOCK.lock().expect("env lock");
-        let root = std::env::temp_dir().join(format!(
-            "loom-mcp-verification-{name}-{}-{}",
-            std::process::id(),
-            state::store::now_millis()
-        ));
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/mcp-only-final-verification")
+            .join(name);
+        if root.exists() {
+            fs::remove_dir_all(&root).expect("clean persistent fixture root");
+        }
         fs::create_dir_all(&root).expect("create fixture root");
         std::env::set_var("LOOM_HOME", root.join(".loom-home"));
         Self {
             root,
+            preserve: true,
             _guard: guard,
         }
     }
@@ -254,6 +257,8 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+        if !self.preserve {
+            let _ = fs::remove_dir_all(&self.root);
+        }
     }
 }
