@@ -123,7 +123,8 @@ fn materialize_request_inner(
         })?;
 
     let request_id = format!("arch_{}", state::store::now_millis());
-    let section_outputs = build_section_outputs(root, &request_id)?;
+    let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
+    let section_outputs = build_section_outputs(root, &request_id, has_previous_runtime_delivery)?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
             "architecture section outputs are empty".to_string(),
@@ -139,6 +140,7 @@ fn materialize_request_inner(
         &technical_baseline,
         &brainstorm_contract_ref,
         phase,
+        has_previous_runtime_delivery,
         &current_output,
         &section_outputs,
     )?;
@@ -191,6 +193,7 @@ fn build_request_root(
     _technical_baseline: &TechnicalBaselineContract,
     brainstorm_contract_ref: &str,
     phase: &delivery_core::DeliveryPhaseState,
+    has_previous_runtime_delivery: bool,
     current_output: &SectionOutput,
     section_outputs: &[SectionOutput],
 ) -> Result<Value, state::store::StateError> {
@@ -211,6 +214,7 @@ fn build_request_root(
         "repositoryContextRef": phase.latest_refs.get("latestRepositoryContext"),
         "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."
     });
+    let runtime_context_fields = runtime_context_fields(has_previous_runtime_delivery);
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -242,7 +246,7 @@ fn build_request_root(
             "doNotWriteFinalAacJson": true,
             "requirementDetailTransfer": "Use contextProjection.requirementDetailTransfer as the current phase detail authority.",
             "frontendExperienceAuthority": "When confirmed/current frontend refs exist, frontend_experience must consume them and must not downgrade the confirmed target.",
-            "runtimeDeliveryAuthority": "runtime_delivery may use unchanged only when sourceRefs.previousRuntimeDeliveryRef exists and is copied exactly."
+            "runtimeDeliveryAuthority": runtime_delivery_authority(has_previous_runtime_delivery)
         },
         "outputContract": {
             "artifactKind": ArtifactKind::ArchitectureSectionCandidate,
@@ -333,9 +337,7 @@ fn build_request_root(
                     "required": false,
                     "purpose": "Read runtime delivery authority fields before generating runtime_delivery.",
                     "whenToRead": "Read when sectionState.currentSection is runtime_delivery.",
-                    "fields": [
-                        "rules.runtimeDeliveryAuthority"
-                    ]
+                    "fields": runtime_context_fields
                 }
             ]
         }
@@ -428,6 +430,7 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
 fn build_section_outputs(
     project_root: &Path,
     request_id: &str,
+    has_previous_runtime_delivery: bool,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
     SECTION_ORDER
         .iter()
@@ -440,9 +443,9 @@ fn build_section_outputs(
                     &architecture_candidate_file(project_root, request_id, section),
                 )?,
                 schema_ref: format!("architecture-section-{}-v1", section_name(section)),
-                schema_shape: section_schema_shape(section),
-                enum_refs: section_enum_refs(section),
-                generation_rules: section_generation_rules(section),
+                schema_shape: section_schema_shape(section, has_previous_runtime_delivery),
+                enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
+                generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
             })
         })
         .collect()
@@ -481,7 +484,10 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
     }
 }
 
-fn section_schema_shape(section: ArchitectureSectionGroup) -> Value {
+fn section_schema_shape(
+    section: ArchitectureSectionGroup,
+    has_previous_runtime_delivery: bool,
+) -> Value {
     json!({
         "schemaVersion": "1.0",
         "requestId": "string",
@@ -489,7 +495,7 @@ fn section_schema_shape(section: ArchitectureSectionGroup) -> Value {
         "phaseId": "string",
         "section": section,
         "status": "ready | blocked",
-        "content": section_content_shape(section),
+        "content": section_content_shape(section, has_previous_runtime_delivery),
         "blockedReasons": [{
             "code": "string",
             "message": "string",
@@ -499,7 +505,10 @@ fn section_schema_shape(section: ArchitectureSectionGroup) -> Value {
     })
 }
 
-fn section_content_shape(section: ArchitectureSectionGroup) -> Value {
+fn section_content_shape(
+    section: ArchitectureSectionGroup,
+    has_previous_runtime_delivery: bool,
+) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
             "source": {
@@ -538,19 +547,9 @@ fn section_content_shape(section: ArchitectureSectionGroup) -> Value {
                 }
             }
         }),
-        ArchitectureSectionGroup::RuntimeDelivery => json!({
-            "runtimeDelivery": {
-                "status": "modified | unchanged | not_applicable",
-                "basis": {
-                    "technicalBaselineRef": "string",
-                    "previousRuntimeDeliveryRef": "string"
-                },
-                "build": "object",
-                "start": "object",
-                "runtimeSurfaces": ["object"],
-                "taskPlanningGuidance": "object"
-            }
-        }),
+        ArchitectureSectionGroup::RuntimeDelivery => {
+            runtime_delivery_content_shape(has_previous_runtime_delivery)
+        }
         ArchitectureSectionGroup::Coverage => json!({
             "acceptanceMatrix": [{
                 "acceptanceId": "string",
@@ -596,20 +595,77 @@ fn section_content_shape(section: ArchitectureSectionGroup) -> Value {
     }
 }
 
-fn section_enum_refs(section: ArchitectureSectionGroup) -> Value {
+fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value {
+    let mut basis = serde_json::Map::new();
+    basis.insert(
+        "technicalBaselineRef".to_string(),
+        Value::String("string".to_string()),
+    );
+    if has_previous_runtime_delivery {
+        basis.insert(
+            "previousRuntimeDeliveryRef".to_string(),
+            Value::String("string".to_string()),
+        );
+    }
+    json!({
+        "runtimeDelivery": {
+            "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
+            "basis": Value::Object(basis),
+            "build": "object",
+            "start": "object",
+            "runtimeSurfaces": ["object"],
+            "taskPlanningGuidance": "object"
+        }
+    })
+}
+
+fn runtime_delivery_status_values(has_previous_runtime_delivery: bool) -> Vec<&'static str> {
+    if has_previous_runtime_delivery {
+        vec!["modified", "unchanged", "not_applicable"]
+    } else {
+        vec!["modified", "not_applicable"]
+    }
+}
+
+fn runtime_delivery_authority(has_previous_runtime_delivery: bool) -> &'static str {
+    if has_previous_runtime_delivery {
+        "A previous runtime delivery exists in sourceRefs.previousRuntimeDeliveryRef. Use runtimeDelivery.status=unchanged only when copying that ref exactly; otherwise use modified or not_applicable."
+    } else {
+        "No previous runtime delivery exists for this phase. runtimeDelivery.status must be modified or not_applicable; do not use unchanged and do not write basis.previousRuntimeDeliveryRef."
+    }
+}
+
+fn runtime_context_fields(has_previous_runtime_delivery: bool) -> Value {
+    if has_previous_runtime_delivery {
+        json!([
+            "rules.runtimeDeliveryAuthority",
+            "sourceRefs.previousRuntimeDeliveryRef"
+        ])
+    } else {
+        json!(["rules.runtimeDeliveryAuthority"])
+    }
+}
+
+fn section_enum_refs(
+    section: ArchitectureSectionGroup,
+    has_previous_runtime_delivery: bool,
+) -> Value {
     match section {
         ArchitectureSectionGroup::Coverage => json!({
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"]
         }),
         ArchitectureSectionGroup::RuntimeDelivery => json!({
-            "runtimeDeliveryStatus": ["modified", "unchanged", "not_applicable"]
+            "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
         }),
         _ => json!({}),
     }
 }
 
-fn section_generation_rules(section: ArchitectureSectionGroup) -> Vec<String> {
+fn section_generation_rules(
+    section: ArchitectureSectionGroup,
+    has_previous_runtime_delivery: bool,
+) -> Vec<String> {
     match section {
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
@@ -637,8 +693,7 @@ fn section_generation_rules(section: ArchitectureSectionGroup) -> Vec<String> {
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."
                 .to_string(),
-            "Use runtimeDelivery.status=unchanged only when sourceRefs.previousRuntimeDeliveryRef exists and is copied exactly."
-                .to_string(),
+            runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."

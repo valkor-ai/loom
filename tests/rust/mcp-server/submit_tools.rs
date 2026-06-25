@@ -1,6 +1,8 @@
 use std::sync::{Mutex, MutexGuard};
 
-use delivery_core::{DomainDispatcher, InspectRequestInput, ReadRequestFieldsInput};
+use delivery_core::{
+    DomainDispatcher, InspectRequestInput, ReadRequestFieldsInput, RouteAction, RouteActionKind,
+};
 use mcp_server::server::LoomMcpServer;
 use serde_json::{json, Value};
 use state::{store::write_json_atomic, write_native_request, NativeRequestInput};
@@ -284,6 +286,152 @@ fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
         .join(&delivery_id)
         .join("contracts/planning/phase-1/pgc.json");
     assert!(planning_contract.exists());
+}
+
+#[test]
+fn architecture_request_omits_previous_runtime_fields_without_previous_runtime() {
+    let fixture = Fixture::new("architecture-runtime-no-previous");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let request_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
+    let source_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref.clone(),
+        fields: vec!["sourceRefs".to_string()],
+    })
+    .expect("read source refs")
+    .fields;
+
+    assert!(source_fields["sourceRefs"]
+        .value
+        .get("previousRuntimeDeliveryRef")
+        .is_none());
+    let runtime_contract = runtime_section_contract(&request_root);
+    assert_eq!(
+        runtime_contract
+            .pointer("/enumRefs/runtimeDeliveryStatus")
+            .cloned()
+            .unwrap(),
+        json!(["modified", "not_applicable"])
+    );
+    assert!(runtime_contract
+        .pointer("/schemaShape/content/runtimeDelivery/basis/previousRuntimeDeliveryRef")
+        .is_none());
+    assert!(runtime_contract
+        .pointer("/generationRules")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .any(|rule| rule
+            .as_str()
+            .unwrap_or_default()
+            .contains("do not use unchanged")));
+
+    let runtime_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref,
+        group_id: "architecture_runtime_context".to_string(),
+    })
+    .expect("read runtime group");
+    assert!(runtime_group
+        .fields
+        .contains_key("rules.runtimeDeliveryAuthority"));
+    assert!(!runtime_group
+        .fields
+        .contains_key("sourceRefs.previousRuntimeDeliveryRef"));
+}
+
+#[test]
+fn architecture_request_exposes_previous_runtime_only_when_available() {
+    let fixture = Fixture::new("architecture-runtime-with-previous");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let previous_runtime_ref = format!(
+        ".loom/deliveries/{delivery_id}/contracts/architecture/phase-0/aac.json#/runtimeDelivery"
+    );
+    let mut index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read index"))
+            .expect("parse index");
+    let active_phase = index["phases"]
+        .as_array_mut()
+        .expect("phases")
+        .iter_mut()
+        .find(|phase| phase["phaseId"].as_str() == Some("phase-1"))
+        .expect("phase-1");
+    let latest_refs = active_phase["latestRefs"]
+        .as_object_mut()
+        .expect("latestRefs object");
+    latest_refs.insert(
+        "runtimeDelivery".to_string(),
+        Value::String(previous_runtime_ref.clone()),
+    );
+    latest_refs.remove("architectureRequestRef");
+    write_json_atomic(&index_path, &index).expect("write index with previous runtime");
+
+    let result = architecture::ArchitectureDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &RouteAction {
+            kind: RouteActionKind::ArchitectureArtifactContract,
+            source: "test".to_string(),
+            reason: "refresh_architecture_request".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: None,
+            target_phase_id: None,
+        },
+    );
+    let result = serde_json::to_value(result).expect("serialize architecture result");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let refreshed_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("architecture requestRef")
+        .to_string();
+    assert_ne!(refreshed_ref, architecture_request_ref);
+    let request_root = read_request_root_value(fixture.root_str(), &refreshed_ref);
+    let source_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: refreshed_ref.clone(),
+        fields: vec!["sourceRefs.previousRuntimeDeliveryRef".to_string()],
+    })
+    .expect("read previous runtime ref")
+    .fields;
+
+    assert_eq!(
+        source_fields["sourceRefs.previousRuntimeDeliveryRef"].value,
+        json!(previous_runtime_ref)
+    );
+    let runtime_contract = runtime_section_contract(&request_root);
+    assert_eq!(
+        runtime_contract
+            .pointer("/enumRefs/runtimeDeliveryStatus")
+            .cloned()
+            .unwrap(),
+        json!(["modified", "unchanged", "not_applicable"])
+    );
+    assert_eq!(
+        runtime_contract
+            .pointer("/schemaShape/content/runtimeDelivery/basis/previousRuntimeDeliveryRef")
+            .cloned()
+            .unwrap(),
+        json!("string")
+    );
+
+    let runtime_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: refreshed_ref,
+        group_id: "architecture_runtime_context".to_string(),
+    })
+    .expect("read runtime group");
+    assert!(runtime_group
+        .fields
+        .contains_key("sourceRefs.previousRuntimeDeliveryRef"));
 }
 
 #[test]
@@ -1877,6 +2025,15 @@ fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
     let request_path = std::path::Path::new(project_root).join(index.request_file);
     serde_json::from_str(&std::fs::read_to_string(request_path).expect("read request file"))
         .expect("parse request file")
+}
+
+fn runtime_section_contract(request_root: &Value) -> &Value {
+    request_root["sectionOutputs"]
+        .as_array()
+        .expect("sectionOutputs")
+        .iter()
+        .find(|section| section["section"] == json!("runtime_delivery"))
+        .expect("runtime_delivery section contract")
 }
 
 fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {
