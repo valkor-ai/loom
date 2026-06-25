@@ -12,6 +12,7 @@ members = [
   "execution",
   "knowledge",
   "deploy",
+  "verification",
   "algorithm-client",
 ]
 

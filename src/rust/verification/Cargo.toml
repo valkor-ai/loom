@@ -1,0 +1,25 @@
+[package]
+name = "verification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "verification"
+path = "lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+delivery-core = { path = "../core" }
+mcp-server = { path = "../mcp-server" }
+serde.workspace = true
+serde_json.workspace = true
+state = { path = "../state" }
+
+[dev-dependencies]
+rmcp.workspace = true
+
+[[test]]
+name = "final_regression"
+path = "../../../tests/rust/verification/final_regression.rs"
