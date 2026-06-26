@@ -74,6 +74,38 @@ fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
 }
 
 #[test]
+fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_gate() {
+    let fixture = Fixture::new("submit-legacy-progress-shape");
+    let request_ref = start_brainstorm_request(&fixture);
+    let mut candidate = valid_candidate_json();
+    candidate["clarificationProgress"] = json!({
+        "mode": "progressive_blocks",
+        "completedBlocks": [
+            "phase_scope",
+            "concept_grounding",
+            "frontend_experience",
+            "final_summary"
+        ],
+        "currentBlock": "final_summary",
+        "finalSummaryConfirmed": true
+    });
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(
+        result["issues"][0]["code"],
+        "CLARIFICATION_PROGRESS_LEGACY_FIELDS"
+    );
+    assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
+}
+
+#[test]
 fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
     let fixture = Fixture::new("submit-success");
     let request_ref = start_brainstorm_request(&fixture);

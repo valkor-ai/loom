@@ -44,6 +44,13 @@ pub fn build_brainstorm_request_root(
             "mode": "progressive_blocks",
             "currentBlock": ClarificationBlockName::PhaseScope,
             "requiredBlocks": required_blocks(),
+            "userVisibleBlockNames": {
+                "phase_scope": "阶段范围确认",
+                "concept_grounding": "业务理解与规则确认",
+                "frontend_experience": "页面办理路径确认",
+                "final_summary": "提交前确认"
+            },
+            "internalTermRule": "phase_scope, concept_grounding, frontend_experience, final_summary, requestRef, candidate, gate, and submit tool names are internal protocol terms. Use the user-visible block names in chat and never ask the user to confirm internal block ids.",
             "blockSequenceRule": "Process phase_scope, then concept_grounding, then frontend_experience, then final_summary. Do not skip ahead to writing the Brainstorm candidate.",
             "userFacingLanguageRule": user_facing_language.rule,
             "blockExecutionRules": {
@@ -98,6 +105,7 @@ pub fn build_brainstorm_request_root(
                 "required": true,
                 "description": "Write the Brainstorm candidate JSON after final_summary is confirmed."
             }],
+            "resultTemplate": candidate_result_template(phase_id),
             "schemaShape": schema_shape,
             "schemaProjection": schema_projection()
         },
@@ -124,6 +132,8 @@ pub fn build_brainstorm_request_root(
                         "userFacingLanguage",
                         "clarificationConversationProtocol.currentBlock",
                         "clarificationConversationProtocol.requiredBlocks",
+                        "clarificationConversationProtocol.userVisibleBlockNames",
+                        "clarificationConversationProtocol.internalTermRule",
                         "clarificationConversationProtocol.blockSequenceRule",
                         "clarificationConversationProtocol.userFacingLanguageRule",
                         "clarificationConversationProtocol.blockExecutionRules.phase_scope",
@@ -226,6 +236,7 @@ pub fn build_brainstorm_request_root(
                     "fields": [
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaProjection",
                         "enumRefs.scopeSource",
                         "enumRefs.acceptancePriority",
@@ -288,10 +299,148 @@ fn schema_projection() -> Value {
             "userConfirmation.confirmationBasis",
             "clarificationProgress"
         ],
+        "clarificationProgressShape": {
+            "mode": "progressive_blocks",
+            "confirmedBlocks": [{
+                "block": "phase_scope|concept_grounding|frontend_experience",
+                "summary": "what the user confirmed in that user-facing block",
+                "confirmedByUser": true
+            }],
+            "skippedBlocks": [{
+                "block": "frontend_experience",
+                "reason": "only when UI/page confirmation is explicitly not applicable"
+            }],
+            "finalSummaryConfirmed": true
+        },
+        "forbiddenClarificationProgressFields": [
+            "completedBlocks",
+            "currentBlock"
+        ],
         "notes": [
             "Machine-owned ids, request binding, accepted status, and handoff routing are added by Loom on accept.",
             "final_summary is the gate before write, not the source of requirement detail."
         ]
+    })
+}
+
+fn candidate_result_template(phase_id: &str) -> Value {
+    json!({
+        "requestSummary": {
+            "title": "",
+            "oneLine": "",
+            "businessGoal": "",
+            "complexity": "medium"
+        },
+        "scope": {
+            "included": [{
+                "id": "scope_1",
+                "label": "",
+                "items": [],
+                "reason": "",
+                "source": "user_confirmed"
+            }],
+            "excluded": [],
+            "deferred": [],
+            "assumptions": []
+        },
+        "roadmap": {
+            "required": true,
+            "currentPhaseId": phase_id,
+            "phases": [{
+                "phaseId": phase_id,
+                "title": "",
+                "name": "",
+                "status": "scope_confirmed",
+                "goal": ""
+            }]
+        },
+        "phasePlan": {
+            "current": {
+                "phaseId": phase_id,
+                "title": "",
+                "goal": "",
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "status": "scope_confirmed"
+            },
+            "nextPhasePreview": {
+                "kind": "none",
+                "reason": ""
+            }
+        },
+        "acceptance": [{
+            "id": "acc_1",
+            "statement": "",
+            "capabilityRefs": [],
+            "sourceRefs": [],
+            "priority": "must"
+        }],
+        "domainModel": {
+            "businessFlows": []
+        },
+        "conceptGrounding": {
+            "phaseConceptGrounding": {
+                "mode": "concepts_present",
+                "reason": "",
+                "concepts": []
+            },
+            "glossaryUpdates": []
+        },
+        "conceptConfirmation": {
+            "shownToUser": true,
+            "confirmedConceptRefs": [],
+            "confirmationSummary": ""
+        },
+        "frontendExperience": {
+            "required": true,
+            "kind": "",
+            "experienceLevel": "usable_internal_product",
+            "audiences": [],
+            "surfaces": [],
+            "dataViews": [],
+            "actions": [],
+            "operationPaths": [],
+            "mustNot": [],
+            "confirmationSummary": ""
+        },
+        "userConfirmation": {
+            "confirmed": true,
+            "confirmedAt": "",
+            "confirmationSummary": "",
+            "confirmationBasis": {
+                "initialRequestOnly": false,
+                "summaryPresentedToUser": true,
+                "confirmedAfterSummary": true,
+                "presentedItems": [
+                    "阶段范围确认",
+                    "业务理解与规则确认",
+                    "页面办理路径确认",
+                    "提交前确认"
+                ]
+            }
+        },
+        "clarificationProgress": {
+            "mode": "progressive_blocks",
+            "confirmedBlocks": [
+                {
+                    "block": "phase_scope",
+                    "summary": "",
+                    "confirmedByUser": true
+                },
+                {
+                    "block": "concept_grounding",
+                    "summary": "",
+                    "confirmedByUser": true
+                },
+                {
+                    "block": "frontend_experience",
+                    "summary": "",
+                    "confirmedByUser": true
+                }
+            ],
+            "skippedBlocks": [],
+            "finalSummaryConfirmed": true
+        }
     })
 }
 
@@ -492,6 +641,9 @@ fn final_summary_rules() -> Value {
 fn candidate_write_rules() -> Value {
     json!([
         "Write only the Brainstorm candidate target after the user explicitly confirms final_summary.",
+        "Use outputContract.resultTemplate as the concrete field shape when writing the candidate.",
+        "clarificationProgress must use confirmedBlocks/skippedBlocks/finalSummaryConfirmed. Do not write completedBlocks or currentBlock.",
+        "In user-facing summaries and confirmation text, use user-visible block names rather than internal block ids.",
         "Keep knowledge metadata out of candidate sourceRefs and summary fields.",
         "Preserve all confirmed block details in scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience instead of relying on final_summary text."
     ])

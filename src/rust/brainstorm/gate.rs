@@ -47,16 +47,16 @@ pub fn to_value(gate: &BrainstormGate) -> Value {
 pub fn block_message(block: &ClarificationBlockName) -> String {
     match block {
         ClarificationBlockName::PhaseScope => {
-            "Start at phase_scope. Present the current stage scope options in the user's language, wait for the user's visible confirmation, then continue to the next Brainstorm block.".to_string()
+            "Present the current stage scope options in the user's language, wait for the user's visible confirmation, then continue to business understanding and rule confirmation. Do not show internal block ids to the user.".to_string()
         }
         ClarificationBlockName::ConceptGrounding => {
-            "Return to concept_grounding. Confirm the business objects, operations, rules, fields, blockers, outcomes, and misunderstanding boundaries for the user-confirmed current scope.".to_string()
+            "Confirm the business objects, operations, rules, fields, blockers, outcomes, and misunderstanding boundaries for the user-confirmed current scope. Use a user-facing title such as business understanding and rule confirmation.".to_string()
         }
         ClarificationBlockName::FrontendExperience => {
-            "Return to frontend_experience. Confirm the page or workspace operation path, target discovery, action entry, feedback, and readback, or explicitly record why UI is not applicable.".to_string()
+            "Confirm the page or workspace operation path, target discovery, action entry, feedback, and readback, or explicitly record why UI is not applicable. Use a user-facing title such as page operation path confirmation.".to_string()
         }
         ClarificationBlockName::FinalSummary => {
-            "Return to final_summary. Present the pre-submit coverage checklist, apply any user corrections back to structured fields, then confirm before writing the Brainstorm candidate.".to_string()
+            "Present the pre-submit coverage checklist, apply any user corrections back to structured fields, then confirm before writing the final structured requirement result. Do not show internal block ids to the user.".to_string()
         }
     }
 }

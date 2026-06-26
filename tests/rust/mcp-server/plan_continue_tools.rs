@@ -72,11 +72,36 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
         fields: vec![
+            "clarificationConversationProtocol.internalTermRule".to_string(),
+            "clarificationConversationProtocol.userVisibleBlockNames".to_string(),
+            "outputContract.resultTemplate".to_string(),
             "knowledgeQueryPlan.toolContract".to_string(),
             "knowledgeQueryPlan.sharedRules".to_string(),
         ],
     })
     .expect("knowledge query plan fields");
+    assert!(
+        knowledge_fields.fields["clarificationConversationProtocol.internalTermRule"]
+            .value
+            .as_str()
+            .expect("internal term rule")
+            .contains("never ask the user to confirm internal block ids")
+    );
+    assert_eq!(
+        knowledge_fields.fields["clarificationConversationProtocol.userVisibleBlockNames"].value
+            ["concept_grounding"],
+        "业务理解与规则确认"
+    );
+    assert!(
+        knowledge_fields.fields["outputContract.resultTemplate"].value["clarificationProgress"]
+            ["confirmedBlocks"]
+            .is_array()
+    );
+    assert!(
+        knowledge_fields.fields["outputContract.resultTemplate"].value["clarificationProgress"]
+            .get("completedBlocks")
+            .is_none()
+    );
     assert_eq!(
         knowledge_fields.fields["knowledgeQueryPlan.toolContract"].value["contextTool"],
         "loom.knowledgeBrainstormContext"

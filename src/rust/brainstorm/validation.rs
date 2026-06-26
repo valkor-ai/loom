@@ -34,6 +34,41 @@ pub fn gate_check(raw: &Value) -> GateCheck {
             repair_issues: vec![],
         };
     };
+    if let Some(progress_object) = progress_value.as_object() {
+        let forbidden_fields = ["completedBlocks", "currentBlock"];
+        let present_forbidden = forbidden_fields
+            .iter()
+            .filter(|field| progress_object.contains_key(**field))
+            .copied()
+            .collect::<Vec<_>>();
+        if !present_forbidden.is_empty() {
+            return GateCheck {
+                gate: None,
+                repair_issues: vec![issue(
+                    "CLARIFICATION_PROGRESS_LEGACY_FIELDS",
+                    "clarificationProgress",
+                    &format!(
+                        "clarificationProgress must use confirmedBlocks/skippedBlocks/finalSummaryConfirmed. Remove unsupported fields: {}.",
+                        present_forbidden.join(", ")
+                    ),
+                )],
+            };
+        }
+        let final_summary_confirmed = progress_object
+            .get("finalSummaryConfirmed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if final_summary_confirmed && !progress_object.contains_key("confirmedBlocks") {
+            return GateCheck {
+                gate: None,
+                repair_issues: vec![issue(
+                    "CLARIFICATION_PROGRESS_CONFIRMED_BLOCKS_REQUIRED",
+                    "clarificationProgress.confirmedBlocks",
+                    "clarificationProgress.confirmedBlocks must list each user-confirmed block when finalSummaryConfirmed is true.",
+                )],
+            };
+        }
+    }
     let progress = match serde_json::from_value::<ClarificationProgress>(progress_value) {
         Ok(progress) => progress,
         Err(error) => {
