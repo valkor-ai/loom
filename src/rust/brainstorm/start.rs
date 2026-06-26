@@ -149,7 +149,7 @@ fn start_brainstorm_inner(
         source: "brainstorm_start".to_string(),
         reason: "await_phase_scope_confirmation".to_string(),
         prompt: Some(
-            "Read the Brainstorm request and present the phase_scope block in the user's language."
+            "Read the Brainstorm request and present the current-stage scope confirmation in the user's language."
                 .to_string(),
         ),
         accepted_responses: vec!["reply_in_chat".to_string()],
@@ -184,7 +184,7 @@ fn start_brainstorm_inner(
 
     Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
         project_root: input.project_root.clone(),
-        prompt: "Read the Brainstorm request, present phase_scope, and continue the progressive clarification conversation.".to_string(),
+        prompt: "Read the Brainstorm request, present the current-stage scope confirmation in the user's language, then continue the progressive clarification conversation.".to_string(),
         accepted_responses: vec!["reply_in_chat".to_string()],
         request_ref: Some(stored.request_ref),
         delivery_id: Some(delivery_id),
