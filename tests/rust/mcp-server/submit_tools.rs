@@ -153,6 +153,72 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
     })
     .expect("inspect technical baseline request");
     assert_eq!(inspected.request_kind, "technical_baseline_request");
+    let selection_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "technical_baseline_selection_guidance")
+        .expect("technical baseline selection guidance group");
+    assert!(selection_group.required);
+    assert_eq!(
+        selection_group.fields,
+        vec!["selectionGuidance".to_string()]
+    );
+    let selection = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: technical_baseline_request_ref.to_string(),
+        group_id: "technical_baseline_selection_guidance".to_string(),
+    })
+    .expect("read technical baseline selection guidance");
+    let guidance = &selection.fields["selectionGuidance"].value;
+    assert!(guidance["trackModel"]["coreTracks"]
+        .as_array()
+        .expect("core tracks")
+        .contains(&json!("backend")));
+    assert!(guidance["commonOptions"]["backend"]["examples"]
+        .as_array()
+        .expect("backend examples")
+        .contains(&json!("Java + Spring Boot")));
+    assert!(guidance["commonOptions"]["backend"]["examples"]
+        .as_array()
+        .expect("backend examples")
+        .contains(&json!("Python + FastAPI")));
+    assert!(guidance["commonOptions"]["dataAccess"]["examples"]
+        .as_array()
+        .expect("data access examples")
+        .contains(&json!("MyBatis Plus")));
+    assert!(guidance["shorthandNormalization"]["backend"]
+        .as_array()
+        .expect("backend shorthand rules")
+        .iter()
+        .any(
+            |rule| rule.as_str().unwrap_or_default().contains("backend=Java")
+                && rule
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("Java + Spring Boot")
+        ));
+    assert!(
+        guidance["userFacingConfirmationProtocol"]["mandatorySections"]
+            .as_array()
+            .expect("mandatory sections")
+            .iter()
+            .any(|section| section
+                .as_str()
+                .unwrap_or_default()
+                .contains("Adjustable technology range"))
+    );
+    assert!(guidance["replyProtocolForUser"]["partialAdjustmentExample"]
+        .as_str()
+        .expect("partial adjustment example")
+        .contains("persistence=PostgreSQL"));
+    assert!(guidance["userFacingConfirmationProtocol"]["wordingRules"]
+        .as_array()
+        .expect("wording rules")
+        .iter()
+        .any(|rule| rule
+            .as_str()
+            .unwrap_or_default()
+            .contains("Do not mention Loom internals")));
 }
 
 #[test]

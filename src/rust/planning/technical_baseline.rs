@@ -188,26 +188,7 @@ fn build_request_root(
             "updatedAt": previous.updated_at
         })
     });
-    let selection_guidance = if matches!(project_kind, ProjectKind::Greenfield) {
-        Some(json!({
-            "userFacingConfirmationProtocol": {
-                "required": true,
-                "showToUser": [
-                    "recommendation_basis",
-                    "recommended_stack",
-                    "adjustable_range",
-                    "confirmation_rule"
-                ],
-                "confirmationRule": "Do not submit the final TechnicalBaseline candidate until the user explicitly confirms the final technology baseline."
-            },
-            "recommendationRules": [
-                "Base the first recommendation on the full Brainstorm scope and deferred roadmap hints, not only on the current phase slice.",
-                "Keep build, test, local run, and deployment mechanics out of the first-screen technology confirmation unless the user explicitly asks for them."
-            ]
-        }))
-    } else {
-        None
-    };
+    let selection_guidance = technical_baseline_selection_guidance(project_kind, baseline_exists);
     let repo_evidence = json!({
         "detectedProjectKind": project_kind,
         "baselineExists": baseline_exists,
@@ -323,13 +304,11 @@ fn build_request_root(
                 },
                 {
                     "groupId": "technical_baseline_selection_guidance",
-                    "required": false,
+                    "required": selection_guidance.is_some(),
                     "purpose": "Read the greenfield confirmation discipline before asking the user to confirm the baseline.",
                     "whenToRead": "Read only when the projectKind is greenfield or the baseline still needs explicit user confirmation.",
                     "fields": [
-                        "selectionGuidance",
-                        "rules.context",
-                        "rules.candidatePolicy"
+                        "selectionGuidance"
                     ]
                 },
                 {
@@ -352,6 +331,147 @@ fn build_request_root(
             ]
         }
     })
+}
+
+fn technical_baseline_selection_guidance(
+    project_kind: ProjectKind,
+    has_previous_baseline: bool,
+) -> Option<Value> {
+    if !matches!(project_kind, ProjectKind::Greenfield) && !has_previous_baseline {
+        return None;
+    }
+    Some(json!({
+        "schemaVersion": "1.0",
+        "purpose": if matches!(project_kind, ProjectKind::Greenfield) {
+            "Guide the agent-user technical baseline confirmation for a greenfield empty project before PGC."
+        } else {
+            "Guide the agent-user technical baseline confirmation when a previous baseline exists and the final candidate may add, replace, or conflict with stable baseline elements."
+        },
+        "runtimeBoundary": {
+            "role": "The request provides materials, common examples, output contract, and confirmation rules only.",
+            "doesNotDo": [
+                "The request does not infer the concrete recommended stack for this requirement.",
+                "The request does not parse the user's natural-language technology replies.",
+                "The request does not participate in intermediate confirmation rounds."
+            ],
+            "requiredAgentLoop": [
+                "Read the request refs and understand the confirmed requirement scope.",
+                "Generate the concrete recommendation or baseline-change summary yourself.",
+                "Talk with the user for as many rounds as needed.",
+                "Write and submit the candidate only after the user explicitly confirms the final technology baseline."
+            ]
+        },
+        "confirmationRules": confirmation_rules(has_previous_baseline),
+        "trackModel": {
+            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. Each track should include status, selection, source, and rationale.",
+            "trackStatusValues": ["selected", "not_needed", "not_applicable", "user_custom"],
+            "sourceValues": ["agent_recommended_user_confirmed", "user_adjusted", "user_specified", "previous_baseline", "not_applicable"],
+            "coreTracks": ["web", "app", "backend", "persistence", "dataAccess", "externalServices"],
+            "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary."
+        },
+        "recommendationBasis": {
+            "authority": "Use the complete BrainstormContract as the product-scope authority for the first greenfield TechnicalBaseline recommendation.",
+            "mustRead": [
+                "Brainstorm summary and original requirement context",
+                "scope.included, scope.deferred, scope.excluded, and assumptions",
+                "domainModel capability groups and business flows",
+                "frontendExperience when present",
+                "roadmap phases, deferred scope, and known next-phase previews"
+            ],
+            "currentPhaseLensRole": "currentPhaseLens identifies the first implementation slice only. Do not choose the initial technology baseline from the current phase scope alone when the full requirement or roadmap implies later product surfaces, persistence scale, app clients, services, integrations, or operational needs.",
+            "recommendationRule": "Recommend a stable baseline for the full confirmed delivery/roadmap horizon; explain when the current phase can start small inside that baseline without hiding later known needs."
+        },
+        "userFacingConfirmationProtocol": {
+            "mandatorySections": [
+                "Recommendation basis: summarize the full requirement/roadmap signals used, not only the current phase.",
+                "Recommended final baseline: list every core track with selection and short rationale.",
+                "Adjustable technology range: show common examples for every core track so the user knows how to modify the recommendation.",
+                "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, and externalServices.",
+                "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
+            ],
+            "wordingRules": [
+                "Do not present the recommendation as based only on the first phase or current small implementation slice.",
+                "Do not omit the adjustable technology range.",
+                "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
+                "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
+                "Do not mention Loom internals, gates, submit permission, workflow blocking, or phrases like Loom allows, Loom requires, Loom is stuck, or Loom will not continue in user-facing text.",
+                "It is fine to understand db as persistence and orm as dataAccess when the user writes those aliases, but normalize the final candidate to stack.tracks.persistence and stack.tracks.dataAccess."
+            ]
+        },
+        "commonOptions": {
+            "web": {
+                "label": "Web client",
+                "examples": ["Next.js", "React + Vite", "Vue + Vite", "SvelteKit", "Astro", "No Web client"]
+            },
+            "app": {
+                "label": "App client",
+                "examples": ["No App client", "React Native + Expo", "Flutter", "iOS Native (Swift / SwiftUI)", "Android Native (Kotlin / Jetpack Compose)", "Hybrid WebView (Capacitor / Ionic)", "PWA"]
+            },
+            "backend": {
+                "label": "Backend / service",
+                "examples": ["Next.js + Server Actions / Route Handlers / SSR", "Node.js + Fastify", "Node.js + Express", "Node.js + NestJS", "Python + FastAPI", "Python + Django", "Java + Spring Boot", "Go + net/http or Gin", ".NET + ASP.NET Core", "No independent backend"]
+            },
+            "persistence": {
+                "label": "Database / persistence",
+                "examples": ["SQLite", "PostgreSQL", "MySQL", "MongoDB", "File storage / local JSON", "No persistence yet"]
+            },
+            "dataAccess": {
+                "label": "ORM / data access",
+                "examples": ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "MyBatis Plus", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"]
+            },
+            "externalServices": {
+                "label": "External services",
+                "examples": ["None", "User specified", "Only recommend services explicitly required by the confirmed requirement"]
+            }
+        },
+        "shorthandNormalization": {
+            "backend": [
+                "If the user writes backend=Java without a framework, normalize it to Java + Spring Boot unless they explicitly name a different Java backend stack.",
+                "If the user writes backend=Python without a framework, normalize it to Python + FastAPI for service/backend work unless the requirement or user explicitly points to Django-style site/admin/content capabilities.",
+                "If the user writes backend=Node.js without a framework, ask for or summarize a concrete Node.js framework choice such as Fastify, Express, or NestJS before final confirmation.",
+                "If the user writes backend=.NET without a framework, normalize it to .NET + ASP.NET Core unless they explicitly name another .NET backend stack."
+            ],
+            "dataAccessCompatibility": [
+                "When backend is Java + Spring Boot and dataAccess is not specified, recommend Spring Data JPA or MyBatis Plus explicitly before final confirmation; do not leave it as generic Java persistence.",
+                "When backend is Python + FastAPI and dataAccess is not specified, recommend SQLAlchemy or SQLModel explicitly before final confirmation.",
+                "When backend is Python + Django and dataAccess is not specified, recommend Django ORM explicitly before final confirmation."
+            ]
+        },
+        "recommendationPrinciples": [
+            "Prefer mainstream, maintainable, community-mature technologies.",
+            "Prefer technologies that match the confirmed product shape and implementation effort.",
+            "For Web UI, TypeScript is preferred unless the user chooses otherwise.",
+            "For small or medium local-first CRUD/admin systems, SQLite is a reasonable default unless the user needs a production multi-user database.",
+            "Prefer integrated fullstack options when they reduce orchestration cost and still satisfy the product need.",
+            "Respect explicit user technology choices even when they are outside common examples.",
+            "Avoid niche stacks unless the user asks for them or the requirement clearly needs them."
+        ],
+        "replyProtocolForUser": {
+            "acceptRecommendation": "确认推荐方案",
+            "partialAdjustmentExample": "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, app=不需要, externalServices=不需要",
+            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, externalServices=不需要",
+            "finalConfirmationPrompt": "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ..."
+        }
+    }))
+}
+
+fn confirmation_rules(has_previous_baseline: bool) -> Vec<&'static str> {
+    let mut rules = vec![
+        "User requirement confirmation is not technology baseline confirmation.",
+        "If the user accepts the recommendation directly, that reply can be the final technology baseline confirmation.",
+        "If the user adjusts part of the stack or specifies a custom stack, summarize the final baseline and ask for final confirmation before writing the candidate.",
+        "Do not submit a confirmed candidate while any core track is ambiguous. Mark a track as not_applicable/not_needed only when the requirement or user confirmation supports that.",
+        "Testing, build, local run, and deployment preparation are derived later. Do not require first-screen user choices for them and do not reopen technology baseline confirmation only to update those commands.",
+    ];
+    if has_previous_baseline {
+        rules.extend([
+            "When a previous baseline exists, unchanged baseline reuse is the default for normal bugfix, repair, optimization, or feature work inside the existing stack.",
+            "Only a current confirmed scope that explicitly adds a new technology surface or replaces a previous baseline element needs explicit technology baseline confirmation.",
+            "Current repository scripts, test commands, build commands, start commands, generated files, or framework implementation nuances are implementation facts; do not treat them as user-facing technology baseline changes by themselves.",
+            "Preserve previous baseline tracks that the user did not confirm changing.",
+        ]);
+    }
+    rules
 }
 
 pub fn accept_technical_baseline_file<D>(
@@ -441,7 +561,7 @@ where
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
-            "TechnicalBaseline projectKind is unknown. Ask the user whether this phase continues an existing project or starts a greenfield project, then rewrite the same candidate with the confirmed projectKind.".to_string(),
+            "Ask the user whether this phase continues an existing project or starts a new project, then rewrite the same candidate with the confirmed projectKind.".to_string(),
             "project_kind_confirmation".to_string(),
         ));
     }
@@ -451,7 +571,7 @@ where
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
-            "Greenfield TechnicalBaseline must be explicitly confirmed by the user before planning can continue. Present the recommended stack, capture corrections, then rewrite the same candidate with approval.type=user_confirmed.".to_string(),
+            "The technology baseline for a new project must be explicitly confirmed by the user before planning continues. Present the recommended stack, capture corrections, then rewrite the same candidate with approval.type=user_confirmed.".to_string(),
             "greenfield_baseline_confirmation".to_string(),
         ));
     }
@@ -464,7 +584,7 @@ where
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
-            "TechnicalBaseline still requires explicit user confirmation. Present the baseline change or recommendation, then rewrite the same candidate with the confirmed baseline.".to_string(),
+            "The technology baseline still requires explicit user confirmation. Present the baseline change or recommendation, then rewrite the same candidate with the confirmed baseline.".to_string(),
             "technical_baseline_confirmation".to_string(),
         ));
     }
@@ -481,7 +601,7 @@ where
             return Ok(technical_baseline_user_gate(
                 input,
                 authorized,
-                "TechnicalBaseline changes an existing baseline. Present the previous baseline and proposed change to the user, then rewrite the same candidate with approval.type=user_confirmed after explicit confirmation.".to_string(),
+                "The proposed technology baseline changes an existing baseline. Present the previous baseline and proposed change to the user, then rewrite the same candidate with approval.type=user_confirmed after explicit confirmation.".to_string(),
                 "previous_baseline_change_confirmation".to_string(),
             ));
         }
