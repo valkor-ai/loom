@@ -1,5 +1,4 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::Read,
     path::{Path, PathBuf},
@@ -335,39 +334,30 @@ fn build_keyword_hints(
         return Ok(empty_keyword_hints(language.default_locale));
     }
 
+    let document_keywords = tfidf["documentKeywords"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let mut section_keywords = Vec::new();
     for part in parts {
-        let token_response = client
-            .call(&json!({"operation": "tokenize", "text": part.text}))
-            .map_err(|error| StateError::InvalidArgument(error.to_string()))?;
-        let mut counts = BTreeMap::<String, u64>::new();
-        for token in token_response["tokens"]
-            .as_array()
+        let top = document_keywords
+            .iter()
+            .find(|entry| {
+                entry.get("documentId").and_then(serde_json::Value::as_str)
+                    == Some(part.item_id.as_str())
+            })
+            .and_then(|entry| entry.get("keywords"))
+            .and_then(serde_json::Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|item| item.as_str())
-        {
-            if !keyword_allowed(token) {
-                continue;
-            }
-            *counts.entry(token.to_string()).or_default() += 1;
-        }
-        let keywords = counts
-            .into_iter()
-            .filter(|(_, count)| *count > 0)
+            .filter_map(|item| item.get("term").and_then(serde_json::Value::as_str))
+            .filter(|keyword| keyword_allowed(keyword))
+            .take(6)
+            .map(|keyword| json!(keyword))
             .collect::<Vec<_>>();
-        if keywords.is_empty() {
+        if top.is_empty() {
             continue;
         }
-        let top = keywords
-            .into_iter()
-            .map(|(keyword, count)| (count, keyword))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .rev()
-            .take(6)
-            .map(|(_, keyword)| json!({ "keyword": keyword }))
-            .collect::<Vec<_>>();
         section_keywords.push(json!({
             "sectionId": part.item_id,
             "sourceItemId": part.item_id,
@@ -376,7 +366,12 @@ fn build_keyword_hints(
         }));
     }
 
-    let top_keywords = global_keywords.iter().take(12).cloned().collect::<Vec<_>>();
+    let top_keywords = global_keywords
+        .iter()
+        .take(12)
+        .filter_map(|item| item.get("keyword").and_then(serde_json::Value::as_str))
+        .map(|keyword| json!(keyword))
+        .collect::<Vec<_>>();
     Ok(json!({
         "schemaVersion": "1.0",
         "usage": "advisory_only",
@@ -462,7 +457,49 @@ fn keyword_allowed(value: &str) -> bool {
     }
     !matches!(
         trimmed,
-        "the" | "and" | "for" | "with" | "this" | "that" | "into" | "from"
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "this"
+            | "that"
+            | "into"
+            | "from"
+            | "的"
+            | "了"
+            | "和"
+            | "与"
+            | "及"
+            | "在"
+            | "对"
+            | "为"
+            | "是"
+            | "有"
+            | "系统"
+            | "功能"
+            | "模块"
+            | "中文"
+            | "需求"
+            | "整理"
+            | "阅读"
+            | "仔细"
+            | "按照"
+            | "阶段"
+            | "范围"
+            | "顺序"
+            | "关系"
+            | "内容"
+            | "文档"
+            | "确认"
+            | "检查"
+            | "能力"
+            | "实现"
+            | "提供"
+            | "需要"
+            | "要求"
+            | "通过"
+            | "进行"
+            | "包括"
     )
 }
 

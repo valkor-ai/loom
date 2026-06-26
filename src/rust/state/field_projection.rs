@@ -101,11 +101,12 @@ fn compact_keyword_hints(root: &Value) -> Value {
             "rules": keyword_hint_compact_rules(),
         });
     };
-    if let Some(compact) = object.get("compact").and_then(Value::as_object) {
-        return Value::Object(compact.clone());
-    }
+    let source = object
+        .get("compact")
+        .and_then(Value::as_object)
+        .unwrap_or(object);
 
-    let language_hints = object
+    let language_hints = source
         .get("languageHints")
         .and_then(Value::as_array)
         .map(|items| {
@@ -117,42 +118,14 @@ fn compact_keyword_hints(root: &Value) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let top_keywords = object
-        .get("globalKeywords")
+    let top_keywords_source = source
+        .get("topKeywords")
+        .or_else(|| object.get("globalKeywords"));
+    let top_keywords = top_keywords_source
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_object)
-                .take(16)
-                .filter_map(|hint| {
-                    let keyword = hint.get("keyword").and_then(Value::as_str)?;
-                    if keyword.is_empty() {
-                        return None;
-                    }
-                    let occurrences = hint.get("occurrences").and_then(Value::as_u64).unwrap_or(0);
-                    let source_item_ids = hint
-                        .get("sourceItemIds")
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .take(3)
-                                .map(|item| Value::String(item.to_string()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    Some(serde_json::json!({
-                        "keyword": keyword,
-                        "occurrences": occurrences,
-                        "sourceItemIds": source_item_ids,
-                    }))
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(|items| keyword_strings(items, 16))
         .unwrap_or_default();
-    let section_keywords = object
+    let section_keywords = source
         .get("sectionKeywords")
         .and_then(Value::as_array)
         .map(|items| {
@@ -173,16 +146,7 @@ fn compact_keyword_hints(root: &Value) -> Value {
                     let keywords = section
                         .get("keywords")
                         .and_then(Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(Value::as_object)
-                                .take(6)
-                                .filter_map(|hint| hint.get("keyword").and_then(Value::as_str))
-                                .filter(|keyword| !keyword.is_empty())
-                                .map(|keyword| Value::String(keyword.to_string()))
-                                .collect::<Vec<_>>()
-                        })
+                        .map(|items| keyword_strings(items, 6))
                         .unwrap_or_default();
                     if section_id.is_empty() && keywords.is_empty() {
                         return None;
@@ -218,6 +182,29 @@ fn compact_keyword_hints(root: &Value) -> Value {
         "sectionKeywords": section_keywords,
         "rules": keyword_hint_compact_rules(),
     })
+}
+
+fn keyword_strings(items: &[Value], limit: usize) -> Vec<Value> {
+    items
+        .iter()
+        .filter_map(keyword_string)
+        .filter(|keyword| !keyword.is_empty())
+        .take(limit)
+        .map(Value::String)
+        .collect()
+}
+
+fn keyword_string(value: &Value) -> Option<String> {
+    if let Some(keyword) = value.as_str() {
+        return Some(keyword.trim().to_string());
+    }
+    let object = value.as_object()?;
+    object
+        .get("keyword")
+        .or_else(|| object.get("term"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(str::to_string)
 }
 
 fn keyword_hint_compact_rules() -> Value {

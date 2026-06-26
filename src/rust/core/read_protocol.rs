@@ -61,27 +61,7 @@ pub struct ReadRequestFieldsResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(transparent)]
 pub struct FieldReadResult {
-    pub status: FieldReadStatus,
     pub value: Value,
-    pub source_ref: String,
-    pub source_kind: FieldSourceKind,
-    pub selector: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum FieldReadStatus {
-    Resolved,
-    NotAvailable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum FieldSourceKind {
-    RequestRoot,
-    RequestManifestRef,
-    ContextRef,
-    TextRef,
 }

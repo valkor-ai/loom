@@ -21,12 +21,14 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
     if operation == "tokenize":
         return {"ok": True, "tokens": analyze(str(request.get("text", "")))}
     if operation == "tfidf":
+        tfidf = extract_tfidf_keywords(
+            list(request.get("documents", [])),
+            int(request.get("limit", 20)),
+        )
         return {
             "ok": True,
-            "keywords": extract_tfidf_keywords(
-                list(request.get("documents", [])),
-                int(request.get("limit", 20)),
-            ),
+            "keywords": tfidf["keywords"],
+            "documentKeywords": tfidf["documentKeywords"],
         }
     if operation == "bm25":
         return {

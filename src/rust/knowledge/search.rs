@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
+    fs,
 };
 
 use algorithm_client::AlgorithmClient;
@@ -135,7 +136,8 @@ fn search_cards(
     let registry = load_registry()?;
     let client = algorithm_client()?;
     let allowed_sources = source_names.iter().cloned().collect::<BTreeSet<_>>();
-    let mut candidates = Vec::new();
+    let mut chunk_candidates = Vec::<SearchChunkCandidate>::new();
+    let mut bm25_documents = Vec::<serde_json::Value>::new();
     for source in registry
         .sources
         .iter()
@@ -150,74 +152,214 @@ fn search_cards(
                 Ok(value) => value,
                 Err(_) => continue,
             };
-        let lexical: LexicalIndex =
-            match read_json(&paths::lexical_index_file(&source.source_id, build_id)?) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-        let docs = lexical
-            .documents
-            .iter()
-            .map(|document| serde_json::json!({"id": document.id, "text": document.text}))
-            .collect::<Vec<_>>();
-        let bm25 = client
-            .call(&serde_json::json!({
-                "operation": "bm25",
-                "query": query,
-                "documents": docs,
-                "limit": 50
-            }))
-            .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
-        let lexical_scores = bm25["matches"]
-            .as_array()
+        let docs = lexical_documents(&source.source_id, build_id, &chunks_file)?;
+        let docs_by_chunk = docs
             .into_iter()
-            .flatten()
-            .filter_map(|item| {
-                Some((
-                    item.get("documentId")?.as_str()?.to_string(),
-                    item.get("score")?.as_f64()?,
-                ))
-            })
+            .map(|document| (document.chunk_id, document.text))
             .collect::<BTreeMap<_, _>>();
         for chunk in &chunks_file.chunks {
-            let lexical = *lexical_scores.get(&chunk.chunk_id).unwrap_or(&0.0);
-            let semantic = semantic_match(chunk, semantic_focus);
-            let affinity = block_affinity_score(chunk.block_affinity.as_ref(), block);
-            let score = lexical * 0.40
-                + semantic.score * 0.25
-                + semantic.completeness * 0.20
-                + affinity * 0.15;
-            if score <= 0.0 {
-                continue;
+            let document_id = lexical_document_id(&source.source_id, build_id, &chunk.chunk_id);
+            if let Some(text) = docs_by_chunk.get(&chunk.chunk_id) {
+                bm25_documents.push(serde_json::json!({
+                    "id": document_id,
+                    "text": text
+                }));
             }
-            candidates.push(KnowledgeChunkCard {
+            chunk_candidates.push(SearchChunkCandidate {
                 source_id: source.source_id.clone(),
                 source_name: source.name.clone(),
                 build_id: build_id.to_string(),
-                chunk_id: chunk.chunk_id.clone(),
-                document_title: chunk.document_title.clone(),
-                heading_path: chunk.heading_path.clone(),
-                summary: chunk.summary.clone(),
-                semantic_labels: chunk
-                    .semantic_labels
-                    .iter()
-                    .map(|label| format!("{}: {}", label.kind, label.text))
-                    .collect(),
-                matched_labels: semantic.matched_labels,
-                score: round_score(score),
-                inspect: KnowledgeInspectChunkInput {
-                    project_root: project_root.to_string(),
-                    source_name: source.name.clone(),
-                    source_id: Some(source.source_id.clone()),
-                    build_id: build_id.to_string(),
-                    chunk_id: chunk.chunk_id.clone(),
-                },
+                chunk: chunk.clone(),
             });
         }
+    }
+    let lexical_scores = global_lexical_scores(&client, query, bm25_documents, limit)?;
+    let mut candidates = Vec::new();
+    for candidate in chunk_candidates {
+        let document_id = lexical_document_id(
+            &candidate.source_id,
+            &candidate.build_id,
+            &candidate.chunk.chunk_id,
+        );
+        let lexical = *lexical_scores.get(&document_id).unwrap_or(&0.0);
+        let semantic = semantic_match(&candidate.chunk, semantic_focus);
+        let affinity = block_affinity_score(candidate.chunk.block_affinity.as_ref(), block);
+        let score =
+            lexical * 0.40 + semantic.score * 0.25 + semantic.completeness * 0.20 + affinity * 0.15;
+        if score <= 0.0 {
+            continue;
+        }
+        candidates.push(KnowledgeChunkCard {
+            source_id: candidate.source_id.clone(),
+            source_name: candidate.source_name.clone(),
+            build_id: candidate.build_id.clone(),
+            chunk_id: candidate.chunk.chunk_id.clone(),
+            document_title: candidate.chunk.document_title.clone(),
+            heading_path: candidate.chunk.heading_path.clone(),
+            summary: candidate.chunk.summary.clone(),
+            semantic_labels: candidate
+                .chunk
+                .semantic_labels
+                .iter()
+                .map(|label| format!("{}: {}", label.kind, label.text))
+                .collect(),
+            matched_labels: semantic.matched_labels,
+            score: round_score(score),
+            inspect: KnowledgeInspectChunkInput {
+                project_root: project_root.to_string(),
+                source_name: candidate.source_name,
+                source_id: Some(candidate.source_id),
+                build_id: candidate.build_id,
+                chunk_id: candidate.chunk.chunk_id,
+            },
+        });
     }
     candidates.sort_by(compare_chunk_cards);
     candidates.truncate(limit);
     Ok(candidates)
+}
+
+#[derive(Debug, Clone)]
+struct SearchChunkCandidate {
+    source_id: String,
+    source_name: String,
+    build_id: String,
+    chunk: KnowledgeChunk,
+}
+
+#[derive(Debug, Clone)]
+struct LexicalSearchDocument {
+    chunk_id: String,
+    text: String,
+}
+
+fn global_lexical_scores(
+    client: &AlgorithmClient,
+    query: &str,
+    documents: Vec<serde_json::Value>,
+    limit: usize,
+) -> KnowledgeResult<BTreeMap<String, f64>> {
+    if documents.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let bm25_limit = documents.len().min(limit.max(DEFAULT_SEARCH_LIMIT) * 20);
+    let bm25 = client
+        .call(&serde_json::json!({
+            "operation": "bm25",
+            "query": query,
+            "documents": documents,
+            "limit": bm25_limit
+        }))
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    let raw_scores = bm25["matches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some((
+                item.get("documentId")?.as_str()?.to_string(),
+                item.get("score")?.as_f64()?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let max_score = raw_scores
+        .iter()
+        .map(|(_, score)| *score)
+        .fold(0.0_f64, f64::max);
+    if max_score <= 0.0 {
+        return Ok(BTreeMap::new());
+    }
+    Ok(raw_scores
+        .into_iter()
+        .map(|(document_id, score)| (document_id, round_score(score / max_score)))
+        .collect())
+}
+
+fn lexical_document_id(source_id: &str, build_id: &str, chunk_id: &str) -> String {
+    format!("{source_id}/{build_id}/{chunk_id}")
+}
+
+fn lexical_documents(
+    source_id: &str,
+    build_id: &str,
+    chunks_file: &ChunksFile,
+) -> KnowledgeResult<Vec<LexicalSearchDocument>> {
+    if let Ok(lexical) = read_json::<LexicalIndex>(&paths::lexical_index_file(source_id, build_id)?)
+    {
+        if !lexical.documents.is_empty() {
+            return Ok(lexical
+                .documents
+                .iter()
+                .map(|document| LexicalSearchDocument {
+                    chunk_id: document.id.clone(),
+                    text: document.text.clone(),
+                })
+                .collect());
+        }
+    }
+
+    Ok(chunks_file
+        .chunks
+        .iter()
+        .map(|chunk| {
+            let body = fs::read_to_string(
+                paths::chunk_body_file(source_id, build_id, &chunk.chunk_id).unwrap_or_default(),
+            )
+            .unwrap_or_default();
+            LexicalSearchDocument {
+                chunk_id: chunk.chunk_id.clone(),
+                text: lexical_text_for_search(chunk, &body),
+            }
+        })
+        .collect())
+}
+
+fn lexical_text_for_search(chunk: &KnowledgeChunk, body: &str) -> String {
+    weighted_lexical_text(
+        &chunk.document_title,
+        &chunk.heading_path,
+        chunk.summary.as_deref(),
+        &chunk
+            .semantic_labels
+            .iter()
+            .map(|label| label.text.clone())
+            .collect::<Vec<_>>(),
+        &chunk.semantic_aliases,
+        body,
+    )
+}
+
+fn weighted_lexical_text(
+    title: &str,
+    heading_path: &[String],
+    summary: Option<&str>,
+    labels: &[String],
+    aliases: &[String],
+    body: &str,
+) -> String {
+    let heading = heading_path.join(" ");
+    let label_text = labels.join(" ");
+    let alias_text = aliases.join(" ");
+    let summary = summary.unwrap_or_default();
+    [
+        repeat_field(title, 4),
+        repeat_field(&heading, 4),
+        repeat_field(summary, 3),
+        repeat_field(&label_text, 5),
+        repeat_field(&alias_text, 5),
+        body.to_string(),
+    ]
+    .into_iter()
+    .filter(|part| !part.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn repeat_field(value: &str, times: usize) -> String {
+    std::iter::repeat_n(value.trim(), times)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn aggregate_sources(

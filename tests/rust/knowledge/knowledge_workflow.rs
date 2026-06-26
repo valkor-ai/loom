@@ -203,6 +203,19 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
             .expect("lexical index path")
             .exists()
     );
+    let lexical_index: knowledge::models::LexicalIndex = knowledge::store::read_json(
+        &knowledge::paths::lexical_index_file(&source.source_id, build_id)
+            .expect("lexical index path"),
+    )
+    .expect("lexical index");
+    let lexical_text = lexical_index
+        .documents
+        .iter()
+        .map(|document| document.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(lexical_text.contains("恢复交易条件"));
+    assert!(lexical_text.contains("证券账户销户"));
 
     let search = search_knowledge(KnowledgeSearchInput {
         project_root: fixture.root_str().to_string(),
@@ -241,6 +254,135 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     })
     .expect("disabled search");
     assert_eq!(disabled_search.status, "empty");
+}
+
+#[test]
+fn legacy_cli_knowledge_store_can_be_listed_searched_and_inspected() {
+    let fixture = Fixture::new("legacy-cli-store");
+    let source_id = "ksrc_legacy_stock_rules";
+    let build_id = "kbld_legacy_stock_rules";
+    let loom_home = fixture.root.join(".loom-home");
+    let build_dir = loom_home
+        .join("knowledge/sources")
+        .join(source_id)
+        .join("build-runs")
+        .join(build_id);
+    std::fs::create_dir_all(build_dir.join("chunks")).expect("legacy chunks dir");
+    std::fs::write(
+        loom_home.join("knowledge/registry.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": "1.0",
+            "sources": [{
+                "sourceId": source_id,
+                "name": "stock-trade-rules",
+                "status": "enabled",
+                "roots": [{
+                    "type": "file",
+                    "path": "/legacy/StockTradingSystem.md"
+                }],
+                "index": {
+                    "version": 1,
+                    "lastBuiltAt": "2026-06-19T03:32:52.815Z",
+                    "currentBuildId": build_id,
+                    "documentCount": 1,
+                    "chunkCount": 1
+                },
+                "createdAt": "2026-06-19T03:32:52.815Z",
+                "updatedAt": "2026-06-19T03:32:52.815Z"
+            }]
+        }))
+        .expect("legacy registry json"),
+    )
+    .expect("legacy registry");
+    std::fs::write(
+        build_dir.join("chunks.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": "1.0",
+            "sourceId": source_id,
+            "sourceName": null,
+            "buildId": build_id,
+            "chunks": [{
+                "chunkId": "kchunk_000001",
+                "documentId": "kdoc_000001",
+                "sourceId": source_id,
+                "title": "股票交易业务领域知识库",
+                "headingPath": ["证券账户业务"],
+                "textRef": "chunks/kchunk_000001.txt",
+                "tokenEstimate": 120,
+                "neighborChunkIds": [],
+                "contextPrefix": "证券账户是交易身份和持仓归属账户。",
+                "splitReason": "section",
+                "retrievalFields": {
+                    "summary": "证券账户开户、挂失补办、销户和持仓清空规则。",
+                    "semanticLabelTexts": ["证券账户", "证券账户开户", "持仓清空后方可销户"],
+                    "semanticAliases": ["开户", "销户", "恢复交易条件"],
+                    "bodyTextRef": "chunks/kchunk_000001.txt"
+                },
+                "semanticLabels": [
+                    {"kind": "object", "text": "证券账户", "normalizedText": "证券账户", "confidence": "high"},
+                    {"kind": "operation", "text": "证券账户开户", "normalizedText": "证券账户开户", "confidence": "high"},
+                    {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "confidence": "high"}
+                ],
+                "blockAffinity": {
+                    "phaseScope": 0.8,
+                    "conceptGrounding": 1.0,
+                    "frontendExperience": 0.2,
+                    "finalSummary": 0.7
+                }
+            }]
+        }))
+        .expect("legacy chunks json"),
+    )
+    .expect("legacy chunks");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_000001.txt"),
+        "证券账户开户是交易身份的上游能力。销户前必须清空该账户持仓。",
+    )
+    .expect("legacy chunk body");
+    std::fs::write(
+        build_dir.join("lexical-index.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": "1.0",
+            "sourceId": source_id,
+            "buildId": build_id,
+            "terms": {},
+            "documentLengths": {},
+            "averageDocumentLength": 0,
+            "fieldWeights": {},
+            "chunkCount": 1
+        }))
+        .expect("legacy lexical json"),
+    )
+    .expect("legacy lexical");
+
+    let listed = list_sources(KnowledgeProjectInput {
+        project_root: fixture.root_str().to_string(),
+    })
+    .expect("legacy list");
+    assert_eq!(
+        listed.sources[0].source.current_build_id.as_deref(),
+        Some(build_id)
+    );
+    assert!(listed.sources[0].source.enabled);
+
+    let search = search_knowledge(KnowledgeSearchInput {
+        project_root: fixture.root_str().to_string(),
+        natural_language_query: "证券账户开户和销户规则".to_string(),
+        semantic_focus: vec!["证券账户".to_string(), "销户".to_string()],
+        source_names: vec![],
+        block: Some("phase_scope".to_string()),
+        limit: Some(5),
+    })
+    .expect("legacy search");
+    assert_eq!(search.status, "available");
+    assert_eq!(search.cards[0].source_name, "stock-trade-rules");
+    assert_eq!(
+        search.cards[0].summary.as_deref(),
+        Some("证券账户开户、挂失补办、销户和持仓清空规则。")
+    );
+
+    let inspected = inspect_chunk(search.cards[0].inspect.clone()).expect("legacy inspect");
+    assert!(inspected.text.contains("销户前必须清空"));
 }
 
 #[test]

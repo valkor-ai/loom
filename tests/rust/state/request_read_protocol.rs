@@ -164,6 +164,16 @@ fn native_request_read_protocol_resolves_declared_fields() {
         group_id: "core".to_string(),
     })
     .expect("read group");
+    let group_json = serde_json::to_value(&group).expect("serialize read group");
+    assert_eq!(
+        group_json["fields"]["task.title"],
+        json!("实现证券账户开户")
+    );
+    let group_text = group_json.to_string();
+    assert!(!group_text.contains("sourceRef"));
+    assert!(!group_text.contains("sourceKind"));
+    assert!(!group_text.contains("selector"));
+    assert!(!group_text.contains("\"status\":\"resolved\""));
     assert_eq!(group.fields["task.title"].value, "实现证券账户开户");
     assert_eq!(group.fields["task.items.0.name"].value, "开户");
     assert_eq!(
@@ -179,8 +189,19 @@ fn native_request_read_protocol_resolves_declared_fields() {
         "completed"
     );
     assert_eq!(
-        group.fields["keywordHints.compact"].value["topKeywords"][0]["keyword"],
+        group.fields["keywordHints.compact"].value["topKeywords"][0],
         "证券账户"
+    );
+    assert_eq!(
+        group.fields["keywordHints.compact"].value["sectionKeywords"][0]["keywords"],
+        json!(["开户", "销户"])
+    );
+    assert!(
+        !group.fields["keywordHints.compact"]
+            .value
+            .to_string()
+            .contains("\"keyword\""),
+        "compact keyword hints must expose keyword arrays as strings"
     );
     assert_eq!(
         group.fields["rules.requirementSemanticGrounding.compactRules"].value,

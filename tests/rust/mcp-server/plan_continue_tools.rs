@@ -1,4 +1,4 @@
-use delivery_core::InspectRequestInput;
+use delivery_core::{InspectRequestInput, ReadRequestFieldsInput};
 use mcp_server::LoomMcpServer;
 use serde_json::{json, Value};
 use std::sync::{Mutex, MutexGuard};
@@ -38,6 +38,7 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         vec![
             "conversation_protocol",
             "requirement_context",
+            "requirement_full_text",
             "phase_scope_rules",
             "knowledge_context_plan",
             "concept_grounding_rules",
@@ -46,6 +47,44 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
             "candidate_write_contract",
         ]
     );
+    let requirement_context = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "requirement_context")
+        .expect("requirement_context group");
+    assert!(
+        !requirement_context
+            .fields
+            .contains(&"requirementContext.normalizedText".to_string()),
+        "default requirement_context group must stay compact"
+    );
+    let full_text = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "requirement_full_text")
+        .expect("requirement_full_text group");
+    assert!(!full_text.required);
+    assert_eq!(
+        full_text.fields,
+        vec!["requirementContext.normalizedText".to_string()]
+    );
+    let knowledge_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "knowledgeQueryPlan.toolContract".to_string(),
+            "knowledgeQueryPlan.sharedRules".to_string(),
+        ],
+    })
+    .expect("knowledge query plan fields");
+    assert_eq!(
+        knowledge_fields.fields["knowledgeQueryPlan.toolContract"].value["contextTool"],
+        "loom.knowledgeBrainstormContext"
+    );
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("do not silently fall back"));
 }
 
 #[test]

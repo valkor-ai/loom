@@ -49,7 +49,7 @@ pub fn build_brainstorm_request_root(
             "blockExecutionRules": {
                 "phase_scope": [
                     "Read conversation_protocol, requirement_context, and phase_scope_rules before presenting phase_scope.",
-                    "When knowledge is available, run the phase_scope steps in knowledge_context_plan before recommending the current phase cut.",
+                    "For every phase_scope step in knowledge_context_plan, call loom.knowledgeBrainstormContext before recommending the current phase cut.",
                     "Present 2-3 source-grounded scope options and show one recommendation; do not directly ask the user to approve an unstated internal scope."
                 ],
                 "concept_grounding": [
@@ -140,12 +140,20 @@ pub fn build_brainstorm_request_root(
                 {
                     "groupId": "requirement_context",
                     "required": true,
-                    "purpose": "Read the source-grounded requirement context before forming any clarification options or rule summaries.",
+                    "purpose": "Read compact source metadata and requirement hints before forming clarification options or rule summaries.",
                     "whenToRead": "Read before phase_scope and return here whenever the confirmed source authority is unclear.",
                     "fields": [
                         "requirementContext.sourceItems",
-                        "requirementContext.normalizedText",
                         "keywordHints.compact"
+                    ]
+                },
+                {
+                    "groupId": "requirement_full_text",
+                    "required": false,
+                    "purpose": "Read the full normalized requirement text only when compact source metadata, keyword hints, and request-scoped knowledge context are insufficient for the current clarification block.",
+                    "whenToRead": "Read on demand only for the active block; do not read it as the default phase_scope context.",
+                    "fields": [
+                        "requirementContext.normalizedText"
                     ]
                 },
                 {
@@ -162,10 +170,11 @@ pub fn build_brainstorm_request_root(
                 {
                     "groupId": "knowledge_context_plan",
                     "required": false,
-                    "purpose": "Read the structured knowledge query plan for phase_scope, concept_grounding, and frontend_experience when knowledge is available.",
-                    "whenToRead": "Read before each knowledge-enabled block. Skip it only when knowledge context is not needed or returns empty.",
+                    "purpose": "Read the tool-bound knowledge query plan for phase_scope, concept_grounding, and frontend_experience.",
+                    "whenToRead": "Read before each knowledge-enabled block. If the knowledge context tool returns failed, stop and report the tool failure instead of producing a knowledge-free clarification.",
                     "fields": [
                         "knowledgeQueryPlan.sharedRules",
+                        "knowledgeQueryPlan.toolContract",
                         "knowledgeQueryPlan.blocks.phase_scope.executionOrder",
                         "knowledgeQueryPlan.blocks.concept_grounding.executionOrder",
                         "knowledgeQueryPlan.blocks.frontend_experience.executionOrder"
@@ -305,9 +314,29 @@ fn knowledge_query_plan() -> Value {
         "sharedRules": [
             "Use request-scoped knowledge context only for phase_scope, concept_grounding, and frontend_experience.",
             "Do not carry knowledge chunks from one Brainstorm block into another block without re-querying that block's step.",
-            "Inspect every chunk listed in the knowledge readPlan before using it in a clarification block.",
+            "For each executionOrder step, call loom.knowledgeBrainstormContext with projectRoot, requestRef, block, stepId, querySubject, naturalLanguageQuery, and semanticFocus.",
+            "If loom.knowledgeBrainstormContext returns status available, inspect every chunk listed in readPlan before using it in the clarification block.",
+            "If loom.knowledgeBrainstormContext returns status empty, continue with source requirements and mention no knowledge match only when it affects confidence.",
+            "If any knowledge tool returns state failed or an error object, stop the clarification block and report the failure; do not silently fall back to a knowledge-free answer.",
             "Use knowledge only to improve clarification quality. Do not write knowledge source ids, chunk ids, inspect output, or knowledge paths into the Brainstorm candidate."
         ],
+        "toolContract": {
+            "contextTool": "loom.knowledgeBrainstormContext",
+            "inspectTool": "loom.knowledgeInspectChunk",
+            "doNotUseAsContextCheck": [
+                "loom.knowledgeList",
+                "loom.knowledgePending"
+            ],
+            "requiredInputFields": [
+                "projectRoot",
+                "requestRef",
+                "block",
+                "stepId",
+                "querySubject",
+                "naturalLanguageQuery",
+                "semanticFocus"
+            ]
+        },
         "blocks": {
             "phase_scope": {
                 "executionOrder": [

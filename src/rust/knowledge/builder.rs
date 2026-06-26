@@ -885,8 +885,9 @@ pub fn rebuild_lexical_index(
             build_id,
             &chunk.chunk_id,
         )?)?;
+        let text = lexical_text(chunk, &body);
         let token_response = client
-            .call(&json!({"operation": "tokenize", "text": body}))
+            .call(&json!({"operation": "tokenize", "text": text}))
             .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
         let tokens = token_response["tokens"]
             .as_array()
@@ -900,7 +901,7 @@ pub fn rebuild_lexical_index(
             .unwrap_or_default();
         documents.push(LexicalDocument {
             id: chunk.chunk_id.clone(),
-            text: lexical_text(chunk, &body),
+            text,
             tokens,
         });
     }
@@ -948,19 +949,52 @@ pub fn rebuild_lexical_index(
 }
 
 fn lexical_text(chunk: &KnowledgeChunk, body: &str) -> String {
-    format!(
-        "{}\n{}\n{}\n{}\n{}",
-        chunk.document_title,
-        chunk.heading_path.join(" "),
-        chunk.summary.clone().unwrap_or_default(),
-        chunk
-            .semantic_labels
-            .iter()
-            .map(|label| label.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" "),
-        body
+    let labels = chunk
+        .semantic_labels
+        .iter()
+        .map(|label| label.text.clone())
+        .collect::<Vec<_>>();
+    weighted_lexical_text(
+        &chunk.document_title,
+        &chunk.heading_path,
+        chunk.summary.as_deref(),
+        &labels,
+        &chunk.semantic_aliases,
+        body,
     )
+}
+
+fn weighted_lexical_text(
+    title: &str,
+    heading_path: &[String],
+    summary: Option<&str>,
+    labels: &[String],
+    aliases: &[String],
+    body: &str,
+) -> String {
+    let heading = heading_path.join(" ");
+    let label_text = labels.join(" ");
+    let alias_text = aliases.join(" ");
+    let summary = summary.unwrap_or_default();
+    [
+        repeat_field(title, 4),
+        repeat_field(&heading, 4),
+        repeat_field(summary, 3),
+        repeat_field(&label_text, 5),
+        repeat_field(&alias_text, 5),
+        body.to_string(),
+    ]
+    .into_iter()
+    .filter(|part| !part.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn repeat_field(value: &str, times: usize) -> String {
+    std::iter::repeat_n(value.trim(), times)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn render_chunk_body(

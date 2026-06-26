@@ -1,9 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use delivery_core::{
-    FieldReadResult, FieldReadStatus, FieldSourceKind, InspectRequestInput, InspectRequestResult,
-    ReadFieldGroupInput, ReadFieldGroupResult, ReadGroupRef, ReadRequestFieldsInput,
-    ReadRequestFieldsResult,
+    FieldReadResult, InspectRequestInput, InspectRequestResult, ReadFieldGroupInput,
+    ReadFieldGroupResult, ReadGroupRef, ReadRequestFieldsInput, ReadRequestFieldsResult,
 };
 use serde_json::Value;
 
@@ -17,7 +16,7 @@ use crate::{
     project::read_project_config,
     read_audit::{now_for_audit, record_field_read_audit, FieldReadAudit},
     request_index::{get_request_index_entry, RequestSourceProtocol},
-    request_manifest::{encode_component, read_group_refs_from_root, request_storage_ref},
+    request_manifest::{read_group_refs_from_root, request_storage_ref},
     store::{read_json_value, read_text, StateError, StateResult},
 };
 
@@ -223,26 +222,14 @@ fn resolve_field(
         } else {
             select_value(&ref_value, &parts[1..])?
         };
-        return Ok(field_result(
-            request,
-            field,
-            value,
-            FieldSourceKind::RequestManifestRef,
-            format!(".{}", parts[1..].join(".")),
-        ));
+        return Ok(field_result(value));
     }
     let value = if field == "rules.requirementSemanticGrounding.compactRules" {
         select_compact_requirement_semantic_rules(request.root.get("rules").unwrap_or(&Value::Null))
     } else {
         select_value(&request.root, &parts)?
     };
-    Ok(field_result(
-        request,
-        field,
-        value,
-        FieldSourceKind::RequestRoot,
-        format!(".{}", parts.join(".")),
-    ))
+    Ok(field_result(value))
 }
 
 fn resolve_context_ref_field(
@@ -261,13 +248,7 @@ fn resolve_context_ref_field(
         {
             let paths = project_paths(project_root)?;
             let text_file = from_project_relative(&paths.root, relative)?;
-            return Ok(Some(field_result(
-                request,
-                field,
-                Value::String(read_text(&text_file)?),
-                FieldSourceKind::TextRef,
-                "$".to_string(),
-            )));
+            return Ok(Some(field_result(Value::String(read_text(&text_file)?))));
         }
     }
     let aliases = [
@@ -307,34 +288,11 @@ fn resolve_context_ref_field(
     } else {
         select_value(&ref_value, &parts[1..])?
     };
-    Ok(Some(field_result(
-        request,
-        field,
-        value,
-        FieldSourceKind::ContextRef,
-        format!(".{}", parts[1..].join(".")),
-    )))
+    Ok(Some(field_result(value)))
 }
 
-fn field_result(
-    request: &LoadedRequest,
-    field: &str,
-    value: Value,
-    source_kind: FieldSourceKind,
-    selector: String,
-) -> FieldReadResult {
-    FieldReadResult {
-        status: FieldReadStatus::Resolved,
-        value,
-        source_ref: format!(
-            "loom://projects/{}/requests/{}/fields/{}",
-            request.project_id,
-            request.request_id,
-            encode_component(field)
-        ),
-        source_kind,
-        selector,
-    }
+fn field_result(value: Value) -> FieldReadResult {
+    FieldReadResult { value }
 }
 
 fn request_storage_manifest_ref(

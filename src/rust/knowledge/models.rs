@@ -1,9 +1,11 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeRegistry {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub sources: Vec<KnowledgeSource>,
 }
@@ -17,7 +19,7 @@ impl KnowledgeRegistry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeSource {
     pub source_id: String,
@@ -30,9 +32,85 @@ pub struct KnowledgeSource {
     pub last_built_at: Option<String>,
 }
 
+impl<'de> Deserialize<'de> for KnowledgeSource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireSource {
+            source_id: String,
+            name: String,
+            #[serde(default)]
+            enabled: Option<bool>,
+            #[serde(default)]
+            status: Option<String>,
+            #[serde(default)]
+            document_paths: Option<Vec<String>>,
+            #[serde(default)]
+            roots: Vec<WireRoot>,
+            #[serde(default)]
+            current_build_id: Option<String>,
+            #[serde(default)]
+            index: Option<WireIndex>,
+            created_at: String,
+            updated_at: String,
+            #[serde(default)]
+            last_built_at: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct WireRoot {
+            path: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireIndex {
+            #[serde(default)]
+            current_build_id: Option<String>,
+            #[serde(default)]
+            last_built_at: Option<String>,
+        }
+
+        let wire = WireSource::deserialize(deserializer)?;
+        let enabled = wire
+            .enabled
+            .unwrap_or_else(|| wire.status.as_deref() != Some("disabled"));
+        let document_paths = wire.document_paths.unwrap_or_else(|| {
+            wire.roots
+                .iter()
+                .map(|root| root.path.clone())
+                .collect::<Vec<_>>()
+        });
+        let current_build_id = wire.current_build_id.or_else(|| {
+            wire.index
+                .as_ref()
+                .and_then(|index| index.current_build_id.clone())
+        });
+        let last_built_at = wire.last_built_at.or_else(|| {
+            wire.index
+                .as_ref()
+                .and_then(|index| index.last_built_at.clone())
+        });
+        Ok(Self {
+            source_id: wire.source_id,
+            name: wire.name,
+            enabled,
+            document_paths,
+            current_build_id,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+            last_built_at,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingQueue {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
     pub source_name: String,
@@ -70,8 +148,10 @@ pub struct PendingOperation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeBuildSnapshot {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub source_name: String,
     pub build_id: String,
     pub documents: Vec<KnowledgeDocument>,
@@ -100,14 +180,16 @@ pub struct SkippedFile {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChunksFile {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub source_name: String,
     pub build_id: String,
     pub chunks: Vec<KnowledgeChunk>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeChunk {
     pub chunk_id: String,
@@ -130,6 +212,95 @@ pub struct KnowledgeChunk {
     pub block_affinity: Option<BlockAffinity>,
 }
 
+impl<'de> Deserialize<'de> for KnowledgeChunk {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireChunk {
+            chunk_id: String,
+            document_id: String,
+            #[serde(default)]
+            document_title: Option<String>,
+            #[serde(default)]
+            title: Option<String>,
+            #[serde(default)]
+            source_path: Option<String>,
+            #[serde(default)]
+            heading_path: Vec<String>,
+            token_estimate: u32,
+            #[serde(default)]
+            context_prefix: String,
+            #[serde(default)]
+            neighbor_chunk_ids: Vec<String>,
+            #[serde(default)]
+            split_reason: String,
+            #[serde(default)]
+            body_ref: Option<String>,
+            #[serde(default)]
+            text_ref: Option<String>,
+            #[serde(default)]
+            summary: Option<String>,
+            #[serde(default)]
+            retrieval_fields: Option<WireRetrievalFields>,
+            #[serde(default)]
+            semantic_labels: Vec<SemanticLabel>,
+            #[serde(default)]
+            semantic_aliases: Vec<String>,
+            #[serde(default)]
+            block_affinity: Option<BlockAffinity>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireRetrievalFields {
+            #[serde(default)]
+            summary: Option<String>,
+            #[serde(default)]
+            semantic_aliases: Vec<String>,
+            #[serde(default)]
+            body_text_ref: Option<String>,
+        }
+
+        let wire = WireChunk::deserialize(deserializer)?;
+        let retrieval = wire.retrieval_fields;
+        let summary = wire
+            .summary
+            .or_else(|| retrieval.as_ref().and_then(|fields| fields.summary.clone()));
+        let mut semantic_aliases = wire.semantic_aliases;
+        if let Some(fields) = &retrieval {
+            semantic_aliases.extend(fields.semantic_aliases.clone());
+        }
+        semantic_aliases.sort();
+        semantic_aliases.dedup();
+        Ok(Self {
+            chunk_id: wire.chunk_id,
+            document_id: wire.document_id,
+            document_title: wire
+                .document_title
+                .or(wire.title)
+                .unwrap_or_else(|| "knowledge document".to_string()),
+            source_path: wire.source_path.unwrap_or_default(),
+            heading_path: wire.heading_path,
+            token_estimate: wire.token_estimate,
+            context_prefix: wire.context_prefix,
+            neighbor_chunk_ids: wire.neighbor_chunk_ids,
+            split_reason: wire.split_reason,
+            body_ref: wire
+                .body_ref
+                .or(wire.text_ref)
+                .or_else(|| retrieval.and_then(|fields| fields.body_text_ref))
+                .unwrap_or_default(),
+            summary,
+            semantic_labels: wire.semantic_labels,
+            semantic_aliases,
+            block_affinity: wire.block_affinity,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticLabel {
@@ -142,15 +313,20 @@ pub struct SemanticLabel {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockAffinity {
+    #[serde(default)]
     pub phase_scope: f64,
+    #[serde(default)]
     pub concept_grounding: f64,
+    #[serde(default)]
     pub frontend_experience: f64,
+    #[serde(default)]
     pub business_rules: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LexicalIndex {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
     pub build_id: String,
@@ -177,6 +353,7 @@ pub struct LexicalKeyword {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticIndex {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
     pub build_id: String,
@@ -204,6 +381,7 @@ pub enum SemanticBuildStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticState {
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
     pub source_name: String,
@@ -232,4 +410,32 @@ pub struct SemanticPackState {
     pub request_ref: String,
     pub result_file: String,
     pub accepted_at: Option<String>,
+}
+
+fn deserialize_schema_version<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|raw| u32::try_from(raw).ok())
+            .ok_or_else(|| de::Error::custom("schemaVersion must be a positive integer")),
+        Value::String(raw) => raw
+            .split('.')
+            .next()
+            .and_then(|major| major.parse::<u32>().ok())
+            .ok_or_else(|| de::Error::custom("schemaVersion string must start with a number")),
+        other => Err(de::Error::custom(format!(
+            "unsupported schemaVersion value: {other}"
+        ))),
+    }
+}
+
+fn deserialize_string_or_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
