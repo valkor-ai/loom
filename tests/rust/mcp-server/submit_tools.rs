@@ -163,6 +163,18 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .fields
         .get("brainstormLens.acceptance")
         .is_none());
+    assert!(baseline_context
+        .fields
+        .get("brainstormLens.domainModel")
+        .is_some());
+    assert!(baseline_context
+        .fields
+        .get("brainstormLens.roadmap")
+        .is_some());
+    assert!(baseline_context
+        .fields
+        .get("brainstormLens.phasePlan")
+        .is_some());
     assert!(baseline_context.fields["brainstormLens.acceptanceIndex"].value[0]["id"].is_string());
     assert!(
         baseline_context.fields["brainstormLens.acceptanceIndex"].value[0]
@@ -406,6 +418,43 @@ fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
 }
 
 #[test]
+fn architecture_read_groups_follow_current_section() {
+    let fixture = Fixture::new("architecture-read-groups-by-section");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+
+    assert_architecture_group_ids(
+        &fixture,
+        &architecture_request_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
+    assert_architecture_group_ids(
+        &fixture,
+        &architecture_request_ref,
+        &[
+            "architecture_core_context",
+            "architecture_section_contract",
+            "architecture_frontend_context",
+        ],
+    );
+
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    assert_architecture_group_ids(
+        &fixture,
+        &architecture_request_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
+    assert_architecture_group_ids(
+        &fixture,
+        &architecture_request_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+}
+
+#[test]
 fn architecture_request_omits_previous_runtime_fields_without_previous_runtime() {
     let fixture = Fixture::new("architecture-runtime-no-previous");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -442,17 +491,31 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .as_str()
             .unwrap_or_default()
             .contains("do not use unchanged")));
+    assert_architecture_group_ids(
+        &fixture,
+        &architecture_request_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
 
-    let runtime_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    assert_architecture_group_ids(
+        &fixture,
+        &architecture_request_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+    let core_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: architecture_request_ref,
-        group_id: "architecture_runtime_context".to_string(),
+        group_id: "architecture_core_context".to_string(),
     })
-    .expect("read runtime group");
-    assert!(runtime_group
-        .fields
-        .contains_key("rules.runtimeDeliveryAuthority"));
-    assert!(!runtime_group
+    .expect("read architecture core group");
+    assert!(core_group.fields.contains_key("sourceRefs"));
+    assert!(!core_group.fields["sourceRefs"]
+        .value
+        .as_object()
+        .expect("sourceRefs")
+        .contains_key("previousRuntimeDeliveryRef"));
+    assert!(!core_group
         .fields
         .contains_key("sourceRefs.previousRuntimeDeliveryRef"));
 }
@@ -515,13 +578,13 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
     let source_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: refreshed_ref.clone(),
-        fields: vec!["sourceRefs.previousRuntimeDeliveryRef".to_string()],
+        fields: vec!["sourceRefs".to_string()],
     })
     .expect("read previous runtime ref")
     .fields;
 
     assert_eq!(
-        source_fields["sourceRefs.previousRuntimeDeliveryRef"].value,
+        source_fields["sourceRefs"].value["previousRuntimeDeliveryRef"],
         json!(previous_runtime_ref)
     );
     let runtime_contract = runtime_section_contract(&request_root);
@@ -540,15 +603,22 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
         json!("string")
     );
 
-    let runtime_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+    advance_architecture_to_section(&fixture, &refreshed_ref, "runtime_delivery");
+    assert_architecture_group_ids(
+        &fixture,
+        &refreshed_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+    let core_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: refreshed_ref,
-        group_id: "architecture_runtime_context".to_string(),
+        group_id: "architecture_core_context".to_string(),
     })
-    .expect("read runtime group");
-    assert!(runtime_group
-        .fields
-        .contains_key("sourceRefs.previousRuntimeDeliveryRef"));
+    .expect("read architecture core group");
+    assert_eq!(
+        core_group.fields["sourceRefs"].value["previousRuntimeDeliveryRef"],
+        json!(previous_runtime_ref)
+    );
 }
 
 #[test]
@@ -1428,6 +1498,31 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         .as_str()
         .expect("repair action requestRef")
         .to_string();
+    assert_architecture_group_ids(
+        &fixture,
+        &repair_action_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+    advance_architecture_to_section(&fixture, &repair_action_ref, "frontend_experience");
+    assert_architecture_group_ids(
+        &fixture,
+        &repair_action_ref,
+        &[
+            "architecture_core_context",
+            "architecture_section_contract",
+            "architecture_frontend_context",
+        ],
+    );
+    let frontend_group = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+        group_id: "architecture_frontend_context".to_string(),
+    })
+    .expect("read architecture repair frontend group");
+    assert!(frontend_group
+        .fields
+        .get("frontendExperienceSource")
+        .is_some());
     let result = complete_architecture_sections(&fixture, &repair_action_ref);
 
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
@@ -1842,14 +1937,27 @@ fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
 fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &str) -> Value {
     let current_request_ref = architecture_request_ref.to_string();
     let mut last = json!(null);
-    for expected_section in [
+    let section_order = [
         "foundation",
         "domain_contract",
         "behavior",
         "frontend_experience",
         "runtime_delivery",
         "coverage",
-    ] {
+    ];
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: current_request_ref.clone(),
+    })
+    .expect("inspect current architecture request");
+    let current_section = inspected.write_targets[0]["targetId"]
+        .as_str()
+        .expect("current architecture target");
+    let start_index = section_order
+        .iter()
+        .position(|section| *section == current_section)
+        .expect("known architecture section");
+    for expected_section in section_order.iter().skip(start_index) {
         let inspected = state::inspect_request(InspectRequestInput {
             project_root: fixture.root_str().to_string(),
             request_ref: current_request_ref.clone(),
@@ -1857,7 +1965,7 @@ fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &
         .expect("inspect current architecture request");
         assert_eq!(
             inspected.write_targets[0]["targetId"],
-            json!(expected_section)
+            json!(*expected_section)
         );
 
         write_candidate_target(
@@ -1869,7 +1977,7 @@ fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &
         let submit_tool = inspected.submit_tool.as_deref().expect("submit tool");
         last = call_submit(submit_tool, &current_request_ref, fixture.root_str());
 
-        if expected_section != "coverage" {
+        if *expected_section != "coverage" {
             assert_eq!(last["state"], "auto_runnable", "{last:#}");
             assert_eq!(
                 last["next"]["requestRef"],
@@ -1879,6 +1987,57 @@ fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &
         }
     }
     last
+}
+
+fn advance_architecture_to_section(
+    fixture: &Fixture,
+    architecture_request_ref: &str,
+    target: &str,
+) {
+    for _ in 0..6 {
+        let inspected = state::inspect_request(InspectRequestInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: architecture_request_ref.to_string(),
+        })
+        .expect("inspect current architecture request");
+        let current = inspected.write_targets[0]["targetId"]
+            .as_str()
+            .expect("current architecture target");
+        if current == target {
+            return;
+        }
+        assert_ne!(
+            current, "coverage",
+            "target section {target} was not reached"
+        );
+        write_candidate_target(
+            fixture,
+            architecture_request_ref,
+            &architecture_section_candidate_json(fixture, architecture_request_ref),
+        );
+        let submit_tool = inspected.submit_tool.as_deref().expect("submit tool");
+        let result = call_submit(submit_tool, architecture_request_ref, fixture.root_str());
+        assert_eq!(result["state"], "auto_runnable", "{result:#}");
+        assert_eq!(
+            result["next"]["requestRef"],
+            json!(architecture_request_ref)
+        );
+    }
+    panic!("target section {target} was not reached");
+}
+
+fn assert_architecture_group_ids(fixture: &Fixture, request_ref: &str, expected: &[&str]) {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect architecture request");
+    let actual = inspected
+        .read_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "{actual:#?}");
 }
 
 fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
@@ -2392,18 +2551,21 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     let section = request_root["sectionState"]["currentSection"]
         .as_str()
         .expect("currentSection");
+    let mut requested_fields = vec![
+        "sourceRefs".to_string(),
+        "allowedRefs".to_string(),
+        "contextProjection.planningContractId".to_string(),
+        "contextProjection.technicalBaseline".to_string(),
+        "contextProjection.requirementDetailTransfer.acceptanceDetails".to_string(),
+        "contextProjection.requirementDetailTransfer.requirementDetails".to_string(),
+    ];
+    if section == "frontend_experience" {
+        requested_fields.push("frontendExperienceSource".to_string());
+    }
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
-        fields: vec![
-            "sourceRefs".to_string(),
-            "allowedRefs".to_string(),
-            "contextProjection.planningContractId".to_string(),
-            "contextProjection.technicalBaseline".to_string(),
-            "contextProjection.requirementDetailTransfer.acceptanceDetails".to_string(),
-            "contextProjection.requirementDetailTransfer.requirementDetails".to_string(),
-            "frontendExperienceSource".to_string(),
-        ],
+        fields: requested_fields,
     })
     .expect("read architecture request fields")
     .fields;
@@ -2440,15 +2602,18 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .and_then(|item| item.get("statement"))
         .and_then(Value::as_str)
         .unwrap_or("Current phase acceptance is covered by the architecture.");
-    let frontend_source = &fields["frontendExperienceSource"].value;
-    let frontend_authority_ref = frontend_source
-        .get("confirmedFrontendExperienceRef")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            frontend_source
-                .get("currentFrontendExperienceRef")
-                .and_then(Value::as_str)
-        });
+    let frontend_authority_ref = fields.get("frontendExperienceSource").and_then(|field| {
+        field
+            .value
+            .get("confirmedFrontendExperienceRef")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                field
+                    .value
+                    .get("currentFrontendExperienceRef")
+                    .and_then(Value::as_str)
+            })
+    });
     let technical_baseline_ref = source_refs
         .get("technicalBaselineRef")
         .and_then(Value::as_str)

@@ -209,6 +209,7 @@ fn build_request_root(
         "brainstormLens": {
             "summary": brainstorm.summary,
             "scope": brainstorm.scope,
+            "domainModel": brainstorm.domain_model,
             "acceptanceIndex": brainstorm.acceptance.iter().map(|acceptance| json!({
                 "id": acceptance.id,
                 "priority": acceptance.priority,
@@ -217,6 +218,11 @@ fn build_request_root(
             })).collect::<Vec<_>>(),
             "frontendExperience": brainstorm.frontend_experience,
             "userFacingLanguage": brainstorm.delivery_context.user_facing_language,
+            "roadmap": brainstorm.roadmap,
+            "phasePlan": {
+                "current": brainstorm.phase_plan.current,
+                "nextPhasePreview": brainstorm.phase_plan.next_phase_preview
+            },
             "sourceRefs": brainstorm.sources.iter().map(|source| source.source_id.clone()).collect::<Vec<_>>()
         },
         "currentPhaseLens": {
@@ -288,9 +294,12 @@ fn build_request_root(
                     "fields": [
                         "brainstormLens.summary",
                         "brainstormLens.scope",
+                        "brainstormLens.domainModel",
                         "brainstormLens.acceptanceIndex",
                         "brainstormLens.frontendExperience",
                         "brainstormLens.userFacingLanguage",
+                        "brainstormLens.roadmap",
+                        "brainstormLens.phasePlan",
                         "currentPhaseLens",
                         "decisionNeeds",
                         "previousBaselineContext",

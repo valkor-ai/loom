@@ -220,7 +220,6 @@ fn build_request_root(
         "repositoryContextRef": phase.latest_refs.get("latestRepositoryContext"),
         "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."
     });
-    let runtime_context_fields = runtime_context_fields(has_previous_runtime_delivery);
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -292,62 +291,85 @@ fn build_request_root(
             }
         },
         "requestReadPlan": {
-            "groups": [
-                {
-                    "groupId": "architecture_core_context",
-                    "required": true,
-                    "purpose": "Read the current-phase planning authority and allowed refs before generating the current Architecture section.",
-                    "whenToRead": "Read before drafting any Architecture section candidate.",
-                    "fields": [
-                        "sourceRefs",
-                        "contextProjection.phaseScope",
-                        "contextProjection.phaseId",
-                        "contextProjection.planningContractId",
-                        "contextProjection.technicalBaseline",
-                        "contextProjection.requirementDetailTransfer.requirementDetails",
-                        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                        "contextProjection.requirementDetailTransfer.businessFlows",
-                        "allowedRefs"
-                    ]
-                },
-                {
-                    "groupId": "architecture_section_contract",
-                    "required": true,
-                    "purpose": "Read the current section contract, schema projection, and write target before writing the section candidate.",
-                    "whenToRead": "Read immediately before writing the current Architecture section candidate.",
-                    "fields": [
-                        "sectionState.currentSection",
-                        "currentSectionContract",
-                        "outputContract.writeTargets",
-                        "outputContract.submitTool",
-                        "outputContract.schemaProjection",
-                        "enumRefs.section",
-                        "enumRefs.status",
-                        "enumRefs.coverageStatus",
-                        "enumRefs.acceptancePriority"
-                    ]
-                },
-                {
-                    "groupId": "architecture_frontend_context",
-                    "required": false,
-                    "purpose": "Read the frontend authority refs only when generating frontend_experience.",
-                    "whenToRead": "Read when sectionState.currentSection is frontend_experience or when frontend authority affects another section.",
-                    "fields": [
-                        "frontendExperienceSource",
-                        "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
-                        "contextProjection.requirementDetailTransfer.userFacingLanguage"
-                    ]
-                },
-                {
-                    "groupId": "architecture_runtime_context",
-                    "required": false,
-                    "purpose": "Read runtime delivery authority fields before generating runtime_delivery.",
-                    "whenToRead": "Read when sectionState.currentSection is runtime_delivery.",
-                    "fields": runtime_context_fields
-                }
-            ]
+            "groups": architecture_read_groups(current_output.section, false)
         }
     }))
+}
+
+pub(crate) fn architecture_read_groups(
+    section: ArchitectureSectionGroup,
+    include_repair_context: bool,
+) -> Value {
+    let mut core_fields = vec![
+        "sourceRefs",
+        "contextProjection.phaseScope",
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.technicalBaseline",
+        "contextProjection.requirementDetailTransfer.requirementDetails",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlows",
+        "allowedRefs",
+    ];
+    if include_repair_context {
+        core_fields.insert(1, "repairContext");
+    }
+    let mut groups = vec![
+        json!({
+            "groupId": "architecture_core_context",
+            "required": true,
+            "purpose": if include_repair_context {
+                "Read the current-phase planning authority, repair context, and allowed refs before generating the replacement Architecture section."
+            } else {
+                "Read the current-phase planning authority and allowed refs before generating the current Architecture section."
+            },
+            "whenToRead": if include_repair_context {
+                "Read before drafting any replacement Architecture section candidate."
+            } else {
+                "Read before drafting any Architecture section candidate."
+            },
+            "fields": core_fields
+        }),
+        json!({
+            "groupId": "architecture_section_contract",
+            "required": true,
+            "purpose": if include_repair_context {
+                "Read the current section contract, schema projection, and write target before writing the replacement section candidate."
+            } else {
+                "Read the current section contract, schema projection, and write target before writing the section candidate."
+            },
+            "whenToRead": if include_repair_context {
+                "Read immediately before writing the current replacement Architecture section candidate."
+            } else {
+                "Read immediately before writing the current Architecture section candidate."
+            },
+            "fields": [
+                "sectionState.currentSection",
+                "currentSectionContract",
+                "outputContract.writeTargets",
+                "outputContract.submitTool",
+                "outputContract.schemaProjection",
+                "enumRefs.section",
+                "enumRefs.status",
+                "enumRefs.coverageStatus",
+                "enumRefs.acceptancePriority"
+            ]
+        }),
+    ];
+    if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+        groups.push(json!({
+            "groupId": "architecture_frontend_context",
+            "required": true,
+            "purpose": "Read the frontend authority refs for frontend_experience.",
+            "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
+            "fields": [
+                "frontendExperienceSource",
+                "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
+                "contextProjection.requirementDetailTransfer.userFacingLanguage"
+            ]
+        }));
+    }
+    Value::Array(groups)
 }
 
 fn build_source_refs(
@@ -869,17 +891,6 @@ fn runtime_delivery_authority(has_previous_runtime_delivery: bool) -> &'static s
         "A previous runtime delivery exists in sourceRefs.previousRuntimeDeliveryRef. Use runtimeDelivery.status=unchanged only when copying that ref exactly; otherwise use modified or not_applicable."
     } else {
         "No previous runtime delivery exists for this phase. runtimeDelivery.status must be modified or not_applicable; do not use unchanged and do not write basis.previousRuntimeDeliveryRef."
-    }
-}
-
-fn runtime_context_fields(has_previous_runtime_delivery: bool) -> Value {
-    if has_previous_runtime_delivery {
-        json!([
-            "rules.runtimeDeliveryAuthority",
-            "sourceRefs.previousRuntimeDeliveryRef"
-        ])
-    } else {
-        json!(["rules.runtimeDeliveryAuthority"])
     }
 }
 

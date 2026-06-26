@@ -23,7 +23,7 @@ use crate::{
         architecture_contract_file, architecture_latest_file, architecture_section_snapshot_file,
         section_name,
     },
-    request::{required_content_keys, section_order},
+    request::{architecture_read_groups, required_content_keys, section_order},
 };
 
 pub fn accept_architecture_section_file<D>(
@@ -299,8 +299,12 @@ where
                     section_name(next_section)
                 ))
             })?;
-        let updated_root =
-            update_request_for_next_section(request_root, next_section, &next_output)?;
+        let updated_root = update_request_for_next_section(
+            request_root,
+            next_section,
+            &next_output,
+            matches!(mode, ArchitectureSubmitMode::Repair),
+        )?;
         update_output_contract_ref(
             &input.project_root,
             &authorized.request_id,
@@ -764,6 +768,7 @@ fn update_request_for_next_section(
     mut root: Value,
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
+    include_repair_context: bool,
 ) -> Result<Value, state::store::StateError> {
     let completed_section = parse_section(&root, "/sectionState/currentSection")?;
     root["sectionState"]["currentSection"] =
@@ -785,6 +790,8 @@ fn update_request_for_next_section(
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
+    root["requestReadPlan"]["groups"] =
+        architecture_read_groups(next_section, include_repair_context);
     Ok(root)
 }
 
