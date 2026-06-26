@@ -750,6 +750,10 @@ fn expand_focus(value: &str) -> Vec<String> {
     let normalized = normalize_focus(value);
     let mut values = vec![normalized.clone()];
     values.extend(split_compound_focus(&normalized));
+    values.extend(strip_common_semantic_suffixes(&normalized));
+    for part in split_compound_focus(&normalized) {
+        values.extend(strip_common_semantic_suffixes(&part));
+    }
     values.sort();
     values.dedup();
     values
@@ -767,6 +771,46 @@ fn split_compound_focus(value: &str) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+fn strip_common_semantic_suffixes(value: &str) -> Vec<String> {
+    let suffixes = [
+        "前置条件",
+        "条件",
+        "能力",
+        "规则",
+        "约束",
+        "路径",
+        "流程",
+        "状态",
+        "操作",
+        "办理",
+        "结果",
+        "信息",
+        "记录",
+        "关系",
+        "限制",
+        "要求",
+        "conditions",
+        "condition",
+        "rules",
+        "rule",
+        "workflow",
+        "status",
+        "operation",
+        "result",
+        "path",
+    ];
+    let mut values = Vec::new();
+    for suffix in suffixes {
+        let Some(stripped) = value.strip_suffix(suffix) else {
+            continue;
+        };
+        if stripped.chars().count() >= 2 {
+            values.push(stripped.to_string());
+        }
+    }
+    values
 }
 
 fn normalize_focus(value: &str) -> String {

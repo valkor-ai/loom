@@ -92,6 +92,14 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         fields.fields["generationRules"].value["noScriptRuleExtraction"],
         true
     );
+    assert!(fields.fields["generationRules"].value["semanticAliasRules"]
+        .as_array()
+        .expect("semanticAliasRules")
+        .iter()
+        .any(|rule| rule
+            .as_str()
+            .unwrap_or_default()
+            .contains("object+operation aliases")));
 
     let first_chunk = semantic.chunk_read_plan.first().expect("first chunk");
     let inspected = inspect_chunk(KnowledgeInspectChunkInput {
@@ -160,7 +168,7 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
                     {"kind": "operation", "text": "销户", "confidence": "high"},
                     {"kind": "rule", "text": "持仓清空后方可销户", "confidence": "high"}
                 ],
-                "semanticAliases": ["开户", "证券账户销户", "恢复交易条件"],
+                "semanticAliases": ["开户", "证券账户销户", "恢复交易能力"],
                 "blockAffinity": {
                     "phaseScope": 0.7,
                     "conceptGrounding": 1.0,
@@ -214,7 +222,7 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         .map(|document| document.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(lexical_text.contains("恢复交易条件"));
+    assert!(lexical_text.contains("恢复交易能力"));
     assert!(lexical_text.contains("证券账户销户"));
 
     let search = search_knowledge(KnowledgeSearchInput {
@@ -239,6 +247,21 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         .contains_key("text"));
     assert_eq!(search.cards[0].inspect.project_root, fixture.root_str());
 
+    let suffix_search = search_knowledge(KnowledgeSearchInput {
+        project_root: fixture.root_str().to_string(),
+        natural_language_query: "补办后的恢复交易条件".to_string(),
+        semantic_focus: vec!["恢复交易条件".to_string()],
+        source_names: vec![],
+        block: Some("concept_grounding".to_string()),
+        limit: Some(5),
+    })
+    .expect("suffix-compatible knowledge search");
+    assert_eq!(suffix_search.status, "available");
+    assert!(suffix_search.cards.iter().any(|card| card
+        .matched_labels
+        .iter()
+        .any(|label| label.text == "恢复交易能力")));
+
     disable_source(KnowledgeNameInput {
         project_root: fixture.root_str().to_string(),
         name: "stock-rules".to_string(),
@@ -254,6 +277,87 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     })
     .expect("disabled search");
     assert_eq!(disabled_search.status, "empty");
+}
+
+#[test]
+fn knowledge_build_keeps_markdown_heading_sections_as_chunk_boundaries() {
+    let fixture = Fixture::new("heading-boundaries");
+    fixture.write_file(
+        "docs/stock.md",
+        r#"# 股票交易业务领域知识库
+
+## 4. 账户生命周期
+
+### 4.1 证券账户开户
+
+证券账户开户是投资者进入股市的第一步。开户完成后，投资者获得证券交易身份。
+
+### 4.2 证券账户挂失与补办
+
+证券账户丢失时，需要办理挂失和重新开户手续。挂失不是删除原账户，补办会产生新的证券账户凭证。
+
+### 4.3 证券账户销户
+
+证券账户销户表示投资者不再使用某个证券账户。持仓未清空时不能销户。
+
+### 4.4 资金账户开户
+
+资金账户开户是在证券经纪商处建立交易结算资金账户，并与已有证券账户关联。
+"#,
+    );
+    add_source(KnowledgeAddInput {
+        project_root: fixture.root_str().to_string(),
+        name: "section-rules".to_string(),
+        paths: vec![fixture.root.join("docs").to_string_lossy().into_owned()],
+    })
+    .expect("add section source");
+    let next = build_source(fixture.root_str(), "section-rules").expect("build section source");
+    let semantic = match next {
+        LoomMcpActionResult::AutoRunnable(result) => match result.next {
+            LoomMcpNextAction::GenerateKnowledgeSemantics(semantic) => semantic,
+            other => panic!("expected semantic next action, got {other:?}"),
+        },
+        other => panic!("expected auto_runnable build result, got {other:?}"),
+    };
+    let chunks_file: knowledge::models::ChunksFile = knowledge::store::read_json(
+        &knowledge::paths::chunks_file(&semantic.source_id, &semantic.build_id)
+            .expect("chunks path"),
+    )
+    .expect("chunks file");
+    let headings = chunks_file
+        .chunks
+        .iter()
+        .map(|chunk| chunk.heading_path.join(" / "))
+        .collect::<Vec<_>>();
+    assert_eq!(chunks_file.chunks.len(), 4);
+    assert!(headings
+        .iter()
+        .any(|heading| heading.ends_with("4.1 证券账户开户")));
+    assert!(headings
+        .iter()
+        .any(|heading| heading.ends_with("4.2 证券账户挂失与补办")));
+    assert!(headings
+        .iter()
+        .any(|heading| heading.ends_with("4.3 证券账户销户")));
+    assert!(headings
+        .iter()
+        .any(|heading| heading.ends_with("4.4 资金账户开户")));
+    let fund_chunk = chunks_file
+        .chunks
+        .iter()
+        .find(|chunk| chunk.heading_path.last().map(String::as_str) == Some("4.4 资金账户开户"))
+        .expect("fund account chunk");
+    let fund_body = std::fs::read_to_string(
+        knowledge::paths::chunk_body_file(
+            &semantic.source_id,
+            &semantic.build_id,
+            &fund_chunk.chunk_id,
+        )
+        .expect("fund body path"),
+    )
+    .expect("fund body");
+    assert!(fund_body.contains("资金账户开户"));
+    assert!(!fund_body.contains("证券账户销户表示"));
 }
 
 #[test]

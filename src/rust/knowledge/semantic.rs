@@ -57,7 +57,15 @@ pub fn semantic_generation_rules() -> Value {
         "statusEnum": ["ok", "unreadable"],
         "semanticLabelKinds": ["object", "operation", "rule", "state", "field", "flow", "page_operation"],
         "confidenceEnum": ["high", "medium", "low"],
-        "semanticAnchorRule": "Prefer self-contained anchors. For operations, include object+operation when the object is known; aliases may include split object and operation forms.",
+        "semanticAnchorRule": "Prefer self-contained anchors. For operation and page_operation labels, use object+operation when the object is explicit in the chunk; keep split object and operation forms in semanticAliases.",
+        "semanticAliasRules": [
+            "semanticAliases are retrieval anchors derived only from the inspected chunk text and semanticLabels.",
+            "Include object+operation aliases when both are present, for example '<object><operation>'.",
+            "Include atomic operation aliases for short user wording, for example the operation without its object.",
+            "For each rule label, include one short rule or blocker alias of 4-12 source-language characters/words. Prefer the condition, blocker, or required outcome over copying the whole rule sentence.",
+            "For each state or flow label, include one short state/flow goal alias that a user might query.",
+            "Do not invent business facts that are not in the chunk. Do not include source ids, chunk ids, or file paths."
+        ],
         "blockAffinityFields": ["phaseScope", "conceptGrounding", "frontendExperience", "businessRules"],
         "noSourceCodeSchemaLookup": true,
         "noScriptRuleExtraction": true

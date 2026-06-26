@@ -600,29 +600,13 @@ fn chunk_document(
 ) -> KnowledgeResult<Vec<KnowledgeChunk>> {
     let blocks = split_blocks(text);
     let mut chunks = Vec::new();
-    let mut current = String::new();
-    let mut current_heading = Vec::<String>::new();
     for (heading, block) in blocks {
         let block_tokens = estimate_tokens(&block);
-        if block_tokens > HARD_MAX_TOKENS {
-            flush_chunk(
-                source_id,
-                build_id,
-                document_id,
-                title,
-                source_path,
-                &current_heading,
-                &mut current,
-                "target_size",
-                offset,
-                &mut chunks,
-            )?;
-            for part in hard_split(&block) {
-                let heading_path = if heading.is_empty() {
-                    current_heading.clone()
-                } else {
-                    heading.clone()
-                };
+        if block_tokens > SOFT_MAX_TOKENS {
+            let parts = split_large_section(&block);
+            let part_count = parts.len();
+            for (part_index, part) in parts.into_iter().enumerate() {
+                let heading_path = heading_path_for_part(&heading, part_index, part_count);
                 let mut text = part;
                 flush_chunk(
                     source_id,
@@ -632,60 +616,23 @@ fn chunk_document(
                     source_path,
                     &heading_path,
                     &mut text,
-                    "hard_split",
+                    "section_split",
                     offset,
                     &mut chunks,
                 )?;
             }
             continue;
         }
-        let next_tokens = estimate_tokens(&current) + block_tokens;
-        if !current.is_empty() && next_tokens > SOFT_MAX_TOKENS {
-            flush_chunk(
-                source_id,
-                build_id,
-                document_id,
-                title,
-                source_path,
-                &current_heading,
-                &mut current,
-                "soft_max",
-                offset,
-                &mut chunks,
-            )?;
-        }
-        if !heading.is_empty() {
-            current_heading = heading;
-        }
-        if !current.is_empty() {
-            current.push_str("\n\n");
-        }
-        current.push_str(&block);
-        if estimate_tokens(&current) >= TARGET_TOKENS {
-            flush_chunk(
-                source_id,
-                build_id,
-                document_id,
-                title,
-                source_path,
-                &current_heading,
-                &mut current,
-                "target_size",
-                offset,
-                &mut chunks,
-            )?;
-        }
-    }
-    if !current.trim().is_empty() {
+        let mut text = block;
         flush_chunk(
             source_id,
             build_id,
             document_id,
             title,
             source_path,
-            &current_heading,
-            &mut current,
-            "document_end",
+            &heading,
+            &mut text,
+            "section",
             offset,
             &mut chunks,
         )?;
@@ -744,35 +691,88 @@ fn split_blocks(text: &str) -> Vec<(Vec<String>, String)> {
     let mut current = String::new();
     for line in text.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with('#') {
+        if let Some((level, title)) = markdown_heading(trimmed) {
             if !current.trim().is_empty() {
                 blocks.push((heading.clone(), current.trim().to_string()));
                 current.clear();
             }
-            let level = trimmed.chars().take_while(|ch| *ch == '#').count().max(1);
-            let title = trimmed.trim_start_matches('#').trim().to_string();
             heading.truncate(level.saturating_sub(1));
             if !title.is_empty() {
                 heading.push(title);
             }
             continue;
         }
-        if trimmed.is_empty() {
-            if !current.trim().is_empty() {
-                blocks.push((heading.clone(), current.trim().to_string()));
-                current.clear();
-            }
-        } else {
-            if !current.is_empty() {
-                current.push('\n');
-            }
+        if !current.is_empty() || !trimmed.is_empty() {
             current.push_str(line);
+            current.push('\n');
         }
     }
     if !current.trim().is_empty() {
         blocks.push((heading, current.trim().to_string()));
     }
     blocks
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, String)> {
+    let level = line.chars().take_while(|ch| *ch == '#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let title = line[level..].trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some((level, title.to_string()))
+}
+
+fn split_large_section(text: &str) -> Vec<String> {
+    let paragraphs = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|paragraph| !paragraph.is_empty())
+        .collect::<Vec<_>>();
+    if paragraphs.is_empty() {
+        return vec![];
+    }
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    for paragraph in paragraphs {
+        let paragraph_tokens = estimate_tokens(paragraph);
+        if paragraph_tokens > HARD_MAX_TOKENS {
+            flush_text_part(&mut current, &mut parts);
+            parts.extend(hard_split(paragraph));
+            continue;
+        }
+        let next_tokens = if current.is_empty() {
+            paragraph_tokens
+        } else {
+            estimate_tokens(&current) + paragraph_tokens
+        };
+        if !current.is_empty() && next_tokens > TARGET_TOKENS {
+            flush_text_part(&mut current, &mut parts);
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(paragraph);
+    }
+    flush_text_part(&mut current, &mut parts);
+    parts
+}
+
+fn flush_text_part(current: &mut String, parts: &mut Vec<String>) {
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+        current.clear();
+    }
+}
+
+fn heading_path_for_part(heading: &[String], part_index: usize, part_count: usize) -> Vec<String> {
+    let mut heading_path = heading.to_vec();
+    if part_count > 1 {
+        heading_path.push(format!("part {} of {}", part_index + 1, part_count));
+    }
+    heading_path
 }
 
 fn hard_split(text: &str) -> Vec<String> {
@@ -795,14 +795,16 @@ fn merge_small_chunks(
             index += 1;
             continue;
         }
-        let can_merge_next =
-            index + 1 < chunks.len() && chunks[index].document_id == chunks[index + 1].document_id;
+        let can_merge_next = index + 1 < chunks.len()
+            && chunks[index].document_id == chunks[index + 1].document_id
+            && chunks[index].heading_path == chunks[index + 1].heading_path;
         if can_merge_next {
             merge_chunk_pair(source_id, build_id, chunks, index, index + 1)?;
             continue;
         }
-        let can_merge_prev =
-            index > 0 && chunks[index].document_id == chunks[index - 1].document_id;
+        let can_merge_prev = index > 0
+            && chunks[index].document_id == chunks[index - 1].document_id
+            && chunks[index].heading_path == chunks[index - 1].heading_path;
         if can_merge_prev {
             merge_chunk_pair(source_id, build_id, chunks, index - 1, index)?;
             index = index.saturating_sub(1);
