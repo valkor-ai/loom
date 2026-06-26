@@ -139,15 +139,7 @@ If the request is a deploy-sourced synthetic execution repair, treat it as an `e
 
 ## Engineering Discipline
 
-Load only the delivery reference that matches the current instruction:
-
-- [references/delivery/repair.md](references/delivery/repair.md): bug fixes, failed checks, regressions, repairs.
-- [references/delivery/testing.md](references/delivery/testing.md): tests and verification seams.
-- [references/delivery/domain.md](references/delivery/domain.md): concept conflicts.
-- [references/delivery/planning.md](references/delivery/planning.md): scope, slices, dependencies.
-- [references/delivery/design.md](references/delivery/design.md): modules, interfaces, seams.
-- [references/delivery/review.md](references/delivery/review.md): findings and repairable issues.
-- [references/delivery/handoff.md](references/delivery/handoff.md): final, blocked, handoff, continuation.
+Delivery planning, design, review, repair, and handoff rules are supplied by the current Loom request/result. Do not load separate delivery reference files.
 
 ## Frontend UIX Delivery
 

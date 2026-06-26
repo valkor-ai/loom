@@ -9,7 +9,6 @@ const { ensureLoomUserInstall } = require("./lib/loom-user-install");
 const repoRoot = path.resolve(__dirname, "..");
 const claudePluginRoot = path.join(repoRoot, "plugins", "claude-code");
 const sharedDeployReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom-deploy", "references");
-const sharedDeliveryReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom", "references", "delivery");
 const manifestPath = path.join(claudePluginRoot, ".claude-plugin", "plugin.json");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const pluginName = manifest.name;
@@ -38,7 +37,7 @@ fs.rmSync(installRoot, { recursive: true, force: true });
 fs.mkdirSync(installRoot, { recursive: true });
 copyDirectory(claudePluginRoot, installRoot, claudePluginRoot);
 installSharedDeployReferences(path.join(installRoot, "skills", "loom-deploy", "references"));
-installSharedDeliveryReferences(path.join(installRoot, "skills", "loom", "references", "delivery"));
+fs.rmSync(path.join(installRoot, "skills", "loom", "references", "delivery"), { recursive: true, force: true });
 installGlobalCommands();
 
 assertExists(path.join(installRoot, ".claude-plugin", "plugin.json"));
@@ -47,7 +46,6 @@ assertExists(path.join(installRoot, "commands", "loom-deploy.md"));
 assertExists(path.join(installRoot, "hooks", "hooks.json"));
 assertExists(path.join(installRoot, "hooks", "loom-workflow-guard.js"));
 assertExists(path.join(installRoot, "skills", "loom", "SKILL.md"));
-assertExists(path.join(installRoot, "skills", "loom", "references", "delivery", "repair.md"));
 assertExists(path.join(installRoot, "skills", "loom-deploy", "SKILL.md"));
 assertExists(path.join(installRoot, "skills", "loom-deploy", "references", "node.md"));
 assertExists(path.join(commandsRoot, "loom.md"));
@@ -92,14 +90,6 @@ function installSharedDeployReferences(targetRoot) {
   }
   fs.rmSync(targetRoot, { recursive: true, force: true });
   copyDirectory(sharedDeployReferenceSourceRoot, targetRoot, sharedDeployReferenceSourceRoot);
-}
-
-function installSharedDeliveryReferences(targetRoot) {
-  if (!fs.existsSync(sharedDeliveryReferenceSourceRoot)) {
-    throw new Error(`Shared delivery references source does not exist: ${sharedDeliveryReferenceSourceRoot}`);
-  }
-  fs.rmSync(targetRoot, { recursive: true, force: true });
-  copyDirectory(sharedDeliveryReferenceSourceRoot, targetRoot, sharedDeliveryReferenceSourceRoot);
 }
 
 function removeLegacyClaudeArtifacts() {

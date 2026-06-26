@@ -432,9 +432,11 @@ fn build_repair_execution_request(
                 "agentOwnedLongRunningWork": "none | started_and_released | unknown"
             },
             "verificationCommandSchedulingRules": [
-                "Run the verification needed for the repaired task before TaskResult submission."
+                "Run the verification needed for the repaired task before TaskResult submission.",
+                "When a failing signal is available in repairContext, rerun that signal or the closest stable equivalent after the fix."
             ],
-            "rules": [
+            "boundaryRules": [
+                "Use repairContext as the failure boundary; do not repair unrelated issues.",
                 "Do not edit Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, ReviewResult, ManualReviewResolution, or .loom state.",
                 "Do not expand scope.",
                 "Write TaskResult JSON only to outputContract.resultFile."
@@ -476,7 +478,16 @@ fn build_repair_execution_request(
                     "required": true,
                     "purpose": "Read task, repair context, and execution rules before editing.",
                     "whenToRead": "Read before source edits.",
-                    "fields": ["source", "task", "repairContext", "executionRules"]
+                    "fields": [
+                        "source",
+                        "task",
+                        "repairContext",
+                        "executionRules.completionBarrier",
+                        "executionRules.finalResponseGuard",
+                        "executionRules.completionContinuityRequirement",
+                        "executionRules.verificationCommandSchedulingRules",
+                        "executionRules.boundaryRules"
+                    ]
                 },
                 {
                     "groupId": "repair_result_contract",

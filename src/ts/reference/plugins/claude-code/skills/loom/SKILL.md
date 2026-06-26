@@ -124,7 +124,7 @@ Keep chat output compact. Do not paste generated JSON candidates, result files, 
 
 ## Engineering Discipline
 
-Load only the delivery reference matching the current instruction: [repair](references/delivery/repair.md), [testing](references/delivery/testing.md), [domain](references/delivery/domain.md), [planning](references/delivery/planning.md), [design](references/delivery/design.md), [review](references/delivery/review.md), or [handoff](references/delivery/handoff.md).
+Delivery planning, design, review, repair, and handoff rules are supplied by the current Loom request/result. Do not load separate delivery reference files.
 
 ## Frontend UIX Delivery
 

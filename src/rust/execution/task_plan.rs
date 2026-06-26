@@ -1384,7 +1384,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         ],
         "scopeAndReferenceRules": [
             "Use only refs from allowedRefs.",
-            "Do not implement deferred or excluded scope."
+            "Do not implement deferred or excluded scope.",
+            "Keep next-phase seeds in deferred scope or next-phase preview only; do not create executable tasks for them."
         ],
         "writeBoundaryRules": [
             "Every task.writeBoundary.forbiddenPaths must include .loom.",
@@ -1392,7 +1393,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         ],
         "verificationEvidenceRules": [
             "verificationIntents must use enumRefs.verificationEvidence.",
-            "Each implementation task must have at least one verification intent."
+            "Each implementation task must have at least one verification intent.",
+            "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
+            "Avoid broad snapshots or weak no-op checks as the primary verification evidence."
         ],
         "conceptGroundingRules": {
             "phaseConceptGroundingRef": "sourceRefs.phaseConceptGroundingRef",

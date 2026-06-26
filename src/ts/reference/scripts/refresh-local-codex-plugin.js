@@ -9,7 +9,6 @@ const { ensureLoomUserInstall } = require("./lib/loom-user-install");
 const repoRoot = path.resolve(__dirname, "..");
 const codexPluginRoot = path.join(repoRoot, "plugins", "codex");
 const sharedDeployReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom-deploy", "references");
-const sharedDeliveryReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom", "references", "delivery");
 const manifestPath = path.join(codexPluginRoot, ".codex-plugin", "plugin.json");
 const sourceManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const pluginName = sourceManifest.name;
@@ -81,7 +80,7 @@ function installCodexSource() {
   prepareInstallRoot(personalPluginRoot);
   copyDirectory(codexPluginRoot, personalPluginRoot);
   installSharedDeployReferences(path.join(personalPluginRoot, "skills", "loom-deploy", "references"));
-  installSharedDeliveryReferences(path.join(personalPluginRoot, "skills", "loom", "references", "delivery"));
+  fs.rmSync(path.join(personalPluginRoot, "skills", "loom", "references", "delivery"), { recursive: true, force: true });
 
   const installedManifestPath = path.join(personalPluginRoot, ".codex-plugin", "plugin.json");
   const installedManifest = JSON.parse(fs.readFileSync(installedManifestPath, "utf8"));
@@ -90,7 +89,6 @@ function installCodexSource() {
 
   assertExists(path.join(personalPluginRoot, ".codex-plugin", "plugin.json"));
   assertExists(path.join(personalPluginRoot, "skills", "loom", "SKILL.md"));
-  assertExists(path.join(personalPluginRoot, "skills", "loom", "references", "delivery", "repair.md"));
   assertExists(path.join(personalPluginRoot, "skills", "loom-deploy", "SKILL.md"));
   assertExists(path.join(personalPluginRoot, "skills", "loom-deploy", "references", "node.md"));
 }
@@ -101,14 +99,6 @@ function installSharedDeployReferences(targetRoot) {
   }
   fs.rmSync(targetRoot, { recursive: true, force: true });
   copyDirectory(sharedDeployReferenceSourceRoot, targetRoot);
-}
-
-function installSharedDeliveryReferences(targetRoot) {
-  if (!fs.existsSync(sharedDeliveryReferenceSourceRoot)) {
-    throw new Error(`Shared delivery references source does not exist: ${sharedDeliveryReferenceSourceRoot}`);
-  }
-  fs.rmSync(targetRoot, { recursive: true, force: true });
-  copyDirectory(sharedDeliveryReferenceSourceRoot, targetRoot);
 }
 
 function prepareInstallRoot(target) {

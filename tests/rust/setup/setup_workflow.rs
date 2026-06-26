@@ -98,9 +98,7 @@ fn install_projects_shared_references_to_agent_read_paths() {
     for agent in [AgentKind::Codex, AgentKind::ClaudeCode] {
         let root = env.agent_plugin_root(agent);
         assert!(root.join("skills/loom/references/uix/core.md").exists());
-        assert!(root
-            .join("skills/loom/references/delivery/planning.md")
-            .exists());
+        assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
             .exists());
@@ -110,10 +108,7 @@ fn install_projects_shared_references_to_agent_read_paths() {
         .opencode_home
         .join("references/loom/uix/core.md")
         .exists());
-    assert!(env
-        .opencode_home
-        .join("references/loom/delivery/planning.md")
-        .exists());
+    assert!(!env.opencode_home.join("references/loom/delivery").exists());
     assert!(env
         .opencode_home
         .join("references/loom-deploy/compose.md")
@@ -491,16 +486,6 @@ impl Fixture {
     }
 
     fn write_shared_references(&self) {
-        for name in [
-            "design", "domain", "handoff", "planning", "repair", "review", "testing",
-        ] {
-            write_file(
-                &self
-                    .package_root
-                    .join(format!("plugins/shared/loom/references/delivery/{name}.md")),
-                &format!("# {name} Reference\n"),
-            );
-        }
         for name in [
             "content",
             "core",

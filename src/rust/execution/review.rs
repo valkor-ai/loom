@@ -250,7 +250,9 @@ fn build_review_request(
         "reviewRules": {
             "commonRules": [
                 "Read reviewPacket, changeContext, review matrices, reviewSignals, and outputContract before writing ReviewResult.",
+                "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
                 "Every finding must include non-empty readRefs.",
+                "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
                 "Do not approve when reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure."

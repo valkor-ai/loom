@@ -907,6 +907,8 @@ fn section_generation_rules(
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only.".to_string(),
+            "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
+            "Add a seam only when it supports current-phase behavior, verification, or meaningful isolation; avoid pass-through wrappers.".to_string(),
             "Use allowedRefs.scopeRefs and allowedRefs.acceptanceRefs exactly; do not invent ids."
                 .to_string(),
         ],
@@ -914,6 +916,8 @@ fn section_generation_rules(
             "Represent current-phase business objects, key fields, relationships, constraints, and interfaces."
                 .to_string(),
             "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
+                .to_string(),
+            "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
                 .to_string(),
         ],
         ArchitectureSectionGroup::Behavior => vec![
@@ -938,6 +942,8 @@ fn section_generation_rules(
             "Use requirementDetailTransfer.requirementDetails.items as the canonical detail index."
                 .to_string(),
             "detailCoverage must store detailId plus artifact refs; do not copy full detail summaries."
+                .to_string(),
+            "Record only architecture trade-offs that affect later implementation, verification, or repair routing."
                 .to_string(),
         ],
     }

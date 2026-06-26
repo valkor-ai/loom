@@ -1,7 +1,8 @@
 use std::sync::{Mutex, MutexGuard};
 
 use delivery_core::{
-    DomainDispatcher, InspectRequestInput, ReadRequestFieldsInput, RouteAction, RouteActionKind,
+    DomainDispatcher, InspectRequestInput, ReadFieldGroupInput, ReadRequestFieldsInput,
+    RouteAction, RouteActionKind,
 };
 use mcp_server::server::LoomMcpServer;
 use serde_json::{json, Value};
@@ -474,6 +475,10 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let architecture_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
     assert!(architecture_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
+    let architecture_rules =
+        architecture_root["currentSectionContract"]["generationRules"].to_string();
+    assert!(architecture_rules.contains("existing project and technical baseline shape"));
+    assert!(architecture_rules.contains("avoid pass-through wrappers"));
     let coverage_template = architecture_root["sectionOutputs"]
         .as_array()
         .expect("section outputs")
@@ -576,6 +581,16 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         Some("loom.taskPlanAcceptFile")
     );
     assert_eq!(inspected.write_targets.len(), 2);
+    let taskplan_rules = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        group_id: "taskplan_generation_rules".to_string(),
+    })
+    .expect("read taskplan rules");
+    let taskplan_rules_text =
+        serde_json::to_string(&taskplan_rules.fields).expect("serialize taskplan generation rules");
+    assert!(taskplan_rules_text.contains("Keep next-phase seeds"));
+    assert!(taskplan_rules_text.contains("smallest stable verification signal"));
     let compact_taskplan_root = read_request_root_value(fixture.root_str(), taskplan_request_ref);
     assert_no_root_submit_metadata(&compact_taskplan_root);
     let taskplan_contract_fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -652,6 +667,8 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         request_ref: execution_request_ref.clone(),
         fields: vec![
             "source.taskId".to_string(),
+            "executionRules.verificationCommandSchedulingRules".to_string(),
+            "executionRules.boundaryRules".to_string(),
             "outputContract.resultTemplate".to_string(),
         ],
     })
@@ -668,6 +685,10 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(
         execution_fields["outputContract.resultTemplate"].value["executionContinuity"].is_object()
     );
+    let execution_rules_text =
+        serde_json::to_string(&execution_fields).expect("serialize execution rules");
+    assert!(execution_rules_text.contains("smallest meaningful verification signal"));
+    assert!(execution_rules_text.contains("confirmed business language"));
     assert!(execution_inspected
         .read_groups
         .iter()
@@ -756,6 +777,16 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         review_fields["outputContract.resultTemplate"].value["source"]["requestId"],
         review_root["requestId"]
     );
+    let review_rules = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        group_id: "review_rules".to_string(),
+    })
+    .expect("read review rules");
+    let review_rules_text =
+        serde_json::to_string(&review_rules.fields).expect("serialize review rules");
+    assert!(review_rules_text.contains("spec fidelity and project standards"));
+    assert!(review_rules_text.contains("smallest repair"));
     assert!(review_fields["outputContract.resultTemplate"].value["coverageAssessment"].is_object());
     let review_group_ids = review_inspected
         .read_groups
@@ -1223,6 +1254,19 @@ fn manual_review_resolution_routes_to_execution_repair() {
         result["next"]["repairContext"]["userChangeSummary"],
         "修复当前实现问题。"
     );
+    let execution_repair_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("execution repair requestRef");
+    let repair_rules = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_repair_ref.to_string(),
+        group_id: "repair_execution_core".to_string(),
+    })
+    .expect("read execution repair rules");
+    let repair_rules_text =
+        serde_json::to_string(&repair_rules.fields).expect("serialize repair rules");
+    assert!(repair_rules_text.contains("Use repairContext as the failure boundary"));
+    assert!(repair_rules_text.contains("rerun that signal"));
 }
 
 #[test]

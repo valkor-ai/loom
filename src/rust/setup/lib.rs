@@ -16,13 +16,6 @@ const INSTALL_STAMP: &str = ".loom-mcp-install.json";
 const SHARED_LOOM_REFERENCES: &str = "plugins/shared/loom/references";
 const SHARED_DEPLOY_REFERENCES: &str = "plugins/shared/loom-deploy/references";
 const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
-    "plugins/shared/loom/references/delivery/design.md",
-    "plugins/shared/loom/references/delivery/domain.md",
-    "plugins/shared/loom/references/delivery/handoff.md",
-    "plugins/shared/loom/references/delivery/planning.md",
-    "plugins/shared/loom/references/delivery/repair.md",
-    "plugins/shared/loom/references/delivery/review.md",
-    "plugins/shared/loom/references/delivery/testing.md",
     "plugins/shared/loom/references/uix/content.md",
     "plugins/shared/loom/references/uix/core.md",
     "plugins/shared/loom/references/uix/data.md",

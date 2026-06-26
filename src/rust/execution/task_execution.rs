@@ -251,16 +251,18 @@ fn build_execution_request(
             },
             "verificationCommandSchedulingRules": [
                 "Verification method is agent-chosen and must return control before TaskResult submission.",
+                "Use the smallest meaningful verification signal that proves the current task's behavior or contract obligation.",
                 "Do not leave long-running servers, watchers, browsers, or workers unreleased before TaskResult submission."
             ],
             "userFacingLanguage": {
                 "constraint": pgc.planning_inputs.user_facing_language,
                 "rule": "Preserve user-facing language from confirmed requirements in generated UI and feedback."
             },
-            "rules": [
+            "boundaryRules": [
                 "Execute only the current task.",
                 "Do not modify Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, or other protected Loom artifacts.",
                 "Do not implement deferred scope.",
+                "Use confirmed business language in user-visible UI, feedback, test names, and TaskResult evidence when applicable.",
                 "Write TaskResult JSON only to outputContract.resultFile."
             ]
         },
@@ -328,7 +330,10 @@ fn build_execution_request(
                         "sourceContext.acceptanceSnapshot",
                         "sourceContext.requirementDetailSnapshot",
                         "sourceContext.userFacingLanguage",
-                        "executionRules"
+                        "executionRules.sourceEditPreparationContract",
+                        "executionRules.verificationCommandSchedulingRules",
+                        "executionRules.userFacingLanguage",
+                        "executionRules.boundaryRules"
                     ]
                 },
                 {

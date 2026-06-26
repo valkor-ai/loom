@@ -12,7 +12,6 @@ const commandSourceRoot = path.join(opencodeSourceRoot, "commands");
 const pluginSourceRoot = path.join(opencodeSourceRoot, "plugins");
 const referenceSourceRoot = path.join(opencodeSourceRoot, "references");
 const deployReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom-deploy", "references");
-const deliveryReferenceSourceRoot = path.join(repoRoot, "plugins", "shared", "loom", "references", "delivery");
 const opencodeConfigRoot = process.env.OPENCODE_CONFIG_HOME || path.join(process.env.HOME || "", ".config", "opencode");
 const commandInstallRoot = path.join(opencodeConfigRoot, "commands");
 const pluginInstallRoot = path.join(opencodeConfigRoot, "plugins");
@@ -35,10 +34,6 @@ if (!fs.existsSync(pluginSourceRoot)) {
 if (!fs.existsSync(deployReferenceSourceRoot)) {
   throw new Error("plugins/shared/loom-deploy/references does not exist.");
 }
-if (!fs.existsSync(deliveryReferenceSourceRoot)) {
-  throw new Error("plugins/shared/loom/references/delivery does not exist.");
-}
-
 const removedLegacyArtifacts = removeLegacyOpencodeArtifacts();
 fs.mkdirSync(commandInstallRoot, { recursive: true });
 fs.mkdirSync(pluginInstallRoot, { recursive: true });
@@ -48,8 +43,6 @@ copyCommand("loom-deploy.md");
 copyPlugin("loom.js");
 const installedReferences = copyReferences();
 fs.rmSync(deliveryReferenceInstallRoot, { recursive: true, force: true });
-copyDirectory(deliveryReferenceSourceRoot, deliveryReferenceInstallRoot);
-assertExists(path.join(deliveryReferenceInstallRoot, "repair.md"));
 fs.rmSync(deployReferenceInstallRoot, { recursive: true, force: true });
 copyDirectory(deployReferenceSourceRoot, deployReferenceInstallRoot);
 assertExists(path.join(deployReferenceInstallRoot, "node.md"));
@@ -77,7 +70,6 @@ const stamp = {
     path.join(pluginInstallRoot, "loom.js"),
   ],
   installedReferences,
-  installedDeliveryReferencesRoot: deliveryReferenceInstallRoot,
   installedDeployReferencesRoot: deployReferenceInstallRoot,
   removedLegacyArtifactCount: removedLegacyArtifacts.length + removedLegacyCommands.length,
   cli: {

@@ -52,14 +52,7 @@ UIX references:
 - `references/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
 - `references/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
 
-Delivery references:
-- `references/delivery/planning.md`: Brainstorm scope, candidates, dependencies, task planning, or phase continuation.
-- `references/delivery/design.md`: modules, interfaces, adapters, data flow, or test seams.
-- `references/delivery/domain.md`: domain terms, objects, rules, or user/code disagreements.
-- `references/delivery/testing.md`: test design, verification seam, or evidence recording.
-- `references/delivery/review.md`: review findings, manual review summaries, or repairable issues.
-- `references/delivery/repair.md`: bug fixes, failed checks, regressions, or repair loops.
-- `references/delivery/handoff.md`: final response, blocked report, handoff note, or continuation summary.
+Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 
 ## Writing And Submit
 
