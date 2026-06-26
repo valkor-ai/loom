@@ -720,6 +720,8 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
             final_summary_rules(),
             vec![
                 "rules.finalSummary.reviewGate",
+                "rules.finalSummary.presentation",
+                "rules.finalSummary.checklistCoverage",
                 "rules.finalSummary.requiredUserVisibleTopics",
                 "rules.finalSummary.correctionWriteback",
                 "rules.finalSummary.detailRetention",
@@ -967,21 +969,42 @@ fn frontend_experience_rules() -> Value {
 fn final_summary_rules() -> Value {
     json!({
         "reviewGate": [
-            "final_summary is the pre-submit coverage checklist. It is not the only detail source.",
-            "Do not use final_summary to introduce new requirements that were not confirmed in earlier blocks."
+            "final_summary is the pre-submit coverage checklist gate, not the source of detailed requirements.",
+            "Before presenting final_summary for user confirmation, verify that phase_scope, concept_grounding, and frontend_experience were already confirmed or explicitly skipped with concrete reasons.",
+            "Do not use final_summary to introduce new requirements that were not confirmed in earlier blocks.",
+            "Do not fix missing structured detail by expanding final_summary. Return to the relevant Brainstorm block or repair the corresponding structured candidate fields before submit."
+        ],
+        "presentation": [
+            "Use a user-facing title such as pre-submit checklist, submit confirmation, 提交前核对, or 提交前确认. Do not show internal names such as final_summary, phase_scope, concept_grounding, frontend_experience, BrainstormCandidate, dataViews, actions, or operationPaths to the user.",
+            "Project the confirmed prior blocks into one user-visible coverage checklist with exactly one confirmation action, not three separate confirmations.",
+            "Use a stable user-facing section order equivalent to: current phase to submit, current phase coverage, confirmed business rules, confirmed page operation path, not done in this phase, next phase preview, confirmation instruction.",
+            "End with one confirmation instruction. Do not ask the user to reconfirm each previous block separately."
+        ],
+        "checklistCoverage": [
+            "For each applicable checklist section other than the single current phase goal and next phase preview, include at least two concrete checklist items when two or more items were confirmed earlier.",
+            "The current phase coverage section must list concrete included capabilities or actions from the confirmed phase scope; do not collapse the scope to a single abstract sentence when multiple capabilities were confirmed.",
+            "The business rules section must list concrete business objects, relationships, operation names, field-set headlines, state changes, blocking rules, success outcomes, or high-risk misunderstanding guards that were confirmed when they apply.",
+            "The page operation path section must list concrete surface/entry, target discovery or query-selection path, pagination/query criteria when confirmed, action entry, result feedback, and refresh/readback behavior when UI applies.",
+            "If a section is not applicable, write a concrete user-language reason instead of fabricating checklist items.",
+            "If concrete checklist items cannot be extracted from confirmed prior blocks, do not invent them and do not submit; return to the relevant Brainstorm block or repair the corresponding structured candidate fields first."
         ],
         "requiredUserVisibleTopics": [
             "current phase submission goal",
-            "coverage checklist for confirmed current-phase scope and deferred boundaries",
-            "business-rule checklist for confirmed objects, rules, blockers, and outcomes when applicable",
-            "page-operation checklist for confirmed UI/workspace path when applicable",
-            "explicit user corrections that must be written back into structured fields",
+            "coverage checklist from confirmed phase scope including concrete included work and deferred or not-done boundaries",
+            "business-rule checklist from confirmed business understanding including concrete objects, relationships, operations, field-set headlines, state changes, blocking rules, success outcomes, and high-risk misunderstanding guards when applicable",
+            "page-operation checklist from confirmed frontend path including surface or entry, target discovery or query selection, pagination and query criteria when confirmed, action entry, feedback, and refresh or readback when applicable",
+            "explicit final_summary corrections that must be written back to structured fields",
             "next phase preview in user language"
         ],
         "correctionWriteback": [
-            "If the user corrects final_summary, update the corresponding structured fields first, then present an updated summary."
+            "If the user corrects final_summary, do not submit BrainstormCandidate from the stale summary.",
+            "Incorporate the correction into the affected existing fields and present an updated final_summary before setting finalSummaryConfirmed=true.",
+            "A correction can update phase scope, concept grounding, frontend experience, deferred boundaries, or next phase preview; do not store it only in the final_summary text."
         ],
         "detailRetention": [
+            "The final_summary must not be required to repeat every confirmed object, field, operation, rule, state change, blocking reason, feedback path, or frontend operation path from earlier blocks.",
+            "A checklist-style final_summary does not narrow, omit, override, or compress already confirmed phase_scope, concept_grounding, or frontend_experience details.",
+            "Previously confirmed block details remain part of the BrainstormCandidate contract through structured fields, not through final_summary text.",
             "Keep confirmed details from phase_scope, concept_grounding, and frontend_experience in structured fields even when final_summary is concise."
         ],
         "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::FinalSummary)
@@ -991,13 +1014,25 @@ fn final_summary_rules() -> Value {
 fn candidate_write_rules() -> Value {
     json!([
         "Write only the Brainstorm candidate target after the user explicitly confirms final_summary.",
+        "The accepted BrainstormCandidate must be built from all user-confirmed Brainstorm blocks plus final_summary corrections, not from final_summary alone.",
         "Use outputContract.resultTemplate as the concrete field shape when writing the candidate.",
         "Arrays in outputContract.resultTemplate show object shapes. Keep arrays empty only when the confirmed requirement has no item for that field; never replace typed object arrays with string arrays.",
         "When scope.deferred is non-empty, phasePlan.nextPhasePreview must use kind=candidate with suggestedPhaseId, title, goal, scopePreview, and reason. Use kind=none only when scope.deferred is empty.",
         "clarificationProgress must use confirmedBlocks/skippedBlocks/finalSummaryConfirmed. Do not write completedBlocks or currentBlock.",
         "In user-facing summaries and confirmation text, use user-visible block names rather than internal block ids.",
         "Keep knowledge metadata out of candidate sourceRefs and summary fields.",
-        "Preserve all confirmed block details in scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience instead of relying on final_summary text."
+        "Preserve all confirmed block details in scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience instead of relying on final_summary text.",
+        "For phase_scope, preserve the confirmed option's included scope, excluded scope, deferred scope, reasons, tradeoffs, and nextPhasePreview direction in scope, roadmap, phasePlan, assumptions, or acceptance as appropriate.",
+        "For concept_grounding, preserve confirmed business scenario, high-risk concepts, business objects or subjects, key field sets, supported operations, operation inputs, preconditions, validation or blocking reasons, state transitions, success outcomes, visible or returned feedback, unresolved notes, and must-not-misinterpret boundaries in scope, acceptance, domainModel.businessFlows, and conceptGrounding.",
+        "For frontend_experience, preserve confirmed UI need or skip reason, surfaces, data views, target discovery or selection path, pagination, confirmed query criteria, action entry points, input fields, success feedback, error feedback, business-blocking feedback, empty/loading states, refresh/readback policy, and unacceptable UI shapes in frontendExperience.",
+        "For final_summary, preserve user corrections and final scope decisions, but do not treat a checklist-style final_summary as permission to drop details that were confirmed in earlier blocks.",
+        "If a confirmed detail cannot fit a precise structured field, preserve it in the closest existing field's natural-language summary or notes rather than omitting it.",
+        "Before writing or submitting BrainstormCandidate, perform a self-review against each confirmed Brainstorm block; final_summary is only the last confirmation surface and correction source.",
+        "Self-review must verify that confirmed requirement details are stored in existing BrainstormCandidate fields rather than only in chat: scope.included[].items, acceptance[].statement, domainModel.businessFlows[].summary, conceptGrounding, frontendExperience, and phasePlan.nextPhasePreview.",
+        "Self-review must verify that every confirmed scope.included item has been considered in the concept_grounding scope-item coverage summary. If a scope item has no applicable detail, preserve the concrete reason or unresolved note instead of silently dropping it.",
+        "Self-review must check that user-facing workflow phases store page operation paths in frontendExperience: how users find or receive the target object, pagination and query criteria when confirmed, which view/action starts the operation, input fields, refresh/readback policy, and how success, empty, loading, error, or business-blocking results are observed.",
+        "If self-review finds that a required detail is unclear or missing from the existing fields, return to the relevant Brainstorm block and ask the user before submitting; do not let PGC, AAC, TaskPlan, or TaskExecution rediscover that detail later.",
+        "Do not create a separate Markdown spec, commit, or parallel requirement artifact for this self-review; the accepted BrainstormCandidate remains the requirement contract."
     ])
 }
 
@@ -1005,6 +1040,7 @@ fn requirement_semantic_compact_rules() -> Value {
     json!([
         "Preserve the confirmed current-phase semantics in existing Brainstorm candidate fields; avoid vague labels.",
         "When business detail applies, confirm and write objects, operations, rules, fields, blockers, outcomes, and page paths in the owning blocks.",
+        "final_summary is only the final coverage checklist and correction source; do not use it as the only detail source for the candidate.",
         "When business detail does not apply, state the concrete non-domain reason rather than fabricating domain rules.",
         "If a required semantic detail is unclear after reading the requirement and inspected knowledge, ask the user before accept."
     ])

@@ -290,6 +290,27 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         .as_str()
         .expect("final summary request ref")
         .to_string();
+    let final_request = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect final summary request");
+    assert!(!final_request
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "knowledge_context_plan"));
+    let final_rules = read_block_rules_text(&server, &fixture, &request_ref);
+    assert!(final_rules.contains("pre-submit coverage checklist"));
+    assert!(final_rules.contains("Do not show internal names such as final_summary"));
+    assert!(final_rules
+        .contains("one user-visible coverage checklist with exactly one confirmation action"));
+    assert!(final_rules.contains("current phase to submit"));
+    assert!(final_rules.contains("confirmed business rules"));
+    assert!(final_rules.contains("confirmed page operation path"));
+    assert!(final_rules.contains("does not narrow, omit, override, or compress"));
+    assert!(final_rules.contains("Previously confirmed block details remain"));
+    assert!(final_rules.contains("Incorporate the correction into the affected existing fields"));
+
     let write_action = confirm_block(
         &server,
         &fixture,
@@ -346,6 +367,13 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     assert!(write_contract["fields"]["rules.candidateWrite"]
         .to_string()
         .contains("scope.deferred is non-empty"));
+    let candidate_rules = write_contract["fields"]["rules.candidateWrite"].to_string();
+    assert!(candidate_rules.contains("not from final_summary alone"));
+    assert!(candidate_rules.contains("Self-review must verify"));
+    assert!(candidate_rules.contains("scope.included"));
+    assert!(candidate_rules.contains("domainModel.businessFlows"));
+    assert!(candidate_rules.contains("frontendExperience"));
+    assert!(candidate_rules.contains("TaskPlan"));
     let mut candidate = write_contract["fields"]["outputContract.resultTemplate"].clone();
     populate_confirmed_brainstorm_candidate(&mut candidate);
 
@@ -456,22 +484,24 @@ fn read_block_rules_text(server: &LoomMcpServer, fixture: &Fixture, request_ref:
             )
             .expect("read current block rules"),
     );
-    let knowledge = structured(
-        server
-            .invoke_tool(
-                "loom.readFieldGroup",
-                Some(args(json!({
-                    "projectRoot": fixture.root_str(),
-                    "requestRef": request_ref,
-                    "groupId": "knowledge_context_plan"
-                }))),
-            )
-            .expect("read knowledge plan"),
-    );
+    let knowledge = server
+        .invoke_tool(
+            "loom.readFieldGroup",
+            Some(args(json!({
+                "projectRoot": fixture.root_str(),
+                "requestRef": request_ref,
+                "groupId": "knowledge_context_plan"
+            }))),
+        )
+        .ok()
+        .map(structured);
     format!(
         "{}\n{}",
         serde_json::to_string(&rules["fields"]).expect("serialize rules"),
-        serde_json::to_string(&knowledge["fields"]).expect("serialize knowledge")
+        knowledge
+            .as_ref()
+            .and_then(|value| serde_json::to_string(&value["fields"]).ok())
+            .unwrap_or_default()
     )
 }
 
