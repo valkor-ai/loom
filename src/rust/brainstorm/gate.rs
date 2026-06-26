@@ -50,8 +50,8 @@ pub fn required_knowledge_step_ids(block: &ClarificationBlockName) -> &'static [
             "phase_scope_dependency_order",
             "phase_scope_capability_closure",
         ],
-        ClarificationBlockName::ConceptGrounding => &["concept_scope_item_grounding"],
-        ClarificationBlockName::FrontendExperience => &["frontend_page_operation_path"],
+        ClarificationBlockName::ConceptGrounding => &["concept_grounding_scope_item"],
+        ClarificationBlockName::FrontendExperience => &["frontend_experience_page_operation_path"],
         ClarificationBlockName::FinalSummary => &[],
     }
 }

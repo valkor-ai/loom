@@ -614,12 +614,15 @@ fn knowledge_query_plan() -> Value {
             "concept_grounding": {
                 "executionOrder": [
                     {
-                        "stepId": "concept_scope_item_grounding",
+                        "stepId": "concept_grounding_scope_item",
                         "queryKind": "scope_item_grounding",
-                        "querySubjectRule": "The subject is one confirmed scope item or one tight group sharing the same object and flow.",
+                        "querySubjectRule": "The subject is one confirmed scope item or one tight group from the user's confirmed phase scope that shares the same object and operation flow.",
                         "queryConstructionRules": [
-                            "Query only the already confirmed current-phase scope items.",
-                            "Use semanticFocus to name concrete objects, operations, rules, states, and fields."
+                            "Start from every confirmed current-phase included item; do not query only the easiest or highest-level object.",
+                            "naturalLanguageQuery should ask for the subject's objects, fields, rules, states, validations, blockers, outcomes, feedback, and misunderstanding boundaries.",
+                            "semanticFocus must stay inside the confirmed scope item or tight group, pairing object focus with relevant operation, rule, state, field, or flow anchors when those anchors are explicit.",
+                            "Do not re-query the whole system or every deferred module.",
+                            "Use separate operation focus entries for separate actions and lifecycle steps; do not use a single compound operation focus as a substitute for lifecycle or process component operations."
                         ]
                     }
                 ]
@@ -627,12 +630,17 @@ fn knowledge_query_plan() -> Value {
             "frontend_experience": {
                 "executionOrder": [
                     {
-                        "stepId": "frontend_page_operation_path",
+                        "stepId": "frontend_experience_page_operation_path",
                         "queryKind": "page_operation_path",
-                        "querySubjectRule": "The subject is one confirmed page/workspace operation path or one tight group sharing the same entry and readback pattern.",
+                        "querySubjectRule": "The subject is one confirmed user/staff-visible operation path or one tight group sharing one surface, target discovery, action entry, feedback, and readback pattern.",
                         "queryConstructionRules": [
-                            "Ask for entry surface, target discovery, action entry, feedback, blocking, and readback.",
-                            "If page-specific knowledge is absent, use confirmed business operations to form the page path without inventing unsupported UI facts."
+                            "naturalLanguageQuery should ask for entry surface, target discovery, query/list/detail selection, action entry, form inputs, success feedback, validation or business-blocking feedback, loading/empty/error states, and refresh/readback.",
+                            "Start from confirmed current-phase operations and blockers, then translate them into page-operation retrieval anchors for how a user or staff member finds the target, starts the action, enters data, sees feedback, and reads back updated state.",
+                            "Prefer page or flow focus when those labels are explicit; otherwise use operation, field, state, and object anchors from confirmed scope.",
+                            "When the knowledge source has no explicit page labels, use the page-operation intent in naturalLanguageQuery and use operation, field, state, or object semanticFocus anchors from confirmed scope.",
+                            "For multi-step page paths or operation workflows, include page or flow focus plus concrete operation, field, or state anchors; do not rely on a compound operation focus alone.",
+                            "Do not invent page labels just to satisfy semanticFocus.",
+                            "Do not query only with business object names when operation, field, or state anchors are available."
                         ]
                     }
                 ]
@@ -690,6 +698,9 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
                 "rules.conceptGrounding.selfCheck",
                 "rules.conceptGrounding.scopeItemCoverage",
                 "rules.conceptGrounding.objectOperation",
+                "rules.conceptGrounding.businessScenario",
+                "rules.conceptGrounding.decisionImpactOrdering",
+                "rules.conceptGrounding.businessLifecycleScan",
                 "rules.conceptGrounding.confirmedDataShape",
             ],
         ),
@@ -700,6 +711,7 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
                 "rules.frontendExperience.presentation",
                 "rules.frontendExperience.selfCheck",
                 "rules.frontendExperience.operationPath",
+                "rules.frontendExperience.candidateCarryForward",
                 "rules.frontendExperience.confirmedDataShape",
             ],
         ),
@@ -862,19 +874,54 @@ fn phase_scope_rules() -> Value {
 fn concept_grounding_rules() -> Value {
     json!({
         "presentation": [
-            "Show the current business scenario, scope-by-scope coverage, key objects and operation rules, then one confirmation instruction.",
-            "Cover applicable objects, fields, operations, preconditions, validation or blockers, outcomes, and misunderstanding boundaries."
+            "Use a user-facing title such as business understanding and rules confirmation, 业务理解与规则确认, or 业务规则确认. Do not show internal names such as concept_grounding, conceptGrounding, domainModel, businessFlows, riskFactor, semantic grounding, scope.included, or acceptance to the user.",
+            "Use a stable user-visible section order when domain behavior applies: current business scenario, scope-by-scope coverage, key objects and operation rules, unresolved or deferred rules when any exist, and one confirmation instruction.",
+            "Keep the current business scenario as a short plain-language paragraph, then use bullets or compact mini-blocks for details. Do not collapse scenario, concepts, object fields, operations, blocking rules, and state changes into one long paragraph.",
+            "For scope-by-scope coverage, show one separate bullet or mini-block per confirmed current-phase scope item. Each item should name only applicable details: object or subject, action or behavior, key fields or inputs, preconditions, validation or blocking reasons, success state or visible feedback, and unresolved or deferred note.",
+            "For key objects and operation rules, show one separate bullet or mini-block per important object or operation. Use user-facing labels equivalent to 对象/关系, 关键字段, 操作与前置条件, 校验/阻断, 状态/成功结果, and 未决/递延 when those details apply.",
+            "If the phase is technical-only or a detail category is not applicable, state the concrete reason in user language instead of filling a checklist with generic business labels.",
+            "End with one concise confirmation instruction. Do not ask the user to separately confirm every section unless a specific unresolved question blocks progress."
         ],
         "selfCheck": [
-            "Every confirmed scope item must be covered, explicitly unresolved, or explicitly deferred.",
+            "Before presenting concept_grounding for user confirmation, run a concept_grounding self-check inside the block.",
+            "Verify that every confirmed scope.included item is covered, explicitly unresolved, or explicitly deferred.",
+            "Verify that business scenario confirmation, decision impact ordering, and lifecycle scan have been considered when the current phase has domain behavior or user operations.",
+            "Verify that key objects or subjects include applicable field sets, operation inputs, preconditions, validation or blocking reasons, success states, state transitions, and visible or returned feedback.",
+            "If a relevant detail is unclear or missing, ask a focused concept or business-rule question before marking concept_grounding confirmed.",
             "Do not let final_summary become the first place where business rules appear."
         ],
         "scopeItemCoverage": [
-            "For each confirmed scope item, show object or subject, action or behavior, inputs or fields, blockers, outcomes, and unresolved notes when applicable."
+            "Include a natural-language scope-item coverage summary before asking the user to confirm concepts.",
+            "For each confirmed scope.included item, state what requirement detail is covered using only applicable dimensions: object or subject, user/system action or behavior, inputs or fields, preconditions, validation or blocking conditions and reasons, success state/data/UI/API/result changes, visible or returned feedback, source refs, and unresolved notes.",
+            "Do not force every dimension onto every scope item. If a dimension is not applicable, omit it or give a short concrete reason; if it is applicable but source information is insufficient, mark it unresolved or ask a focused clarification.",
+            "Do not use a fixed capability taxonomy or test-scenario categories when presenting the coverage summary. Coverage rows should follow the confirmed scope wording and source facts.",
+            "If a confirmed scope item does not appear in the scope-item coverage summary, do not proceed to frontend_experience or final_summary; cover or explicitly defer that item first."
         ],
         "objectOperation": [
             "The concept_grounding block owns object-operation clarification for domain phases.",
-            "Do not present only noun definitions when business operations are in scope."
+            "When the current phase includes business objects, user operations, system operations, forms, persistence, state changes, or validation/blocking rules, present a natural-language object-operation summary before asking the user to confirm concepts.",
+            "For each key business object in the current phase, list the key field set that the phase depends on: identity fields, input fields, display fields, relationship fields, state fields, and result or feedback fields. Use source-confirmed names when available; if a category is unclear, state the missing detail as a question or unresolved note instead of inventing fields.",
+            "For each operation on a key object, summarize the operation input, preconditions, validation rules, blocking conditions, blocking reasons, success outcome, state changes, and user-visible feedback that downstream implementation must preserve.",
+            "Every object field, operation rule, state change, and blocking reason shown in concept_grounding must point back to original requirements, confirmed user decisions, repository facts, or an explicit unresolved clarification note. Keyword hints are advisory only.",
+            "Do not present only noun definitions or broad concept summaries when business operations are in scope.",
+            "If the current phase is purely technical, infrastructure, build, deployment, or non-domain work, state why object-operation clarification is not applicable and keep concept grounding limited to real high-risk technical concepts."
+        ],
+        "businessScenario": [
+            "Include a plain-language business scenario confirmation when the current phase has domain behavior or user operations.",
+            "The scenario confirmation must name the actor or system, the business object or subject, the trigger, the operation goal, the expected result, and the boundary of what this phase will not do when applicable.",
+            "If the current phase is technical-only, state the concrete reason why business scenario confirmation is not applicable and summarize the technical workflow instead."
+        ],
+        "decisionImpactOrdering": [
+            "Identify important clarification decisions before asking for confirmation, ordered by downstream impact.",
+            "High-impact decisions are those that change phase scope, data model, business flow, frontend operation path, interface contract, acceptance outcome, runtime, or delivery boundary.",
+            "For each high-impact decision, state what it affects in plain language and whether it is confirmed, unresolved, explicitly deferred, or not applicable.",
+            "Do not invent decisions only to fill a checklist. Include only decisions grounded in the source requirement, confirmed user answer, repository facts, or an explicit unresolved note."
+        ],
+        "businessLifecycleScan": [
+            "Scan each key current-phase business object or subject for lifecycle actions that are actually relevant to this phase.",
+            "Lifecycle actions include create, query/select, view, update, approve/process, state change, terminate/cancel, and blocking/exception handling; do not force every action onto every object.",
+            "For each relevant lifecycle action, summarize inputs or fields, preconditions, validation or blocking reasons, success state changes, and visible or returned feedback when applicable.",
+            "For lifecycle actions explicitly out of scope or deferred, state that boundary in user language and preserve it in deferred, excluded, assumptions, or next phase preview as appropriate."
         ],
         "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::ConceptGrounding)
     })
@@ -883,16 +930,35 @@ fn concept_grounding_rules() -> Value {
 fn frontend_experience_rules() -> Value {
     json!({
         "presentation": [
-            "Confirm the page or workspace operation path in user language.",
-            "Cover entry surface, target discovery, query or selection, action entry, input fields, success feedback, blocking feedback, and readback."
+            "Use a user-facing title such as page operation path confirmation, 页面办理路径确认, or 页面操作路径确认. Do not show internal names such as frontend_experience, frontendExperience, targetDiscovery, search_then_select, list_browse, query_and_select, direct_id_lookup, preselected_context, not_applicable, dataViews, actions, or operationPaths to the user.",
+            "Use a stable user-visible section order when UI applies: page or workspace surface, target discovery or query-selection path, operation entries and inputs, result feedback and refresh/readback, unacceptable page shapes when any apply, and one confirmation instruction.",
+            "If users must query or select an existing object, show pagination/list behavior and query criteria as a separate labeled line such as 查询条件. Do not bury query criteria inside a prose paragraph.",
+            "For multiple operations, show one separate bullet or compact mini-block per operation or operation group. Each operation item should name where it starts, what the user enters, what success looks like, what blocking/error feedback looks like, and what refresh/readback happens.",
+            "If UI is not required, deferred, inherited without change, or driven by login/session/preselected context, state the concrete reason and still avoid internal enum labels.",
+            "End with one concise confirmation instruction. Do not ask the user to separately confirm each operation unless a specific unresolved path blocks progress."
         ],
         "selfCheck": [
-            "State clearly whether UI is required, skipped, or not applicable.",
+            "Before presenting frontend_experience for user confirmation, run a frontend_experience self-check inside the block.",
+            "Verify whether UI is required, not required, or deferred, and state the reason in user language.",
+            "When UI is required, verify target discovery or selection, pagination/list behavior when relevant, grounded query criteria, action entry, input fields, success feedback, error feedback, business-blocking feedback, and refresh/readback behavior.",
+            "Verify that query criteria come from confirmed fields, user wording, acceptance details, business flow details, or repository facts; do not use a hardcoded industry field list.",
+            "If the operation path is unclear, ask a focused frontend operation-path question before marking frontend_experience confirmed.",
             "Do not invent a page path when the phase is non-UI work."
         ],
         "operationPath": [
-            "When target discovery exists, prefer paginated query and selection unless the user confirmed direct id lookup or preselected context.",
-            "Use concrete confirmed operations, fields, and states to define the path."
+            "The frontend_experience block owns page operation path clarification; do not wait until final_summary to first ask how users find targets, trigger actions, or observe results.",
+            "When the current phase has UI for existing business objects, present a natural-language default of paginated query results plus selection/action from those results unless the user has confirmed direct id entry, upstream context, login/session context, or no target object.",
+            "When the operation starts from a prior page, authenticated session, notification, external link, or already selected record, describe that preselected context in user language and do not force a query page.",
+            "When the operation is create-only, login-only, static content, a local developer tool, or a non-UI technical task, state why target selection is not applicable.",
+            "If a search/query path is proposed, list only query criteria that are grounded in confirmed object fields, acceptance statements, business flow details, repository facts, or the user's own words; do not use a hardcoded industry field list.",
+            "If confirmed fields are insufficient for meaningful filters, do not block the phase. Confirm a basic paginated result list with no advanced filters, and record the missing filter detail as a risk or note.",
+            "Use natural user-facing wording in the conversation, such as 分页查询结果中选择记录并操作 or 从登录上下文带入当前对象. Do not show internal enum values like query_and_select, direct_id_lookup, preselected_context, not_applicable, dataViews, actions, or operationPaths to the user."
+        ],
+        "candidateCarryForward": [
+            "When frontendExperience is present, store confirmed page operation paths in dataViews, actions, and operationPaths instead of only in confirmationSummary.",
+            "For query-and-select workflows, set dataViews pagination and first-page loading expectations. Search criteria are optional only when no query criteria were confirmed; when query criteria were confirmed, preserve them.",
+            "For direct id lookup workflows, explain why direct id entry is user-confirmed or operationally appropriate; do not use it as the default for existing-object back-office operations.",
+            "Each action must name its entry point, input fields when applicable, success feedback, blocking/error feedback, and refresh policy so downstream architecture and task execution inherit the confirmed user experience target."
         ],
         "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::FrontendExperience)
     })

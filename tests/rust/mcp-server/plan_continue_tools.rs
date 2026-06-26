@@ -236,6 +236,16 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         .request_kind,
         "brainstorm_clarification_block"
     );
+    let concept_rules = read_block_rules_text(&server, &fixture, &request_ref);
+    assert!(concept_rules.contains("business scenario"));
+    assert!(concept_rules.contains("scope-by-scope coverage"));
+    assert!(concept_rules.contains("decision impact ordering"));
+    assert!(concept_rules.contains("lifecycle scan"));
+    assert!(concept_rules.contains("object-operation summary"));
+    assert!(concept_rules.contains("Do not show internal names such as concept_grounding"));
+    assert!(concept_rules.contains("Do not present only noun definitions"));
+    assert!(concept_rules.contains("concept_grounding_scope_item"));
+
     request_ref = confirm_block(
         &server,
         &fixture,
@@ -252,6 +262,17 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         .as_str()
         .expect("frontend request ref")
         .to_string();
+    let frontend_rules = read_block_rules_text(&server, &fixture, &request_ref);
+    assert!(frontend_rules.contains("page operation path"));
+    assert!(frontend_rules.contains("pagination/list behavior"));
+    assert!(frontend_rules.contains("query criteria"));
+    assert!(frontend_rules.contains("success feedback"));
+    assert!(frontend_rules.contains("business-blocking feedback"));
+    assert!(frontend_rules.contains("refresh/readback"));
+    assert!(frontend_rules.contains("Do not show internal names such as frontend_experience"));
+    assert!(frontend_rules.contains("do not use a hardcoded industry field list"));
+    assert!(frontend_rules.contains("frontend_experience_page_operation_path"));
+
     request_ref = confirm_block(
         &server,
         &fixture,
@@ -419,6 +440,38 @@ fn confirm_block(
                 }))),
             )
             .expect("confirm brainstorm block"),
+    )
+}
+
+fn read_block_rules_text(server: &LoomMcpServer, fixture: &Fixture, request_ref: &str) -> String {
+    let rules = structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "current_block_rules"
+                }))),
+            )
+            .expect("read current block rules"),
+    );
+    let knowledge = structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "knowledge_context_plan"
+                }))),
+            )
+            .expect("read knowledge plan"),
+    );
+    format!(
+        "{}\n{}",
+        serde_json::to_string(&rules["fields"]).expect("serialize rules"),
+        serde_json::to_string(&knowledge["fields"]).expect("serialize knowledge")
     )
 }
 
