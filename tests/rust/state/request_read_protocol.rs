@@ -223,6 +223,16 @@ fn native_request_read_protocol_resolves_declared_fields() {
         fields: vec!["task.title".to_string(), "task.title".to_string()],
     })
     .expect("read selected fields");
+    let selected_json = serde_json::to_value(&selected).expect("serialize selected fields");
+    assert_eq!(
+        selected_json
+            .as_object()
+            .expect("selected fields object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["fields".to_string()]
+    );
     assert_eq!(selected.fields.len(), 1);
 
     let denied = state::read_request_fields(delivery_core::ReadRequestFieldsInput {

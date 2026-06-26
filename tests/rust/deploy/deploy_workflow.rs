@@ -11,7 +11,10 @@ use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
     FileSubmitInput, InspectRequestInput, ProjectStatus, ReadRequestFieldsInput,
 };
-use deploy::{accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, DeployToolInput};
+use deploy::{
+    accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status,
+    DeployToolInput,
+};
 use serde_json::{json, Value};
 use state::store::{ensure_dir, now_millis, now_string, read_json, read_text, write_json_atomic};
 
@@ -86,6 +89,37 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
     assert!(compose.contains("      - postgres"));
+}
+
+#[test]
+fn deploy_status_does_not_echo_project_root_inside_state_details() {
+    let fixture = Fixture::new("deploy-status-trim");
+    let state_dir = fixture.root.join(".loom/deployment/state");
+    ensure_dir(&state_dir).expect("state dir");
+    write_json_atomic(
+        &state_dir.join("local.json"),
+        &json!({
+            "schemaVersion": 1,
+            "projectRoot": fixture.root_str(),
+            "running": true,
+            "url": "http://127.0.0.1:4173"
+        }),
+    )
+    .expect("write deployment state");
+
+    let result = deploy_status(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("status result json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["projectRoot"], fixture.root_str());
+    assert!(
+        value["details"]["state"].get("projectRoot").is_none(),
+        "{value:#}"
+    );
 }
 
 #[test]

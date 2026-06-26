@@ -58,6 +58,27 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     );
     assert!(inspected.submit_tool.is_none());
     assert!(inspected.write_targets.is_empty());
+    let selected = structured(
+        server
+            .invoke_tool(
+                "readRequestFields",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "fields": ["knowledgeQueryPlan.toolContract"]
+                }))),
+            )
+            .expect("read request fields"),
+    );
+    assert_eq!(
+        selected
+            .as_object()
+            .expect("selected fields object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["fields".to_string()]
+    );
     let knowledge_group = inspected
         .read_groups
         .iter()
@@ -583,7 +604,7 @@ fn run_knowledge_context(
         .expect("knowledge executionOrder");
     for step in steps {
         let step_id = step["stepId"].as_str().expect("stepId");
-        structured(
+        let result = structured(
             server
                 .invoke_tool(
                     "loom.knowledgeBrainstormContext",
@@ -599,6 +620,13 @@ fn run_knowledge_context(
                 )
                 .expect("knowledge brainstorm context"),
         );
+        let details = &result["details"];
+        assert!(details.get("requestRef").is_none());
+        assert!(details.get("stepId").is_none());
+        assert!(details.get("querySubject").is_none());
+        assert!(details.get("naturalLanguageQuery").is_none());
+        assert!(details.get("semanticFocus").is_none());
+        assert_no_key_recursive(details, "inspect");
     }
 }
 
@@ -727,6 +755,26 @@ fn args(value: Value) -> rmcp::model::JsonObject {
 
 fn structured(result: rmcp::model::CallToolResult) -> Value {
     serde_json::to_value(result).expect("call result to value")["structuredContent"].clone()
+}
+
+fn assert_no_key_recursive(value: &Value, forbidden_key: &str) {
+    match value {
+        Value::Object(object) => {
+            assert!(
+                !object.contains_key(forbidden_key),
+                "{forbidden_key} must not appear in {value}"
+            );
+            for child in object.values() {
+                assert_no_key_recursive(child, forbidden_key);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assert_no_key_recursive(item, forbidden_key);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn read_compact_request_root(fixture: &Fixture, request_id: &str) -> Value {

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
-use serde_json::json;
+use serde_json::{json, Value};
 use state::store::{path_exists, read_json_value};
 
 use crate::{
@@ -29,7 +29,8 @@ pub fn deploy_status(input: DeployToolInput) -> LoomMcpActionResult {
         read_json_value(&paths.state_file).ok()
     } else {
         None
-    };
+    }
+    .map(trim_status_state);
     LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: input.project_root,
         summary: "Deployment status loaded.".to_string(),
@@ -39,4 +40,11 @@ pub fn deploy_status(input: DeployToolInput) -> LoomMcpActionResult {
         })),
         warnings: vec![],
     })
+}
+
+fn trim_status_state(mut state: Value) -> Value {
+    if let Some(object) = state.as_object_mut() {
+        object.remove("projectRoot");
+    }
+    state
 }

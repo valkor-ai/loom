@@ -115,7 +115,6 @@ pub struct KnowledgeChunkCard {
     #[serde(default)]
     pub matched_labels: Vec<KnowledgeMatchedLabel>,
     pub score: f64,
-    pub inspect: KnowledgeInspectChunkInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -137,10 +136,6 @@ pub struct KnowledgeSearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeInspectChunkResult {
-    pub source_name: String,
-    pub source_id: String,
-    pub build_id: String,
-    pub chunk_id: String,
     pub document_title: String,
     pub heading_path: Vec<String>,
     pub text: String,
@@ -166,7 +161,6 @@ pub struct KnowledgeReadPlanChunk {
     pub source_id: String,
     pub build_id: String,
     pub chunk_id: String,
-    pub inspect: KnowledgeInspectChunkInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -180,12 +174,6 @@ pub struct KnowledgeReadPlan {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeBrainstormContextResult {
     pub status: String,
-    pub block: String,
-    pub request_ref: String,
-    pub step_id: String,
-    pub query_subject: String,
-    pub natural_language_query: String,
-    pub semantic_focus: Vec<String>,
     pub matched_sources: Vec<KnowledgeMatchedSource>,
     pub read_plan: KnowledgeReadPlan,
 }

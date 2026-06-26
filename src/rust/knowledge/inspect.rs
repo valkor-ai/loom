@@ -22,10 +22,6 @@ pub fn inspect_chunk(
         })?;
     let text = read_chunk_body(&source.source_id, &input.build_id, &input.chunk_id)?;
     Ok(KnowledgeInspectChunkResult {
-        source_name: source.name,
-        source_id: source.source_id,
-        build_id: input.build_id,
-        chunk_id: input.chunk_id,
         document_title: chunk.document_title.clone(),
         heading_path: chunk.heading_path.clone(),
         text,

@@ -9,8 +9,8 @@ use algorithm_client::AlgorithmClient;
 use crate::{
     mcp_models::{
         KnowledgeBrainstormContextInput, KnowledgeBrainstormContextResult, KnowledgeChunkCard,
-        KnowledgeInspectChunkInput, KnowledgeMatchedLabel, KnowledgeMatchedSource,
-        KnowledgeReadPlan, KnowledgeReadPlanChunk, KnowledgeSearchInput, KnowledgeSearchResult,
+        KnowledgeMatchedLabel, KnowledgeMatchedSource, KnowledgeReadPlan, KnowledgeReadPlanChunk,
+        KnowledgeSearchInput, KnowledgeSearchResult,
     },
     models::{BlockAffinity, ChunksFile, KnowledgeChunk, LexicalIndex},
     paths,
@@ -24,7 +24,6 @@ const MAX_CONTEXT_CHUNKS_PER_BLOCK: usize = 5;
 
 pub fn search_knowledge(input: KnowledgeSearchInput) -> KnowledgeResult<KnowledgeSearchResult> {
     let cards = search_cards(
-        &input.project_root,
         &input.natural_language_query,
         &input.semantic_focus,
         &input.source_names,
@@ -75,7 +74,6 @@ pub fn brainstorm_context(
     )?;
     let request_scope = resolve_brainstorm_request_scope(&input.project_root, &input.request_ref)?;
     let cards = search_cards(
-        &input.project_root,
         &format!("{} {}", input.query_subject, input.natural_language_query),
         &input.semantic_focus,
         &[],
@@ -101,7 +99,6 @@ pub fn brainstorm_context(
                         source_id: source.source_id.clone(),
                         build_id: source.build_id.clone(),
                         chunk_id: chunk.chunk_id.clone(),
-                        inspect: chunk.inspect.clone(),
                     })
             })
             .collect(),
@@ -112,21 +109,14 @@ pub fn brainstorm_context(
         } else {
             "available".to_string()
         },
-        block: input.block,
-        request_ref: input.request_ref,
-        step_id: input.step_id,
-        query_subject: input.query_subject,
-        natural_language_query: input.natural_language_query,
-        semantic_focus: input.semantic_focus,
         matched_sources,
         read_plan,
     };
-    persist_brainstorm_context(&input.project_root, &request_scope, &result)?;
+    persist_brainstorm_context(&input, &request_scope, &result)?;
     Ok(result)
 }
 
 fn search_cards(
-    project_root: &str,
     query: &str,
     semantic_focus: &[String],
     source_names: &[String],
@@ -205,13 +195,6 @@ fn search_cards(
                 .collect(),
             matched_labels: semantic.matched_labels,
             score: round_score(score),
-            inspect: KnowledgeInspectChunkInput {
-                project_root: project_root.to_string(),
-                source_name: candidate.source_name,
-                source_id: Some(candidate.source_id),
-                build_id: candidate.build_id,
-                chunk_id: candidate.chunk.chunk_id,
-            },
         });
     }
     Ok(rank_chunk_cards(candidates, semantic_focus, limit))
@@ -844,11 +827,11 @@ fn resolve_brainstorm_request_scope(
 }
 
 fn persist_brainstorm_context(
-    project_root: &str,
+    input: &KnowledgeBrainstormContextInput,
     scope: &BrainstormRequestScope,
     result: &KnowledgeBrainstormContextResult,
 ) -> KnowledgeResult<()> {
-    let project_paths = state::paths::project_paths(project_root)
+    let project_paths = state::paths::project_paths(&input.project_root)
         .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
     let locator = state::paths::DeliveryPhaseLocator {
         delivery_id: scope.delivery_id.clone(),
@@ -857,23 +840,23 @@ fn persist_brainstorm_context(
     let step_dir = state::paths::workspace_dir(&project_paths.root, &locator)
         .join("brainstorm-knowledge")
         .join(&scope.request_id)
-        .join(&result.block)
-        .join(&result.step_id);
+        .join(&input.block)
+        .join(&input.step_id);
     state::store::ensure_dir(&step_dir)
         .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
     state::store::write_json_atomic(
         &step_dir.join("query.json"),
         &serde_json::json!({
             "schemaVersion": "1.0",
-            "requestRef": result.request_ref,
+            "requestRef": input.request_ref,
             "requestId": scope.request_id,
             "deliveryId": scope.delivery_id,
             "phaseId": scope.phase_id,
-            "block": result.block,
-            "stepId": result.step_id,
-            "querySubject": result.query_subject,
-            "naturalLanguageQuery": result.natural_language_query,
-            "semanticFocus": result.semantic_focus,
+            "block": input.block,
+            "stepId": input.step_id,
+            "querySubject": input.query_subject,
+            "naturalLanguageQuery": input.natural_language_query,
+            "semanticFocus": input.semantic_focus,
         }),
     )
     .map_err(|error| KnowledgeError::invalid(error.to_string()))?;

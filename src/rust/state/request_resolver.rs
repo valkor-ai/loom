@@ -126,11 +126,7 @@ pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadReq
             recorded_at: now_for_audit(),
         },
     );
-    Ok(ReadRequestFieldsResult {
-        request_ref: request.request_ref,
-        request_id: request.request_id,
-        fields: resolved,
-    })
+    Ok(ReadRequestFieldsResult { fields: resolved })
 }
 
 pub fn read_field_group_by_resource_uri(uri: &str) -> StateResult<ReadFieldGroupResult> {

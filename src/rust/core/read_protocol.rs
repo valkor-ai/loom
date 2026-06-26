@@ -50,8 +50,6 @@ pub struct ReadRequestFieldsInput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadRequestFieldsResult {
-    pub request_ref: String,
-    pub request_id: String,
     pub fields: BTreeMap<String, FieldReadResult>,
 }
 

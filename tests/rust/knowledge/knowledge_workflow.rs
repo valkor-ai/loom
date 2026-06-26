@@ -110,6 +110,11 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         chunk_id: first_chunk.chunk_id.clone(),
     })
     .expect("inspect chunk");
+    let inspected_json = serde_json::to_value(&inspected).expect("inspect json");
+    assert!(inspected_json.get("sourceName").is_none());
+    assert!(inspected_json.get("sourceId").is_none());
+    assert!(inspected_json.get("buildId").is_none());
+    assert!(inspected_json.get("chunkId").is_none());
     assert!(inspected.text.contains("证券账户"));
     assert!(inspected
         .text
@@ -245,7 +250,11 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         .as_object()
         .expect("card object")
         .contains_key("text"));
-    assert_eq!(search.cards[0].inspect.project_root, fixture.root_str());
+    assert!(!serde_json::to_value(&search.cards[0])
+        .expect("card json")
+        .as_object()
+        .expect("card object")
+        .contains_key("inspect"));
 
     let suffix_search = search_knowledge(KnowledgeSearchInput {
         project_root: fixture.root_str().to_string(),
@@ -485,7 +494,14 @@ fn legacy_cli_knowledge_store_can_be_listed_searched_and_inspected() {
         Some("证券账户开户、挂失补办、销户和持仓清空规则。")
     );
 
-    let inspected = inspect_chunk(search.cards[0].inspect.clone()).expect("legacy inspect");
+    let inspected = inspect_chunk(KnowledgeInspectChunkInput {
+        project_root: fixture.root_str().to_string(),
+        source_name: search.cards[0].source_name.clone(),
+        source_id: Some(search.cards[0].source_id.clone()),
+        build_id: search.cards[0].build_id.clone(),
+        chunk_id: search.cards[0].chunk_id.clone(),
+    })
+    .expect("legacy inspect");
     assert!(inspected.text.contains("销户前必须清空"));
 }
 
@@ -665,14 +681,13 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     })
     .expect("brainstorm context");
     assert_eq!(context.status, "available");
-    assert_eq!(context.block, "frontend_experience");
     assert_eq!(context.read_plan.mode, "inspect_all_listed_chunks");
     assert!(!context.read_plan.chunks.is_empty());
     assert!(context
         .read_plan
         .chunks
         .iter()
-        .all(|chunk| chunk.inspect.source_name == "page-paths"));
+        .all(|chunk| chunk.source_name == "page-paths"));
     let query_file = fixture.root.join(
         ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/frontend_experience/frontend_paths/query.json",
     );
@@ -689,8 +704,12 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     let persisted_result: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&result_file).expect("read result"))
             .expect("parse result");
-    assert_eq!(persisted_result["requestRef"], context.request_ref);
     assert_eq!(persisted_result["status"], "available");
+    assert!(persisted_result.get("requestRef").is_none());
+    assert!(persisted_result.get("stepId").is_none());
+    assert!(persisted_result.get("querySubject").is_none());
+    assert!(persisted_result.get("naturalLanguageQuery").is_none());
+    assert!(persisted_result.get("semanticFocus").is_none());
 
     let wrong_step = brainstorm_context(KnowledgeBrainstormContextInput {
         project_root: fixture.root_str().to_string(),
