@@ -36,11 +36,6 @@ pub struct ReadFieldGroupInput {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadFieldGroupResult {
-    pub request_ref: String,
-    pub request_id: String,
-    pub group_id: String,
-    pub required: bool,
-    pub order: u32,
     pub fields: BTreeMap<String, FieldReadResult>,
 }
 

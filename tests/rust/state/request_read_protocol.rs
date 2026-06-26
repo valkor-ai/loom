@@ -166,6 +166,15 @@ fn native_request_read_protocol_resolves_declared_fields() {
     .expect("read group");
     let group_json = serde_json::to_value(&group).expect("serialize read group");
     assert_eq!(
+        group_json
+            .as_object()
+            .expect("read group object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["fields".to_string()]
+    );
+    assert_eq!(
         group_json["fields"]["task.title"],
         json!("实现证券账户开户")
     );

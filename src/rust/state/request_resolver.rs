@@ -81,14 +81,7 @@ pub fn read_field_group(input: ReadFieldGroupInput) -> StateResult<ReadFieldGrou
             recorded_at: now_for_audit(),
         },
     );
-    Ok(ReadFieldGroupResult {
-        request_ref: request.request_ref,
-        request_id: request.request_id,
-        group_id: group.group_id,
-        required: group.required,
-        order: group.order,
-        fields,
-    })
+    Ok(ReadFieldGroupResult { fields })
 }
 
 pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadRequestFieldsResult> {
