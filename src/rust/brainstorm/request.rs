@@ -103,9 +103,9 @@ pub fn build_brainstorm_clarification_request_root(
     if current_block != ClarificationBlockName::FinalSummary {
         groups.push(json!({
             "groupId": "knowledge_context_plan",
-            "required": false,
-            "purpose": "Read the request-scoped knowledge query plan for the current Brainstorm block.",
-            "whenToRead": "Read before calling loom.knowledgeBrainstormContext for the current block.",
+            "required": true,
+            "purpose": "Read the request-scoped knowledge query plan and call loom.knowledgeBrainstormContext for the current Brainstorm block before presenting it.",
+            "whenToRead": "Read before forming the current block response; call loom.knowledgeBrainstormContext for every listed executionOrder step.",
             "fields": [
                 "knowledgeQueryPlan.sharedRules",
                 "knowledgeQueryPlan.toolContract",
@@ -497,9 +497,10 @@ fn knowledge_query_plan() -> Value {
                     {
                         "stepId": "phase_scope_dependency_order",
                         "queryKind": "dependency_order",
-                        "querySubjectRule": "The subject is the overall dependency order across candidate capability units, not one module's closure.",
+                        "querySubjectRule": "The subject is dependency evidence used to compare active-phase candidate boundaries, not a full delivery roadmap.",
                         "queryConstructionRules": [
-                            "Use dependency_order only to compare sequencing and deferred boundaries.",
+                            "Use dependency_order only to compare what belongs in the active phase and what must be deferred.",
+                            "Do not output or confirm the overall dependency sequence as numbered project phases.",
                             "Do not let a broad system-chain query decide the current phase by itself."
                         ]
                     },
@@ -577,7 +578,10 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
             "phaseScope",
             phase_scope_rules(),
             vec![
+                "rules.phaseScope.blockMission",
+                "rules.phaseScope.presentation",
                 "rules.phaseScope.optionComparison",
+                "rules.phaseScope.forbiddenOutput",
                 "rules.phaseScope.selfCheck",
                 "rules.phaseScope.confirmedDataShape",
             ],
@@ -639,13 +643,13 @@ fn user_visible_block_title(block: &ClarificationBlockName) -> &'static str {
 fn block_rule(block: &ClarificationBlockName) -> &'static str {
     match block {
         ClarificationBlockName::PhaseScope => {
-            "Present only current-stage scope options and wait for explicit user confirmation before moving on."
+            "Confirm only the active phase boundary: first query request-scoped knowledge for this block, then present 2-3 current-phase options, not a full multi-stage project roadmap, and wait for explicit user confirmation."
         }
         ClarificationBlockName::ConceptGrounding => {
-            "Use only the confirmed current-stage scope as the subject set and wait for explicit user confirmation."
+            "Use only the confirmed current-stage scope as the subject set; first query request-scoped knowledge for this block, then wait for explicit user confirmation."
         }
         ClarificationBlockName::FrontendExperience => {
-            "Use confirmed business operations to confirm the page or workspace path, or record a concrete skip reason."
+            "Use confirmed business operations; first query request-scoped knowledge for this block, then confirm the page or workspace path, or record a concrete skip reason."
         }
         ClarificationBlockName::FinalSummary => {
             "Summarize already confirmed blocks for final confirmation; do not introduce new requirement detail here."
@@ -693,12 +697,33 @@ fn block_confirmed_data_shape(block: &ClarificationBlockName) -> Value {
 
 fn phase_scope_rules() -> Value {
     json!({
+        "blockMission": [
+            "This block confirms only the active phase implementation boundary.",
+            "Use module dependency order only to compare active-phase candidate boundaries and deferred items.",
+            "Before presenting options, call loom.knowledgeBrainstormContext for every phase_scope executionOrder step in knowledge_context_plan. If the result is empty, continue with source requirements.",
+            "Even when the source asks for stage priorities or phased delivery, do not ask the user to confirm a full-project roadmap in this block."
+        ],
+        "presentation": [
+            "Present 2-3 alternatives for the active phase only, preferably as A/B/C.",
+            "Each alternative must be one current-phase candidate slice, not a sequence of phases.",
+            "For each alternative show included scope, deferred boundary, reason, and tradeoff.",
+            "End with one recommendation and ask the user to choose A/B/C or adjust the active-phase boundary."
+        ],
         "optionComparison": [
             "Present 2-3 source-grounded current-phase options with one recommendation.",
             "Each option must show included scope, deferred or not-this-phase boundary, reason, and tradeoff.",
             "The recommended option must preserve the current phase's closure and dependency purpose."
         ],
+        "forbiddenOutput": [
+            "Do not output numbered full-project phases such as 1..N.",
+            "Do not ask the user to confirm the entire dependency sequence.",
+            "Do not split downstream modules into their own confirmed implementation phases here.",
+            "Mention downstream work only inside deferred boundary or a short next-phase preview."
+        ],
         "selfCheck": [
+            "Before responding, check that every option is an active-phase boundary candidate.",
+            "Before responding, check that the current block's knowledge_context_plan was used; if the knowledge result was empty, the response may proceed from source requirements.",
+            "Before responding, check that the message is not a full multi-stage roadmap.",
             "Verify the recommended option contains goal-essential and flow-support items.",
             "Do not let adjacent or downstream work occupy the current phase unless the user explicitly asks for that wider boundary."
         ],

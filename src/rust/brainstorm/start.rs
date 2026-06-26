@@ -157,7 +157,7 @@ fn start_brainstorm_inner(
         source: "brainstorm_start".to_string(),
         reason: "await_phase_scope_confirmation".to_string(),
         prompt: Some(
-            "Read the current Brainstorm block request and present the stage scope confirmation in the user's language."
+            "Read the current Brainstorm block request, query request-scoped knowledge for this block, and present only active phase boundary options in the user's language."
                 .to_string(),
         ),
         accepted_responses: vec!["reply_in_chat".to_string()],
@@ -192,7 +192,7 @@ fn start_brainstorm_inner(
 
     Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
         project_root: input.project_root.clone(),
-        prompt: "Read the current Brainstorm block request, present the stage scope confirmation in the user's language, then call loom.brainstormConfirmBlock after the user confirms it.".to_string(),
+        prompt: "Read the current Brainstorm block request, query request-scoped knowledge for this block, present only active phase boundary options in the user's language, then call loom.brainstormConfirmBlock after the user confirms one boundary.".to_string(),
         accepted_responses: vec!["reply_in_chat".to_string()],
         request_ref: Some(stored.request_ref),
         delivery_id: Some(delivery_id),

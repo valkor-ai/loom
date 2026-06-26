@@ -14,7 +14,7 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
             "loom.plan",
             Some(args(json!({
                 "projectRoot": fixture.root_str(),
-                "requestText": "实现证券账户开户流程"
+                "requestText": "实现股票交易系统，请按模块依赖关系整理阶段优先级，每个阶段不要太大，优先按单模块能力闭环划分。"
             }))),
         )
         .expect("plan call");
@@ -25,6 +25,9 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .as_str()
         .expect("prompt")
         .contains("phase_scope"));
+    let prompt = value["prompt"].as_str().expect("prompt");
+    assert!(prompt.contains("active phase boundary options"));
+    assert!(!prompt.contains("phase-1 boundary"));
     assert_eq!(value["gate"]["currentBlock"], "phase_scope");
     let request_ref = value["requestRef"].as_str().expect("requestRef");
     assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 1);
@@ -51,6 +54,12 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     );
     assert!(inspected.submit_tool.is_none());
     assert!(inspected.write_targets.is_empty());
+    let knowledge_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "knowledge_context_plan")
+        .expect("knowledge_context_plan group");
+    assert!(knowledge_group.required);
     let requirement_context = inspected
         .read_groups
         .iter()
@@ -72,14 +81,34 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         full_text.fields,
         vec!["requirementContext.normalizedText".to_string()]
     );
+    let current_block_rules = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        group_id: "current_block_rules".to_string(),
+    })
+    .expect("read current block rules");
+    let rules_text =
+        serde_json::to_string(&current_block_rules.fields).expect("serialize current block rules");
+    assert!(rules_text.contains("active phase"));
+    assert!(!rules_text.contains("active phase-1"));
+    assert!(rules_text.contains("call loom.knowledgeBrainstormContext"));
+    assert!(rules_text.contains("full-project roadmap"));
+    assert!(rules_text.contains("full multi-stage roadmap"));
+    assert!(rules_text.contains("Do not output numbered full-project phases"));
+    assert!(!current_block_rules
+        .fields
+        .keys()
+        .any(|field| field.contains("candidateWrite")));
     let knowledge_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
         fields: vec![
             "clarificationConversationProtocol.userVisibleBlockTitle".to_string(),
+            "clarificationConversationProtocol.blockRule".to_string(),
             "blockConfirmationContract".to_string(),
             "knowledgeQueryPlan.toolContract".to_string(),
             "knowledgeQueryPlan.sharedRules".to_string(),
+            "knowledgeQueryPlan.blocks.phase_scope.executionOrder".to_string(),
         ],
     })
     .expect("knowledge query plan fields");
@@ -91,6 +120,13 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         knowledge_fields.fields["blockConfirmationContract"].value["tool"],
         "loom.brainstormConfirmBlock"
     );
+    assert!(
+        knowledge_fields.fields["clarificationConversationProtocol.blockRule"]
+            .value
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a full multi-stage project roadmap")
+    );
     assert_eq!(
         knowledge_fields.fields["knowledgeQueryPlan.toolContract"].value["contextTool"],
         "loom.knowledgeBrainstormContext"
@@ -99,6 +135,12 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .value
         .to_string()
         .contains("do not silently fall back"));
+    assert!(
+        knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"]
+            .value
+            .to_string()
+            .contains("Do not output or confirm the overall dependency sequence")
+    );
 }
 
 #[test]
