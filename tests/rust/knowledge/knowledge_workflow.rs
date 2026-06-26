@@ -528,9 +528,31 @@ fn knowledge_search_prioritizes_semantic_focus_coverage_before_lexical_fallback(
             "buildId": build_id,
             "chunks": [
                 focus_chunk("kchunk_000001", "证券账户开户", "证券账户开户是生命周期起点。", 0.2),
-                focus_chunk("kchunk_000002", "证券账户挂失", "证券账户挂失是风险保护流程。", 0.2),
+                focus_chunk("kchunk_000002", "证券账户挂失与补办", "证券账户挂失与补办是风险保护流程。", 0.2),
                 focus_chunk("kchunk_000003", "证券账户销户", "证券账户销户是生命周期结束。", 0.2),
-                focus_chunk("kchunk_000004", "资金账户挂失", "证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。", 1.0)
+                semantic_chunk(
+                    "kchunk_000004",
+                    "账户状态背景",
+                    "证券账户生命周期 开户 挂失 补办 销户 账户状态。证券账户生命周期 开户 挂失 补办 销户 账户状态。证券账户生命周期 开户 挂失 补办 销户 账户状态。",
+                    json!([
+                        {"kind": "object", "text": "证券账户", "confidence": "high"},
+                        {"kind": "field", "text": "账户状态", "confidence": "high"},
+                        {"kind": "state", "text": "挂失", "confidence": "high"}
+                    ]),
+                    json!(["证券账户", "账户状态", "挂失"]),
+                    1.0,
+                ),
+                semantic_chunk(
+                    "kchunk_000005",
+                    "资金账户挂失与补办",
+                    "证券账户生命周期 开户 挂失 补办 销户。证券账户生命周期 开户 挂失 补办 销户。证券账户生命周期 开户 挂失 补办 销户。",
+                    json!([
+                        {"kind": "page_operation", "text": "资金账户挂失与补办", "confidence": "high"},
+                        {"kind": "operation", "text": "冻结关联证券账户下所有证券", "confidence": "medium"}
+                    ]),
+                    json!(["资金账户挂失", "资金账户补办"]),
+                    1.0,
+                )
             ]
         }))
         .expect("chunks json"),
@@ -538,11 +560,15 @@ fn knowledge_search_prioritizes_semantic_focus_coverage_before_lexical_fallback(
     .expect("write chunks");
     for (chunk_id, text) in [
         ("kchunk_000001", "证券账户开户是生命周期起点。"),
-        ("kchunk_000002", "证券账户挂失是风险保护流程。"),
+        ("kchunk_000002", "证券账户挂失与补办是风险保护流程。"),
         ("kchunk_000003", "证券账户销户是生命周期结束。"),
         (
             "kchunk_000004",
-            "证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。",
+            "证券账户生命周期 开户 挂失 补办 销户 账户状态。证券账户生命周期 开户 挂失 补办 销户 账户状态。证券账户生命周期 开户 挂失 补办 销户 账户状态。",
+        ),
+        (
+            "kchunk_000005",
+            "证券账户生命周期 开户 挂失 补办 销户。证券账户生命周期 开户 挂失 补办 销户。证券账户生命周期 开户 挂失 补办 销户。",
         ),
     ] {
         std::fs::write(build_dir.join("chunks").join(format!("{chunk_id}.txt")), text)
@@ -554,7 +580,7 @@ fn knowledge_search_prioritizes_semantic_focus_coverage_before_lexical_fallback(
         natural_language_query: "证券账户生命周期 开户 挂失 销户".to_string(),
         semantic_focus: vec![
             "证券账户开户".to_string(),
-            "证券账户挂失".to_string(),
+            "证券账户挂失与补办".to_string(),
             "证券账户销户".to_string(),
         ],
         source_names: vec![],
@@ -685,22 +711,40 @@ fn focus_chunk(
     summary: &str,
     phase_scope: f64,
 ) -> serde_json::Value {
+    semantic_chunk(
+        chunk_id,
+        semantic_label,
+        summary,
+        json!([
+            {"kind": "operation", "text": semantic_label, "confidence": "high"}
+        ]),
+        json!([]),
+        phase_scope,
+    )
+}
+
+fn semantic_chunk(
+    chunk_id: &str,
+    heading: &str,
+    summary: &str,
+    semantic_labels: serde_json::Value,
+    semantic_aliases: serde_json::Value,
+    phase_scope: f64,
+) -> serde_json::Value {
     json!({
         "chunkId": chunk_id,
         "documentId": "kdoc_000001",
         "documentTitle": "focus fixture",
         "sourcePath": "/fixture/focus.md",
-        "headingPath": ["fixture", semantic_label],
+        "headingPath": ["fixture", heading],
         "tokenEstimate": 80,
         "contextPrefix": summary,
         "neighborChunkIds": [],
         "splitReason": "section",
         "bodyRef": format!("chunks/{chunk_id}.txt"),
         "summary": summary,
-        "semanticLabels": [
-            {"kind": "operation", "text": semantic_label, "confidence": "high"}
-        ],
-        "semanticAliases": [],
+        "semanticLabels": semantic_labels,
+        "semanticAliases": semantic_aliases,
         "blockAffinity": {
             "phaseScope": phase_scope,
             "conceptGrounding": phase_scope,

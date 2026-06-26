@@ -587,31 +587,18 @@ fn semantic_entries(chunk: &KnowledgeChunk) -> Vec<SemanticEntry> {
 }
 
 fn focus_coverage(cards: &[KnowledgeChunkCard], semantic_focus: &[String]) -> f64 {
-    let expanded_focus = semantic_focus
+    let focus_count = semantic_focus
         .iter()
-        .flat_map(|focus| expand_focus(focus))
-        .collect::<BTreeSet<_>>();
-    if expanded_focus.is_empty() {
+        .filter(|focus| !focus.trim().is_empty())
+        .count();
+    if focus_count == 0 {
         return 0.0;
     }
     let matched = cards
         .iter()
-        .flat_map(|card| {
-            card.matched_labels.iter().flat_map(|label| {
-                let value = format!("{} {}", label.kind, label.text);
-                expand_focus(&value)
-            })
-        })
+        .flat_map(|card| card_focus_hits(card, semantic_focus))
         .collect::<BTreeSet<_>>();
-    let hits = expanded_focus
-        .iter()
-        .filter(|focus| {
-            matched
-                .iter()
-                .any(|term| term.contains(*focus) || focus.contains(term))
-        })
-        .count();
-    hits as f64 / expanded_focus.len() as f64
+    matched.len() as f64 / focus_count as f64
 }
 
 fn rank_chunk_cards(
@@ -673,7 +660,7 @@ fn rank_chunk_cards(
     let (mut focused, mut fallback): (Vec<_>, Vec<_>) = cards
         .into_iter()
         .partition(|card| !card_focus_hits(card, semantic_focus).is_empty());
-    focused.sort_by(compare_chunk_cards);
+    focused.sort_by(|left, right| compare_focused_chunk_cards(left, right, semantic_focus));
     fallback.sort_by(compare_chunk_cards);
     selected.extend(focused);
     selected.extend(fallback);
@@ -684,30 +671,108 @@ fn rank_chunk_cards(
 fn card_focus_hits(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> BTreeSet<usize> {
     let mut hits = BTreeSet::new();
     for (index, focus) in semantic_focus.iter().enumerate() {
-        let focus_terms = expand_focus(focus)
-            .into_iter()
-            .filter(|term| !term.is_empty())
-            .collect::<Vec<_>>();
-        if focus_terms.is_empty() {
-            continue;
-        }
-        if card.matched_labels.iter().any(|label| {
-            let mut label_terms = expand_focus(&label.text);
-            label_terms.push(normalize_focus(&format!("{}:{}", label.kind, label.text)));
-            label_terms.sort();
-            label_terms.dedup();
-            label_terms.iter().any(|label_term| {
-                focus_terms.iter().any(|focus_term| {
-                    label_term == focus_term
-                        || label_term.contains(focus_term)
-                        || focus_term.contains(label_term)
-                })
-            })
-        }) {
+        if best_label_focus_hit(card, focus).covers_focus() {
             hits.insert(index);
         }
     }
     hits
+}
+
+fn compare_focused_chunk_cards(
+    left: &KnowledgeChunkCard,
+    right: &KnowledgeChunkCard,
+    semantic_focus: &[String],
+) -> Ordering {
+    let left_quality = card_focus_quality(left, semantic_focus);
+    let right_quality = card_focus_quality(right, semantic_focus);
+    right_quality
+        .exact_hits
+        .cmp(&left_quality.exact_hits)
+        .then_with(|| right_quality.strong_hits.cmp(&left_quality.strong_hits))
+        .then_with(|| {
+            right_quality
+                .covered_hits()
+                .cmp(&left_quality.covered_hits())
+        })
+        .then_with(|| compare_chunk_cards(left, right))
+}
+
+fn card_focus_quality(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> FocusQuality {
+    let mut quality = FocusQuality::default();
+    for focus in semantic_focus {
+        match best_label_focus_hit(card, focus) {
+            FocusHitKind::Exact => quality.exact_hits += 1,
+            FocusHitKind::Strong => quality.strong_hits += 1,
+            FocusHitKind::Broad => quality.broad_hits += 1,
+            FocusHitKind::None => {}
+        }
+    }
+    quality
+}
+
+fn best_label_focus_hit(card: &KnowledgeChunkCard, focus: &str) -> FocusHitKind {
+    card.matched_labels
+        .iter()
+        .map(|label| label_focus_hit(label, focus))
+        .max()
+        .unwrap_or(FocusHitKind::None)
+}
+
+fn label_focus_hit(label: &KnowledgeMatchedLabel, focus: &str) -> FocusHitKind {
+    let focus_terms = expand_focus(focus)
+        .into_iter()
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    if focus_terms.is_empty() {
+        return FocusHitKind::None;
+    }
+    let mut label_terms = expand_focus(&label.text);
+    label_terms.push(normalize_focus(&format!("{}:{}", label.kind, label.text)));
+    label_terms.sort();
+    label_terms.dedup();
+    if label_terms.iter().any(|label_term| {
+        focus_terms
+            .iter()
+            .any(|focus_term| label_term == focus_term)
+    }) {
+        return FocusHitKind::Exact;
+    }
+    let label_contains_focus = label_terms.iter().any(|label_term| {
+        focus_terms
+            .iter()
+            .any(|focus_term| label_term.contains(focus_term))
+    });
+    if label_contains_focus {
+        return if is_focus_covering_kind(&label.kind) {
+            FocusHitKind::Strong
+        } else {
+            FocusHitKind::Broad
+        };
+    }
+    let focus_contains_label = label_terms.iter().any(|label_term| {
+        focus_terms
+            .iter()
+            .any(|focus_term| focus_term.contains(label_term))
+    });
+    if focus_contains_label {
+        return if is_compact_focus_covering_kind(&label.kind) {
+            FocusHitKind::Strong
+        } else {
+            FocusHitKind::Broad
+        };
+    }
+    FocusHitKind::None
+}
+
+fn is_focus_covering_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "operation" | "page_operation" | "rule" | "flow" | "alias"
+    )
+}
+
+fn is_compact_focus_covering_kind(kind: &str) -> bool {
+    matches!(kind, "operation" | "page_operation" | "rule" | "flow")
 }
 
 fn validate_brainstorm_request_scope(
@@ -948,14 +1013,50 @@ impl SemanticEntry {
         if self.terms.iter().any(|term| term == focus) {
             return 1.0;
         }
-        if self
-            .terms
-            .iter()
-            .any(|term| term.contains(focus) || focus.contains(term))
-        {
-            return 0.7;
+        if self.terms.iter().any(|term| term.contains(focus)) {
+            return if self.kind == "summary" {
+                0.35
+            } else if is_focus_covering_kind(&self.kind) {
+                0.80
+            } else {
+                0.45
+            };
+        }
+        if self.terms.iter().any(|term| focus.contains(term)) {
+            return if is_compact_focus_covering_kind(&self.kind) {
+                0.55
+            } else {
+                0.20
+            };
         }
         0.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FocusQuality {
+    exact_hits: usize,
+    strong_hits: usize,
+    broad_hits: usize,
+}
+
+impl FocusQuality {
+    fn covered_hits(&self) -> usize {
+        self.exact_hits + self.strong_hits
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FocusHitKind {
+    None,
+    Broad,
+    Strong,
+    Exact,
+}
+
+impl FocusHitKind {
+    fn covers_focus(self) -> bool {
+        matches!(self, FocusHitKind::Exact | FocusHitKind::Strong)
     }
 }
 
