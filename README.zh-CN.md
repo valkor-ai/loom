@@ -160,6 +160,14 @@ Invoke-WebRequest https://github.com/valkor-ai/loom/releases/latest/download/ins
 
 重复执行同一条安装命令就是升级。安装器会在安装 MCP runtime 前清理确认属于 Loom 的旧 CLI 插件产物；如果发现无法确认归属的文件，会停止并提示人工处理路径，而不是覆盖用户文件。
 
+如果是在仓库本地做验证，请使用同一个安装脚本的本地构建模式：
+
+```bash
+./install.sh --agent codex --local-build
+```
+
+它会构建 Rust MCP server 和 setup 二进制，生成同样的 release package layout，然后通过 `loom-setup` 完成安装。后续本地修 bug 后都应该走这条路径，这样安装器、包结构、MCP registration 和插件刷新会一起被验证。
+
 安装或更新 agent 插件后，请在目标项目里打开一个新的 agent 会话，让新的 MCP registration 和插件文件重新加载。
 
 如果只想验证安装是否正常、但还不想开始需求交付，请在 coding agent 里使用 Loom 命令：

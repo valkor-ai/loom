@@ -158,6 +158,14 @@ Invoke-WebRequest https://github.com/valkor-ai/loom/releases/latest/download/ins
 
 Run the same install command again to upgrade. The installer removes Loom-owned legacy CLI plugin artifacts before installing the MCP runtime. If it finds files it cannot prove are Loom-owned, it stops and tells you what to remove manually instead of overwriting user files.
 
+For local validation from a repository checkout, use the same installer in local build mode:
+
+```bash
+./install.sh --agent codex --local-build
+```
+
+This builds the Rust MCP server and setup binary, writes the same release package layout, then installs through `loom-setup`. Use this path after local bug fixes so the installer, package layout, MCP registration, and plugin refresh are verified together.
+
 After installing or updating an agent plugin, open a new agent session in the target project so the refreshed MCP registration and plugin files are loaded.
 
 To verify the install without starting a delivery, use the Loom command inside your coding agent:
