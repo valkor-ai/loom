@@ -345,8 +345,18 @@ fn candidate_result_template(phase_id: &str) -> Value {
                 "source": "user_confirmed"
             }],
             "excluded": [],
-            "deferred": [],
-            "assumptions": []
+            "deferred": [{
+                "id": "deferred_1",
+                "label": "",
+                "items": [],
+                "reason": "",
+                "source": "user_confirmed"
+            }],
+            "assumptions": [{
+                "id": "assumption_1",
+                "text": "",
+                "requiresConfirmation": false
+            }]
         },
         "roadmap": {
             "required": true,
@@ -369,7 +379,11 @@ fn candidate_result_template(phase_id: &str) -> Value {
                 "status": "scope_confirmed"
             },
             "nextPhasePreview": {
-                "kind": "none",
+                "kind": "candidate",
+                "suggestedPhaseId": "phase-next",
+                "title": "",
+                "goal": "",
+                "scopePreview": [],
                 "reason": ""
             }
         },
@@ -381,13 +395,42 @@ fn candidate_result_template(phase_id: &str) -> Value {
             "priority": "must"
         }],
         "domainModel": {
-            "businessFlows": []
+            "actors": [{
+                "id": "actor_1",
+                "name": "",
+                "description": ""
+            }],
+            "capabilityGroups": [{
+                "id": "capability_group_1",
+                "name": "",
+                "description": ""
+            }],
+            "businessFlows": [{
+                "id": "flow_1",
+                "name": "",
+                "actors": ["actor_1"],
+                "capabilityRefs": ["scope_1"],
+                "summary": ""
+            }]
         },
         "conceptGrounding": {
             "phaseConceptGrounding": {
                 "mode": "concepts_present",
                 "reason": "",
-                "concepts": []
+                "concepts": [{
+                    "conceptId": "concept_1",
+                    "term": "",
+                    "normalizedName": "",
+                    "explanation": "",
+                    "mustNotMisinterpretAs": [],
+                    "phaseRelevance": "current",
+                    "priority": "must_understand",
+                    "attentionRank": 1,
+                    "riskFactors": [],
+                    "scopeRefs": ["scope_1"],
+                    "acceptanceRefs": ["acc_1"],
+                    "humanReadableReason": ""
+                }]
             },
             "glossaryUpdates": []
         },
@@ -400,11 +443,59 @@ fn candidate_result_template(phase_id: &str) -> Value {
             "required": true,
             "kind": "",
             "experienceLevel": "usable_internal_product",
-            "audiences": [],
-            "surfaces": [],
-            "dataViews": [],
-            "actions": [],
-            "operationPaths": [],
+            "audiences": [{
+                "audienceId": "audience_1",
+                "name": "",
+                "primaryJobs": []
+            }],
+            "surfaces": [{
+                "surfaceId": "surface_1",
+                "name": "",
+                "audienceRefs": ["audience_1"],
+                "primaryJobs": []
+            }],
+            "dataViews": [{
+                "viewId": "view_1",
+                "name": "",
+                "purpose": "",
+                "targetObject": "",
+                "selectionMode": "query_and_select",
+                "paginationRequired": true,
+                "defaultLoadsFirstPage": true,
+                "searchCriteria": [{
+                    "criterionId": "criterion_1",
+                    "label": "",
+                    "fieldRef": "",
+                    "reason": "",
+                    "sourceRefs": []
+                }],
+                "sourceRefs": []
+            }],
+            "actions": [{
+                "actionId": "action_1",
+                "label": "",
+                "targetObject": "",
+                "entryPoint": "navigation_entry",
+                "inputFields": [],
+                "resultObservation": ["response_message"],
+                "refreshPolicy": "",
+                "successFeedback": [],
+                "blockingOrErrorFeedback": [],
+                "sourceRefs": []
+            }],
+            "operationPaths": [{
+                "pathId": "path_1",
+                "name": "",
+                "userGoal": "",
+                "surfaceRef": "surface_1",
+                "targetObject": "",
+                "selectionMode": "query_and_select",
+                "selectionSummary": "",
+                "dataViewRefs": ["view_1"],
+                "actionRefs": ["action_1"],
+                "requiredStates": ["success", "business_blocking", "error"],
+                "sourceRefs": []
+            }],
             "mustNot": [],
             "confirmationSummary": ""
         },
@@ -798,6 +889,8 @@ fn candidate_write_rules() -> Value {
     json!([
         "Write only the Brainstorm candidate target after the user explicitly confirms final_summary.",
         "Use outputContract.resultTemplate as the concrete field shape when writing the candidate.",
+        "Arrays in outputContract.resultTemplate show object shapes. Keep arrays empty only when the confirmed requirement has no item for that field; never replace typed object arrays with string arrays.",
+        "When scope.deferred is non-empty, phasePlan.nextPhasePreview must use kind=candidate with suggestedPhaseId, title, goal, scopePreview, and reason. Use kind=none only when scope.deferred is empty.",
         "clarificationProgress must use confirmedBlocks/skippedBlocks/finalSummaryConfirmed. Do not write completedBlocks or currentBlock.",
         "In user-facing summaries and confirmation text, use user-visible block names rather than internal block ids.",
         "Keep knowledge metadata out of candidate sourceRefs and summary fields.",

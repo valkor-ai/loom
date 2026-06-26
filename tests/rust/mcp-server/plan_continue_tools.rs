@@ -296,6 +296,24 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             .get("completedBlocks")
             .is_none()
     );
+    let template = &write_contract["fields"]["outputContract.resultTemplate"];
+    assert!(template["scope"]["deferred"][0].is_object());
+    assert!(template["scope"]["assumptions"][0].is_object());
+    assert_eq!(
+        template["phasePlan"]["nextPhasePreview"]["kind"],
+        "candidate"
+    );
+    assert!(template["frontendExperience"]["audiences"][0]["audienceId"].is_string());
+    assert!(template["frontendExperience"]["surfaces"][0]["surfaceId"].is_string());
+    assert!(template["frontendExperience"]["dataViews"][0]["viewId"].is_string());
+    assert!(template["frontendExperience"]["actions"][0]["actionId"].is_string());
+    assert!(template["frontendExperience"]["operationPaths"][0]["pathId"].is_string());
+    assert!(write_contract["fields"]["rules.candidateWrite"]
+        .to_string()
+        .contains("never replace typed object arrays with string arrays"));
+    assert!(write_contract["fields"]["rules.candidateWrite"]
+        .to_string()
+        .contains("scope.deferred is non-empty"));
     let mut candidate = write_contract["fields"]["outputContract.resultTemplate"].clone();
     populate_confirmed_brainstorm_candidate(&mut candidate);
 

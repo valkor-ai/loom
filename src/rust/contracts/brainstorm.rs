@@ -307,10 +307,12 @@ pub enum PhasePlanCurrentStatus {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NextPhasePreview {
     Candidate {
+        #[serde(rename = "suggestedPhaseId", alias = "suggested_phase_id")]
         suggested_phase_id: String,
         title: String,
         goal: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(rename = "scopePreview", alias = "scope_preview")]
         scope_preview: Vec<String>,
         reason: String,
     },
