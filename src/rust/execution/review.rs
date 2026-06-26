@@ -1006,10 +1006,6 @@ fn materialize_manual_review_request(
         result,
         &result_ref,
     )?;
-    let inspected = state::inspect_request(delivery_core::InspectRequestInput {
-        project_root: input.project_root.clone(),
-        request_ref: stored.request_ref.clone(),
-    })?;
     Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
         project_root: input.project_root.clone(),
         prompt: "Review requires user decision. Reply approve_override to continue with notes, or request_changes with the repair route and change summary.".to_string(),
@@ -1024,9 +1020,6 @@ fn materialize_manual_review_request(
             "gateId": format!("manual_review_{}", result.review_id),
             "kind": "manual_review",
             "reviewResultRef": result_ref,
-            "writeTargets": inspected.write_targets,
-            "readGroups": inspected.read_groups,
-            "submitTool": "loom.reviewResolveFile",
             "visibleReason": {
                 "decision": result.decision,
                 "nextAction": result.next_action,

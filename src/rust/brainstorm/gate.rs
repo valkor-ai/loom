@@ -44,6 +44,18 @@ pub fn to_value(gate: &BrainstormGate) -> Value {
     serde_json::to_value(gate).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+pub fn required_knowledge_step_ids(block: &ClarificationBlockName) -> &'static [&'static str] {
+    match block {
+        ClarificationBlockName::PhaseScope => &[
+            "phase_scope_dependency_order",
+            "phase_scope_capability_closure",
+        ],
+        ClarificationBlockName::ConceptGrounding => &["concept_scope_item_grounding"],
+        ClarificationBlockName::FrontendExperience => &["frontend_page_operation_path"],
+        ClarificationBlockName::FinalSummary => &[],
+    }
+}
+
 pub fn block_message(block: &ClarificationBlockName) -> String {
     match block {
         ClarificationBlockName::PhaseScope => {

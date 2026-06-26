@@ -600,8 +600,13 @@ fn knowledge_query_plan() -> Value {
                         "queryKind": "capability_closure",
                         "querySubjectRule": "The subject is exactly one candidate capability unit or one closed current-phase slice.",
                         "queryConstructionRules": [
+                            "Before composing options, identify candidate capability units from the requirement and dependency-order evidence.",
                             "Run one capability_closure query per candidate phase cut.",
-                            "Keep semanticFocus inside the current unit's object, operation, rule, state, field, or flow anchors."
+                            "Each capability_closure query covers exactly one module, object lifecycle, workflow, backend capability, or page-operation set.",
+                            "Keep semanticFocus inside the current unit's object, operation, rule, state, field, or flow anchors.",
+                            "Do not include sibling, downstream, or next-phase capability units in semanticFocus.",
+                            "Use separate operation focus entries for separate operations; never combine multiple operations into one operation focus.",
+                            "For connected processes, lifecycle transitions, replacement, recovery, or ordered flows, include the primary object plus each identifiable component operation as separate operation focus entries; add a flow focus only when the whole flow wording is explicit."
                         ]
                     }
                 ]
@@ -801,9 +806,33 @@ fn phase_scope_rules() -> Value {
             "End with one recommendation and ask the user to choose A/B/C or adjust the active-phase boundary."
         ],
         "optionComparison": [
-            "Present 2-3 source-grounded current-phase options with one recommendation.",
+            "During the phase_scope block, present 2-3 source-grounded phase scope options before asking for confirmation by default. Treat any next phase seed or dependency order as a non-binding seed for option design, not as a preselected user answer.",
+            "Before writing phase_scope options, internally decompose the source-grounded current-phase candidate work into scope items and classify each item before composing options.",
+            "Use only these internal scope item categories: goal-essential item, flow-support item, current-object lifecycle item, experience or management extension item, cross-phase item, explicitly excluded item, and unresolved classification item.",
+            "A goal-essential item is required for the current phase goal to be true; do not omit it from the recommended option.",
+            "A flow-support item is not the headline goal but is required for in-scope operations to be usable, selectable, submitted, validated, read back, or verified; do not move it only to the broad option.",
+            "If any alternate option includes a support-like item that is required to find, select, operate on, validate, read back, or verify work in the recommended option, the recommended option must include that support item explicitly instead of relying on implication.",
+            "A current-object lifecycle item belongs to the lifecycle of the current phase's core object or subject. If the phase goal is a closed loop or lifecycle closure, the recommended option must include the applicable current-object lifecycle items unless there is a source-grounded reason to ask the user to reduce scope.",
+            "An experience or management extension item improves experience, administration, observability, approval depth, reporting, or adjacent convenience, but is not required for the current phase goal or flow support.",
+            "A cross-phase item depends on a later module, another product surface, another subsystem, or a different core object lifecycle; keep it out of the recommended option unless the user explicitly asks to cross phase boundaries.",
+            "An explicitly excluded item must not appear in any option's included scope.",
+            "If classification is uncertain, mark the item as unresolved in natural language and ask a focused scope question instead of silently placing it into A/B/C.",
+            "Do not expose these internal category names to the user. Use them only to make the options coherent.",
+            "Generate the recommended option from all goal-essential items plus all flow-support items, and include current-object lifecycle items when the current phase goal is a closed loop or lifecycle closure.",
+            "Generate the narrower option by reducing current-object lifecycle items or experience/management extension items only; do not remove goal-essential or flow-support items from the narrow option unless you label it as a deliberate scope reduction and ask the user to confirm that reduction.",
+            "Generate the broader option by adding real experience/management extension items or a clearly labeled adjacent capability; do not make the broad option the only place where goal-essential or flow-support items appear.",
+            "Before presenting options, compare the included-scope line of every alternate option against the recommended option. If an alternate contains an item that is needed to use, select, validate, read back, or verify the recommended option, add it to the recommended option or ask a focused question.",
             "Each option must show included scope, deferred or not-this-phase boundary, reason, and tradeoff.",
-            "The recommended option must preserve the current phase's closure and dependency purpose."
+            "Each option block must use a stable multi-line template: option letter and short title on the first line, then separate labeled lines for included scope, not-this-phase or deferred scope, reason, and tradeoff. In Chinese, use user-facing labels equivalent to 包含, 本阶段不做或延后, 原因, and 取舍.",
+            "The recommendation should be shown in the option title, such as A（推荐） or Recommended, not buried inside the option paragraph.",
+            "Recommend exactly one phase_scope option and explain why it is the best current-phase cut. The recommended option must preserve the current phase's source-grounded core outcome, module closure, lifecycle coverage, and dependency purpose.",
+            "Do not rewrite source-grounded or previously confirmed object relationships, operations, ownership, or state transitions while composing options. Do not turn one object's operation into another object's operation just to create an option.",
+            "For high-risk object relationship work, phase_scope should name the capability boundary in source-grounded terms and defer detailed relationship semantics to concept_grounding unless the source or prior confirmation already fixes those semantics.",
+            "Do not introduce vague or new relationship endpoints in phase_scope wording. Avoid implying that one object is replaced, relinked, inherited, transferred, frozen, or restored unless that exact relationship effect is source-grounded or previously confirmed.",
+            "A narrower option may be offered as an alternative, but do not recommend it when it defers explicit current-phase seed items, previously deferred current-phase work, or confirmed lifecycle actions that define the module closure, unless the user has asked to reduce scope or the source/repository evidence shows the full closure is impossible for this phase.",
+            "If the recommended option excludes or defers any explicit current-phase seed item, label that as a scope reduction, explain the source-grounded reason, and ask the user to confirm the reduction instead of presenting it as the default recommendation.",
+            "Use a single phase_scope only for an atomic phase where no source-grounded narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary exists.",
+            "When multiple concrete actions, workflows, UI surfaces, lifecycle changes, or deliverable boundaries exist, the phase is not atomic and must be presented as 2-3 options."
         ],
         "forbiddenOutput": [
             "Do not output numbered full-project phases such as 1..N.",
@@ -815,7 +844,15 @@ fn phase_scope_rules() -> Value {
             "Before responding, check that every option is an active-phase boundary candidate.",
             "Before responding, check that the current block's knowledge_context_plan was used; if the knowledge result was empty, the response may proceed from source requirements.",
             "Before responding, check that the message is not a full multi-stage roadmap.",
-            "Verify the recommended option contains goal-essential and flow-support items.",
+            "Verify that source-grounded candidate work was decomposed into scope items and internally classified before options were written.",
+            "Verify the recommended option includes every goal-essential item and flow-support item, and includes current-object lifecycle items when the current phase goal is a closed loop or lifecycle closure.",
+            "Verify that narrower options do not silently remove goal-essential or flow-support items; if they do, the option must be labeled as a deliberate scope reduction requiring user confirmation.",
+            "Verify that broader options add only real experience/management extension items, adjacent capabilities, or clearly labeled cross-phase items; broader options must not be the only place where goal-essential or flow-support items appear.",
+            "Compare alternate included-scope lines against the recommended option and reject any option set where a support item needed by the recommended option appears only in an alternate option.",
+            "Verify that no option rewrites source-grounded or previously confirmed object relationships, object ownership, operation ownership, or state transitions.",
+            "Verify that explicitly excluded items do not appear in any option's included scope, and unresolved classification items are surfaced as focused questions instead of being silently included.",
+            "Verify that included, deferred, and excluded scope are explicit and that included scope names concrete objects, actions, workflows, deliverables, or boundaries when present in the source.",
+            "If fewer than 2 options are shown, document why there is no narrower cut, broader adjacent-workflow cut, dependency/order cut, deferred lifecycle action, or alternate UI/runtime boundary before asking for confirmation.",
             "Do not let adjacent or downstream work occupy the current phase unless the user explicitly asks for that wider boundary."
         ],
         "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::PhaseScope)

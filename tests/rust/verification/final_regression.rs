@@ -323,6 +323,9 @@ fn confirm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
+    if block != "final_summary" {
+        run_knowledge_context(server, fixture, request_ref, block);
+    }
     structured(
         server
             .invoke_tool(
@@ -337,6 +340,49 @@ fn confirm_block(
             )
             .expect("confirm brainstorm block"),
     )
+}
+
+fn run_knowledge_context(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+) {
+    let knowledge_plan = structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "knowledge_context_plan"
+                }))),
+            )
+            .expect("read knowledge context plan"),
+    );
+    let field_name = format!("knowledgeQueryPlan.blocks.{block}.executionOrder");
+    let steps = knowledge_plan["fields"][field_name]
+        .as_array()
+        .expect("knowledge executionOrder");
+    for step in steps {
+        let step_id = step["stepId"].as_str().expect("stepId");
+        structured(
+            server
+                .invoke_tool(
+                    "loom.knowledgeBrainstormContext",
+                    Some(args(json!({
+                        "projectRoot": fixture.root_str(),
+                        "requestRef": request_ref,
+                        "block": block,
+                        "stepId": step_id,
+                        "querySubject": format!("{block} {step_id}"),
+                        "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                        "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户"]
+                    }))),
+                )
+                .expect("knowledge brainstorm context"),
+        );
+    }
 }
 
 struct Fixture {

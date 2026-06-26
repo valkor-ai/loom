@@ -11,12 +11,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
-    paths::{from_project_relative, to_project_relative},
+    paths::{from_project_relative, to_project_relative, DeliveryPhaseLocator},
     store::{ensure_dir, read_json, write_json_atomic, StateError, StateResult},
 };
 
 use crate::{
-    gate::{block_message, to_value, BrainstormGate, BrainstormResponseRule},
+    gate::{
+        block_message, required_knowledge_step_ids, to_value, BrainstormGate,
+        BrainstormResponseRule,
+    },
     paths::{brainstorm_agent_candidate_file, brainstorm_clarification_state_file},
     request::{
         build_brainstorm_candidate_write_request_root, build_brainstorm_clarification_request_root,
@@ -87,17 +90,24 @@ pub fn initial_state(
 pub fn confirm_block(input: BrainstormConfirmBlockInput) -> LoomMcpActionResult {
     match confirm_block_inner(input) {
         Ok(result) => result,
-        Err(error) => LoomMcpActionResult::Failed(LoomMcpFailureResult {
-            project_root: error.project_root,
-            error: LoomMcpFailure {
-                code: error.code,
-                message: error.message,
-                target_batch: Some(7),
-                domain: Some("brainstorm".to_string()),
-                route_action: Some("brainstorm_confirm_block".to_string()),
-                recovery_tool: Some("loom.continue".to_string()),
-            },
-        }),
+        Err(error) => {
+            let recovery_tool = if error.code == "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED" {
+                Some("loom.knowledgeBrainstormContext".to_string())
+            } else {
+                Some("loom.continue".to_string())
+            };
+            LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                project_root: error.project_root,
+                error: LoomMcpFailure {
+                    code: error.code,
+                    message: error.message,
+                    target_batch: Some(7),
+                    domain: Some("brainstorm".to_string()),
+                    route_action: Some("brainstorm_confirm_block".to_string()),
+                    recovery_tool,
+                },
+            })
+        }
     }
 }
 
@@ -233,6 +243,14 @@ fn confirm_block_inner(
             message: "Only the page operation path block can be skipped.".to_string(),
         });
     }
+    ensure_block_knowledge_context(
+        &project_root,
+        &delivery_id,
+        &phase_id,
+        &request_id,
+        &input.request_ref,
+        &input.block,
+    )?;
 
     let now = state::store::now_string();
     upsert_confirmed_block(
@@ -418,6 +436,53 @@ fn confirm_block_inner(
             message: error.to_string(),
         })?;
     Ok(result)
+}
+
+fn ensure_block_knowledge_context(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    request_id: &str,
+    request_ref: &str,
+    block: &ClarificationBlockName,
+) -> Result<(), ConfirmError> {
+    let required_steps = required_knowledge_step_ids(block);
+    if required_steps.is_empty() {
+        return Ok(());
+    }
+    let project_paths =
+        state::paths::project_paths(project_root).map_err(|error| ConfirmError {
+            project_root: project_root.to_string(),
+            code: "BRAINSTORM_KNOWLEDGE_CONTEXT_CHECK_FAILED".to_string(),
+            message: error.to_string(),
+        })?;
+    let block_name = block_id(block);
+    let base_dir = state::paths::workspace_dir(
+        &project_paths.root,
+        &DeliveryPhaseLocator {
+            delivery_id: delivery_id.to_string(),
+            phase_id: phase_id.to_string(),
+        },
+    )
+    .join("brainstorm-knowledge")
+    .join(request_id)
+    .join(block_name);
+    let missing_steps = required_steps
+        .iter()
+        .filter(|step_id| !base_dir.join(step_id).join("result.json").is_file())
+        .copied()
+        .collect::<Vec<_>>();
+    if missing_steps.is_empty() {
+        return Ok(());
+    }
+    Err(ConfirmError {
+        project_root: project_root.to_string(),
+        code: "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED".to_string(),
+        message: format!(
+            "Before confirming {block_name}, the agent must read requestReadPlan group knowledge_context_plan for requestRef {request_ref} and call loom.knowledgeBrainstormContext for the missing stepIds: {}. Empty knowledge results are acceptable; missing request-scoped knowledge result files are not. Do not ask the user to reconfirm this block; run the missing Loom knowledge calls, then retry loom.brainstormConfirmBlock.",
+            missing_steps.join(", ")
+        ),
+    })
 }
 
 fn materialize_confirmation_request_inner(

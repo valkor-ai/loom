@@ -21,6 +21,8 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     let value = structured(result);
 
     assert_eq!(value["state"], "user_gate");
+    assert!(value.get("readGroups").is_none());
+    assert!(value.get("requiredBeforeResponse").is_none());
     assert!(!value["prompt"]
         .as_str()
         .expect("prompt")
@@ -29,6 +31,8 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     assert!(prompt.contains("active phase boundary options"));
     assert!(!prompt.contains("phase-1 boundary"));
     assert_eq!(value["gate"]["currentBlock"], "phase_scope");
+    assert!(value["gate"].get("requestReadGroups").is_none());
+    assert!(value["gate"].get("requiredBeforeResponse").is_none());
     let request_ref = value["requestRef"].as_str().expect("requestRef");
     assert_eq!(count_entries(&fixture.root.join(".loom/deliveries")), 1);
     let inspected = state::inspect_request(InspectRequestInput {
@@ -95,6 +99,13 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     assert!(rules_text.contains("full-project roadmap"));
     assert!(rules_text.contains("full multi-stage roadmap"));
     assert!(rules_text.contains("Do not output numbered full-project phases"));
+    assert!(rules_text.contains("decompose the source-grounded current-phase candidate work"));
+    assert!(rules_text.contains("goal-essential item"));
+    assert!(rules_text.contains("flow-support item"));
+    assert!(rules_text.contains("current-object lifecycle item"));
+    assert!(rules_text
+        .contains("recommended option from all goal-essential items plus all flow-support items"));
+    assert!(rules_text.contains("Do not expose these internal category names to the user"));
     assert!(!current_block_rules
         .fields
         .keys()
@@ -392,6 +403,9 @@ fn confirm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
+    if block != "final_summary" {
+        run_knowledge_context(server, fixture, request_ref, block);
+    }
     structured(
         server
             .invoke_tool(
@@ -406,6 +420,104 @@ fn confirm_block(
             )
             .expect("confirm brainstorm block"),
     )
+}
+
+fn run_knowledge_context(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+) {
+    let knowledge_plan = structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "knowledge_context_plan"
+                }))),
+            )
+            .expect("read knowledge context plan"),
+    );
+    let field_name = format!("knowledgeQueryPlan.blocks.{block}.executionOrder");
+    let steps = knowledge_plan["fields"][field_name]
+        .as_array()
+        .expect("knowledge executionOrder");
+    for step in steps {
+        let step_id = step["stepId"].as_str().expect("stepId");
+        structured(
+            server
+                .invoke_tool(
+                    "loom.knowledgeBrainstormContext",
+                    Some(args(json!({
+                        "projectRoot": fixture.root_str(),
+                        "requestRef": request_ref,
+                        "block": block,
+                        "stepId": step_id,
+                        "querySubject": format!("{block} {step_id}"),
+                        "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                        "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户"]
+                    }))),
+                )
+                .expect("knowledge brainstorm context"),
+        );
+    }
+}
+
+#[test]
+fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
+    let fixture = Fixture::new("brainstorm-knowledge-required");
+    let server = LoomMcpServer::default();
+    let planned = structured(
+        server
+            .invoke_tool(
+                "loom.plan",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestText": "实现股票交易系统，第一阶段优先证券账户模块闭环。"
+                }))),
+            )
+            .expect("plan call"),
+    );
+    let request_ref = planned["requestRef"].as_str().expect("requestRef");
+    let result = structured(
+        server
+            .invoke_tool(
+                "loom.brainstormConfirmBlock",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "summary": "确认第一阶段为证券账户模块闭环。",
+                    "confirmedData": {
+                        "scope": {
+                            "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
+                            "deferred": ["资金账户", "交易客户端"],
+                            "excluded": []
+                        },
+                        "recommendation": {
+                            "label": "证券账户模块闭环",
+                            "reason": "证券账户是交易身份基础。"
+                        }
+                    }
+                }))),
+            )
+            .expect("confirm brainstorm block"),
+    );
+    assert_eq!(result["state"], "failed", "{result:#}");
+    assert_eq!(
+        result["error"]["code"],
+        "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED"
+    );
+    assert_eq!(
+        result["error"]["recoveryTool"],
+        "loom.knowledgeBrainstormContext"
+    );
+    assert!(result["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Do not ask the user to reconfirm"));
 }
 
 #[test]

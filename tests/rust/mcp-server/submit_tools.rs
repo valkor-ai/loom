@@ -1187,6 +1187,9 @@ fn manual_review_resolution_routes_to_execution_repair() {
         fixture.root_str(),
     );
     assert_eq!(gate["state"], "user_gate", "{gate:#}");
+    assert!(gate["gate"].get("readGroups").is_none());
+    assert!(gate["gate"].get("writeTargets").is_none());
+    assert!(gate["gate"].get("submitTool").is_none());
     let manual_request_ref = gate["requestRef"]
         .as_str()
         .expect("manual review requestRef")
@@ -1549,6 +1552,9 @@ fn confirm_brainstorm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
+    if block != "final_summary" {
+        run_knowledge_context(server, fixture, request_ref, block);
+    }
     let arguments = json!({
         "projectRoot": fixture.root_str(),
         "requestRef": request_ref,
@@ -1569,6 +1575,57 @@ fn confirm_brainstorm_block(
         "{result:#}"
     );
     result
+}
+
+fn run_knowledge_context(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+) {
+    let knowledge_plan = server
+        .invoke_tool(
+            "loom.readFieldGroup",
+            Some(
+                json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "knowledge_context_plan"
+                })
+                .as_object()
+                .expect("arguments object")
+                .clone(),
+            ),
+        )
+        .expect("read knowledge context plan")
+        .structured_content
+        .expect("structured content");
+    let field_name = format!("knowledgeQueryPlan.blocks.{block}.executionOrder");
+    let steps = knowledge_plan["fields"][field_name]
+        .as_array()
+        .expect("knowledge executionOrder");
+    for step in steps {
+        let step_id = step["stepId"].as_str().expect("stepId");
+        server
+            .invoke_tool(
+                "loom.knowledgeBrainstormContext",
+                Some(
+                    json!({
+                        "projectRoot": fixture.root_str(),
+                        "requestRef": request_ref,
+                        "block": block,
+                        "stepId": step_id,
+                        "querySubject": format!("{block} {step_id}"),
+                        "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                        "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户"]
+                    })
+                    .as_object()
+                    .expect("arguments object")
+                    .clone(),
+                ),
+            )
+            .expect("knowledge brainstorm context");
+    }
 }
 
 fn write_candidate_target(fixture: &Fixture, request_ref: &str, value: &Value) {

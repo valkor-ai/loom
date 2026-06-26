@@ -353,7 +353,7 @@ where
         return Ok(repository_context_user_gate(
             input,
             authorized,
-            "Current phase scope is not confirmed yet. Return to Brainstorm phase_scope confirmation before accepting RepositoryContext and creating the planning contract.".to_string(),
+            "The current phase boundary has not been confirmed yet. Confirm the current phase scope with the user before accepting repository context and creating the planning contract.".to_string(),
             "phase_scope_confirmation_required".to_string(),
         ));
     }
