@@ -490,6 +490,90 @@ fn legacy_cli_knowledge_store_can_be_listed_searched_and_inspected() {
 }
 
 #[test]
+fn knowledge_search_prioritizes_semantic_focus_coverage_before_lexical_fallback() {
+    let fixture = Fixture::new("semantic-focus-rerank");
+    let source_id = "ksrc_focus_rerank";
+    let build_id = "kbld_focus_rerank";
+    let loom_home = fixture.root.join(".loom-home");
+    let build_dir = loom_home
+        .join("knowledge/sources")
+        .join(source_id)
+        .join("build-runs")
+        .join(build_id);
+    std::fs::create_dir_all(build_dir.join("chunks")).expect("rerank chunks dir");
+    std::fs::write(
+        loom_home.join("knowledge/registry.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sources": [{
+                "sourceId": source_id,
+                "name": "focus-rules",
+                "enabled": true,
+                "documentPaths": ["/fixture/focus.md"],
+                "currentBuildId": build_id,
+                "createdAt": "2026-06-26T00:00:00Z",
+                "updatedAt": "2026-06-26T00:00:00Z",
+                "lastBuiltAt": "2026-06-26T00:00:00Z"
+            }]
+        }))
+        .expect("registry json"),
+    )
+    .expect("write registry");
+    std::fs::write(
+        build_dir.join("chunks.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": source_id,
+            "sourceName": "focus-rules",
+            "buildId": build_id,
+            "chunks": [
+                focus_chunk("kchunk_000001", "证券账户开户", "证券账户开户是生命周期起点。", 0.2),
+                focus_chunk("kchunk_000002", "证券账户挂失", "证券账户挂失是风险保护流程。", 0.2),
+                focus_chunk("kchunk_000003", "证券账户销户", "证券账户销户是生命周期结束。", 0.2),
+                focus_chunk("kchunk_000004", "资金账户挂失", "证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。", 1.0)
+            ]
+        }))
+        .expect("chunks json"),
+    )
+    .expect("write chunks");
+    for (chunk_id, text) in [
+        ("kchunk_000001", "证券账户开户是生命周期起点。"),
+        ("kchunk_000002", "证券账户挂失是风险保护流程。"),
+        ("kchunk_000003", "证券账户销户是生命周期结束。"),
+        (
+            "kchunk_000004",
+            "证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。证券账户生命周期 开户 挂失 销户。",
+        ),
+    ] {
+        std::fs::write(build_dir.join("chunks").join(format!("{chunk_id}.txt")), text)
+            .expect("write chunk body");
+    }
+
+    let search = search_knowledge(KnowledgeSearchInput {
+        project_root: fixture.root_str().to_string(),
+        natural_language_query: "证券账户生命周期 开户 挂失 销户".to_string(),
+        semantic_focus: vec![
+            "证券账户开户".to_string(),
+            "证券账户挂失".to_string(),
+            "证券账户销户".to_string(),
+        ],
+        source_names: vec![],
+        block: Some("phase_scope".to_string()),
+        limit: Some(3),
+    })
+    .expect("reranked search");
+    let chunk_ids = search
+        .cards
+        .iter()
+        .map(|card| card.chunk_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chunk_ids,
+        vec!["kchunk_000001", "kchunk_000002", "kchunk_000003"]
+    );
+}
+
+#[test]
 fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     let fixture = Fixture::new("brainstorm-context");
     fixture.write_file(
@@ -593,6 +677,37 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     })
     .expect_err("wrong step must fail");
     assert!(wrong_step.to_string().contains("does not belong"));
+}
+
+fn focus_chunk(
+    chunk_id: &str,
+    semantic_label: &str,
+    summary: &str,
+    phase_scope: f64,
+) -> serde_json::Value {
+    json!({
+        "chunkId": chunk_id,
+        "documentId": "kdoc_000001",
+        "documentTitle": "focus fixture",
+        "sourcePath": "/fixture/focus.md",
+        "headingPath": ["fixture", semantic_label],
+        "tokenEstimate": 80,
+        "contextPrefix": summary,
+        "neighborChunkIds": [],
+        "splitReason": "section",
+        "bodyRef": format!("chunks/{chunk_id}.txt"),
+        "summary": summary,
+        "semanticLabels": [
+            {"kind": "operation", "text": semantic_label, "confidence": "high"}
+        ],
+        "semanticAliases": [],
+        "blockAffinity": {
+            "phaseScope": phase_scope,
+            "conceptGrounding": phase_scope,
+            "frontendExperience": 0.0,
+            "businessRules": phase_scope
+        }
+    })
 }
 
 fn publish_simple_source(fixture: &Fixture, name: &str) {

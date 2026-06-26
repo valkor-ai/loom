@@ -214,9 +214,7 @@ fn search_cards(
             },
         });
     }
-    candidates.sort_by(compare_chunk_cards);
-    candidates.truncate(limit);
-    Ok(candidates)
+    Ok(rank_chunk_cards(candidates, semantic_focus, limit))
 }
 
 #[derive(Debug, Clone)]
@@ -382,13 +380,9 @@ fn aggregate_sources(
 
     let mut sources = grouped
         .into_iter()
-        .map(|((source_id, source_name, build_id), mut source_cards)| {
-            source_cards.sort_by(compare_chunk_cards);
-            let limited_cards = source_cards
-                .iter()
-                .take(per_source_chunk_limit)
-                .cloned()
-                .collect::<Vec<_>>();
+        .map(|((source_id, source_name, build_id), source_cards)| {
+            let limited_cards =
+                rank_chunk_cards(source_cards, semantic_focus, per_source_chunk_limit);
             let best_chunk_score = limited_cards.first().map(|card| card.score).unwrap_or(0.0);
             let average_top3_chunk_score = {
                 let top3 = limited_cards.iter().take(3).collect::<Vec<_>>();
@@ -618,6 +612,102 @@ fn focus_coverage(cards: &[KnowledgeChunkCard], semantic_focus: &[String]) -> f6
         })
         .count();
     hits as f64 / expanded_focus.len() as f64
+}
+
+fn rank_chunk_cards(
+    mut cards: Vec<KnowledgeChunkCard>,
+    semantic_focus: &[String],
+    limit: usize,
+) -> Vec<KnowledgeChunkCard> {
+    cards.sort_by(compare_chunk_cards);
+    if semantic_focus.iter().all(|focus| focus.trim().is_empty()) {
+        cards.truncate(limit);
+        return cards;
+    }
+
+    let mut selected = Vec::new();
+    let mut covered_focuses = BTreeSet::<usize>::new();
+    while selected.len() < limit {
+        let mut best_index = None;
+        let mut best_hits = BTreeSet::<usize>::new();
+        for (index, card) in cards.iter().enumerate() {
+            let hits = card_focus_hits(card, semantic_focus);
+            let new_hits = hits
+                .difference(&covered_focuses)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let best_new_hits = best_hits
+                .difference(&covered_focuses)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            let new_hit_count = new_hits.len();
+            let best_new_hit_count = best_new_hits.len();
+            let first_new_hit = new_hits.iter().next().copied().unwrap_or(usize::MAX);
+            let best_first_new_hit = best_new_hits.iter().next().copied().unwrap_or(usize::MAX);
+            let better = new_hit_count > 0
+                && (best_index.is_none()
+                    || new_hit_count > best_new_hit_count
+                    || (new_hit_count == best_new_hit_count && first_new_hit < best_first_new_hit)
+                    || (new_hit_count == best_new_hit_count
+                        && first_new_hit == best_first_new_hit
+                        && (hits.len() > best_hits.len()
+                            || (hits.len() == best_hits.len()
+                                && best_index
+                                    .map(|best| {
+                                        compare_chunk_cards(card, &cards[best]) == Ordering::Less
+                                    })
+                                    .unwrap_or(false)))));
+            if better {
+                best_index = Some(index);
+                best_hits = hits;
+            }
+        }
+
+        let Some(index) = best_index else {
+            break;
+        };
+        covered_focuses.extend(best_hits);
+        selected.push(cards.remove(index));
+    }
+
+    let (mut focused, mut fallback): (Vec<_>, Vec<_>) = cards
+        .into_iter()
+        .partition(|card| !card_focus_hits(card, semantic_focus).is_empty());
+    focused.sort_by(compare_chunk_cards);
+    fallback.sort_by(compare_chunk_cards);
+    selected.extend(focused);
+    selected.extend(fallback);
+    selected.truncate(limit);
+    selected
+}
+
+fn card_focus_hits(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> BTreeSet<usize> {
+    let mut hits = BTreeSet::new();
+    for (index, focus) in semantic_focus.iter().enumerate() {
+        let focus_terms = expand_focus(focus)
+            .into_iter()
+            .filter(|term| !term.is_empty())
+            .collect::<Vec<_>>();
+        if focus_terms.is_empty() {
+            continue;
+        }
+        if card.matched_labels.iter().any(|label| {
+            let mut label_terms = expand_focus(&label.text);
+            label_terms.push(normalize_focus(&format!("{}:{}", label.kind, label.text)));
+            label_terms.sort();
+            label_terms.dedup();
+            label_terms.iter().any(|label_term| {
+                focus_terms.iter().any(|focus_term| {
+                    label_term == focus_term
+                        || label_term.contains(focus_term)
+                        || focus_term.contains(label_term)
+                })
+            })
+        }) {
+            hits.insert(index);
+        }
+    }
+    hits
 }
 
 fn validate_brainstorm_request_scope(

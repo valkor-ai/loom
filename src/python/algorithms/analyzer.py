@@ -100,6 +100,8 @@ _CJK_STOPWORDS = {
     "按照",
     "能力",
 }
+_CJK_NEGATORS = {"不"}
+_CJK_NEGATED_PREDICATES = {"等于"}
 
 
 def analyze(text: str) -> list[str]:
@@ -109,8 +111,8 @@ def analyze(text: str) -> list[str]:
 
     tokens.extend(token for token in _latin_tokens(normalized) if keyword_allowed(token))
     for segment in _CJK_RE.findall(normalized):
-        cjk_tokens = [token for token in _jieba_tokens(segment) if keyword_allowed(token)]
-        tokens.extend(cjk_tokens)
+        cjk_tokens = [token for token in _jieba_tokens(segment) if cjk_compound_allowed(token)]
+        tokens.extend(token for token in cjk_tokens if keyword_allowed(token))
         tokens.extend(_cjk_compounds(cjk_tokens, 2))
         tokens.extend(_cjk_compounds(cjk_tokens, 3))
 
@@ -131,10 +133,23 @@ def _cjk_compounds(tokens: list[str], size: int) -> Iterable[str]:
     compounds: list[str] = []
     for index in range(0, len(tokens) - size + 1):
         parts = tokens[index : index + size]
+        if _starts_inside_negated_predicate(tokens, index):
+            continue
         compound = "".join(parts)
         if 3 <= len(compound) <= 12 and keyword_allowed(compound):
             compounds.append(compound)
     return compounds
+
+
+def _starts_inside_negated_predicate(tokens: list[str], index: int) -> bool:
+    if index == 0:
+        return False
+    return tokens[index - 1] in _CJK_NEGATORS and tokens[index] in _CJK_NEGATED_PREDICATES
+
+
+def cjk_compound_allowed(value: str) -> bool:
+    token = value.strip().casefold()
+    return token in _CJK_NEGATORS or keyword_allowed(token)
 
 
 def keyword_allowed(value: str) -> bool:
