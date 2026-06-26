@@ -361,6 +361,18 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     assert!(template["frontendExperience"]["dataViews"][0]["viewId"].is_string());
     assert!(template["frontendExperience"]["actions"][0]["actionId"].is_string());
     assert!(template["frontendExperience"]["operationPaths"][0]["pathId"].is_string());
+    assert_eq!(
+        write_contract["fields"]["enumRefs.conceptPhaseRelevance"][0],
+        "current"
+    );
+    assert_eq!(
+        write_contract["fields"]["enumRefs.conceptPriority"][0],
+        "must_understand"
+    );
+    assert!(write_contract["fields"]["enumRefs.conceptRiskFactor"]
+        .as_array()
+        .expect("concept risk factor enum")
+        .contains(&json!("business_invariant")));
     assert!(write_contract["fields"]["rules.candidateWrite"]
         .to_string()
         .contains("never replace typed object arrays with string arrays"));
