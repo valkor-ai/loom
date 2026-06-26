@@ -194,6 +194,8 @@ fn build_request_root(
         "baselineExists": baseline_exists,
         "repositoryContextExists": false
     });
+    let baseline_context_fields =
+        technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
     json!({
         "schemaVersion": "1.0",
         "requestType": "technical_baseline_request",
@@ -208,15 +210,30 @@ fn build_request_root(
         },
         "brainstormLens": {
             "summary": brainstorm.summary,
-            "scope": brainstorm.scope,
-            "domainModel": brainstorm.domain_model,
+            "scope": {
+                "included": brainstorm.scope.included,
+                "deferred": brainstorm.scope.deferred,
+                "excluded": brainstorm.scope.excluded,
+                "assumptions": brainstorm.scope.assumptions
+            },
+            "domainModel": brainstorm.domain_model.as_ref().map(|domain_model| json!({
+                "capabilityGroups": domain_model.capability_groups,
+                "businessFlows": domain_model.business_flows
+            })),
             "acceptanceIndex": brainstorm.acceptance.iter().map(|acceptance| json!({
                 "id": acceptance.id,
                 "priority": acceptance.priority,
                 "capabilityRefs": acceptance.capability_refs,
                 "sourceRefs": acceptance.source_refs
             })).collect::<Vec<_>>(),
-            "frontendExperience": brainstorm.frontend_experience,
+            "frontendExperience": brainstorm.frontend_experience.as_ref().map(|frontend_experience| json!({
+                "required": frontend_experience.required,
+                "kind": frontend_experience.kind,
+                "experienceLevel": frontend_experience.experience_level,
+                "audiences": frontend_experience.audiences,
+                "surfaces": frontend_experience.surfaces,
+                "operationPaths": frontend_experience.operation_paths
+            })),
             "userFacingLanguage": brainstorm.delivery_context.user_facing_language,
             "roadmap": brainstorm.roadmap,
             "phasePlan": {
@@ -291,20 +308,7 @@ fn build_request_root(
                     "required": true,
                     "purpose": "Read the confirmed Brainstorm scope, acceptance ids, frontend target, current phase lens, and baseline decision needs before drafting the baseline.",
                     "whenToRead": "Read before producing any TechnicalBaseline recommendation.",
-                    "fields": [
-                        "brainstormLens.summary",
-                        "brainstormLens.scope",
-                        "brainstormLens.domainModel",
-                        "brainstormLens.acceptanceIndex",
-                        "brainstormLens.frontendExperience",
-                        "brainstormLens.userFacingLanguage",
-                        "brainstormLens.roadmap",
-                        "brainstormLens.phasePlan",
-                        "currentPhaseLens",
-                        "decisionNeeds",
-                        "previousBaselineContext",
-                        "constraints"
-                    ]
+                    "fields": baseline_context_fields
                 },
                 {
                     "groupId": "technical_baseline_repo_evidence",
@@ -345,6 +349,69 @@ fn build_request_root(
             ]
         }
     })
+}
+
+fn technical_baseline_context_fields(
+    brainstorm: &BrainstormContract,
+    has_previous_baseline: bool,
+) -> Vec<&'static str> {
+    let mut fields = vec![
+        "brainstormLens.summary.title",
+        "brainstormLens.summary.oneLine",
+        "brainstormLens.summary.complexity",
+        "brainstormLens.scope.included",
+        "brainstormLens.scope.deferred",
+        "brainstormLens.scope.excluded",
+        "brainstormLens.scope.assumptions",
+        "brainstormLens.acceptanceIndex",
+        "brainstormLens.userFacingLanguage",
+        "brainstormLens.roadmap.required",
+        "brainstormLens.roadmap.currentPhaseId",
+        "brainstormLens.roadmap.phases",
+        "brainstormLens.phasePlan.nextPhasePreview",
+        "currentPhaseLens.phaseId",
+        "currentPhaseLens.title",
+        "currentPhaseLens.goal",
+        "currentPhaseLens.includedScopeRefs",
+        "currentPhaseLens.acceptanceRefs",
+        "decisionNeeds",
+        "constraints.mustUse",
+        "constraints.mustAvoid",
+        "constraints.userPreferences",
+        "constraints.deploymentPreference",
+    ];
+    if brainstorm.summary.business_goal.is_some() {
+        fields.insert(2, "brainstormLens.summary.businessGoal");
+    }
+    if brainstorm.domain_model.is_some() {
+        fields.extend([
+            "brainstormLens.domainModel.capabilityGroups",
+            "brainstormLens.domainModel.businessFlows",
+        ]);
+    }
+    if brainstorm.frontend_experience.is_some() {
+        fields.extend([
+            "brainstormLens.frontendExperience.required",
+            "brainstormLens.frontendExperience.kind",
+            "brainstormLens.frontendExperience.experienceLevel",
+            "brainstormLens.frontendExperience.audiences",
+            "brainstormLens.frontendExperience.surfaces",
+            "brainstormLens.frontendExperience.operationPaths",
+        ]);
+    }
+    if has_previous_baseline {
+        fields.extend([
+            "previousBaselineContext.previousBaselineRef",
+            "previousBaselineContext.technicalBaselineId",
+            "previousBaselineContext.status",
+            "previousBaselineContext.projectKind",
+            "previousBaselineContext.scope",
+            "previousBaselineContext.stack",
+            "previousBaselineContext.constraints",
+            "previousBaselineContext.confidence",
+        ]);
+    }
+    fields
 }
 
 fn technical_baseline_selection_guidance(

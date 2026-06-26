@@ -166,15 +166,50 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
     assert!(baseline_context
         .fields
         .get("brainstormLens.domainModel")
-        .is_some());
+        .is_none());
     assert!(baseline_context
         .fields
         .get("brainstormLens.roadmap")
-        .is_some());
+        .is_none());
     assert!(baseline_context
         .fields
         .get("brainstormLens.phasePlan")
-        .is_some());
+        .is_none());
+    assert!(baseline_context
+        .fields
+        .get("brainstormLens.scope")
+        .is_none());
+    assert!(baseline_context
+        .fields
+        .get("brainstormLens.frontendExperience")
+        .is_none());
+    for field in [
+        "brainstormLens.summary.title",
+        "brainstormLens.summary.oneLine",
+        "brainstormLens.summary.businessGoal",
+        "brainstormLens.scope.included",
+        "brainstormLens.scope.deferred",
+        "brainstormLens.roadmap.phases",
+        "brainstormLens.phasePlan.nextPhasePreview",
+        "currentPhaseLens.phaseId",
+        "currentPhaseLens.goal",
+    ] {
+        assert!(
+            baseline_context.fields.get(field).is_some(),
+            "missing field-level baseline context {field}"
+        );
+    }
+    for field in [
+        "brainstormLens.domainModel.capabilityGroups",
+        "brainstormLens.domainModel.businessFlows",
+        "brainstormLens.frontendExperience.required",
+        "brainstormLens.frontendExperience.surfaces",
+    ] {
+        assert!(
+            baseline_context.fields.get(field).is_none(),
+            "optional absent baseline context field should not be exposed: {field}"
+        );
+    }
     assert!(baseline_context.fields["brainstormLens.acceptanceIndex"].value[0]["id"].is_string());
     assert!(
         baseline_context.fields["brainstormLens.acceptanceIndex"].value[0]
@@ -343,11 +378,11 @@ fn technical_baseline_conflict_with_previous_baseline_requires_user_gate() {
     let previous = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: baseline_request_ref.clone(),
-        fields: vec!["previousBaselineContext".to_string()],
+        fields: vec!["previousBaselineContext.previousBaselineRef".to_string()],
     })
     .expect("read previous baseline context");
     assert_eq!(
-        previous.fields["previousBaselineContext"].value["previousBaselineRef"],
+        previous.fields["previousBaselineContext.previousBaselineRef"].value,
         json!(format!(
             ".loom/deliveries/{delivery_id}/contracts/technical-baseline.json"
         ))
