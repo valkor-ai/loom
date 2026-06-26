@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
+use brainstorm::BrainstormConfirmBlockInput;
 use delivery_core::{
     normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestResult,
     LoomMcpActionResult, PlanToolInput, ProjectToolInput, ReadFieldGroupInput,
@@ -32,6 +33,7 @@ pub enum ToolInputKind {
     Project,
     Plan,
     FileSubmit,
+    BrainstormConfirmBlock,
     KnowledgeAdd,
     KnowledgeUpdate,
     KnowledgeName,
@@ -111,6 +113,15 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         target_batch: 3,
         input_kind: ToolInputKind::ReadRequestFields,
         output_kind: ToolOutputKind::ReadRequestFields,
+        implemented: true,
+    },
+    ToolRegistration {
+        name: "loom.brainstormConfirmBlock",
+        description:
+            "Record a user-confirmed Brainstorm block and return the next Brainstorm action.",
+        target_batch: 7,
+        input_kind: ToolInputKind::BrainstormConfirmBlock,
+        output_kind: ToolOutputKind::ActionResult,
         implemented: true,
     },
     ToolRegistration {
@@ -457,6 +468,7 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
         ToolInputKind::Project => schema_for_type::<ProjectToolInput>(),
         ToolInputKind::Plan => schema_for_type::<PlanToolInput>(),
         ToolInputKind::FileSubmit => schema_for_type::<FileSubmitInput>(),
+        ToolInputKind::BrainstormConfirmBlock => schema_for_type::<BrainstormConfirmBlockInput>(),
         ToolInputKind::KnowledgeAdd => schema_for_type::<KnowledgeAddInput>(),
         ToolInputKind::KnowledgeUpdate => schema_for_type::<KnowledgeUpdateInput>(),
         ToolInputKind::KnowledgeName => schema_for_type::<KnowledgeNameInput>(),
@@ -528,6 +540,7 @@ mod tests {
             vec![
                 "loom.architectureSectionSubmitFile",
                 "loom.brainstormAcceptFile",
+                "loom.brainstormConfirmBlock",
                 "loom.continue",
                 "loom.deployBootstrap",
                 "loom.deployDown",

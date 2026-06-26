@@ -17,6 +17,7 @@ use state::{
 };
 
 use crate::{
+    clarification::{initial_state, write_initial_state_file},
     gate::{block_message, to_value, BrainstormGate, BrainstormResponseRule},
     paths::brainstorm_contract_file,
     request::build_brainstorm_request_root,
@@ -78,6 +79,9 @@ fn start_brainstorm_inner(
     let contract_file = brainstorm_contract_file(project_root, &delivery_id);
     write_json_atomic(&contract_file, &contract)?;
     let contract_ref = to_project_relative(project_root, &contract_file)?;
+    let clarification_state = initial_state(&delivery_id, &phase_id, &brainstorm_run_id);
+    let clarification_state_ref =
+        write_initial_state_file(project_root, &delivery_id, &phase_id, &clarification_state)?;
 
     let request_root = build_brainstorm_request_root(
         project_root,
@@ -92,7 +96,7 @@ fn start_brainstorm_inner(
         &input.project_root,
         state::NativeRequestInput {
             request_id: request_id.clone(),
-            request_kind: "brainstorm_session".to_string(),
+            request_kind: "brainstorm_clarification_block".to_string(),
             request_file: None,
             delivery_id: Some(delivery_id.clone()),
             phase_id: Some(phase_id.clone()),
@@ -134,6 +138,10 @@ fn start_brainstorm_inner(
     latest_refs.insert("brainstormRunId".to_string(), brainstorm_run_id.clone());
     latest_refs.insert("brainstormContract".to_string(), contract_ref);
     latest_refs.insert(
+        "brainstormClarificationState".to_string(),
+        clarification_state_ref,
+    );
+    latest_refs.insert(
         "requirementContext".to_string(),
         requirement.context_ref.clone(),
     );
@@ -149,7 +157,7 @@ fn start_brainstorm_inner(
         source: "brainstorm_start".to_string(),
         reason: "await_phase_scope_confirmation".to_string(),
         prompt: Some(
-            "Read the Brainstorm request and present the current-stage scope confirmation in the user's language."
+            "Read the current Brainstorm block request and present the stage scope confirmation in the user's language."
                 .to_string(),
         ),
         accepted_responses: vec!["reply_in_chat".to_string()],
@@ -184,7 +192,7 @@ fn start_brainstorm_inner(
 
     Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
         project_root: input.project_root.clone(),
-        prompt: "Read the Brainstorm request, present the current-stage scope confirmation in the user's language, then continue the progressive clarification conversation.".to_string(),
+        prompt: "Read the current Brainstorm block request, present the stage scope confirmation in the user's language, then call loom.brainstormConfirmBlock after the user confirms it.".to_string(),
         accepted_responses: vec!["reply_in_chat".to_string()],
         request_ref: Some(stored.request_ref),
         delivery_id: Some(delivery_id),

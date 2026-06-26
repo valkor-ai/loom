@@ -39,14 +39,15 @@ struct LoadedRequest {
 
 pub fn inspect_request(input: InspectRequestInput) -> StateResult<InspectRequestResult> {
     let request = load_request(&input.project_root, &input.request_ref)?;
+    let output_contract = read_output_contract(&input.project_root, &request)?;
     Ok(InspectRequestResult {
         request_ref: request.request_ref,
         request_id: request.request_id,
         project_id: request.project_id,
         request_kind: request.request_kind,
         read_groups: request.read_groups,
-        write_targets: extract_write_targets(&request.root),
-        submit_tool: extract_submit_tool(&request.root),
+        write_targets: extract_write_targets(&request.root, output_contract.as_ref()),
+        submit_tool: extract_submit_tool(&request.root, output_contract.as_ref()),
     })
 }
 
@@ -271,6 +272,7 @@ fn resolve_context_ref_field(
         ("deliveryConceptGlossary", "deliveryConceptGlossaryRef"),
         ("phaseConceptGrounding", "phaseConceptGroundingRef"),
         ("currentFrontendExperience", "currentFrontendExperienceRef"),
+        ("confirmedClarificationState", "clarificationStateRef"),
     ];
     let Some((_alias, ref_field)) = aliases.iter().find(|(alias, _)| parts[0] == *alias) else {
         return Ok(None);
@@ -440,17 +442,35 @@ fn dedupe(fields: Vec<String>) -> Vec<String> {
         })
 }
 
-fn extract_write_targets(root: &Value) -> Vec<Value> {
+fn extract_write_targets(root: &Value, output_contract: Option<&Value>) -> Vec<Value> {
     root.get("writeTargets")
         .or_else(|| root.pointer("/outputContract/writeTargets"))
+        .or_else(|| output_contract.and_then(|contract| contract.get("writeTargets")))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
 }
 
-fn extract_submit_tool(root: &Value) -> Option<String> {
+fn extract_submit_tool(root: &Value, output_contract: Option<&Value>) -> Option<String> {
     root.get("submitTool")
         .or_else(|| root.pointer("/outputContract/submitTool"))
+        .or_else(|| output_contract.and_then(|contract| contract.get("submitTool")))
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+fn read_output_contract(project_root: &str, request: &LoadedRequest) -> StateResult<Option<Value>> {
+    if let Some(value) = request.root.get("outputContract") {
+        return Ok(Some(value.clone()));
+    }
+    if request.source_protocol != RequestSourceProtocol::RustMcpNative {
+        return Ok(None);
+    }
+    let Some(relative) = request_storage_manifest_ref(project_root, request, "outputContract")?
+    else {
+        return Ok(None);
+    };
+    let paths = project_paths(project_root)?;
+    let ref_file = from_project_relative(&paths.root, &relative)?;
+    read_json_value(&ref_file).map(Some)
 }

@@ -1,5 +1,6 @@
 mod accept;
 mod artifacts;
+mod clarification;
 mod gate;
 mod paths;
 mod request;
@@ -7,9 +8,12 @@ mod requirements;
 mod start;
 mod validation;
 
-use delivery_core::{DomainDispatcher, LoomMcpActionResult, RouteAction, ValidatedPlanInput};
+use delivery_core::{
+    DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, ValidatedPlanInput,
+};
 
 pub use accept::accept_brainstorm_file;
+pub use clarification::{confirm_block, BrainstormConfirmBlockInput};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BrainstormDomainDispatcher;
@@ -26,12 +30,17 @@ impl DomainDispatcher for BrainstormDomainDispatcher {
         phase_id: &str,
         action: &RouteAction,
     ) -> LoomMcpActionResult {
-        delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
-            project_root,
-            delivery_id,
-            phase_id,
-            action,
-        )
+        match action.kind {
+            RouteActionKind::BrainstormConfirmation => {
+                clarification::materialize_confirmation_request(project_root, delivery_id, phase_id)
+            }
+            _ => delivery_core::UnimplementedDomainDispatcher.dispatch_route_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                action,
+            ),
+        }
     }
 }
 

@@ -208,6 +208,8 @@ fn build_request_root(
                 "projectKind": baseline.project_kind,
                 "stack": baseline.stack
             },
+            "frontendExperienceProjection": aac.frontend_experience,
+            "runtimeDeliveryProjection": aac.runtime_delivery,
             "requirementDetailTransfer": requirement_transfer
         },
         "allowedRefs": allowed_refs(pgc, aac),
@@ -268,8 +270,6 @@ fn build_request_root(
                 "tasks": ["TaskDefinition entries whose groupId equals group.groupId"],
                 "createdAt": "ISO-8601 datetime"
             },
-            "frontendExperienceProjection": aac.frontend_experience,
-            "runtimeDeliveryProjection": aac.runtime_delivery,
             "runtimeDeliveryClosureTaskTemplate": runtime_closure_template
         },
         "blockedOutput": {
@@ -365,10 +365,10 @@ fn taskplan_candidate_contract_fields(runtime_closure_template: &Value) -> Vec<&
 fn taskplan_optional_projection_fields(aac: &ArchitectureArtifactContract) -> Vec<&'static str> {
     let mut fields = Vec::new();
     if aac.frontend_experience.is_some() {
-        fields.push("outputContract.frontendExperienceProjection");
+        fields.push("contextProjection.frontendExperienceProjection");
     }
     if aac.runtime_delivery.is_some() {
-        fields.push("outputContract.runtimeDeliveryProjection");
+        fields.push("contextProjection.runtimeDeliveryProjection");
     }
     fields
 }

@@ -385,27 +385,31 @@ fn native_request_protocol_snapshot_covers_delivery_request_kinds() {
         let target_path = format!(".loom/agent-writable/{request_kind}.json");
         let mut root = json!({
             "protocolPurpose": request_kind,
-            "submitTool": submit_tool,
-            "writeTargets": [{
-                "targetId": "result",
-                "path": target_path,
-                "required": true,
-                "description": "Agent-writable result JSON."
-            }],
+            "outputContract": {
+                "submitTool": submit_tool,
+                "writeTargets": [{
+                    "targetId": "result",
+                    "path": target_path,
+                    "required": true,
+                    "description": "Agent-writable result JSON."
+                }]
+            },
             "requestReadPlan": {
                 "groups": [{
                     "groupId": "write_contract",
                     "required": true,
                     "purpose": "Read the native MCP write contract.",
                     "whenToRead": "Before writing the result file.",
-                    "fields": ["protocolPurpose", "submitTool", "writeTargets"]
+                    "fields": [
+                        "protocolPurpose",
+                        "outputContract.submitTool",
+                        "outputContract.writeTargets"
+                    ]
                 }]
             }
         });
         if let Some(artifact_kind) = artifact_kind {
-            root.as_object_mut()
-                .expect("root object")
-                .insert("artifactKind".to_string(), json!(artifact_kind));
+            root["outputContract"]["artifactKind"] = json!(artifact_kind);
         }
 
         let stored = write_native_request(
@@ -449,9 +453,10 @@ fn native_request_protocol_snapshot_covers_delivery_request_kinds() {
                 .as_object()
                 .expect("manifest refs")
                 .len(),
-            0,
-            "{request_kind} should not write unused backing refs"
+            1,
+            "{request_kind} should keep the write contract in one private ref"
         );
+        assert!(storage_manifest["refs"]["outputContract"].is_object());
 
         let group = state::read_field_group(delivery_core::ReadFieldGroupInput {
             project_root: fixture.root_str().to_string(),
@@ -460,8 +465,11 @@ fn native_request_protocol_snapshot_covers_delivery_request_kinds() {
         })
         .expect("read snapshot write contract");
         assert_eq!(group.fields["protocolPurpose"].value, json!(request_kind));
-        assert_eq!(group.fields["submitTool"].value, json!(submit_tool));
-        assert!(group.fields["writeTargets"].value.is_array());
+        assert_eq!(
+            group.fields["outputContract.submitTool"].value,
+            json!(submit_tool)
+        );
+        assert!(group.fields["outputContract.writeTargets"].value.is_array());
     }
 }
 
@@ -580,9 +588,9 @@ fn native_submit_authorizes_declared_write_targets() {
             delivery_id: Some("delivery_1".to_string()),
             phase_id: Some("phase_1".to_string()),
             root: json!({
-                "artifactKind": "brainstorm_candidate",
-                "submitTool": "loom.brainstormAcceptFile",
                 "outputContract": {
+                    "artifactKind": "brainstorm_candidate",
+                    "submitTool": "loom.brainstormAcceptFile",
                     "writeMode": "single_json",
                     "writeTargets": [{
                         "targetId": "candidate",
@@ -597,7 +605,7 @@ fn native_submit_authorizes_declared_write_targets() {
                         "required": true,
                         "purpose": "Read core fields.",
                         "whenToRead": "Before writing.",
-                        "fields": ["writeTargets"]
+                        "fields": ["outputContract.writeTargets"]
                     }]
                 }
             }),

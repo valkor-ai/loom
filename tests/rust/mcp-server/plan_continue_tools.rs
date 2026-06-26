@@ -44,14 +44,13 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
             "conversation_protocol",
             "requirement_context",
             "requirement_full_text",
-            "phase_scope_rules",
+            "current_block_rules",
             "knowledge_context_plan",
-            "concept_grounding_rules",
-            "frontend_experience_rules",
-            "final_summary_rules",
-            "candidate_write_contract",
+            "block_confirmation_contract",
         ]
     );
+    assert!(inspected.submit_tool.is_none());
+    assert!(inspected.write_targets.is_empty());
     let requirement_context = inspected
         .read_groups
         .iter()
@@ -77,35 +76,20 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
         fields: vec![
-            "clarificationConversationProtocol.internalTermRule".to_string(),
-            "clarificationConversationProtocol.userVisibleBlockNames".to_string(),
-            "outputContract.resultTemplate".to_string(),
+            "clarificationConversationProtocol.userVisibleBlockTitle".to_string(),
+            "blockConfirmationContract".to_string(),
             "knowledgeQueryPlan.toolContract".to_string(),
             "knowledgeQueryPlan.sharedRules".to_string(),
         ],
     })
     .expect("knowledge query plan fields");
-    assert!(
-        knowledge_fields.fields["clarificationConversationProtocol.internalTermRule"]
-            .value
-            .as_str()
-            .expect("internal term rule")
-            .contains("never ask the user to confirm internal block ids")
+    assert_eq!(
+        knowledge_fields.fields["clarificationConversationProtocol.userVisibleBlockTitle"].value,
+        "阶段范围确认"
     );
     assert_eq!(
-        knowledge_fields.fields["clarificationConversationProtocol.userVisibleBlockNames"].value
-            ["concept_grounding"],
-        "业务理解与规则确认"
-    );
-    assert!(
-        knowledge_fields.fields["outputContract.resultTemplate"].value["clarificationProgress"]
-            ["confirmedBlocks"]
-            .is_array()
-    );
-    assert!(
-        knowledge_fields.fields["outputContract.resultTemplate"].value["clarificationProgress"]
-            .get("completedBlocks")
-            .is_none()
+        knowledge_fields.fields["blockConfirmationContract"].value["tool"],
+        "loom.brainstormConfirmBlock"
     );
     assert_eq!(
         knowledge_fields.fields["knowledgeQueryPlan.toolContract"].value["contextTool"],
@@ -138,7 +122,10 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         .as_str()
         .expect("planned prompt")
         .contains("phase_scope"));
-    let request_ref = planned["requestRef"].as_str().expect("requestRef");
+    let mut request_ref = planned["requestRef"]
+        .as_str()
+        .expect("requestRef")
+        .to_string();
 
     structured(
         server
@@ -152,6 +139,99 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             )
             .expect("read conversation protocol"),
     );
+    assert!(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "candidate_write_contract"
+                }))),
+            )
+            .is_err(),
+        "clarification request must not expose candidate_write_contract"
+    );
+
+    request_ref = confirm_block(
+        &server,
+        &fixture,
+        &request_ref,
+        "phase_scope",
+        "确认第一阶段为证券账户模块闭环。",
+        json!({
+            "scope": {
+                "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户", "账户状态管理"],
+                "deferred": ["资金账户", "交易客户端", "中央撮合"],
+                "excluded": []
+            },
+            "recommendation": {
+                "label": "证券账户模块闭环",
+                "reason": "证券账户是交易身份和持仓归属的上游基础对象。"
+            }
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("concept request ref")
+        .to_string();
+    assert_eq!(
+        state::inspect_request(InspectRequestInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: request_ref.clone(),
+        })
+        .expect("inspect concept request")
+        .request_kind,
+        "brainstorm_clarification_block"
+    );
+    request_ref = confirm_block(
+        &server,
+        &fixture,
+        &request_ref,
+        "concept_grounding",
+        "确认证券账户业务规则、状态和边界。",
+        json!({
+            "objects": ["证券账户"],
+            "operations": ["开户", "挂失补办", "销户"],
+            "rules": ["开户需要资格校验", "挂失后冻结证券", "销户前必须清空持仓"],
+            "boundaries": ["资金账户递延", "交易客户端递延"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("frontend request ref")
+        .to_string();
+    request_ref = confirm_block(
+        &server,
+        &fixture,
+        &request_ref,
+        "frontend_experience",
+        "确认工作人员后台证券账户管理页面路径。",
+        json!({
+            "required": true,
+            "surfaces": ["证券账户管理页面"],
+            "targetDiscovery": ["分页查询列表", "按账户号、姓名、证件号查询"],
+            "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
+            "mustNot": ["不能只靠内部主键触发办理动作"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("final summary request ref")
+        .to_string();
+    let write_action = confirm_block(
+        &server,
+        &fixture,
+        &request_ref,
+        "final_summary",
+        "用户已确认阶段范围、业务理解、页面办理路径和提交前核对。",
+        json!({
+            "coverageChecklist": ["证券账户模块闭环", "开户/挂失补办/销户规则", "工作人员后台办理路径"],
+            "readyToWriteCandidate": true
+        }),
+    );
+    assert_eq!(write_action["state"], "auto_runnable", "{write_action:#}");
+    let request_ref = write_action["next"]["requestRef"]
+        .as_str()
+        .expect("candidate write requestRef");
+
     let write_contract = structured(
         server
             .invoke_tool(
@@ -182,6 +262,28 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         request_ref: request_ref.to_string(),
     })
     .expect("inspect request");
+    assert_eq!(
+        inspected.submit_tool.as_deref(),
+        Some("loom.brainstormAcceptFile")
+    );
+    assert_eq!(inspected.write_targets.len(), 1);
+    let compact_request = read_compact_request_root(&fixture, &inspected.request_id);
+    for key in [
+        "artifactKind",
+        "submitTool",
+        "writeTargets",
+        "writeMode",
+        "outputContract",
+    ] {
+        assert!(
+            compact_request.get(key).is_none(),
+            "candidate write compact root must not duplicate {key}: {compact_request:#}"
+        );
+    }
+    let manifest = read_request_storage_manifest(&fixture, &inspected.request_id);
+    assert!(manifest["refs"]["outputContract"].is_object());
+    assert!(manifest["refs"]["rules"].is_object());
+    assert!(manifest["refs"]["enumRefs"].is_object());
     let target_path = inspected.write_targets[0]["path"]
         .as_str()
         .expect("candidate target path");
@@ -220,6 +322,30 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     })
     .expect("inspect technical baseline request");
     assert_eq!(baseline.request_kind, "technical_baseline_request");
+}
+
+fn confirm_block(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+    summary: &str,
+    confirmed_data: Value,
+) -> Value {
+    structured(
+        server
+            .invoke_tool(
+                "loom.brainstormConfirmBlock",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": block,
+                    "summary": summary,
+                    "confirmedData": confirmed_data
+                }))),
+            )
+            .expect("confirm brainstorm block"),
+    )
 }
 
 #[test]
@@ -292,6 +418,32 @@ fn args(value: Value) -> rmcp::model::JsonObject {
 
 fn structured(result: rmcp::model::CallToolResult) -> Value {
     serde_json::to_value(result).expect("call result to value")["structuredContent"].clone()
+}
+
+fn read_compact_request_root(fixture: &Fixture, request_id: &str) -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(
+            fixture
+                .root
+                .join(".loom/requests")
+                .join(format!("{request_id}.json")),
+        )
+        .expect("read compact request root"),
+    )
+    .expect("parse compact request root")
+}
+
+fn read_request_storage_manifest(fixture: &Fixture, request_id: &str) -> Value {
+    serde_json::from_str(
+        &std::fs::read_to_string(
+            fixture
+                .root
+                .join(".loom/requests")
+                .join(format!("{request_id}.manifest.json")),
+        )
+        .expect("read request storage manifest"),
+    )
+    .expect("parse request storage manifest")
 }
 
 fn populate_confirmed_brainstorm_candidate(candidate: &mut Value) {

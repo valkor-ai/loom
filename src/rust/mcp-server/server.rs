@@ -1,6 +1,6 @@
 use std::future::{ready, Future};
 
-use brainstorm::accept_brainstorm_file;
+use brainstorm::{accept_brainstorm_file, BrainstormConfirmBlockInput};
 use delivery_core::{
     is_submit_tool, normalize_project_root, status_details, submit_tool_spec, validate_plan_input,
     DomainDispatcher, FileSubmitInput, InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult,
@@ -162,6 +162,13 @@ fn call_tool(
         "loom.continue" => action_result(continue_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
+        "loom.brainstormConfirmBlock" => {
+            action_result(brainstorm_confirm_block_tool(parse_args::<
+                BrainstormConfirmBlockInput,
+            >(
+                request.arguments
+            )?))
+        }
         "loom.inspectRequest" => structured(state::inspect_request(parse_args::<
             InspectRequestInput,
         >(request.arguments)?)),
@@ -494,6 +501,22 @@ fn continue_tool(input: ProjectToolInput) -> LoomMcpActionResult {
             },
         }),
     }
+}
+
+fn brainstorm_confirm_block_tool(input: BrainstormConfirmBlockInput) -> LoomMcpActionResult {
+    let normalized = match normalize_project_root(&input.project_root) {
+        Ok(root) => root,
+        Err(message) => return LoomMcpActionResult::invalid_project_root(message),
+    };
+    brainstorm::confirm_block(BrainstormConfirmBlockInput {
+        project_root: normalized.display,
+        request_ref: input.request_ref,
+        block: input.block,
+        summary: input.summary,
+        confirmed_data: input.confirmed_data,
+        skipped: input.skipped,
+        skip_reason: input.skip_reason,
+    })
 }
 
 fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionResult {

@@ -133,7 +133,7 @@ pub fn write_native_request(
     );
     reject_forbidden_root_keys(root_object)?;
     reject_root_ref_aliases(root_object)?;
-    project_output_contract_submit_metadata(root_object);
+    normalize_output_contract_submit_metadata(root_object)?;
 
     let read_groups = canonicalize_read_plan(
         root_object,
@@ -442,21 +442,31 @@ fn reject_read_group_sidecar_fields(
     Ok(())
 }
 
-fn project_output_contract_submit_metadata(root_object: &mut Map<String, Value>) {
+fn normalize_output_contract_submit_metadata(
+    root_object: &mut Map<String, Value>,
+) -> StateResult<()> {
     let Some(contract) = root_object
         .get("outputContract")
         .and_then(Value::as_object)
         .cloned()
     else {
-        return;
+        return Ok(());
     };
     for key in ["artifactKind", "submitTool", "writeTargets", "writeMode"] {
-        if !root_object.contains_key(key) {
-            if let Some(value) = contract.get(key) {
-                root_object.insert(key.to_string(), value.clone());
-            }
+        let Some(contract_value) = contract.get(key) else {
+            continue;
+        };
+        let Some(root_value) = root_object.get(key) else {
+            continue;
+        };
+        if root_value != contract_value {
+            return Err(StateError::InvalidArgument(format!(
+                "native MCP request root {key} conflicts with outputContract.{key}; keep one authoritative value in outputContract"
+            )));
         }
+        root_object.remove(key);
     }
+    Ok(())
 }
 
 fn canonicalize_context_refs(root_object: &mut Map<String, Value>, read_groups: &[ReadGroupRef]) {
@@ -518,6 +528,9 @@ fn used_context_ref_keys(read_groups: &[ReadGroupRef]) -> BTreeSet<&'static str>
             }
             "currentFrontendExperience" => {
                 used.insert("currentFrontendExperienceRef");
+            }
+            "confirmedClarificationState" => {
+                used.insert("clarificationStateRef");
             }
             _ => {}
         }
@@ -653,6 +666,7 @@ fn resolve_context_ref_for_validation(
         ("deliveryConceptGlossary", "deliveryConceptGlossaryRef"),
         ("phaseConceptGrounding", "phaseConceptGroundingRef"),
         ("currentFrontendExperience", "currentFrontendExperienceRef"),
+        ("confirmedClarificationState", "clarificationStateRef"),
     ];
     let Some((_alias, ref_field)) = aliases.iter().find(|(alias, _)| parts[0] == *alias) else {
         return Ok(None);

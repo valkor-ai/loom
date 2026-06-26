@@ -30,9 +30,10 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
     );
     let first_delivery = first["deliveryId"].as_str().expect("first delivery");
     let first_request = first["requestRef"].as_str().expect("first request");
+    let first_write_request = confirm_all_brainstorm_blocks(&server, &fixture, first_request);
     state::read_field_group(delivery_core::ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: first_request.to_string(),
+        request_ref: first_write_request,
         group_id: "candidate_write_contract".to_string(),
     })
     .expect("read first request group");
@@ -47,20 +48,27 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
             phase_id: Some("phase-2".to_string()),
             root: json!({
                 "protocolPurpose": "phase two isolation request",
-                "submitTool": "loom.technicalBaselineAcceptFile",
-                "writeTargets": [{
-                    "targetId": "candidate",
-                    "path": ".loom/agent-writable/phase-2-technical-baseline.json",
-                    "required": true,
-                    "description": "Synthetic phase two candidate for isolation verification."
-                }],
+                "outputContract": {
+                    "artifactKind": "technical_baseline_candidate",
+                    "submitTool": "loom.technicalBaselineAcceptFile",
+                    "writeTargets": [{
+                        "targetId": "candidate",
+                        "path": ".loom/agent-writable/phase-2-technical-baseline.json",
+                        "required": true,
+                        "description": "Synthetic phase two candidate for isolation verification."
+                    }]
+                },
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "write_contract",
                         "required": true,
                         "purpose": "Read phase two write contract.",
                         "whenToRead": "Before writing the phase two candidate.",
-                        "fields": ["protocolPurpose", "submitTool", "writeTargets"]
+                        "fields": [
+                            "protocolPurpose",
+                            "outputContract.submitTool",
+                            "outputContract.writeTargets"
+                        ]
                     }]
                 }
             }),
@@ -89,9 +97,10 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
     let second_delivery = second["deliveryId"].as_str().expect("second delivery");
     assert_ne!(first_delivery, second_delivery);
     let second_request = second["requestRef"].as_str().expect("second request");
+    let second_write_request = confirm_all_brainstorm_blocks(&server, &fixture, second_request);
     state::read_field_group(delivery_core::ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: second_request.to_string(),
+        request_ref: second_write_request,
         group_id: "candidate_write_contract".to_string(),
     })
     .expect("read second request group");
@@ -143,7 +152,10 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
             .len(),
         0
     );
-    assert_eq!(protocol["requestCount"].as_u64().expect("request count"), 3);
+    assert_eq!(
+        protocol["requestCount"].as_u64().expect("request count"),
+        11
+    );
     let deliveries = protocol["deliveries"].as_array().expect("deliveries");
     assert_eq!(deliveries.len(), 2);
     let first_summary = deliveries
@@ -223,6 +235,108 @@ fn args(value: Value) -> rmcp::model::JsonObject {
 
 fn structured(result: rmcp::model::CallToolResult) -> Value {
     serde_json::to_value(result).expect("call result to value")["structuredContent"].clone()
+}
+
+fn confirm_all_brainstorm_blocks(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+) -> String {
+    let mut request_ref = request_ref.to_string();
+    request_ref = confirm_block(
+        server,
+        fixture,
+        &request_ref,
+        "phase_scope",
+        "确认第一阶段为证券账户模块闭环。",
+        json!({
+            "scope": {
+                "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
+                "deferred": ["资金账户", "交易客户端"],
+                "excluded": []
+            },
+            "recommendation": {
+                "label": "证券账户模块闭环",
+                "reason": "证券账户是交易身份基础。"
+            }
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("concept requestRef")
+        .to_string();
+    request_ref = confirm_block(
+        server,
+        fixture,
+        &request_ref,
+        "concept_grounding",
+        "确认证券账户生命周期规则。",
+        json!({
+            "objects": ["证券账户"],
+            "operations": ["开户", "挂失补办", "销户"],
+            "rules": ["销户前必须清空持仓"],
+            "boundaries": ["资金账户递延"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("frontend requestRef")
+        .to_string();
+    request_ref = confirm_block(
+        server,
+        fixture,
+        &request_ref,
+        "frontend_experience",
+        "确认工作人员后台证券账户管理页面路径。",
+        json!({
+            "required": true,
+            "surfaces": ["证券账户管理页面"],
+            "targetDiscovery": ["分页查询列表"],
+            "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
+            "mustNot": ["不能只靠内部主键触发办理动作"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("final requestRef")
+        .to_string();
+    let write_action = confirm_block(
+        server,
+        fixture,
+        &request_ref,
+        "final_summary",
+        "用户已确认阶段范围、业务理解、页面办理路径和提交前核对。",
+        json!({
+            "coverageChecklist": ["证券账户模块闭环", "生命周期规则", "工作人员页面路径"],
+            "readyToWriteCandidate": true
+        }),
+    );
+    assert_eq!(write_action["state"], "auto_runnable", "{write_action:#}");
+    write_action["next"]["requestRef"]
+        .as_str()
+        .expect("candidate write requestRef")
+        .to_string()
+}
+
+fn confirm_block(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+    summary: &str,
+    confirmed_data: Value,
+) -> Value {
+    structured(
+        server
+            .invoke_tool(
+                "loom.brainstormConfirmBlock",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": block,
+                    "summary": summary,
+                    "confirmedData": confirmed_data
+                }))),
+            )
+            .expect("confirm brainstorm block"),
+    )
 }
 
 struct Fixture {

@@ -1,7 +1,8 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
-    BrainstormCandidateAgentWritable, RequirementSourceItem, UserFacingLanguageConstraint,
+    BrainstormCandidateAgentWritable, RequirementContext, RequirementSourceItem,
+    UserFacingLanguageConstraint,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
@@ -137,29 +138,8 @@ where
         }
     };
 
-    let request = state::inspect_request(delivery_core::InspectRequestInput {
-        project_root: input.project_root.clone(),
-        request_ref: input.request_ref.clone(),
-    })?;
-    let request_fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
-        project_root: input.project_root.clone(),
-        request_ref: input.request_ref.clone(),
-        fields: vec![
-            "requirementContext.sourceItems".to_string(),
-            "requirementContext.normalizedText".to_string(),
-            "userFacingLanguage".to_string(),
-        ],
-    })?;
-    let source_items = serde_json::from_value::<Vec<RequirementSourceItem>>(
-        request_fields.fields["requirementContext.sourceItems"]
-            .value
-            .clone(),
-    )
-    .map_err(|error| {
-        state::store::StateError::InvalidArgument(format!(
-            "invalid requirementContext.sourceItems: {error}"
-        ))
-    })?;
+    let request_context = load_accept_request_context(&input.project_root, &input.request_ref)?;
+    let source_items = request_context.source_items;
     let source_ids = source_items
         .iter()
         .map(|item| item.item_id.clone())
@@ -180,7 +160,7 @@ where
         ));
     }
 
-    let request_id = request.request_id;
+    let request_id = request_context.request_id;
     let project_paths = state::paths::project_paths(&input.project_root)?;
     let request_index =
         state::request_index::get_request_index_entry(&input.project_root, &request_id)?;
@@ -191,21 +171,10 @@ where
         .and_then(serde_json::Value::as_str)
         .unwrap_or("brainstorm-run")
         .to_string();
-    let user_facing_language: UserFacingLanguageConstraint = serde_json::from_value(
-        request_fields.fields["userFacingLanguage"].value.clone(),
-    )
-    .map_err(|error| {
-        state::store::StateError::InvalidArgument(format!("invalid userFacingLanguage: {error}"))
-    })?;
+    let user_facing_language = request_context.user_facing_language;
     let formal_sources = formal_sources_from_items(&source_items);
     let original_request_text = build_original_request_text(project_root, &source_items)
-        .unwrap_or_else(|| {
-            request_fields.fields["requirementContext.normalizedText"]
-                .value
-                .as_str()
-                .unwrap_or_default()
-                .to_string()
-        });
+        .unwrap_or(request_context.normalized_text);
     let persisted = write_accepted_artifacts(
         project_root,
         &delivery_id,
@@ -291,6 +260,90 @@ where
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+struct AcceptRequestContext {
+    request_id: String,
+    source_items: Vec<RequirementSourceItem>,
+    normalized_text: String,
+    user_facing_language: UserFacingLanguageConstraint,
+}
+
+fn load_accept_request_context(
+    project_root: &str,
+    request_ref: &str,
+) -> Result<AcceptRequestContext, state::store::StateError> {
+    let request_id = parse_request_id(request_ref)?;
+    let request_index = state::request_index::get_request_index_entry(project_root, &request_id)?;
+    let project_paths = state::paths::project_paths(project_root)?;
+    let request_file = from_project_relative(&project_paths.root, &request_index.request_file)?;
+    let request_root = state::store::read_json_value(&request_file)?;
+    let user_facing_language = serde_json::from_value::<UserFacingLanguageConstraint>(
+        request_root
+            .get("userFacingLanguage")
+            .cloned()
+            .ok_or_else(|| {
+                state::store::StateError::StateCorrupted(
+                    "Brainstorm request userFacingLanguage is missing".to_string(),
+                )
+            })?,
+    )
+    .map_err(|error| {
+        state::store::StateError::StateCorrupted(format!("invalid userFacingLanguage: {error}"))
+    })?;
+    let context_refs = request_root
+        .get("contextRefs")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "Brainstorm request contextRefs is missing".to_string(),
+            )
+        })?;
+    let requirement_context_ref = context_refs
+        .get("requirementContextRef")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "Brainstorm request contextRefs.requirementContextRef is missing".to_string(),
+            )
+        })?;
+    let requirement_context_file =
+        from_project_relative(&project_paths.root, requirement_context_ref)?;
+    let requirement_context: RequirementContext =
+        state::store::read_json(&requirement_context_file)?;
+    let normalized_text = context_refs
+        .get("normalizedRequirementTextRef")
+        .and_then(serde_json::Value::as_str)
+        .map(|relative| {
+            from_project_relative(&project_paths.root, relative)
+                .and_then(|path| state::store::read_text(&path))
+        })
+        .transpose()?
+        .unwrap_or_default();
+    Ok(AcceptRequestContext {
+        request_id,
+        source_items: requirement_context.source_items,
+        normalized_text,
+        user_facing_language,
+    })
+}
+
+fn parse_request_id(request_ref: &str) -> Result<String, state::store::StateError> {
+    let prefix = "loom://projects/";
+    let rest = request_ref.strip_prefix(prefix).ok_or_else(|| {
+        state::store::StateError::InvalidArgument(
+            "requestRef must start with loom://projects/.".to_string(),
+        )
+    })?;
+    let (_project_id, request_id) = rest.split_once("/requests/").ok_or_else(|| {
+        state::store::StateError::InvalidArgument("requestRef must include /requests/.".to_string())
+    })?;
+    if request_id.is_empty() || request_id.contains('/') {
+        return Err(state::store::StateError::InvalidArgument(format!(
+            "invalid requestRef: {request_ref}"
+        )));
+    }
+    Ok(request_id.to_string())
 }
 
 fn ensure_latest_brainstorm_request(

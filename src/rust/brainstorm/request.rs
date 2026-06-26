@@ -5,12 +5,156 @@ use contracts::{
 };
 use delivery_core::{ArtifactKind, RouteAction, RouteActionKind, WriteMode};
 use schemars::schema_for;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use state::paths::to_project_relative;
 
 use crate::{gate::required_blocks, paths::brainstorm_agent_candidate_file};
 
 pub fn build_brainstorm_request_root(
+    _project_root: &Path,
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    brainstorm_run_id: &str,
+    user_facing_language: &UserFacingLanguageConstraint,
+    context_refs: Value,
+) -> serde_json::Value {
+    build_brainstorm_clarification_request_root(
+        request_id,
+        delivery_id,
+        phase_id,
+        brainstorm_run_id,
+        user_facing_language,
+        context_refs,
+        ClarificationBlockName::PhaseScope,
+    )
+}
+
+pub fn build_brainstorm_clarification_request_root(
+    _request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    brainstorm_run_id: &str,
+    user_facing_language: &UserFacingLanguageConstraint,
+    context_refs: Value,
+    current_block: ClarificationBlockName,
+) -> serde_json::Value {
+    let (rule_key, rules, rule_group_fields) = block_rules(&current_block);
+    let mut rules_object = Map::new();
+    rules_object.insert(rule_key.to_string(), rules);
+    rules_object.insert(
+        "requirementSemanticGrounding".to_string(),
+        json!({ "compactRules": requirement_semantic_compact_rules() }),
+    );
+    let mut groups = vec![
+        json!({
+            "groupId": "conversation_protocol",
+            "required": true,
+            "purpose": "Read the current Brainstorm block protocol before presenting anything to the user.",
+            "whenToRead": "Read at the beginning of this Brainstorm block.",
+            "fields": [
+                "userFacingLanguage",
+                "clarificationConversationProtocol.currentBlock",
+                "clarificationConversationProtocol.userVisibleBlockTitle",
+                "clarificationConversationProtocol.userFacingLanguageRule",
+                "clarificationConversationProtocol.blockRule",
+                "clarificationConversationProtocol.confirmToolRule"
+            ]
+        }),
+        json!({
+            "groupId": "requirement_context",
+            "required": true,
+            "purpose": "Read compact source metadata and requirement hints for the current Brainstorm block.",
+            "whenToRead": "Read before forming the current block response.",
+            "fields": [
+                "requirementContext.sourceItems",
+                "keywordHints.compact"
+            ]
+        }),
+        json!({
+            "groupId": "requirement_full_text",
+            "required": false,
+            "purpose": "Read the full normalized requirement text only when compact context and request-scoped knowledge are insufficient.",
+            "whenToRead": "Read on demand for the current block only.",
+            "fields": [
+                "requirementContext.normalizedText"
+            ]
+        }),
+        json!({
+            "groupId": "current_block_rules",
+            "required": true,
+            "purpose": "Read only the rules for the current Brainstorm confirmation block.",
+            "whenToRead": "Read before presenting the current block.",
+            "fields": rule_group_fields
+        }),
+    ];
+    if current_block != ClarificationBlockName::PhaseScope {
+        groups.push(json!({
+            "groupId": "confirmed_clarification_state",
+            "required": true,
+            "purpose": "Read the already user-confirmed Brainstorm blocks as the authority for the current block.",
+            "whenToRead": "Read before forming the current block response.",
+            "fields": [
+                "confirmedClarificationState.blocks",
+                "confirmedClarificationState.finalSummaryConfirmed"
+            ]
+        }));
+    }
+    if current_block != ClarificationBlockName::FinalSummary {
+        groups.push(json!({
+            "groupId": "knowledge_context_plan",
+            "required": false,
+            "purpose": "Read the request-scoped knowledge query plan for the current Brainstorm block.",
+            "whenToRead": "Read before calling loom.knowledgeBrainstormContext for the current block.",
+            "fields": [
+                "knowledgeQueryPlan.sharedRules",
+                "knowledgeQueryPlan.toolContract",
+                format!("knowledgeQueryPlan.blocks.{}.executionOrder", block_id(&current_block))
+            ]
+        }));
+    }
+    groups.push(json!({
+        "groupId": "block_confirmation_contract",
+        "required": true,
+        "purpose": "Read the current block confirmation submit shape after the user visibly confirms this block.",
+        "whenToRead": "Read only after the user confirms the current block in chat.",
+        "fields": [
+            "blockConfirmationContract"
+        ]
+    }));
+
+    json!({
+        "schemaVersion": "1.0",
+        "requestType": "brainstorm_clarification_block",
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "brainstormRunId": brainstorm_run_id,
+        "userFacingLanguage": user_facing_language,
+        "contextRefs": context_refs,
+        "clarificationConversationProtocol": {
+            "mode": "progressive_blocks",
+            "currentBlock": current_block,
+            "requiredBlocks": required_blocks(),
+            "userVisibleBlockTitle": user_visible_block_title(&current_block),
+            "userFacingLanguageRule": user_facing_language.rule,
+            "blockRule": block_rule(&current_block),
+            "confirmToolRule": "After visible user confirmation, call loom.brainstormConfirmBlock with this requestRef, currentBlock, a concise user-facing summary, and current-block confirmedData. Do not write the final Brainstorm candidate in a clarification block."
+        },
+        "knowledgeQueryPlan": knowledge_query_plan_for_block(&current_block),
+        "rules": Value::Object(rules_object),
+        "blockConfirmationContract": {
+            "tool": "loom.brainstormConfirmBlock",
+            "currentBlock": current_block,
+            "summary": "Concise user-facing summary of what the user confirmed for this block.",
+            "confirmedDataShape": block_confirmed_data_shape(&current_block)
+        },
+        "requestReadPlan": {
+            "groups": groups
+        }
+    })
+}
+
+pub fn build_brainstorm_candidate_write_request_root(
     project_root: &Path,
     request_id: &str,
     delivery_id: &str,
@@ -26,72 +170,19 @@ pub fn build_brainstorm_request_root(
     .unwrap_or_else(|_| format!(".loom/agent-writable/{request_id}/brainstorm-candidate.json"));
     let schema_shape = serde_json::to_value(schema_for!(BrainstormCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let phase_scope_rules = phase_scope_rules();
-    let concept_rules = concept_grounding_rules();
-    let frontend_rules = frontend_experience_rules();
-    let final_summary_rules = final_summary_rules();
-    let semantic_rules = requirement_semantic_compact_rules();
 
     json!({
         "schemaVersion": "1.0",
-        "requestType": "brainstorm_session",
+        "requestType": "brainstorm_candidate_write",
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "brainstormRunId": brainstorm_run_id,
         "userFacingLanguage": user_facing_language,
         "contextRefs": context_refs,
-        "clarificationConversationProtocol": {
-            "mode": "progressive_blocks",
-            "currentBlock": ClarificationBlockName::PhaseScope,
-            "requiredBlocks": required_blocks(),
-            "userVisibleBlockNames": {
-                "phase_scope": "阶段范围确认",
-                "concept_grounding": "业务理解与规则确认",
-                "frontend_experience": "页面办理路径确认",
-                "final_summary": "提交前确认"
-            },
-            "internalTermRule": "phase_scope, concept_grounding, frontend_experience, final_summary, requestRef, candidate, gate, and submit tool names are internal protocol terms. Use the user-visible block names in chat and never ask the user to confirm internal block ids.",
-            "blockSequenceRule": "Process phase_scope, then concept_grounding, then frontend_experience, then final_summary. Do not skip ahead to writing the Brainstorm candidate.",
-            "userFacingLanguageRule": user_facing_language.rule,
-            "blockExecutionRules": {
-                "phase_scope": [
-                    "Read conversation_protocol, requirement_context, and phase_scope_rules before presenting phase_scope.",
-                    "For every phase_scope step in knowledge_context_plan, call loom.knowledgeBrainstormContext before recommending the current phase cut.",
-                    "Present 2-3 source-grounded scope options and show one recommendation; do not directly ask the user to approve an unstated internal scope."
-                ],
-                "concept_grounding": [
-                    "Read concept_grounding_rules after phase_scope is confirmed.",
-                    "Use only the confirmed current-phase scope items as the concept_grounding subject set.",
-                    "Show business objects, operations, fields, states, blockers, outcomes, and misunderstanding boundaries to the user before confirmation."
-                ],
-                "frontend_experience": [
-                    "Read frontend_experience_rules only after concept_grounding is confirmed.",
-                    "Confirm page or workspace operation paths from the already confirmed scope and business rules.",
-                    "If UI is not applicable, state the concrete reason and mark frontend_experience as skipped rather than inventing a page target."
-                ],
-                "final_summary": [
-                    "Do not call knowledge context for final_summary.",
-                    "Use final_summary as the pre-submit coverage checklist, not as the first place where detailed requirements appear.",
-                    "If the user corrects the summary, write the correction back into structured fields before confirming final_summary."
-                ]
-            },
-            "blockConfirmationRules": {
-                "phase_scope": "Wait for explicit user confirmation of the current phase cut before moving to concept_grounding.",
-                "concept_grounding": "Wait for explicit user confirmation of business understanding and rules before moving to frontend_experience.",
-                "frontend_experience": "Wait for explicit user confirmation of the page/workspace path, or record a concrete skip reason, before moving to final_summary.",
-                "final_summary": "Write and submit the Brainstorm candidate only after the user explicitly confirms the final_summary coverage checklist."
-            },
-            "noPrematureSubmitRule": "Do not read candidate_write_contract or write the Brainstorm candidate before final_summary is explicitly confirmed."
-        },
-        "knowledgeQueryPlan": knowledge_query_plan(),
         "rules": {
-            "phaseScope": phase_scope_rules,
-            "conceptGrounding": concept_rules,
-            "frontendExperience": frontend_rules,
-            "finalSummary": final_summary_rules,
             "candidateWrite": candidate_write_rules(),
             "requirementSemanticGrounding": {
-                "compactRules": semantic_rules
+                "compactRules": requirement_semantic_compact_rules()
             }
         },
         "enumRefs": enum_refs(),
@@ -124,115 +215,29 @@ pub fn build_brainstorm_request_root(
         "requestReadPlan": {
             "groups": [
                 {
-                    "groupId": "conversation_protocol",
+                    "groupId": "confirmed_clarification_state",
                     "required": true,
-                    "purpose": "Read the Brainstorm conversation contract and the current block discipline before asking the user anything.",
-                    "whenToRead": "Read at the beginning of the Brainstorm conversation and keep it authoritative for the whole request.",
+                    "purpose": "Read the confirmed Brainstorm blocks that must be structurally preserved in the candidate.",
+                    "whenToRead": "Read before writing the Brainstorm candidate.",
                     "fields": [
-                        "userFacingLanguage",
-                        "clarificationConversationProtocol.currentBlock",
-                        "clarificationConversationProtocol.requiredBlocks",
-                        "clarificationConversationProtocol.userVisibleBlockNames",
-                        "clarificationConversationProtocol.internalTermRule",
-                        "clarificationConversationProtocol.blockSequenceRule",
-                        "clarificationConversationProtocol.userFacingLanguageRule",
-                        "clarificationConversationProtocol.blockExecutionRules.phase_scope",
-                        "clarificationConversationProtocol.blockExecutionRules.concept_grounding",
-                        "clarificationConversationProtocol.blockExecutionRules.frontend_experience",
-                        "clarificationConversationProtocol.blockExecutionRules.final_summary",
-                        "clarificationConversationProtocol.blockConfirmationRules.phase_scope",
-                        "clarificationConversationProtocol.blockConfirmationRules.concept_grounding",
-                        "clarificationConversationProtocol.blockConfirmationRules.frontend_experience",
-                        "clarificationConversationProtocol.blockConfirmationRules.final_summary",
-                        "clarificationConversationProtocol.noPrematureSubmitRule"
+                        "confirmedClarificationState"
                     ]
                 },
                 {
                     "groupId": "requirement_context",
                     "required": true,
-                    "purpose": "Read compact source metadata and requirement hints before forming clarification options or rule summaries.",
-                    "whenToRead": "Read before phase_scope and return here whenever the confirmed source authority is unclear.",
+                    "purpose": "Read formal requirement source ids before writing candidate sourceRefs.",
+                    "whenToRead": "Read before writing sourceRefs.",
                     "fields": [
                         "requirementContext.sourceItems",
                         "keywordHints.compact"
                     ]
                 },
                 {
-                    "groupId": "requirement_full_text",
-                    "required": false,
-                    "purpose": "Read the full normalized requirement text only when compact source metadata, keyword hints, and request-scoped knowledge context are insufficient for the current clarification block.",
-                    "whenToRead": "Read on demand only for the active block; do not read it as the default phase_scope context.",
-                    "fields": [
-                        "requirementContext.normalizedText"
-                    ]
-                },
-                {
-                    "groupId": "phase_scope_rules",
-                    "required": true,
-                    "purpose": "Read the current-phase cut rules before presenting phase_scope options.",
-                    "whenToRead": "Read immediately before presenting phase_scope.",
-                    "fields": [
-                        "rules.phaseScope.optionComparison",
-                        "rules.phaseScope.selfCheck",
-                        "rules.phaseScope.candidateFieldMapping"
-                    ]
-                },
-                {
-                    "groupId": "knowledge_context_plan",
-                    "required": false,
-                    "purpose": "Read the tool-bound knowledge query plan for phase_scope, concept_grounding, and frontend_experience.",
-                    "whenToRead": "Read before each knowledge-enabled block. If the knowledge context tool returns failed, stop and report the tool failure instead of producing a knowledge-free clarification.",
-                    "fields": [
-                        "knowledgeQueryPlan.sharedRules",
-                        "knowledgeQueryPlan.toolContract",
-                        "knowledgeQueryPlan.blocks.phase_scope.executionOrder",
-                        "knowledgeQueryPlan.blocks.concept_grounding.executionOrder",
-                        "knowledgeQueryPlan.blocks.frontend_experience.executionOrder"
-                    ]
-                },
-                {
-                    "groupId": "concept_grounding_rules",
-                    "required": true,
-                    "purpose": "Read the business understanding and rule confirmation contract after phase_scope is confirmed.",
-                    "whenToRead": "Read after phase_scope is confirmed and before presenting concept_grounding.",
-                    "fields": [
-                        "rules.conceptGrounding.presentation",
-                        "rules.conceptGrounding.selfCheck",
-                        "rules.conceptGrounding.scopeItemCoverage",
-                        "rules.conceptGrounding.objectOperation",
-                        "rules.conceptGrounding.candidateFieldMapping"
-                    ]
-                },
-                {
-                    "groupId": "frontend_experience_rules",
-                    "required": false,
-                    "purpose": "Read the page/workspace operation path contract after concept_grounding is confirmed.",
-                    "whenToRead": "Read after concept_grounding is confirmed and before presenting frontend_experience.",
-                    "fields": [
-                        "rules.frontendExperience.presentation",
-                        "rules.frontendExperience.selfCheck",
-                        "rules.frontendExperience.operationPath",
-                        "rules.frontendExperience.candidateFieldMapping"
-                    ]
-                },
-                {
-                    "groupId": "final_summary_rules",
-                    "required": true,
-                    "purpose": "Read the pre-submit coverage checklist rules before presenting final_summary.",
-                    "whenToRead": "Read after prior blocks are confirmed or skipped and before presenting final_summary.",
-                    "fields": [
-                        "rules.finalSummary.reviewGate",
-                        "rules.finalSummary.requiredUserVisibleTopics",
-                        "rules.finalSummary.correctionWriteback",
-                        "rules.finalSummary.detailRetention",
-                        "rules.requirementSemanticGrounding.compactRules"
-                    ]
-                },
-                {
                     "groupId": "candidate_write_contract",
                     "required": true,
-                    "purpose": "Read the compact write contract only after the user explicitly confirms final_summary.",
-                    "whenToRead": "Read only after final_summary is explicitly confirmed by the user.",
+                    "purpose": "Read the compact write contract for the final Brainstorm candidate.",
+                    "whenToRead": "Read immediately before writing the Brainstorm candidate.",
                     "fields": [
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
@@ -539,6 +544,153 @@ fn knowledge_query_plan() -> Value {
     })
 }
 
+fn knowledge_query_plan_for_block(block: &ClarificationBlockName) -> Value {
+    if *block == ClarificationBlockName::FinalSummary {
+        return json!({
+            "sharedRules": [
+                "final_summary does not call knowledge context."
+            ],
+            "toolContract": {
+                "contextTool": "loom.knowledgeBrainstormContext",
+                "inspectTool": "loom.knowledgeInspectChunk"
+            },
+            "blocks": {}
+        });
+    }
+    let full = knowledge_query_plan();
+    let block_name = block_id(block);
+    let Some(block_plan) = full.pointer(&format!("/blocks/{block_name}")).cloned() else {
+        return full;
+    };
+    let mut blocks = Map::new();
+    blocks.insert(block_name.to_string(), block_plan);
+    json!({
+        "sharedRules": full.get("sharedRules").cloned().unwrap_or_else(|| json!([])),
+        "toolContract": full.get("toolContract").cloned().unwrap_or_else(|| json!({})),
+        "blocks": Value::Object(blocks)
+    })
+}
+
+fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'static str>) {
+    match block {
+        ClarificationBlockName::PhaseScope => (
+            "phaseScope",
+            phase_scope_rules(),
+            vec![
+                "rules.phaseScope.optionComparison",
+                "rules.phaseScope.selfCheck",
+                "rules.phaseScope.confirmedDataShape",
+            ],
+        ),
+        ClarificationBlockName::ConceptGrounding => (
+            "conceptGrounding",
+            concept_grounding_rules(),
+            vec![
+                "rules.conceptGrounding.presentation",
+                "rules.conceptGrounding.selfCheck",
+                "rules.conceptGrounding.scopeItemCoverage",
+                "rules.conceptGrounding.objectOperation",
+                "rules.conceptGrounding.confirmedDataShape",
+            ],
+        ),
+        ClarificationBlockName::FrontendExperience => (
+            "frontendExperience",
+            frontend_experience_rules(),
+            vec![
+                "rules.frontendExperience.presentation",
+                "rules.frontendExperience.selfCheck",
+                "rules.frontendExperience.operationPath",
+                "rules.frontendExperience.confirmedDataShape",
+            ],
+        ),
+        ClarificationBlockName::FinalSummary => (
+            "finalSummary",
+            final_summary_rules(),
+            vec![
+                "rules.finalSummary.reviewGate",
+                "rules.finalSummary.requiredUserVisibleTopics",
+                "rules.finalSummary.correctionWriteback",
+                "rules.finalSummary.detailRetention",
+                "rules.finalSummary.confirmedDataShape",
+                "rules.requirementSemanticGrounding.compactRules",
+            ],
+        ),
+    }
+}
+
+fn block_id(block: &ClarificationBlockName) -> &'static str {
+    match block {
+        ClarificationBlockName::PhaseScope => "phase_scope",
+        ClarificationBlockName::ConceptGrounding => "concept_grounding",
+        ClarificationBlockName::FrontendExperience => "frontend_experience",
+        ClarificationBlockName::FinalSummary => "final_summary",
+    }
+}
+
+fn user_visible_block_title(block: &ClarificationBlockName) -> &'static str {
+    match block {
+        ClarificationBlockName::PhaseScope => "阶段范围确认",
+        ClarificationBlockName::ConceptGrounding => "业务理解与规则确认",
+        ClarificationBlockName::FrontendExperience => "页面办理路径确认",
+        ClarificationBlockName::FinalSummary => "提交前确认",
+    }
+}
+
+fn block_rule(block: &ClarificationBlockName) -> &'static str {
+    match block {
+        ClarificationBlockName::PhaseScope => {
+            "Present only current-stage scope options and wait for explicit user confirmation before moving on."
+        }
+        ClarificationBlockName::ConceptGrounding => {
+            "Use only the confirmed current-stage scope as the subject set and wait for explicit user confirmation."
+        }
+        ClarificationBlockName::FrontendExperience => {
+            "Use confirmed business operations to confirm the page or workspace path, or record a concrete skip reason."
+        }
+        ClarificationBlockName::FinalSummary => {
+            "Summarize already confirmed blocks for final confirmation; do not introduce new requirement detail here."
+        }
+    }
+}
+
+fn block_confirmed_data_shape(block: &ClarificationBlockName) -> Value {
+    match block {
+        ClarificationBlockName::PhaseScope => json!({
+            "scope": {
+                "included": ["current-stage capability items confirmed by the user"],
+                "deferred": ["out-of-current-stage boundary items"],
+                "excluded": ["not-this-delivery items when applicable"]
+            },
+            "recommendation": {
+                "label": "confirmed current stage",
+                "reason": "why this stage boundary was confirmed"
+            },
+            "nextPhasePreview": "short user-facing next-phase preview when useful"
+        }),
+        ClarificationBlockName::ConceptGrounding => json!({
+            "scopeCoverage": ["coverage notes for each confirmed scope item"],
+            "objects": ["business objects or subjects"],
+            "operations": ["business operations or workflows"],
+            "fields": ["important fields or inputs"],
+            "states": ["important states"],
+            "rules": ["validation, blocking, outcome, or invariant rules"],
+            "boundaries": ["misunderstanding boundaries or deferred rules"]
+        }),
+        ClarificationBlockName::FrontendExperience => json!({
+            "required": true,
+            "surfaces": ["page or workspace names"],
+            "targetDiscovery": ["query, list, selection, or preselected context"],
+            "operationPaths": ["entry, inputs, success feedback, blocking feedback, and readback"],
+            "mustNot": ["unacceptable page interaction forms"]
+        }),
+        ClarificationBlockName::FinalSummary => json!({
+            "coverageChecklist": ["already confirmed scope, rules, page path, and deferred boundary"],
+            "corrections": ["user corrections written back to prior block data"],
+            "readyToWriteCandidate": true
+        }),
+    }
+}
+
 fn phase_scope_rules() -> Value {
     json!({
         "optionComparison": [
@@ -550,11 +702,7 @@ fn phase_scope_rules() -> Value {
             "Verify the recommended option contains goal-essential and flow-support items.",
             "Do not let adjacent or downstream work occupy the current phase unless the user explicitly asks for that wider boundary."
         ],
-        "candidateFieldMapping": {
-            "scope": ["scope.included", "scope.excluded", "scope.deferred", "scope.assumptions"],
-            "roadmap": ["roadmap.currentPhaseId", "roadmap.phases"],
-            "phasePlan": ["phasePlan.current", "phasePlan.nextPhasePreview"]
-        }
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::PhaseScope)
     })
 }
 
@@ -575,12 +723,7 @@ fn concept_grounding_rules() -> Value {
             "The concept_grounding block owns object-operation clarification for domain phases.",
             "Do not present only noun definitions when business operations are in scope."
         ],
-        "candidateFieldMapping": {
-            "acceptance": ["acceptance"],
-            "domainModel": ["domainModel.businessFlows"],
-            "concepts": ["conceptGrounding", "conceptConfirmation"],
-            "scopeCoverage": ["scope.included[].items"]
-        }
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::ConceptGrounding)
     })
 }
 
@@ -598,20 +741,7 @@ fn frontend_experience_rules() -> Value {
             "When target discovery exists, prefer paginated query and selection unless the user confirmed direct id lookup or preselected context.",
             "Use concrete confirmed operations, fields, and states to define the path."
         ],
-        "candidateFieldMapping": {
-            "frontendExperience": [
-                "frontendExperience.required",
-                "frontendExperience.kind",
-                "frontendExperience.experienceLevel",
-                "frontendExperience.audiences",
-                "frontendExperience.surfaces",
-                "frontendExperience.dataViews",
-                "frontendExperience.actions",
-                "frontendExperience.operationPaths",
-                "frontendExperience.mustNot",
-                "frontendExperience.confirmationSummary"
-            ]
-        }
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::FrontendExperience)
     })
 }
 
@@ -634,7 +764,8 @@ fn final_summary_rules() -> Value {
         ],
         "detailRetention": [
             "Keep confirmed details from phase_scope, concept_grounding, and frontend_experience in structured fields even when final_summary is concise."
-        ]
+        ],
+        "confirmedDataShape": block_confirmed_data_shape(&ClarificationBlockName::FinalSummary)
     })
 }
 

@@ -39,6 +39,7 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
         vec![
             "loom.architectureSectionSubmitFile",
             "loom.brainstormAcceptFile",
+            "loom.brainstormConfirmBlock",
             "loom.continue",
             "loom.deployBootstrap",
             "loom.deployDown",

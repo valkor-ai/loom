@@ -328,7 +328,6 @@ fn write_semantic_request(
             delivery_id: None,
             phase_id: None,
             root: json!({
-                "artifactKind": "knowledge_semantic_pack_result",
                 "sourceName": source_name,
                 "sourceId": source_id,
                 "buildId": build_id,
@@ -337,6 +336,8 @@ fn write_semantic_request(
                 "packCount": pack_count,
                 "chunkReadPlan": read_plan,
                 "outputContract": {
+                    "artifactKind": "knowledge_semantic_pack_result",
+                    "submitTool": "loom.knowledgeSemanticSubmitFile",
                     "resultTemplate": result_template,
                     "writeMode": "single_json",
                     "writeTargets": [{
@@ -347,7 +348,6 @@ fn write_semantic_request(
                     }]
                 },
                 "generationRules": generation_rules,
-                "submitTool": "loom.knowledgeSemanticSubmitFile",
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "semantic_pack_contract",
@@ -364,8 +364,8 @@ fn write_semantic_request(
                             "chunkReadPlan",
                             "outputContract.resultTemplate",
                             "generationRules",
-                            "writeTargets",
-                            "submitTool"
+                            "outputContract.writeTargets",
+                            "outputContract.submitTool"
                         ]
                     }]
                 }

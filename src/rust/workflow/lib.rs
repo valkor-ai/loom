@@ -18,6 +18,8 @@ impl DomainDispatcher for WorkflowDomainDispatcher {
         action: &RouteAction,
     ) -> LoomMcpActionResult {
         match action.kind {
+            RouteActionKind::BrainstormConfirmation => brainstorm::BrainstormDomainDispatcher
+                .dispatch_route_action(project_root, delivery_id, phase_id, action),
             RouteActionKind::TechnicalBaselineRequest => {
                 planning::materialize_technical_baseline_request(
                     project_root,

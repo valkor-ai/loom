@@ -26,26 +26,28 @@ fn submit_tool_returns_repairable_error_for_missing_target_file() {
 }
 
 #[test]
-fn brainstorm_submit_returns_user_gate_when_clarification_is_incomplete() {
+fn brainstorm_clarification_request_has_no_candidate_write_contract() {
     let fixture = Fixture::new("submit-user-gate");
     let request_ref = start_brainstorm_request(&fixture);
-    write_candidate_target(&fixture, &request_ref, &json!({}));
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.clone(),
+    })
+    .expect("inspect clarification request");
 
-    let result = call_submit(
-        "loom.brainstormAcceptFile",
-        &request_ref,
-        fixture.root_str(),
-    );
-
-    assert_eq!(result["state"], "user_gate");
-    assert_eq!(result["gate"]["currentBlock"], "phase_scope");
-    assert_eq!(result["requestRef"], request_ref);
+    assert_eq!(inspected.request_kind, "brainstorm_clarification_block");
+    assert!(inspected.submit_tool.is_none());
+    assert!(inspected.write_targets.is_empty());
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "candidate_write_contract"));
 }
 
 #[test]
 fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
     let fixture = Fixture::new("submit-schema-invalid");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(
         &fixture,
         &request_ref,
@@ -76,7 +78,7 @@ fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
 #[test]
 fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_gate() {
     let fixture = Fixture::new("submit-legacy-progress-shape");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     let mut candidate = valid_candidate_json();
     candidate["clarificationProgress"] = json!({
         "mode": "progressive_blocks",
@@ -108,7 +110,7 @@ fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_ga
 #[test]
 fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
     let fixture = Fixture::new("submit-success");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
     let result = call_submit(
@@ -155,7 +157,7 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
 #[test]
 fn continue_reuses_same_technical_baseline_request_after_brainstorm_accept() {
     let fixture = Fixture::new("continue-technical-baseline");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
     let submitted = call_submit(
@@ -185,7 +187,7 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         &json!({ "name": "loom-fixture", "private": true }),
     )
     .expect("write package.json");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
     let brainstorm_result = call_submit(
@@ -229,7 +231,7 @@ fn technical_baseline_conflict_with_previous_baseline_requires_user_gate() {
         &json!({ "name": "loom-fixture", "private": true }),
     )
     .expect("write package.json");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
     write_previous_technical_baseline(&fixture, &delivery_id);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
@@ -544,6 +546,13 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     })
     .expect("inspect taskplan request");
     assert_eq!(inspected.request_kind, "taskplan_generation_request");
+    assert_eq!(
+        inspected.submit_tool.as_deref(),
+        Some("loom.taskPlanAcceptFile")
+    );
+    assert_eq!(inspected.write_targets.len(), 2);
+    let compact_taskplan_root = read_request_root_value(fixture.root_str(), taskplan_request_ref);
+    assert_no_root_submit_metadata(&compact_taskplan_root);
     assert!(inspected
         .read_groups
         .iter()
@@ -1168,7 +1177,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
 #[test]
 fn brainstorm_submit_rejects_stale_request_binding() {
     let fixture = Fixture::new("submit-stale-request");
-    let request_ref = start_brainstorm_request(&fixture);
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
     let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
     let delivery_index = fixture
         .root
@@ -1215,9 +1224,9 @@ fn write_brainstorm_request(
             delivery_id: Some("delivery_1".to_string()),
             phase_id: Some("phase_1".to_string()),
             root: json!({
-                "artifactKind": "brainstorm_candidate",
-                "submitTool": "loom.brainstormAcceptFile",
                 "outputContract": {
+                    "artifactKind": "brainstorm_candidate",
+                    "submitTool": "loom.brainstormAcceptFile",
                     "writeMode": "single_json",
                     "writeTargets": [{
                         "targetId": "candidate",
@@ -1232,7 +1241,7 @@ fn write_brainstorm_request(
                         "required": true,
                         "purpose": "Read core fields.",
                         "whenToRead": "Before writing.",
-                        "fields": ["writeTargets"]
+                        "fields": ["outputContract.writeTargets"]
                     }]
                 }
             }),
@@ -1304,6 +1313,128 @@ fn start_brainstorm_request(fixture: &Fixture) -> String {
         .to_string()
 }
 
+fn start_brainstorm_candidate_write_request(fixture: &Fixture) -> String {
+    let server = LoomMcpServer::default();
+    let mut request_ref = start_brainstorm_request(fixture);
+
+    request_ref = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "phase_scope",
+        "确认第一阶段为证券账户模块闭环。",
+        json!({
+            "scope": {
+                "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户", "账户状态管理"],
+                "deferred": ["资金账户", "交易客户端", "中央撮合"],
+                "excluded": []
+            },
+            "recommendation": {
+                "label": "证券账户模块闭环",
+                "reason": "证券账户是资金账户和交易链路的上游基础对象。"
+            }
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("concept requestRef")
+        .to_string();
+    request_ref = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "concept_grounding",
+        "确认证券账户业务规则、状态和边界。",
+        json!({
+            "objects": ["证券账户"],
+            "operations": ["开户", "挂失补办", "销户"],
+            "rules": ["开户需要资格校验", "挂失后冻结证券", "销户前必须清空持仓"],
+            "boundaries": ["资金账户递延", "交易客户端递延"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("frontend requestRef")
+        .to_string();
+    request_ref = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "frontend_experience",
+        "确认工作人员后台证券账户管理页面路径。",
+        json!({
+            "required": true,
+            "surfaces": ["证券账户管理页面"],
+            "targetDiscovery": ["分页查询列表", "按账户号、姓名、证件号查询"],
+            "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
+            "mustNot": ["不能只靠内部主键触发办理动作"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("final summary requestRef")
+        .to_string();
+    let write_action = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "final_summary",
+        "用户已确认阶段范围、业务理解、页面办理路径和提交前核对。",
+        json!({
+            "coverageChecklist": ["证券账户模块闭环", "开户/挂失补办/销户规则", "工作人员后台办理路径"],
+            "readyToWriteCandidate": true
+        }),
+    );
+    assert_eq!(write_action["state"], "auto_runnable", "{write_action:#}");
+    let candidate_request_ref = write_action["next"]["requestRef"]
+        .as_str()
+        .expect("candidate write requestRef")
+        .to_string();
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: candidate_request_ref.clone(),
+    })
+    .expect("inspect candidate write request");
+    assert_eq!(inspected.request_kind, "brainstorm_candidate_write");
+    assert_eq!(
+        inspected.submit_tool.as_deref(),
+        Some("loom.brainstormAcceptFile")
+    );
+    assert_eq!(inspected.write_targets.len(), 1);
+    assert!(inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "candidate_write_contract"));
+    candidate_request_ref
+}
+
+fn confirm_brainstorm_block(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+    summary: &str,
+    confirmed_data: Value,
+) -> Value {
+    let arguments = json!({
+        "projectRoot": fixture.root_str(),
+        "requestRef": request_ref,
+        "block": block,
+        "summary": summary,
+        "confirmedData": confirmed_data
+    })
+    .as_object()
+    .expect("arguments object")
+    .clone();
+    let result = server
+        .invoke_tool("loom.brainstormConfirmBlock", Some(arguments))
+        .expect("confirm brainstorm block")
+        .structured_content
+        .expect("structured content");
+    assert!(
+        result["state"] == "user_gate" || result["state"] == "auto_runnable",
+        "{result:#}"
+    );
+    result
+}
+
 fn write_candidate_target(fixture: &Fixture, request_ref: &str, value: &Value) {
     let inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
@@ -1328,7 +1459,7 @@ fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
     )
     .expect("write entrypoint");
 
-    let request_ref = start_brainstorm_request(fixture);
+    let request_ref = start_brainstorm_candidate_write_request(fixture);
     write_candidate_target(fixture, &request_ref, &valid_candidate_json());
 
     let brainstorm_result = call_submit(
@@ -2131,6 +2262,21 @@ fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
     let request_path = std::path::Path::new(project_root).join(index.request_file);
     serde_json::from_str(&std::fs::read_to_string(request_path).expect("read request file"))
         .expect("parse request file")
+}
+
+fn assert_no_root_submit_metadata(root: &Value) {
+    for key in [
+        "artifactKind",
+        "submitTool",
+        "writeTargets",
+        "writeMode",
+        "outputContract",
+    ] {
+        assert!(
+            root.get(key).is_none(),
+            "compact request root must not duplicate {key}: {root:#}"
+        );
+    }
 }
 
 fn runtime_section_contract(request_root: &Value) -> &Value {

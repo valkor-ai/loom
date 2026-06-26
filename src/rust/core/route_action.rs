@@ -107,7 +107,6 @@ impl RouteActionKind {
             self,
             Self::BrainstormStart
                 | Self::BrainstormClarification
-                | Self::BrainstormConfirmation
                 | Self::NeedsUserDecision
                 | Self::ManualReview
         )

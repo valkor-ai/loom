@@ -36,6 +36,14 @@ pub fn brainstorm_latest_file(project_root: &Path, delivery_id: &str) -> PathBuf
     brainstorm_dir(project_root, delivery_id).join("latest.json")
 }
 
+pub fn brainstorm_clarification_state_file(
+    project_root: &Path,
+    delivery_id: &str,
+    phase_id: &str,
+) -> PathBuf {
+    brainstorm_phase_dir(project_root, delivery_id, phase_id).join("clarification-state.json")
+}
+
 pub fn brainstorm_phases_dir(project_root: &Path, delivery_id: &str) -> PathBuf {
     brainstorm_dir(project_root, delivery_id).join("phases")
 }

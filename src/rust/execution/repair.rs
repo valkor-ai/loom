@@ -577,7 +577,7 @@ fn materialize_taskplan_repair_action(
 
     let source_refs = field_value(&core_fields, "sourceRefs")?;
     let allowed_refs = field_value(&core_fields, "allowedRefs")?;
-    let context_projection = json!({
+    let mut context_projection = json!({
         "phaseId": field_value(&core_fields, "contextProjection.phaseId")?,
         "planningContractId": field_value(&core_fields, "contextProjection.planningContractId")?,
         "architectureArtifactContractId": field_value(&core_fields, "contextProjection.architectureArtifactContractId")?,
@@ -604,14 +604,18 @@ fn materialize_taskplan_repair_action(
         "runtimeDeliveryRules": field_value(&rule_fields, "generationRules.runtimeDeliveryRules")?
     });
     let enum_refs = field_value(&contract_fields, "enumRefs")?;
-    let frontend_projection = optional_fields
-        .get("outputContract.frontendExperienceProjection")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
-    let runtime_projection = optional_fields
-        .get("outputContract.runtimeDeliveryProjection")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
+    let frontend_projection = optional_field_value(
+        &optional_fields,
+        "contextProjection.frontendExperienceProjection",
+        "outputContract.frontendExperienceProjection",
+    );
+    let runtime_projection = optional_field_value(
+        &optional_fields,
+        "contextProjection.runtimeDeliveryProjection",
+        "outputContract.runtimeDeliveryProjection",
+    );
+    context_projection["frontendExperienceProjection"] = frontend_projection.clone();
+    context_projection["runtimeDeliveryProjection"] = runtime_projection.clone();
     let optional_projection_fields =
         taskplan_repair_optional_projection_fields(&frontend_projection, &runtime_projection);
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
@@ -679,9 +683,7 @@ fn materialize_taskplan_repair_action(
                 "status": "ready",
                 "group": "TaskPlanGroup matching one outline group",
                 "tasks": []
-            },
-            "frontendExperienceProjection": frontend_projection,
-            "runtimeDeliveryProjection": runtime_projection
+            }
         },
         "requestReadPlan": {
             "groups": [
@@ -1109,16 +1111,28 @@ fn field_value(
         })
 }
 
+fn optional_field_value(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+    primary: &str,
+    migration_fallback: &str,
+) -> Value {
+    fields
+        .get(primary)
+        .or_else(|| fields.get(migration_fallback))
+        .map(|field| field.value.clone())
+        .unwrap_or(Value::Null)
+}
+
 fn taskplan_repair_optional_projection_fields(
     frontend_projection: &Value,
     runtime_projection: &Value,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
     if !frontend_projection.is_null() {
-        fields.push("outputContract.frontendExperienceProjection");
+        fields.push("contextProjection.frontendExperienceProjection");
     }
     if !runtime_projection.is_null() {
-        fields.push("outputContract.runtimeDeliveryProjection");
+        fields.push("contextProjection.runtimeDeliveryProjection");
     }
     fields
 }
