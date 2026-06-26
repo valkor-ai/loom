@@ -224,13 +224,12 @@ pub fn build_brainstorm_candidate_write_request_root(
                     ]
                 },
                 {
-                    "groupId": "requirement_context",
+                    "groupId": "source_ref_registry",
                     "required": true,
-                    "purpose": "Read formal requirement source ids before writing candidate sourceRefs.",
-                    "whenToRead": "Read before writing sourceRefs.",
+                    "purpose": "Read only legal requirement source ids for candidate sourceRefs; do not reinterpret requirements from this registry.",
+                    "whenToRead": "Read before filling candidate sourceRefs.",
                     "fields": [
-                        "requirementContext.sourceItems",
-                        "keywordHints.compact"
+                        "sourceRefRegistry.sources"
                     ]
                 },
                 {

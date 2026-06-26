@@ -326,6 +326,52 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     let request_ref = write_action["next"]["requestRef"]
         .as_str()
         .expect("candidate write requestRef");
+    let candidate_request = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect candidate write request");
+    let candidate_group_ids = candidate_request
+        .read_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        candidate_group_ids,
+        vec![
+            "confirmed_clarification_state",
+            "source_ref_registry",
+            "candidate_write_contract"
+        ]
+    );
+    let source_ref_registry = structured(
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": "source_ref_registry"
+                }))),
+            )
+            .expect("read source ref registry"),
+    );
+    assert_eq!(
+        source_ref_registry["fields"]["sourceRefRegistry.sources"][0]["sourceId"],
+        "req-001"
+    );
+    assert_eq!(
+        source_ref_registry["fields"]["sourceRefRegistry.sources"][0]["title"],
+        "request_text"
+    );
+    assert!(
+        source_ref_registry["fields"]["sourceRefRegistry.sources"][0]
+            .get("textRef")
+            .is_none()
+    );
+    assert!(source_ref_registry["fields"]
+        .get("keywordHints.compact")
+        .is_none());
 
     let write_contract = structured(
         server
@@ -389,11 +435,7 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     let mut candidate = write_contract["fields"]["outputContract.resultTemplate"].clone();
     populate_confirmed_brainstorm_candidate(&mut candidate);
 
-    let inspected = state::inspect_request(InspectRequestInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: request_ref.to_string(),
-    })
-    .expect("inspect request");
+    let inspected = candidate_request;
     assert_eq!(
         inspected.submit_tool.as_deref(),
         Some("loom.brainstormAcceptFile")

@@ -10,8 +10,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     field_projection::{
-        select_compact_keyword_hints, select_compact_requirement_semantic_rules, select_value,
-        selector_parts,
+        select_compact_keyword_hints, select_compact_requirement_semantic_rules,
+        select_source_ref_registry, select_value, selector_parts,
     },
     paths::{
         from_project_relative, request_file_for_id, request_refs_dir,
@@ -502,6 +502,9 @@ fn used_context_ref_keys(read_groups: &[ReadGroupRef]) -> BTreeSet<&'static str>
             "requirementContext" => {
                 used.insert("requirementContextRef");
             }
+            "sourceRefRegistry" => {
+                used.insert("requirementContextRef");
+            }
             "originalRequirementContext" => {
                 used.insert("originalRequirementContextRef");
             }
@@ -645,6 +648,17 @@ fn resolve_context_ref_for_validation(
             let text_file = from_project_relative(project_root, relative)?;
             return Ok(Some(Value::String(read_text(&text_file)?)));
         }
+    }
+    if parts[0] == "sourceRefRegistry" {
+        let Some(relative) = context_refs
+            .get("requirementContextRef")
+            .and_then(Value::as_str)
+        else {
+            return Ok(None);
+        };
+        let ref_file = from_project_relative(project_root, relative)?;
+        let ref_value = read_json_value(&ref_file)?;
+        return Ok(Some(select_source_ref_registry(&ref_value, &parts[1..])?));
     }
     let aliases = [
         ("requirementContext", "requirementContextRef"),

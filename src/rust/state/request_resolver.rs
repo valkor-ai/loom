@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use crate::{
     field_projection::{
-        select_compact_keyword_hints, select_compact_requirement_semantic_rules, select_value,
-        selector_parts as projection_selector_parts,
+        select_compact_keyword_hints, select_compact_requirement_semantic_rules,
+        select_source_ref_registry, select_value, selector_parts as projection_selector_parts,
     },
     legacy_ts_reader::hydrate_legacy_request_value,
     paths::{from_project_relative, project_paths},
@@ -251,6 +251,21 @@ fn resolve_context_ref_field(
             let text_file = from_project_relative(&paths.root, relative)?;
             return Ok(Some(field_result(Value::String(read_text(&text_file)?))));
         }
+    }
+    if parts[0] == "sourceRefRegistry" {
+        let Some(relative) = context_refs
+            .get("requirementContextRef")
+            .and_then(Value::as_str)
+        else {
+            return Ok(None);
+        };
+        let paths = project_paths(project_root)?;
+        let ref_file = from_project_relative(&paths.root, relative)?;
+        let ref_value = read_json_value(&ref_file)?;
+        return Ok(Some(field_result(select_source_ref_registry(
+            &ref_value,
+            &parts[1..],
+        )?)));
     }
     let aliases = [
         ("requirementContext", "requirementContextRef"),

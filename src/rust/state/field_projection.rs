@@ -90,6 +90,41 @@ pub(crate) fn select_compact_requirement_semantic_rules(root: &Value) -> Value {
     )
 }
 
+pub(crate) fn select_source_ref_registry(
+    requirement_context: &Value,
+    selector_parts: &[String],
+) -> StateResult<Value> {
+    let sources = requirement_context
+        .get("sourceItems")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_object)
+                .filter_map(|source| {
+                    let source_id = source.get("itemId").and_then(Value::as_str)?;
+                    let mut value = serde_json::Map::new();
+                    value.insert("sourceId".to_string(), Value::String(source_id.to_string()));
+                    for key in ["kind", "origin", "title", "characterCount"] {
+                        if let Some(field) = source.get(key) {
+                            value.insert(key.to_string(), field.clone());
+                        }
+                    }
+                    Some(Value::Object(value))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let registry = serde_json::json!({
+        "usage": "source_refs_only",
+        "sources": sources,
+    });
+    if selector_parts.is_empty() {
+        return Ok(registry);
+    }
+    select_value(&registry, selector_parts)
+}
+
 fn compact_keyword_hints(root: &Value) -> Value {
     let Some(object) = root.as_object() else {
         return serde_json::json!({
