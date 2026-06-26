@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, path::Path};
 
 use delivery_core::{
-    submit_tool_accepts_artifact, ArtifactKind, FileSubmitInput, ReadGroupRef, RepairIssue,
-    RouteAction, SubmitPreflightSummary, WriteMode, WriteTarget,
+    canonical_tool_name, submit_tool_accepts_artifact, ArtifactKind, FileSubmitInput, ReadGroupRef,
+    RepairIssue, RouteAction, SubmitPreflightSummary, WriteMode, WriteTarget,
 };
 use serde_json::Value;
 
@@ -85,7 +85,7 @@ pub fn authorize_write_targets(
         ));
     }
     let declared_submit_tool = extract_submit_tool(&root)?;
-    if declared_submit_tool != submit_tool {
+    if canonical_tool_name(&declared_submit_tool) != canonical_tool_name(submit_tool) {
         return Err(fatal(
             "SUBMIT_TOOL_MISMATCH",
             format!(

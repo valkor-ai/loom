@@ -59,7 +59,7 @@ pub enum ToolOutputKind {
 
 pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
     ToolRegistration {
-        name: "loom.initProject",
+        name: "initProject",
         description: "Initialize Loom project state for the current project.",
         target_batch: 4,
         input_kind: ToolInputKind::Project,
@@ -67,7 +67,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.status",
+        name: "status",
         description: "Read Loom project status for the current project.",
         target_batch: 4,
         input_kind: ToolInputKind::Project,
@@ -75,7 +75,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.plan",
+        name: "plan",
         description: "Start or route a Loom delivery plan for a requirement.",
         target_batch: 4,
         input_kind: ToolInputKind::Plan,
@@ -83,7 +83,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.continue",
+        name: "continue",
         description: "Continue the active Loom workflow for the current project.",
         target_batch: 4,
         input_kind: ToolInputKind::Project,
@@ -91,7 +91,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.inspectRequest",
+        name: "inspectRequest",
         description:
             "Inspect request metadata and declared read groups without returning the full request.",
         target_batch: 3,
@@ -100,7 +100,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.readFieldGroup",
+        name: "readFieldGroup",
         description: "Read a declared request field group.",
         target_batch: 3,
         input_kind: ToolInputKind::ReadFieldGroup,
@@ -108,7 +108,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.readRequestFields",
+        name: "readRequestFields",
         description: "Read declared request fields by path.",
         target_batch: 3,
         input_kind: ToolInputKind::ReadRequestFields,
@@ -116,7 +116,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.brainstormConfirmBlock",
+        name: "brainstormConfirmBlock",
         description:
             "Record a user-confirmed Brainstorm block and return the next Brainstorm action.",
         target_batch: 7,
@@ -125,7 +125,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.brainstormAcceptFile",
+        name: "brainstormAcceptFile",
         description: "Submit a Brainstorm candidate file.",
         target_batch: 7,
         input_kind: ToolInputKind::FileSubmit,
@@ -133,7 +133,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.technicalBaselineAcceptFile",
+        name: "technicalBaselineAcceptFile",
         description: "Submit a technical baseline candidate file.",
         target_batch: 8,
         input_kind: ToolInputKind::FileSubmit,
@@ -141,7 +141,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.repositoryContextAcceptFile",
+        name: "repositoryContextAcceptFile",
         description: "Submit a repository context candidate file.",
         target_batch: 8,
         input_kind: ToolInputKind::FileSubmit,
@@ -149,7 +149,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.architectureSectionSubmitFile",
+        name: "architectureSectionSubmitFile",
         description: "Submit an architecture artifact section file.",
         target_batch: 8,
         input_kind: ToolInputKind::FileSubmit,
@@ -157,7 +157,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.taskPlanAcceptFile",
+        name: "taskPlanAcceptFile",
         description: "Submit a task plan candidate file.",
         target_batch: 8,
         input_kind: ToolInputKind::FileSubmit,
@@ -165,7 +165,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.recordTaskResultFile",
+        name: "recordTaskResultFile",
         description: "Submit a task execution result file.",
         target_batch: 8,
         input_kind: ToolInputKind::FileSubmit,
@@ -173,7 +173,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.reviewAcceptFile",
+        name: "reviewAcceptFile",
         description: "Submit a review result file.",
         target_batch: 9,
         input_kind: ToolInputKind::FileSubmit,
@@ -181,7 +181,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.reviewResolveFile",
+        name: "reviewResolveFile",
         description: "Submit a manual review resolution file.",
         target_batch: 9,
         input_kind: ToolInputKind::FileSubmit,
@@ -189,7 +189,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.repairSubmitFile",
+        name: "repairSubmitFile",
         description: "Submit a repair artifact file.",
         target_batch: 5,
         input_kind: ToolInputKind::FileSubmit,
@@ -197,7 +197,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeAdd",
+        name: "knowledgeAdd",
         description: "Register a knowledge source and write pending source paths.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeAdd,
@@ -205,7 +205,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeUpdate",
+        name: "knowledgeUpdate",
         description: "Add, remove, or replace pending paths for a knowledge source.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeUpdate,
@@ -213,7 +213,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgePending",
+        name: "knowledgePending",
         description: "List knowledge sources with pending operations.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeProject,
@@ -221,7 +221,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeDiscard",
+        name: "knowledgeDiscard",
         description: "Discard pending operations for a knowledge source.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -229,7 +229,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeBuild",
+        name: "knowledgeBuild",
         description: "Build a knowledge source and start semantic pack generation.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -237,7 +237,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeResume",
+        name: "knowledgeResume",
         description: "Resume a pending semantic build for a knowledge source.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -245,7 +245,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeList",
+        name: "knowledgeList",
         description: "List registered knowledge sources.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeProject,
@@ -253,7 +253,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeStatus",
+        name: "knowledgeStatus",
         description: "Read status for a knowledge source.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -261,7 +261,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeRemove",
+        name: "knowledgeRemove",
         description: "Remove a knowledge source without deleting original documents.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -269,7 +269,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeEnable",
+        name: "knowledgeEnable",
         description: "Enable a knowledge source for search and Brainstorm context.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -277,7 +277,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeDisable",
+        name: "knowledgeDisable",
         description: "Disable a knowledge source for search and Brainstorm context.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeName,
@@ -285,7 +285,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeSearch",
+        name: "knowledgeSearch",
         description: "Search enabled published knowledge sources and return chunk cards.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeSearch,
@@ -293,7 +293,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeBrainstormContext",
+        name: "knowledgeBrainstormContext",
         description: "Build request-scoped Brainstorm knowledge context.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeBrainstormContext,
@@ -301,7 +301,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeInspectChunk",
+        name: "knowledgeInspectChunk",
         description: "Read a knowledge chunk body.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeInspectChunk,
@@ -309,7 +309,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.knowledgeSemanticSubmitFile",
+        name: "knowledgeSemanticSubmitFile",
         description: "Submit a generated knowledge semantic pack result file.",
         target_batch: 6,
         input_kind: ToolInputKind::KnowledgeSemanticSubmit,
@@ -317,7 +317,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployPrepare",
+        name: "deployPrepare",
         description: "Prepare generated deployment assets from RuntimeDeliveryContract.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -325,7 +325,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployRun",
+        name: "deployRun",
         description: "Prepare, start, validate, and report local deployment state.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -333,7 +333,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployUp",
+        name: "deployUp",
         description: "Start an already prepared deployment and validate preview/API routes.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -341,7 +341,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployStatus",
+        name: "deployStatus",
         description: "Read local deployment status or active deploy operation.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -349,7 +349,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployInspect",
+        name: "deployInspect",
         description:
             "Inspect deployment spec, source model, topology, generated files, and repair state.",
         target_batch: 10,
@@ -358,7 +358,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployValidate",
+        name: "deployValidate",
         description: "Validate generated deployment assets plus preview and public API paths.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -366,7 +366,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployLogs",
+        name: "deployLogs",
         description: "Read deployment log tail and full log ref without inlining full logs.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -374,7 +374,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployBootstrap",
+        name: "deployBootstrap",
         description: "Confirm and run deployment bootstrap tasks when required.",
         target_batch: 10,
         input_kind: ToolInputKind::DeployBootstrap,
@@ -382,7 +382,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployDown",
+        name: "deployDown",
         description: "Stop the local deployment.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -390,7 +390,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
-        name: "loom.deployRepair",
+        name: "deployRepair",
         description: "Return the current deployment repair next action.",
         target_batch: 10,
         input_kind: ToolInputKind::Deploy,
@@ -538,48 +538,48 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "loom.architectureSectionSubmitFile",
-                "loom.brainstormAcceptFile",
-                "loom.brainstormConfirmBlock",
-                "loom.continue",
-                "loom.deployBootstrap",
-                "loom.deployDown",
-                "loom.deployInspect",
-                "loom.deployLogs",
-                "loom.deployPrepare",
-                "loom.deployRepair",
-                "loom.deployRun",
-                "loom.deployStatus",
-                "loom.deployUp",
-                "loom.deployValidate",
-                "loom.initProject",
-                "loom.inspectRequest",
-                "loom.knowledgeAdd",
-                "loom.knowledgeBrainstormContext",
-                "loom.knowledgeBuild",
-                "loom.knowledgeDisable",
-                "loom.knowledgeDiscard",
-                "loom.knowledgeEnable",
-                "loom.knowledgeInspectChunk",
-                "loom.knowledgeList",
-                "loom.knowledgePending",
-                "loom.knowledgeRemove",
-                "loom.knowledgeResume",
-                "loom.knowledgeSearch",
-                "loom.knowledgeSemanticSubmitFile",
-                "loom.knowledgeStatus",
-                "loom.knowledgeUpdate",
-                "loom.plan",
-                "loom.readFieldGroup",
-                "loom.readRequestFields",
-                "loom.recordTaskResultFile",
-                "loom.repairSubmitFile",
-                "loom.repositoryContextAcceptFile",
-                "loom.reviewAcceptFile",
-                "loom.reviewResolveFile",
-                "loom.status",
-                "loom.taskPlanAcceptFile",
-                "loom.technicalBaselineAcceptFile",
+                "architectureSectionSubmitFile",
+                "brainstormAcceptFile",
+                "brainstormConfirmBlock",
+                "continue",
+                "deployBootstrap",
+                "deployDown",
+                "deployInspect",
+                "deployLogs",
+                "deployPrepare",
+                "deployRepair",
+                "deployRun",
+                "deployStatus",
+                "deployUp",
+                "deployValidate",
+                "initProject",
+                "inspectRequest",
+                "knowledgeAdd",
+                "knowledgeBrainstormContext",
+                "knowledgeBuild",
+                "knowledgeDisable",
+                "knowledgeDiscard",
+                "knowledgeEnable",
+                "knowledgeInspectChunk",
+                "knowledgeList",
+                "knowledgePending",
+                "knowledgeRemove",
+                "knowledgeResume",
+                "knowledgeSearch",
+                "knowledgeSemanticSubmitFile",
+                "knowledgeStatus",
+                "knowledgeUpdate",
+                "plan",
+                "readFieldGroup",
+                "readRequestFields",
+                "recordTaskResultFile",
+                "repairSubmitFile",
+                "repositoryContextAcceptFile",
+                "reviewAcceptFile",
+                "reviewResolveFile",
+                "status",
+                "taskPlanAcceptFile",
+                "technicalBaselineAcceptFile",
             ]
         );
     }
@@ -589,8 +589,8 @@ mod tests {
         let tool = ToolRegistry::batch_2()
             .list_tools()
             .into_iter()
-            .find(|tool| tool.name == "loom.status")
-            .expect("loom.status tool");
+            .find(|tool| tool.name == "status")
+            .expect("status tool");
         let schema = serde_json::to_value(tool.input_schema).expect("schema json");
         assert!(schema.to_string().contains("projectRoot"));
         assert!(!schema.to_string().contains("host"));

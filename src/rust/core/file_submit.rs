@@ -48,58 +48,59 @@ const REPAIR_KINDS: &[ArtifactKind] = &[
 
 pub const SUBMIT_TOOL_SPECS: &[SubmitToolSpec] = &[
     SubmitToolSpec {
-        name: "loom.brainstormAcceptFile",
+        name: "brainstormAcceptFile",
         target_batch: 7,
         allowed_artifact_kinds: BRAINSTORM_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.knowledgeSemanticSubmitFile",
+        name: "knowledgeSemanticSubmitFile",
         target_batch: 6,
         allowed_artifact_kinds: KNOWLEDGE_SEMANTIC_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.technicalBaselineAcceptFile",
+        name: "technicalBaselineAcceptFile",
         target_batch: 8,
         allowed_artifact_kinds: TECHNICAL_BASELINE_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.repositoryContextAcceptFile",
+        name: "repositoryContextAcceptFile",
         target_batch: 8,
         allowed_artifact_kinds: REPOSITORY_CONTEXT_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.architectureSectionSubmitFile",
+        name: "architectureSectionSubmitFile",
         target_batch: 8,
         allowed_artifact_kinds: ARCHITECTURE_SECTION_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.taskPlanAcceptFile",
+        name: "taskPlanAcceptFile",
         target_batch: 8,
         allowed_artifact_kinds: TASK_PLAN_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.recordTaskResultFile",
+        name: "recordTaskResultFile",
         target_batch: 8,
         allowed_artifact_kinds: TASK_RESULT_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.reviewAcceptFile",
+        name: "reviewAcceptFile",
         target_batch: 9,
         allowed_artifact_kinds: REVIEW_RESULT_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.reviewResolveFile",
+        name: "reviewResolveFile",
         target_batch: 9,
         allowed_artifact_kinds: MANUAL_REVIEW_KINDS,
     },
     SubmitToolSpec {
-        name: "loom.repairSubmitFile",
+        name: "repairSubmitFile",
         target_batch: 5,
         allowed_artifact_kinds: REPAIR_KINDS,
     },
 ];
 
 pub fn submit_tool_spec(name: &str) -> Option<SubmitToolSpec> {
+    let name = canonical_tool_name(name);
     SUBMIT_TOOL_SPECS
         .iter()
         .copied()
@@ -114,4 +115,8 @@ pub fn submit_tool_accepts_artifact(tool_name: &str, artifact_kind: ArtifactKind
     submit_tool_spec(tool_name)
         .map(|spec| spec.allowed_artifact_kinds.contains(&artifact_kind))
         .unwrap_or(false)
+}
+
+pub fn canonical_tool_name(name: &str) -> &str {
+    name.strip_prefix("loom.").unwrap_or(name)
 }

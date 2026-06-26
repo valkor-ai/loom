@@ -151,36 +151,33 @@ fn call_tool(
     server: &LoomMcpServer,
     request: CallToolRequestParams,
 ) -> Result<CallToolResult, McpError> {
-    match request.name.as_ref() {
-        "loom.initProject" => action_result(init_project_tool(parse_args::<ProjectToolInput>(
+    let tool_name = canonical_tool_name(request.name.as_ref());
+    match tool_name {
+        "initProject" => action_result(init_project_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
-        "loom.status" => action_result(status_tool(parse_args::<ProjectToolInput>(
+        "status" => action_result(status_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
-        "loom.plan" => action_result(plan_tool(parse_args::<PlanToolInput>(request.arguments)?)),
-        "loom.continue" => action_result(continue_tool(parse_args::<ProjectToolInput>(
+        "plan" => action_result(plan_tool(parse_args::<PlanToolInput>(request.arguments)?)),
+        "continue" => action_result(continue_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
-        "loom.brainstormConfirmBlock" => {
-            action_result(brainstorm_confirm_block_tool(parse_args::<
-                BrainstormConfirmBlockInput,
-            >(
-                request.arguments
-            )?))
-        }
-        "loom.inspectRequest" => structured(state::inspect_request(parse_args::<
-            InspectRequestInput,
+        "brainstormConfirmBlock" => action_result(brainstorm_confirm_block_tool(parse_args::<
+            BrainstormConfirmBlockInput,
+        >(
+            request.arguments,
+        )?)),
+        "inspectRequest" => structured(state::inspect_request(parse_args::<InspectRequestInput>(
+            request.arguments,
+        )?)),
+        "readFieldGroup" => structured(state::read_field_group(parse_args::<ReadFieldGroupInput>(
+            request.arguments,
+        )?)),
+        "readRequestFields" => structured(state::read_request_fields(parse_args::<
+            ReadRequestFieldsInput,
         >(request.arguments)?)),
-        "loom.readFieldGroup" => structured(state::read_field_group(parse_args::<
-            ReadFieldGroupInput,
-        >(request.arguments)?)),
-        "loom.readRequestFields" => {
-            structured(state::read_request_fields(parse_args::<
-                ReadRequestFieldsInput,
-            >(request.arguments)?))
-        }
-        "loom.knowledgeAdd" => {
+        "knowledgeAdd" => {
             let input = parse_args::<KnowledgeAddInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -189,7 +186,7 @@ fn call_tool(
                 knowledge::add_source(input),
             ))
         }
-        "loom.knowledgeUpdate" => {
+        "knowledgeUpdate" => {
             let input = parse_args::<KnowledgeUpdateInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -198,7 +195,7 @@ fn call_tool(
                 knowledge::update_source(input),
             ))
         }
-        "loom.knowledgePending" => {
+        "knowledgePending" => {
             let input = parse_args::<KnowledgeProjectInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -207,7 +204,7 @@ fn call_tool(
                 knowledge::pending_sources(input),
             ))
         }
-        "loom.knowledgeDiscard" => {
+        "knowledgeDiscard" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -216,7 +213,7 @@ fn call_tool(
                 knowledge::discard_pending(input),
             ))
         }
-        "loom.knowledgeBuild" => {
+        "knowledgeBuild" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_result(
@@ -224,7 +221,7 @@ fn call_tool(
                 knowledge::build_source_from_input(input),
             ))
         }
-        "loom.knowledgeResume" => {
+        "knowledgeResume" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_result(
@@ -232,7 +229,7 @@ fn call_tool(
                 knowledge::resume_source_from_input(input),
             ))
         }
-        "loom.knowledgeList" => {
+        "knowledgeList" => {
             let input = parse_args::<KnowledgeProjectInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -241,7 +238,7 @@ fn call_tool(
                 knowledge::list_sources(input),
             ))
         }
-        "loom.knowledgeStatus" => {
+        "knowledgeStatus" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -250,7 +247,7 @@ fn call_tool(
                 knowledge::source_status(input),
             ))
         }
-        "loom.knowledgeRemove" => {
+        "knowledgeRemove" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -259,7 +256,7 @@ fn call_tool(
                 knowledge::remove_source(input),
             ))
         }
-        "loom.knowledgeEnable" => {
+        "knowledgeEnable" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -268,7 +265,7 @@ fn call_tool(
                 knowledge::enable_source(input),
             ))
         }
-        "loom.knowledgeDisable" => {
+        "knowledgeDisable" => {
             let input = parse_args::<KnowledgeNameInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -277,7 +274,7 @@ fn call_tool(
                 knowledge::disable_source(input),
             ))
         }
-        "loom.knowledgeSearch" => {
+        "knowledgeSearch" => {
             let input = parse_args::<KnowledgeSearchInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -286,7 +283,7 @@ fn call_tool(
                 knowledge::search_knowledge(input),
             ))
         }
-        "loom.knowledgeBrainstormContext" => {
+        "knowledgeBrainstormContext" => {
             let input = parse_args::<KnowledgeBrainstormContextInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -295,7 +292,7 @@ fn call_tool(
                 knowledge::brainstorm_context(input),
             ))
         }
-        "loom.knowledgeInspectChunk" => {
+        "knowledgeInspectChunk" => {
             let input = parse_args::<KnowledgeInspectChunkInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
@@ -304,7 +301,7 @@ fn call_tool(
                 knowledge::inspect_chunk(input),
             ))
         }
-        "loom.knowledgeSemanticSubmitFile" => {
+        "knowledgeSemanticSubmitFile" => {
             let input = parse_args::<KnowledgeSemanticSubmitInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_result(
@@ -312,50 +309,44 @@ fn call_tool(
                 knowledge::submit_semantic_pack_from_input(input),
             ))
         }
-        "loom.deployPrepare" => action_result(deploy::deploy_prepare(normalize_deploy_input(
+        "deployPrepare" => action_result(deploy::deploy_prepare(normalize_deploy_input(
             parse_args::<DeployToolInput>(request.arguments)?,
         )?)),
-        "loom.deployRun" => {
-            action_result(deploy::deploy_run(normalize_deploy_input(parse_args::<
-                DeployToolInput,
-            >(
-                request.arguments,
-            )?)?))
-        }
-        "loom.deployUp" => action_result(deploy::deploy_up(normalize_deploy_input(parse_args::<
+        "deployRun" => action_result(deploy::deploy_run(normalize_deploy_input(parse_args::<
             DeployToolInput,
         >(
             request.arguments,
         )?)?)),
-        "loom.deployStatus" => action_result(deploy::deploy_status(normalize_deploy_input(
+        "deployUp" => action_result(deploy::deploy_up(normalize_deploy_input(parse_args::<
+            DeployToolInput,
+        >(
+            request.arguments,
+        )?)?)),
+        "deployStatus" => action_result(deploy::deploy_status(normalize_deploy_input(
             parse_args::<DeployToolInput>(request.arguments)?,
         )?)),
-        "loom.deployInspect" => action_result(deploy::deploy_inspect(normalize_deploy_input(
+        "deployInspect" => action_result(deploy::deploy_inspect(normalize_deploy_input(
             parse_args::<DeployToolInput>(request.arguments)?,
         )?)),
-        "loom.deployValidate" => action_result(deploy::deploy_validate(normalize_deploy_input(
+        "deployValidate" => action_result(deploy::deploy_validate(normalize_deploy_input(
             parse_args::<DeployToolInput>(request.arguments)?,
         )?)),
-        "loom.deployLogs" => {
-            action_result(deploy::deploy_logs(normalize_deploy_input(parse_args::<
-                DeployToolInput,
-            >(
-                request.arguments,
-            )?)?))
-        }
-        "loom.deployBootstrap" => {
+        "deployLogs" => action_result(deploy::deploy_logs(normalize_deploy_input(parse_args::<
+            DeployToolInput,
+        >(
+            request.arguments,
+        )?)?)),
+        "deployBootstrap" => {
             action_result(deploy::deploy_bootstrap(normalize_deploy_bootstrap_input(
                 parse_args::<DeployBootstrapInput>(request.arguments)?,
             )?))
         }
-        "loom.deployDown" => {
-            action_result(deploy::deploy_down(normalize_deploy_input(parse_args::<
-                DeployToolInput,
-            >(
-                request.arguments,
-            )?)?))
-        }
-        "loom.deployRepair" => action_result(deploy::deploy_repair(normalize_deploy_input(
+        "deployDown" => action_result(deploy::deploy_down(normalize_deploy_input(parse_args::<
+            DeployToolInput,
+        >(
+            request.arguments,
+        )?)?)),
+        "deployRepair" => action_result(deploy::deploy_repair(normalize_deploy_input(
             parse_args::<DeployToolInput>(request.arguments)?,
         )?)),
         name if is_submit_tool(name) => action_result(submit_file_tool(
@@ -364,9 +355,13 @@ fn call_tool(
         )),
         _ => server
             .tools
-            .call_registered_placeholder(&request.name, request.arguments)
+            .call_registered_placeholder(tool_name, request.arguments)
             .map_err(|_| McpError::method_not_found::<CallToolRequestMethod>()),
     }
+}
+
+fn canonical_tool_name(name: &str) -> &str {
+    name.strip_prefix("loom.").unwrap_or(name)
 }
 
 fn init_project_tool(input: ProjectToolInput) -> LoomMcpActionResult {
@@ -566,64 +561,64 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         }
     };
 
-    match tool_name {
-        "loom.brainstormAcceptFile" => {
+    match delivery_core::canonical_tool_name(tool_name) {
+        "brainstormAcceptFile" => {
             return accept_brainstorm_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.technicalBaselineAcceptFile" => {
+        "technicalBaselineAcceptFile" => {
             return accept_technical_baseline_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.repositoryContextAcceptFile" => {
+        "repositoryContextAcceptFile" => {
             return accept_repository_context_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.architectureSectionSubmitFile" => {
+        "architectureSectionSubmitFile" => {
             return architecture::accept_architecture_section_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.taskPlanAcceptFile" => {
+        "taskPlanAcceptFile" => {
             return execution::accept_task_plan_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.recordTaskResultFile" => {
+        "recordTaskResultFile" => {
             return execution::accept_task_result_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.reviewAcceptFile" => {
+        "reviewAcceptFile" => {
             return execution::accept_review_result_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.reviewResolveFile" => {
+        "reviewResolveFile" => {
             return execution::accept_manual_review_resolution_file(
                 &normalized_input,
                 &authorized,
                 WorkflowDomainDispatcher,
             );
         }
-        "loom.repairSubmitFile" => {
+        "repairSubmitFile" => {
             if authorized.artifact_kind == delivery_core::ArtifactKind::ArchitectureArtifactRepair {
                 return architecture::accept_architecture_repair_file(
                     &normalized_input,

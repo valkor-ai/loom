@@ -22,7 +22,7 @@ fn submit_tool_returns_repairable_error_for_missing_target_file() {
     assert_eq!(result["targetFile"], ".loom/agent-writable/candidate.json");
     assert_eq!(result["targetIds"], json!(["candidate"]));
     assert_eq!(result["issues"][0]["code"], "TARGET_MISSING");
-    assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
+    assert_eq!(result["resubmitTool"], "brainstormAcceptFile");
     assert!(result.get("submitCommand").is_none());
 }
 
@@ -153,6 +153,22 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
     })
     .expect("inspect technical baseline request");
     assert_eq!(inspected.request_kind, "technical_baseline_request");
+    let baseline_context = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: technical_baseline_request_ref.to_string(),
+        group_id: "technical_baseline_context".to_string(),
+    })
+    .expect("read technical baseline context");
+    assert!(baseline_context
+        .fields
+        .get("brainstormLens.acceptance")
+        .is_none());
+    assert!(baseline_context.fields["brainstormLens.acceptanceIndex"].value[0]["id"].is_string());
+    assert!(
+        baseline_context.fields["brainstormLens.acceptanceIndex"].value[0]
+            .get("statement")
+            .is_none()
+    );
     let selection_group = inspected
         .read_groups
         .iter()

@@ -209,7 +209,12 @@ fn build_request_root(
         "brainstormLens": {
             "summary": brainstorm.summary,
             "scope": brainstorm.scope,
-            "acceptance": brainstorm.acceptance,
+            "acceptanceIndex": brainstorm.acceptance.iter().map(|acceptance| json!({
+                "id": acceptance.id,
+                "priority": acceptance.priority,
+                "capabilityRefs": acceptance.capability_refs,
+                "sourceRefs": acceptance.source_refs
+            })).collect::<Vec<_>>(),
             "frontendExperience": brainstorm.frontend_experience,
             "userFacingLanguage": brainstorm.delivery_context.user_facing_language,
             "sourceRefs": brainstorm.sources.iter().map(|source| source.source_id.clone()).collect::<Vec<_>>()
@@ -278,12 +283,12 @@ fn build_request_root(
                 {
                     "groupId": "technical_baseline_context",
                     "required": true,
-                    "purpose": "Read the confirmed Brainstorm scope, acceptance, frontend target, current phase lens, and baseline decision needs before drafting the baseline.",
+                    "purpose": "Read the confirmed Brainstorm scope, acceptance ids, frontend target, current phase lens, and baseline decision needs before drafting the baseline.",
                     "whenToRead": "Read before producing any TechnicalBaseline recommendation.",
                     "fields": [
                         "brainstormLens.summary",
                         "brainstormLens.scope",
-                        "brainstormLens.acceptance",
+                        "brainstormLens.acceptanceIndex",
                         "brainstormLens.frontendExperience",
                         "brainstormLens.userFacingLanguage",
                         "currentPhaseLens",

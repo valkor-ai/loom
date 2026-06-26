@@ -44,8 +44,8 @@ fn stdio_server_initializes_and_lists_batch_2_surface() {
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name"))
         .collect();
-    assert!(tool_names.contains(&"loom.status"));
-    assert!(tool_names.contains(&"loom.readFieldGroup"));
+    assert!(tool_names.contains(&"status"));
+    assert!(tool_names.contains(&"readFieldGroup"));
 
     let templates = client.request(json!({
         "jsonrpc": "2.0",

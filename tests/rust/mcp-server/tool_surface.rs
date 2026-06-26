@@ -37,48 +37,48 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
     assert_eq!(
         names,
         vec![
-            "loom.architectureSectionSubmitFile",
-            "loom.brainstormAcceptFile",
-            "loom.brainstormConfirmBlock",
-            "loom.continue",
-            "loom.deployBootstrap",
-            "loom.deployDown",
-            "loom.deployInspect",
-            "loom.deployLogs",
-            "loom.deployPrepare",
-            "loom.deployRepair",
-            "loom.deployRun",
-            "loom.deployStatus",
-            "loom.deployUp",
-            "loom.deployValidate",
-            "loom.initProject",
-            "loom.inspectRequest",
-            "loom.knowledgeAdd",
-            "loom.knowledgeBrainstormContext",
-            "loom.knowledgeBuild",
-            "loom.knowledgeDisable",
-            "loom.knowledgeDiscard",
-            "loom.knowledgeEnable",
-            "loom.knowledgeInspectChunk",
-            "loom.knowledgeList",
-            "loom.knowledgePending",
-            "loom.knowledgeRemove",
-            "loom.knowledgeResume",
-            "loom.knowledgeSearch",
-            "loom.knowledgeSemanticSubmitFile",
-            "loom.knowledgeStatus",
-            "loom.knowledgeUpdate",
-            "loom.plan",
-            "loom.readFieldGroup",
-            "loom.readRequestFields",
-            "loom.recordTaskResultFile",
-            "loom.repairSubmitFile",
-            "loom.repositoryContextAcceptFile",
-            "loom.reviewAcceptFile",
-            "loom.reviewResolveFile",
-            "loom.status",
-            "loom.taskPlanAcceptFile",
-            "loom.technicalBaselineAcceptFile",
+            "architectureSectionSubmitFile",
+            "brainstormAcceptFile",
+            "brainstormConfirmBlock",
+            "continue",
+            "deployBootstrap",
+            "deployDown",
+            "deployInspect",
+            "deployLogs",
+            "deployPrepare",
+            "deployRepair",
+            "deployRun",
+            "deployStatus",
+            "deployUp",
+            "deployValidate",
+            "initProject",
+            "inspectRequest",
+            "knowledgeAdd",
+            "knowledgeBrainstormContext",
+            "knowledgeBuild",
+            "knowledgeDisable",
+            "knowledgeDiscard",
+            "knowledgeEnable",
+            "knowledgeInspectChunk",
+            "knowledgeList",
+            "knowledgePending",
+            "knowledgeRemove",
+            "knowledgeResume",
+            "knowledgeSearch",
+            "knowledgeSemanticSubmitFile",
+            "knowledgeStatus",
+            "knowledgeUpdate",
+            "plan",
+            "readFieldGroup",
+            "readRequestFields",
+            "recordTaskResultFile",
+            "repairSubmitFile",
+            "repositoryContextAcceptFile",
+            "reviewAcceptFile",
+            "reviewResolveFile",
+            "status",
+            "taskPlanAcceptFile",
+            "technicalBaselineAcceptFile",
         ]
     );
 
@@ -96,15 +96,15 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
 fn submit_tools_use_file_submit_input_without_legacy_cli_paths() {
     let tools = ToolRegistry::batch_2().list_tools();
     for name in [
-        "loom.brainstormAcceptFile",
-        "loom.technicalBaselineAcceptFile",
-        "loom.repositoryContextAcceptFile",
-        "loom.architectureSectionSubmitFile",
-        "loom.taskPlanAcceptFile",
-        "loom.recordTaskResultFile",
-        "loom.reviewAcceptFile",
-        "loom.reviewResolveFile",
-        "loom.repairSubmitFile",
+        "brainstormAcceptFile",
+        "technicalBaselineAcceptFile",
+        "repositoryContextAcceptFile",
+        "architectureSectionSubmitFile",
+        "taskPlanAcceptFile",
+        "recordTaskResultFile",
+        "reviewAcceptFile",
+        "reviewResolveFile",
+        "repairSubmitFile",
     ] {
         let tool = tools
             .iter()
@@ -125,7 +125,7 @@ fn submit_tools_use_file_submit_input_without_legacy_cli_paths() {
 
     let knowledge_submit = tools
         .iter()
-        .find(|tool| tool.name.as_ref() == "loom.knowledgeSemanticSubmitFile")
+        .find(|tool| tool.name.as_ref() == "knowledgeSemanticSubmitFile")
         .expect("knowledge semantic submit tool");
     let knowledge_schema =
         serde_json::to_value(knowledge_submit).expect("tool json")["inputSchema"].to_string();
@@ -174,7 +174,7 @@ fn registered_placeholder_returns_target_batch() {
         .clone();
 
     let result = ToolRegistry::batch_2()
-        .call_registered_placeholder("loom.readFieldGroup", Some(arguments))
+        .call_registered_placeholder("readFieldGroup", Some(arguments))
         .expect("placeholder result");
     let structured = result
         .structured_content
