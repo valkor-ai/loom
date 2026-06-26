@@ -15,8 +15,6 @@
     ·
     <a href="#token-saving-context">Token Saving</a>
     ·
-    <a href="#related-work">Related Work</a>
-    ·
     <a href="#faq">FAQ</a>
   </p>
   <p>
