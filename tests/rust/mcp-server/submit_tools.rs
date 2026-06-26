@@ -938,8 +938,8 @@ fn review_environment_blocker_cannot_route_execution_repair() {
 }
 
 #[test]
-fn repeated_invalid_review_result_falls_back_to_manual_review() {
-    let fixture = Fixture::new("review-invalid-fallback");
+fn repeated_invalid_review_result_stays_repairable() {
+    let fixture = Fixture::new("review-invalid-repairable");
     let review_request_ref = complete_task_execution_to_review(&fixture);
     write_candidate_target(
         &fixture,
@@ -965,9 +965,9 @@ fn repeated_invalid_review_result_falls_back_to_manual_review() {
 
     assert_eq!(first["state"], "repairable_error", "{first:#}");
     assert_eq!(second["state"], "repairable_error", "{second:#}");
-    assert_eq!(third["state"], "user_gate", "{third:#}");
-    assert_eq!(third["gate"]["kind"], "manual_review");
-    assert_eq!(third["gate"]["submitTool"], "loom.reviewResolveFile");
+    assert_eq!(third["state"], "repairable_error", "{third:#}");
+    assert_eq!(third["resubmitTool"], "loom.reviewAcceptFile");
+    assert_eq!(third["fixScope"], "review_result_candidate_only");
 }
 
 #[test]

@@ -203,6 +203,59 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
     assert_forbidden_cli_fields_absent(&submitted_value);
 }
 
+#[test]
+fn deploy_execution_repair_invalid_result_returns_repairable_error() {
+    let fixture = Fixture::new("deploy-execution-repair-invalid");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({ "schemaVersion": "1.0" }),
+    )
+    .expect("write invalid deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert_eq!(submitted_value["targetFile"], result_file);
+    assert_eq!(submitted_value["resubmitTool"], "loom.repairSubmitFile");
+    assert_eq!(
+        submitted_value["fixScope"],
+        "deploy_execution_repair_result_only"
+    );
+}
+
 fn runtime_delivery() -> Value {
     json!({
         "status": "modified",

@@ -9,16 +9,16 @@ use delivery_core::{
     ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
     ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput, LoomMcpActionResult,
     LoomMcpAutoRunnableResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpNextAction, PostSubmitAction, ReadRequestFieldsResult,
-    RepairContext, RepairOrigin, WriteMode,
+    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult, PostSubmitAction,
+    ReadRequestFieldsResult, RepairContext, RepairIssue, RepairOrigin, WriteMode,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     paths::{from_project_relative, to_project_relative},
     store::{
-        ensure_dir, now_millis, now_string, path_exists, read_json, write_json_atomic, StateError,
-        StateResult,
+        ensure_dir, now_millis, now_string, path_exists, read_json, read_json_value,
+        write_json_atomic, StateError, StateResult,
     },
     write_targets::AuthorizedWriteSet,
 };
@@ -223,8 +223,37 @@ fn accept_deploy_execution_repair_file_inner(
         StateError::InvalidArgument("Deploy execution repair result target is missing.".to_string())
     })?;
     let project_root = Path::new(&input.project_root);
-    let result: DeployExecutionRepairTaskResult =
-        read_json(&from_project_relative(project_root, &target.path)?)?;
+    let target_file = target.path.clone();
+    let raw_result = match read_json_value(&from_project_relative(project_root, &target_file)?) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(repairable(
+                input,
+                authorized,
+                target_file,
+                vec![repair_issue(
+                    "DEPLOY_REPAIR_RESULT_JSON_INVALID",
+                    "$",
+                    &format!("Deploy execution repair result JSON is not readable: {error}"),
+                )],
+            ))
+        }
+    };
+    let result: DeployExecutionRepairTaskResult = match serde_json::from_value(raw_result) {
+        Ok(result) => result,
+        Err(error) => {
+            return Ok(repairable(
+                input,
+                authorized,
+                target_file,
+                vec![repair_issue(
+                    "DEPLOY_REPAIR_RESULT_SCHEMA_INVALID",
+                    "$",
+                    &format!("Deploy execution repair result has an invalid schema: {error}"),
+                )],
+            ))
+        }
+    };
     let request_fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
@@ -255,13 +284,27 @@ fn accept_deploy_execution_repair_file_inner(
             )
         })?;
     if result.repair_id != repair_id {
-        return Err(StateError::InvalidArgument(
-            "repairId does not match request.".to_string(),
+        return Ok(repairable(
+            input,
+            authorized,
+            target_file,
+            vec![repair_issue(
+                "DEPLOY_REPAIR_ID_MISMATCH",
+                "repairId",
+                "repairId must match outputContract.repairId from the active deploy repair request.",
+            )],
         ));
     }
     if result.deployment_failure_ref != deployment_failure_ref {
-        return Err(StateError::InvalidArgument(
-            "deploymentFailureRef does not match request.".to_string(),
+        return Ok(repairable(
+            input,
+            authorized,
+            target_file,
+            vec![repair_issue(
+                "DEPLOY_REPAIR_FAILURE_REF_MISMATCH",
+                "deploymentFailureRef",
+                "deploymentFailureRef must match outputContract.deploymentFailureRef from the active deploy repair request.",
+            )],
         ));
     }
     let protected = request_fields
@@ -281,12 +324,30 @@ fn accept_deploy_execution_repair_file_inner(
             .iter()
             .any(|prefix| changed == prefix || changed.starts_with(&format!("{prefix}/")))
         {
-            return Err(StateError::InvalidArgument(format!(
-                "Deploy execution repair changed protected path {changed}."
-            )));
+            return Ok(repairable(
+                input,
+                authorized,
+                target_file,
+                vec![repair_issue(
+                    "DEPLOY_REPAIR_PROTECTED_PATH_CHANGED",
+                    "changedFiles",
+                    &format!("Deploy execution repair must not change protected path {changed}."),
+                )],
+            ));
         }
     }
-    validate_runtime_delivery_evidence(&result, &request_fields)?;
+    if let Err(error) = validate_runtime_delivery_evidence(&result, &request_fields) {
+        return Ok(repairable(
+            input,
+            authorized,
+            target_file,
+            vec![repair_issue(
+                "DEPLOY_REPAIR_RUNTIME_EVIDENCE_INVALID",
+                "runtimeDeliveryEvidence",
+                &error.to_string(),
+            )],
+        ));
+    }
     if matches!(result.status.as_str(), "blocked" | "failed") {
         return Ok(LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
             project_root: input.project_root.clone(),
@@ -738,6 +799,36 @@ fn enum_string<T: serde::Serialize>(value: &T) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn repair_issue(code: &str, field_path: &str, message: &str) -> RepairIssue {
+    RepairIssue {
+        code: code.to_string(),
+        message: message.to_string(),
+        target_id: Some("result".to_string()),
+        field_path: Some(field_path.to_string()),
+    }
+}
+
+fn repairable(
+    input: &FileSubmitInput,
+    authorized: &AuthorizedWriteSet,
+    target_file: String,
+    issues: Vec<RepairIssue>,
+) -> LoomMcpActionResult {
+    LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
+        project_root: input.project_root.clone(),
+        target_file,
+        target_ids: authorized
+            .targets
+            .iter()
+            .map(|target| target.target_id.clone())
+            .collect(),
+        issues,
+        resubmit_tool: "loom.repairSubmitFile".to_string(),
+        fix_scope: Some("deploy_execution_repair_result_only".to_string()),
+        read_groups: authorized.read_groups.clone(),
+    })
 }
 
 fn failed(project_root: &str, code: &str, message: String) -> LoomMcpActionResult {
