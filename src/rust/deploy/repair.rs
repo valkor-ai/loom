@@ -428,6 +428,7 @@ fn materialize_deploy_execution_repair(
                 "description": "Write the deploy execution repair result JSON."
             }],
             "schemaShape": schema_shape,
+            "resultTemplate": deploy_execution_repair_result_template(request, &failure_ref, &failure),
             "resultRules": [
                 "changedFiles must not include generated Dockerfile, Compose, nginx, dockerignore, RuntimeDeliveryContract, AAC, TaskPlan, ReviewResult, or .loom.",
                 "runtimeDeliveryEvidence.addressedFailedContractFields must cover failedContractFields.",
@@ -457,6 +458,7 @@ fn materialize_deploy_execution_repair(
                         "outputContract.repairId",
                         "outputContract.deploymentFailureRef",
                         "outputContract.resultFile",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.status",
                         "outputContract.schemaShape.properties.changedFiles",
                         "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
@@ -526,6 +528,39 @@ fn materialize_deploy_execution_repair(
             }),
         ),
     ))
+}
+
+fn deploy_execution_repair_result_template(
+    request: &DeploymentRepairAction,
+    failure_ref: &str,
+    failure: &DeploymentFailureReport,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "repairId": request.repair_id,
+        "status": "completed",
+        "deploymentFailureRef": failure_ref,
+        "changedFiles": [],
+        "runtimeDeliveryEvidence": {
+            "addressedFailedContractFields": failure.failed_contract_fields,
+            "codeLevelChecks": failure.required_code_level_checks.iter().map(|check| {
+                json!({
+                    "checkId": check,
+                    "status": "passed",
+                    "evidence": ""
+                })
+            }).collect::<Vec<_>>(),
+            "commandsRun": [],
+            "unverifiedItems": []
+        },
+        "selfRepairSummary": {
+            "attempted": true,
+            "attemptCount": failure.attempt,
+            "stopReason": "verification_passed",
+            "progressObserved": true
+        },
+        "notes": []
+    })
 }
 
 fn latest_repair_action(project_root: &Path) -> StateResult<Option<DeploymentRepairAction>> {

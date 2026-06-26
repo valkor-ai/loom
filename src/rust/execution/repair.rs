@@ -28,6 +28,9 @@ use crate::{
     },
     task_execution::{load_current_plan_and_run, save_run},
     task_plan::update_run_summary,
+    templates::{
+        task_result_template, taskplan_group_result_template, taskplan_outline_result_template,
+    },
 };
 
 const ARCHITECTURE_SECTION_ORDER: [ArchitectureSectionGroup; 6] = [
@@ -389,6 +392,7 @@ fn build_repair_execution_request(
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    let result_template = task_result_template(&task_plan.task_plan_id, task);
     json!({
         "schemaVersion": "1.0",
         "requestType": "delivery_execution_repair",
@@ -459,6 +463,7 @@ fn build_repair_execution_request(
                 "blockedReasons", "createdAt", "updatedAt"
             ],
             "schemaShape": schema_shape,
+            "resultTemplate": result_template,
             "resultRules": [
                 "TaskResult must include every requiredTopLevelFields entry.",
                 "If status is completed, evidence must show the repair was verified."
@@ -482,6 +487,7 @@ fn build_repair_execution_request(
                         "enumRefs",
                         "outputContract.resultFile",
                         "outputContract.requiredTopLevelFields",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.status",
                         "outputContract.schemaShape.properties.changedFiles",
                         "outputContract.schemaShape.properties.noChangeReason",
@@ -666,24 +672,8 @@ fn materialize_taskplan_repair_action(
             },
             "outlineSchemaShape": schema_shape,
             "groupSchemaShape": group_schema,
-            "outlineResultTemplate": {
-                "schemaVersion": "1.0",
-                "requestId": request_id,
-                "deliveryId": delivery_id,
-                "phaseId": phase_id,
-                "status": "ready",
-                "taskPlanId": format!("taskplan-{phase_id}-repair"),
-                "groups": []
-            },
-            "groupResultTemplate": {
-                "schemaVersion": "1.0",
-                "requestId": request_id,
-                "deliveryId": delivery_id,
-                "phaseId": phase_id,
-                "status": "ready",
-                "group": "TaskPlanGroup matching one outline group",
-                "tasks": []
-            }
+            "outlineResultTemplate": taskplan_outline_result_template(&request_id, delivery_id, phase_id),
+            "groupResultTemplate": taskplan_group_result_template(&request_id, delivery_id, phase_id)
         },
         "requestReadPlan": {
             "groups": [
@@ -877,7 +867,8 @@ fn materialize_architecture_repair_action(
         .get("rules.runtimeDeliveryAuthority")
         .map(|field| field.value.clone())
         .unwrap_or(Value::Null);
-    let section_outputs = build_architecture_repair_section_outputs(root, &request_id)?;
+    let section_outputs =
+        build_architecture_repair_section_outputs(root, &request_id, delivery_id, phase_id)?;
     let candidate_files = section_outputs
         .iter()
         .filter_map(|output| {
@@ -1000,6 +991,7 @@ fn materialize_architecture_repair_action(
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
                         "outputContract.schemaProjection",
+                        "currentSectionContract.resultTemplate",
                         "enumRefs.section",
                         "enumRefs.status",
                         "enumRefs.coverageStatus",
@@ -1140,6 +1132,8 @@ fn taskplan_repair_optional_projection_fields(
 fn build_architecture_repair_section_outputs(
     project_root: &Path,
     request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
 ) -> Result<Vec<Value>, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1156,6 +1150,12 @@ fn build_architecture_repair_section_outputs(
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
                 "schemaRef": format!("rust-contract://ArchitectureSectionCandidateAgentWritable/{}", section_name(*section)),
                 "schemaShape": schema_shape.clone(),
+                "resultTemplate": architecture_repair_section_result_template(
+                    request_id,
+                    delivery_id,
+                    phase_id,
+                    *section
+                ),
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
@@ -1169,6 +1169,204 @@ fn build_architecture_repair_section_outputs(
             }))
         })
         .collect::<Result<Vec<_>, state::store::StateError>>()?)
+}
+
+fn architecture_repair_section_result_template(
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    section: ArchitectureSectionGroup,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "section": section,
+        "status": "ready",
+        "content": architecture_repair_section_content_template(section),
+        "blockedReasons": [],
+        "createdAt": "ISO-8601 datetime"
+    })
+}
+
+fn architecture_repair_section_content_template(section: ArchitectureSectionGroup) -> Value {
+    match section {
+        ArchitectureSectionGroup::Foundation => json!({
+            "source": {
+                "planningGenerationContractId": "",
+                "technicalBaselineId": ""
+            },
+            "engineeringBoundary": {
+                "summary": "",
+                "applications": [{
+                    "applicationId": "app_1",
+                    "name": "",
+                    "kind": "",
+                    "rootPath": "."
+                }],
+                "modules": [{
+                    "moduleId": "module_1",
+                    "name": "",
+                    "scopeRefs": [],
+                    "acceptanceRefs": [],
+                    "summary": ""
+                }]
+            },
+            "modules": [{
+                "moduleId": "module_1",
+                "name": "",
+                "responsibility": "",
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        }),
+        ArchitectureSectionGroup::DomainContract => json!({
+            "dataModel": {
+                "entities": [{
+                    "entityId": "entity_1",
+                    "name": "",
+                    "fields": [],
+                    "constraints": [],
+                    "scopeRefs": [],
+                    "acceptanceRefs": []
+                }],
+                "relationships": [],
+                "constraints": []
+            },
+            "interfaces": [{
+                "interfaceId": "interface_1",
+                "name": "",
+                "kind": "",
+                "operations": [],
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        }),
+        ArchitectureSectionGroup::Behavior => json!({
+            "userFlows": [{
+                "flowId": "flow_1",
+                "name": "",
+                "steps": [],
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }],
+            "stateMachines": [{
+                "machineId": "state_machine_1",
+                "name": "",
+                "states": [],
+                "transitions": [],
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        }),
+        ArchitectureSectionGroup::FrontendExperience => json!({
+            "frontendExperience": {
+                "required": true,
+                "experienceLevel": "usable_internal_product",
+                "surfaces": [{
+                    "surfaceId": "surface_1",
+                    "name": "",
+                    "purpose": "",
+                    "audienceRefs": []
+                }],
+                "dataViews": [{
+                    "viewId": "view_1",
+                    "name": "",
+                    "fields": [],
+                    "sourceRefs": []
+                }],
+                "actions": [{
+                    "actionId": "action_1",
+                    "label": "",
+                    "entryPoint": "",
+                    "sourceRefs": []
+                }],
+                "operationPaths": [{
+                    "pathId": "path_1",
+                    "name": "",
+                    "surfaceRef": "surface_1",
+                    "dataViewRefs": ["view_1"],
+                    "actionRefs": ["action_1"],
+                    "sourceRefs": []
+                }],
+                "sourceRefs": {
+                    "brainstormFrontendExperienceRef": ""
+                }
+            }
+        }),
+        ArchitectureSectionGroup::RuntimeDelivery => json!({
+            "runtimeDelivery": {
+                "status": "modified",
+                "basis": {
+                    "technicalBaselineRef": ""
+                },
+                "build": {
+                    "command": "",
+                    "output": ""
+                },
+                "start": {
+                    "command": "",
+                    "port": null
+                },
+                "runtimeSurfaces": [{
+                    "surfaceId": "runtime_surface_1",
+                    "kind": "",
+                    "urlPath": "",
+                    "purpose": ""
+                }],
+                "taskPlanningGuidance": {
+                    "runtimeAffectingTasks": [],
+                    "closureRequired": true
+                }
+            }
+        }),
+        ArchitectureSectionGroup::Coverage => json!({
+            "acceptanceMatrix": [{
+                "acceptanceId": "",
+                "priority": "must",
+                "statement": "",
+                "coverageStatus": "covered",
+                "reason": "",
+                "coverage": [{
+                    "type": "",
+                    "refs": [],
+                    "description": ""
+                }],
+                "verificationHints": [{
+                    "kind": "",
+                    "description": ""
+                }]
+            }],
+            "detailCoverage": [{
+                "detailId": "",
+                "coverageStatus": "covered",
+                "artifactRefs": {
+                    "modules": [],
+                    "entities": [],
+                    "fields": [],
+                    "constraints": [],
+                    "interfaces": [],
+                    "userFlows": [],
+                    "stateMachines": [],
+                    "frontendDataViews": [],
+                    "frontendActions": [],
+                    "frontendOperationPaths": [],
+                    "acceptanceMatrix": []
+                },
+                "reason": ""
+            }],
+            "risksAndDecisions": {
+                "decisions": [],
+                "risks": []
+            },
+            "handoff": {
+                "readyForTaskPlan": true,
+                "blockingReasons": [],
+                "nextNode": "task_plan"
+            }
+        }),
+    }
 }
 
 fn section_name(section: ArchitectureSectionGroup) -> &'static str {

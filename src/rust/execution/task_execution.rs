@@ -21,6 +21,7 @@ use crate::{
         task_plan_latest_file, task_plan_run_file, task_plan_run_latest_file,
     },
     task_plan::{execute_task_next_from_request, update_run_summary},
+    templates::task_result_template,
 };
 
 pub fn continue_execution(
@@ -300,6 +301,7 @@ fn build_execution_request(
                 "blockedReasons", "createdAt", "updatedAt"
             ],
             "schemaShape": schema_shape,
+            "resultTemplate": task_result_template(&task_plan.task_plan_id, task),
             "resultRules": [
                 "TaskResult must include every requiredTopLevelFields entry.",
                 "If status is completed, every verification intent should have passed evidence.",
@@ -338,6 +340,7 @@ fn build_execution_request(
                         "enumRefs",
                         "outputContract.resultFile",
                         "outputContract.requiredTopLevelFields",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.status",
                         "outputContract.schemaShape.properties.changedFiles",
                         "outputContract.schemaShape.properties.noChangeReason",

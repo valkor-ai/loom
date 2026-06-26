@@ -23,6 +23,7 @@ use crate::{
     paths::task_result_file,
     task_execution::{load_current_plan_and_run, save_run},
     task_plan::update_run_summary,
+    templates::task_result_template,
 };
 
 pub fn accept_task_result_file<D>(
@@ -1161,6 +1162,7 @@ fn materialize_task_result_repair(
     )?;
     let schema_shape = serde_json::to_value(schema_for!(TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    let result_template = task_result_template(&context.task_plan_id, &context.task);
     let root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "task_result_repair",
@@ -1194,6 +1196,7 @@ fn materialize_task_result_repair(
             }],
             "requiredTopLevelFields": context.required_top_level_fields,
             "schemaShape": schema_shape,
+            "resultTemplate": result_template,
             "resultRules": [
                 "The replacement must be a TaskResult JSON, not a repair summary.",
                 "Runtime, frontend, requirement detail, and concept evidence must follow the original output contract."
@@ -1225,6 +1228,7 @@ fn materialize_task_result_repair(
                         "outputContract.resultFile",
                         "outputContract.writeTargets",
                         "outputContract.requiredTopLevelFields",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.status",
                         "outputContract.schemaShape.properties.changedFiles",
                         "outputContract.schemaShape.properties.noChangeReason",

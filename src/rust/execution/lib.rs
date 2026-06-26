@@ -4,6 +4,7 @@ mod review;
 mod task_execution;
 mod task_plan;
 mod task_result;
+mod templates;
 
 use delivery_core::{
     DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, ValidatedPlanInput,

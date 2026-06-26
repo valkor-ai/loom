@@ -30,6 +30,7 @@ use crate::paths::{
     task_plan_outline_candidate_file, task_plan_request_file, task_plan_run_file,
     task_plan_run_latest_file,
 };
+use crate::templates::{taskplan_group_result_template, taskplan_outline_result_template};
 
 pub fn materialize_request(
     project_root: &str,
@@ -185,6 +186,9 @@ fn build_request_root(
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let requirement_transfer = requirement_detail_transfer(pgc, aac);
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
+    let outline_result_template =
+        taskplan_outline_result_template(request_id, delivery_id, phase_id);
+    let group_result_template = taskplan_group_result_template(request_id, delivery_id, phase_id);
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -242,34 +246,8 @@ fn build_request_root(
             },
             "outlineSchemaShape": outline_schema,
             "groupSchemaShape": group_schema,
-            "outlineResultTemplate": {
-                "schemaVersion": "1.0",
-                "requestId": request_id,
-                "deliveryId": delivery_id,
-                "phaseId": phase_id,
-                "status": "ready",
-                "taskPlanId": format!("taskplan-{phase_id}"),
-                "groups": [{
-                    "groupId": "group-current-capability",
-                    "title": "Current capability group",
-                    "objective": "Deliver one taskable current-phase capability slice.",
-                    "dependsOn": [],
-                    "scopeRefs": ["allowedRefs.scopeRefs item"],
-                    "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-                    "taskIds": ["task-current-001"]
-                }],
-                "createdAt": "ISO-8601 datetime"
-            },
-            "groupResultTemplate": {
-                "schemaVersion": "1.0",
-                "requestId": request_id,
-                "deliveryId": delivery_id,
-                "phaseId": phase_id,
-                "status": "ready",
-                "group": "TaskPlanGroup matching the outline group",
-                "tasks": ["TaskDefinition entries whose groupId equals group.groupId"],
-                "createdAt": "ISO-8601 datetime"
-            },
+            "outlineResultTemplate": outline_result_template,
+            "groupResultTemplate": group_result_template,
             "runtimeDeliveryClosureTaskTemplate": runtime_closure_template
         },
         "blockedOutput": {

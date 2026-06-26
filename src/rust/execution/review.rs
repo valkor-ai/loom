@@ -279,6 +279,7 @@ fn build_review_request(
                 "description": "Write the ReviewResult JSON for this phase run."
             }],
             "schemaShape": schema_shape,
+            "resultTemplate": review_result_template(review_id, phase_id, task_plan, run),
             "allowedRefs": allowed_refs,
             "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
             "reviewSignals": build_review_signals(task_plan, task_results),
@@ -341,6 +342,7 @@ fn build_review_request(
                         "outputContract.writeTargets",
                         "outputContract.allowedRefs",
                         "outputContract.requiredFields",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.source",
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.findings",
@@ -353,6 +355,124 @@ fn build_review_request(
             ]
         }
     }))
+}
+
+fn review_result_template(
+    review_id: &str,
+    phase_id: &str,
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+) -> Value {
+    let must_acceptance = task_plan
+        .scope_snapshot
+        .acceptance_refs
+        .iter()
+        .map(|acceptance_ref| {
+            json!({
+                "acceptanceRef": acceptance_ref,
+                "status": "satisfied",
+                "supportingTaskResults": [],
+                "evidenceStatus": "sufficient",
+                "notes": []
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schemaVersion": "1.0",
+        "reviewId": review_id,
+        "source": {
+            "requestId": review_id,
+            "phaseId": phase_id,
+            "taskPlanId": task_plan.task_plan_id,
+            "taskPlanRunId": run.run_id
+        },
+        "decision": "approved",
+        "findings": [{
+            "findingId": "finding_1",
+            "findingType": "note",
+            "severity": "note",
+            "severityClass": "info",
+            "evidenceKind": "review_limitation",
+            "failureClass": "review_limitation",
+            "category": "review_limitation",
+            "summary": "",
+            "evidence": "",
+            "readRefs": [{
+                "type": "review_packet",
+                "ref": "reviewPacket",
+                "reason": ""
+            }],
+            "evidenceRefs": [],
+            "groupRefs": [],
+            "taskRefs": [],
+            "acceptanceRefs": [],
+            "artifactRefs": {},
+            "location": {},
+            "taskRelevance": "not_applicable",
+            "scopeRelation": "current_phase",
+            "introducedByCurrentTask": "unknown",
+            "recommendedNextAction": "done"
+        }],
+        "coverageAssessment": {
+            "mustAcceptance": must_acceptance,
+            "summary": {
+                "totalMust": task_plan.scope_snapshot.acceptance_refs.len(),
+                "satisfied": task_plan.scope_snapshot.acceptance_refs.len(),
+                "insufficientEvidence": 0,
+                "notSatisfied": 0,
+                "notReviewed": 0
+            }
+        },
+        "limitations": [],
+        "pendingActions": [],
+        "nextAction": {
+            "type": "done",
+            "reason": "",
+            "targetTaskIds": [],
+            "findingRefs": []
+        },
+        "createdAt": "ISO-8601 datetime",
+        "updatedAt": "ISO-8601 datetime"
+    })
+}
+
+fn manual_review_resolution_template(
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    result: &ReviewResult,
+) -> Value {
+    let route = match result.next_action.r#type.as_str() {
+        "execution_repair" | "taskplan_repair" | "architecture_artifact_repair" => {
+            result.next_action.r#type.as_str()
+        }
+        _ => "needs_user_decision",
+    };
+    json!({
+        "schemaVersion": "1.0",
+        "manualReviewResolutionId": format!("manual-review-resolution-{request_id}"),
+        "manualReviewRequestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "userAnswer": {
+            "text": "",
+            "selectedShortReply": "request_changes"
+        },
+        "decision": "request_changes",
+        "changeRequest": {
+            "summary": "",
+            "route": route,
+            "reason": "",
+            "details": {}
+        },
+        "nextAction": {
+            "type": route,
+            "reason": "",
+            "targetTaskIds": result.next_action.target_task_ids.clone(),
+            "findingRefs": result.next_action.finding_refs.clone()
+        },
+        "createdAt": "ISO-8601 datetime"
+    })
 }
 
 pub fn accept_review_result_file<D>(
@@ -986,7 +1106,13 @@ fn build_manual_review_request(
                 "deliveryId", "phaseId", "userAnswer", "decision", "changeRequest",
                 "nextAction", "createdAt"
             ],
-            "schemaShape": schema_shape
+            "schemaShape": schema_shape,
+            "resultTemplate": manual_review_resolution_template(
+                request_id,
+                delivery_id,
+                phase_id,
+                result,
+            )
         },
         "requestReadPlan": {
             "groups": [
@@ -1006,6 +1132,7 @@ fn build_manual_review_request(
                         "outputContract.resultFile",
                         "outputContract.writeTargets",
                         "outputContract.requiredFields",
+                        "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.manualReviewRequestId",
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.changeRequest",

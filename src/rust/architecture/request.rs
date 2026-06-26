@@ -124,7 +124,13 @@ fn materialize_request_inner(
 
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
-    let section_outputs = build_section_outputs(root, &request_id, has_previous_runtime_delivery)?;
+    let section_outputs = build_section_outputs(
+        root,
+        &request_id,
+        delivery_id,
+        phase_id,
+        has_previous_runtime_delivery,
+    )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
             "architecture section outputs are empty".to_string(),
@@ -430,6 +436,8 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
 fn build_section_outputs(
     project_root: &Path,
     request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
     has_previous_runtime_delivery: bool,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
     SECTION_ORDER
@@ -444,6 +452,13 @@ fn build_section_outputs(
                 )?,
                 schema_ref: format!("architecture-section-{}-v1", section_name(section)),
                 schema_shape: section_schema_shape(section, has_previous_runtime_delivery),
+                result_template: section_result_template(
+                    request_id,
+                    delivery_id,
+                    phase_id,
+                    section,
+                    has_previous_runtime_delivery,
+                ),
                 enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
                 generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
             })
@@ -457,6 +472,7 @@ fn section_output_to_value(output: &SectionOutput) -> Value {
         "candidateFile": output.candidate_file,
         "schemaRef": output.schema_ref,
         "schemaShape": output.schema_shape,
+        "resultTemplate": output.result_template,
         "enumRefs": output.enum_refs,
         "generationRules": output.generation_rules
     })
@@ -616,6 +632,227 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
             "runtimeSurfaces": ["object"],
             "taskPlanningGuidance": "object"
         }
+    })
+}
+
+fn section_result_template(
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    section: ArchitectureSectionGroup,
+    has_previous_runtime_delivery: bool,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "section": section,
+        "status": "ready",
+        "content": section_content_template(section, has_previous_runtime_delivery),
+        "blockedReasons": [],
+        "createdAt": "ISO-8601 datetime"
+    })
+}
+
+fn section_content_template(
+    section: ArchitectureSectionGroup,
+    has_previous_runtime_delivery: bool,
+) -> Value {
+    match section {
+        ArchitectureSectionGroup::Foundation => json!({
+            "source": {
+                "planningGenerationContractId": "",
+                "technicalBaselineId": ""
+            },
+            "engineeringBoundary": {
+                "summary": "",
+                "applications": [{
+                    "applicationId": "app_1",
+                    "name": "",
+                    "kind": "",
+                    "rootPath": "."
+                }],
+                "modules": [{
+                    "moduleId": "module_1",
+                    "name": "",
+                    "scopeRefs": [],
+                    "acceptanceRefs": [],
+                    "summary": ""
+                }]
+            },
+            "modules": [{
+                "moduleId": "module_1",
+                "name": "",
+                "responsibility": "",
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        }),
+        ArchitectureSectionGroup::DomainContract => json!({
+            "dataModel": {
+                "entities": [{
+                    "entityId": "entity_1",
+                    "name": "",
+                    "fields": [],
+                    "constraints": [],
+                    "scopeRefs": [],
+                    "acceptanceRefs": []
+                }],
+                "relationships": [],
+                "constraints": []
+            },
+            "interfaces": [{
+                "interfaceId": "interface_1",
+                "name": "",
+                "kind": "",
+                "operations": [],
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        }),
+        ArchitectureSectionGroup::Behavior => json!({
+            "userFlows": [{
+                "flowId": "flow_1",
+                "name": "",
+                "steps": [],
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }],
+            "stateMachines": [{
+                "machineId": "state_machine_1",
+                "name": "",
+                "states": [],
+                "transitions": [],
+                "scopeRefs": [],
+                "acceptanceRefs": []
+            }]
+        }),
+        ArchitectureSectionGroup::FrontendExperience => json!({
+            "frontendExperience": {
+                "required": true,
+                "experienceLevel": "usable_internal_product",
+                "surfaces": [{
+                    "surfaceId": "surface_1",
+                    "name": "",
+                    "purpose": "",
+                    "audienceRefs": []
+                }],
+                "dataViews": [{
+                    "viewId": "view_1",
+                    "name": "",
+                    "fields": [],
+                    "sourceRefs": []
+                }],
+                "actions": [{
+                    "actionId": "action_1",
+                    "label": "",
+                    "entryPoint": "",
+                    "sourceRefs": []
+                }],
+                "operationPaths": [{
+                    "pathId": "path_1",
+                    "name": "",
+                    "surfaceRef": "surface_1",
+                    "dataViewRefs": ["view_1"],
+                    "actionRefs": ["action_1"],
+                    "sourceRefs": []
+                }],
+                "sourceRefs": {
+                    "brainstormFrontendExperienceRef": ""
+                }
+            }
+        }),
+        ArchitectureSectionGroup::RuntimeDelivery => {
+            runtime_delivery_content_template(has_previous_runtime_delivery)
+        }
+        ArchitectureSectionGroup::Coverage => json!({
+            "acceptanceMatrix": [{
+                "acceptanceId": "",
+                "priority": "must",
+                "statement": "",
+                "coverageStatus": "covered",
+                "reason": "",
+                "coverage": [{
+                    "type": "",
+                    "refs": [],
+                    "description": ""
+                }],
+                "verificationHints": [{
+                    "kind": "",
+                    "description": ""
+                }]
+            }],
+            "detailCoverage": [{
+                "detailId": "",
+                "coverageStatus": "covered",
+                "artifactRefs": detail_coverage_artifact_refs_template(),
+                "reason": ""
+            }],
+            "risksAndDecisions": {
+                "decisions": [],
+                "risks": []
+            },
+            "handoff": {
+                "readyForTaskPlan": true,
+                "blockingReasons": [],
+                "nextNode": "task_plan"
+            }
+        }),
+    }
+}
+
+fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Value {
+    let mut basis = serde_json::Map::new();
+    basis.insert(
+        "technicalBaselineRef".to_string(),
+        Value::String("".to_string()),
+    );
+    if has_previous_runtime_delivery {
+        basis.insert(
+            "previousRuntimeDeliveryRef".to_string(),
+            Value::String("".to_string()),
+        );
+    }
+    json!({
+        "runtimeDelivery": {
+            "status": "modified",
+            "basis": Value::Object(basis),
+            "build": {
+                "command": "",
+                "output": ""
+            },
+            "start": {
+                "command": "",
+                "port": null
+            },
+            "runtimeSurfaces": [{
+                "surfaceId": "runtime_surface_1",
+                "kind": "",
+                "urlPath": "",
+                "purpose": ""
+            }],
+            "taskPlanningGuidance": {
+                "runtimeAffectingTasks": [],
+                "closureRequired": true
+            }
+        }
+    })
+}
+
+fn detail_coverage_artifact_refs_template() -> Value {
+    json!({
+        "modules": [],
+        "entities": [],
+        "fields": [],
+        "constraints": [],
+        "interfaces": [],
+        "userFlows": [],
+        "stateMachines": [],
+        "frontendDataViews": [],
+        "frontendActions": [],
+        "frontendOperationPaths": [],
+        "acceptanceMatrix": []
     })
 }
 

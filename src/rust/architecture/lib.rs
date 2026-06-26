@@ -103,6 +103,7 @@ struct SectionOutput {
     candidate_file: String,
     schema_ref: String,
     schema_shape: serde_json::Value,
+    result_template: serde_json::Value,
     enum_refs: serde_json::Value,
     generation_rules: Vec<String>,
 }

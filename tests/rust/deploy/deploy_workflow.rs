@@ -9,7 +9,7 @@ use contracts::{
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
-    FileSubmitInput, ProjectStatus,
+    FileSubmitInput, InspectRequestInput, ProjectStatus, ReadRequestFieldsInput,
 };
 use deploy::{accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, DeployToolInput};
 use serde_json::{json, Value};
@@ -160,6 +160,24 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
     assert_forbidden_cli_fields_absent(&value);
 
     let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str(),
+        request_ref: request_ref.clone(),
+    })
+    .expect("inspect deploy repair request");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str(),
+        request_ref: request_ref.clone(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read deploy repair request fields")
+    .fields;
+    assert!(fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"].is_object());
+    assert!(inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .any(|field| field == "outputContract.resultTemplate"));
     let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
     write_json_atomic(
         &fixture.root.join(&result_file),

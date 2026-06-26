@@ -472,6 +472,31 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
 fn architecture_section_submit_advances_same_request_to_next_section() {
     let fixture = Fixture::new("architecture-next-section");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let architecture_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
+    assert!(architecture_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
+    let coverage_template = architecture_root["sectionOutputs"]
+        .as_array()
+        .expect("section outputs")
+        .iter()
+        .find(|section| section["section"].as_str() == Some("coverage"))
+        .expect("coverage section")["resultTemplate"]["content"]
+        .clone();
+    let artifact_refs = &coverage_template["detailCoverage"][0]["artifactRefs"];
+    for key in [
+        "modules",
+        "entities",
+        "fields",
+        "constraints",
+        "interfaces",
+        "userFlows",
+        "stateMachines",
+        "frontendDataViews",
+        "frontendActions",
+        "frontendOperationPaths",
+        "acceptanceMatrix",
+    ] {
+        assert!(artifact_refs[key].is_array(), "missing artifactRefs.{key}");
+    }
 
     write_candidate_target(
         &fixture,
@@ -553,6 +578,27 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert_eq!(inspected.write_targets.len(), 2);
     let compact_taskplan_root = read_request_root_value(fixture.root_str(), taskplan_request_ref);
     assert_no_root_submit_metadata(&compact_taskplan_root);
+    let taskplan_contract_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec![
+            "outputContract.outlineResultTemplate".to_string(),
+            "outputContract.groupResultTemplate".to_string(),
+        ],
+    })
+    .expect("read taskplan contract fields")
+    .fields;
+    assert!(
+        taskplan_contract_fields["outputContract.outlineResultTemplate"].value["groups"][0]
+            .is_object()
+    );
+    assert!(
+        taskplan_contract_fields["outputContract.groupResultTemplate"].value["group"].is_object()
+    );
+    assert!(
+        taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
+            .is_object()
+    );
     assert!(inspected
         .read_groups
         .iter()
@@ -601,6 +647,27 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     })
     .expect("inspect execution request");
     assert_eq!(execution_inspected.request_kind, "task_execution_request");
+    let execution_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "source.taskId".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution result template")
+    .fields;
+    assert_eq!(
+        execution_fields["outputContract.resultTemplate"].value["taskId"],
+        execution_fields["source.taskId"].value
+    );
+    assert!(
+        execution_fields["outputContract.resultTemplate"].value["verificationResults"][0]
+            .is_object()
+    );
+    assert!(
+        execution_fields["outputContract.resultTemplate"].value["executionContinuity"].is_object()
+    );
     assert!(execution_inspected
         .read_groups
         .iter()
@@ -638,6 +705,25 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .as_str()
         .expect("task result repair action requestRef")
         .to_string();
+    let task_result_repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: task_result_repair_action_ref.clone(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read task result repair template")
+    .fields;
+    assert!(
+        task_result_repair_fields["outputContract.resultTemplate"].value["verificationResults"][0]
+            .is_object()
+    );
+    let task_result_repair_root =
+        read_request_root_value(fixture.root_str(), &task_result_repair_action_ref);
+    assert!(task_result_repair_root["requestReadPlan"]["groups"]
+        .as_array()
+        .expect("repair read groups")
+        .iter()
+        .flat_map(|group| group["fields"].as_array().into_iter().flatten())
+        .any(|field| field.as_str() == Some("outputContract.resultTemplate")));
     write_task_result_candidate(&fixture, &task_result_repair_action_ref);
     let task_result = call_submit(
         "loom.repairSubmitFile",
@@ -658,6 +744,19 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     })
     .expect("inspect review request");
     assert_eq!(review_inspected.request_kind, "review_request");
+    let review_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read review result template")
+    .fields;
+    let review_root = read_request_root_value(fixture.root_str(), review_request_ref);
+    assert_eq!(
+        review_fields["outputContract.resultTemplate"].value["source"]["requestId"],
+        review_root["requestId"]
+    );
+    assert!(review_fields["outputContract.resultTemplate"].value["coverageAssessment"].is_object());
     let review_group_ids = review_inspected
         .read_groups
         .iter()
@@ -805,6 +904,17 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         .unwrap()
         .contains("/tasks/phase-1/results/"));
     assert_eq!(result["next"]["repairContext"]["attemptCount"], 1);
+    let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read execution repair result template")
+    .fields;
+    assert!(
+        repair_fields["outputContract.resultTemplate"].value["verificationResults"][0].is_object()
+    );
 }
 
 #[test]
@@ -828,6 +938,20 @@ fn blocked_task_result_routes_to_taskplan_repair() {
     assert_eq!(result["next"]["kind"], "write_artifact");
     assert_eq!(result["next"]["artifactKind"], "taskplan_repair");
     assert_eq!(result["next"]["submitTool"], "loom.repairSubmitFile");
+    let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec![
+            "outputContract.outlineResultTemplate".to_string(),
+            "outputContract.groupResultTemplate".to_string(),
+        ],
+    })
+    .expect("read taskplan repair templates")
+    .fields;
+    assert!(repair_fields["outputContract.outlineResultTemplate"].value["groups"][0].is_object());
+    assert!(repair_fields["outputContract.groupResultTemplate"].value["group"].is_object());
+    assert!(repair_fields["outputContract.groupResultTemplate"].value["tasks"][0].is_object());
 }
 
 #[test]
@@ -854,6 +978,9 @@ fn blocked_task_result_routes_to_architecture_repair() {
         "architecture_artifact_repair"
     );
     assert_eq!(result["next"]["submitTool"], "loom.repairSubmitFile");
+    let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
+    assert!(repair_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
 }
 
 #[test]
@@ -1064,6 +1191,15 @@ fn manual_review_resolution_routes_to_execution_repair() {
         .as_str()
         .expect("manual review requestRef")
         .to_string();
+    let manual_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: manual_request_ref.clone(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read manual review result template")
+    .fields;
+    assert!(manual_fields["outputContract.resultTemplate"].value["userAnswer"].is_object());
+    assert!(manual_fields["outputContract.resultTemplate"].value["nextAction"].is_object());
     write_manual_review_resolution_candidate(&fixture, &manual_request_ref);
 
     let result = call_submit(
