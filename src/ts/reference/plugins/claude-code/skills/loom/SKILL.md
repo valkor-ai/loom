@@ -65,7 +65,7 @@ For a new request, read the returned `BrainstormSessionRequest` and manage clari
 
 During `phase_scope`, follow the request's `phaseScopeOptionComparison` guidance: present 2-3 source-grounded scope options by default, recommend exactly one, and treat `nextPhaseSeed` as a non-binding seed rather than a preselected answer. Use a single scope only when the request rules' atomic-scope exception is satisfied and explain that exception to the user.
 
-For Brainstorm `ask_user` gates, read `requestRef` and follow root `requestReadPlan.groups`. Do this before presenting phase_scope, concept_grounding, frontend_experience, or final_summary. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block. Do not infer scope, sources, concepts, frontend target, paths, schema, or submit command from guessed legacy root fields such as `.objective`, `.scope`, or `.outputContract`.
+For Brainstorm `ask_user` gates, read `requestRef` and follow root `requestReadPlan.groups`. If the current block exposes a required `knowledge_context_plan`, run its `loom.knowledgeBrainstormContext` steps before presenting phase_scope, concept_grounding, or frontend_experience. Do this before presenting phase_scope, concept_grounding, frontend_experience, or final_summary. Do not stop at a request-ready/path-only recap; stop only after presenting the next required Brainstorm block. Do not infer scope, sources, concepts, frontend target, paths, schema, or submit command from guessed legacy root fields such as `.objective`, `.scope`, or `.outputContract`.
 
 Follow Brainstorm `knowledgeQueryPlan`; do not merge its steps into one query.
 

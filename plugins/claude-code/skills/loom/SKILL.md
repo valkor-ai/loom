@@ -13,7 +13,7 @@ Do not replace Loom with Claude Plan Mode. Do not inspect project `.loom` state 
 
 - `auto_runnable`: keep going immediately by executing the returned `next.kind`.
 - `active_operation`: only use the observation tools named by the result.
-- `user_gate`: ask the visible question or present the confirmation summary.
+- `user_gate`: when `requestRef` is present, first inspect the request and read required `requestReadPlan.groups`; for Brainstorm gates, run required `knowledge_context_plan` steps before asking the visible question or presenting confirmation.
 - `repairable_error`: repair only the returned target and resubmit with the returned tool.
 - `done`, `blocked`, `failed`: report the returned status and stop.
 

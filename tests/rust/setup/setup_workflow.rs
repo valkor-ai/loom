@@ -48,6 +48,15 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
         .to_string(),
     )
     .unwrap();
+    let stale_codex_cache = fixture
+        .user_home
+        .join(".codex/plugins/cache/local-plugins/loom/0.1.0/skills/loom/references/delivery");
+    fs::create_dir_all(&stale_codex_cache).unwrap();
+    fs::write(
+        stale_codex_cache.join("planning.md"),
+        "Loom MCP-only stale delivery planning reference",
+    )
+    .unwrap();
 
     let env = fixture.env();
     let report = install(&env, &[AgentKind::Codex]).unwrap();
@@ -57,6 +66,15 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
     assert!(env
         .agent_plugin_root(AgentKind::Codex)
         .join(".loom-mcp-install.json")
+        .exists());
+    assert!(!fixture
+        .user_home
+        .join(".codex/plugins/cache/local-plugins/loom")
+        .join("0.1.0/skills/loom/references/delivery")
+        .exists());
+    assert!(fixture
+        .user_home
+        .join(".codex/plugins/cache/local-plugins/loom/0.1.0/skills/loom/SKILL.md")
         .exists());
     assert!(!fixture.loom_home.join("bin/loom-cli").exists());
     assert!(!env.agent_mcp_registration_path(AgentKind::Codex).exists());

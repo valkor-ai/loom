@@ -26,7 +26,7 @@ Follow `LoomMcpActionResult.state`.
 
 - `auto_runnable`: continue immediately by executing the returned `next.kind`.
 - `active_operation`: only call the observation tools named by the result.
-- `user_gate`: ask the user the visible question or present the confirmation exactly for that gate.
+- `user_gate`: when `requestRef` is present, first inspect the request and read required `requestReadPlan.groups`; for Brainstorm gates, run required `knowledge_context_plan` steps before asking the visible question or presenting confirmation.
 - `repairable_error`: edit only the returned target file or target ids, then call the returned resubmit tool.
 - `done`, `blocked`, `failed`: stop and report the returned user-facing status.
 

@@ -16,7 +16,7 @@ Call the matching Loom MCP tool for the current project directory before doing a
 - `deploy ...` -> matching `loom.deploy*` tool
 - `plan <request>` or any other request text -> `loom.plan`
 
-After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`, ask only for `user_gate`, repair only returned targets for `repairable_error`, and stop only for `done`, `blocked`, or `failed`.
+After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking; repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
 
 Use `requestReadPlan.groups` through `loom.inspectRequest` and `loom.readFieldGroup`. Write only to returned `writeTargets` and submit only through the returned MCP submit tool.
 

@@ -928,12 +928,40 @@ fn install_agent_plugin(
 
 fn install_codex_plugin(env: &SetupEnvironment, template: &Path) -> Result<(), SetupError> {
     let target = env.agent_plugin_root(AgentKind::Codex);
+    cleanup_codex_plugin_cache(env)?;
     prepare_generated_target(&target)?;
     copy_dir(template, &target)?;
     install_skill_references(env, &target)?;
     write_install_stamp(&target, AgentKind::Codex)?;
+    write_codex_plugin_cache(env, &target)?;
     update_codex_marketplace(env)?;
     Ok(())
+}
+
+fn cleanup_codex_plugin_cache(env: &SetupEnvironment) -> Result<(), SetupError> {
+    for target in [
+        env.codex_home.join("plugins/cache/local/loom"),
+        env.codex_home.join("plugins/cache/local-plugins/loom"),
+    ] {
+        if target.exists() {
+            remove_path(&target)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_codex_plugin_cache(env: &SetupEnvironment, plugin_root: &Path) -> Result<(), SetupError> {
+    let manifest_path = plugin_root.join(".codex-plugin/plugin.json");
+    let manifest = read_json_value(&manifest_path)?;
+    let version = manifest
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| SetupError::MissingPackageEntry(manifest_path.clone()))?;
+    let cache_root = env
+        .codex_home
+        .join("plugins/cache/local-plugins/loom")
+        .join(version);
+    copy_dir(plugin_root, &cache_root)
 }
 
 fn update_codex_marketplace(env: &SetupEnvironment) -> Result<(), SetupError> {
