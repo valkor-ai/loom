@@ -413,6 +413,11 @@ fn review_result_template(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
 ) -> Value {
+    let first_task_result_ref = run
+        .task_states
+        .iter()
+        .find_map(|state| state.result_id.as_deref())
+        .unwrap_or("");
     let must_acceptance = task_plan
         .scope_snapshot
         .acceptance_refs
@@ -452,7 +457,11 @@ fn review_result_template(
                 "ref": "reviewPacket",
                 "reason": ""
             }],
-            "evidenceRefs": [],
+            "evidenceRefs": [{
+                "type": "task_result",
+                "ref": first_task_result_ref,
+                "reason": ""
+            }],
             "groupRefs": [],
             "taskRefs": [],
             "acceptanceRefs": [],

@@ -1137,6 +1137,11 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(review_rules_text.contains("spec fidelity and project standards"));
     assert!(review_rules_text.contains("smallest repair"));
     assert!(review_fields["outputContract.resultTemplate"].value["coverageAssessment"].is_object());
+    let template_evidence_ref =
+        &review_fields["outputContract.resultTemplate"].value["findings"][0]["evidenceRefs"][0];
+    assert_eq!(template_evidence_ref["type"], "task_result");
+    assert!(template_evidence_ref["ref"].is_string());
+    assert!(template_evidence_ref["reason"].is_string());
     let review_group_ids = review_inspected
         .read_groups
         .iter()
