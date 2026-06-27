@@ -30,7 +30,55 @@ use crate::paths::{
     task_plan_outline_candidate_file, task_plan_request_file, task_plan_run_file,
     task_plan_run_latest_file,
 };
-use crate::templates::{taskplan_group_result_template, taskplan_outline_result_template};
+use crate::templates::{
+    runtime_delivery_requirement_template, taskplan_group_result_template,
+    taskplan_outline_result_template,
+};
+
+const TASK_KIND_VALUES: &[&str] = &[
+    "feature_increment",
+    "data_model_increment",
+    "interface_increment",
+    "ui_flow_increment",
+    "frontend_experience",
+    "runtime_delivery",
+    "runtime_delivery_closure",
+    "integration_increment",
+    "verification_increment",
+    "refactor_support",
+    "configuration_support",
+];
+
+const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
+    "create_or_update_entity",
+    "create_or_update_persistence",
+    "create_or_update_interface",
+    "create_or_update_ui_flow",
+    "create_or_update_state_machine",
+    "create_or_update_business_rule",
+    "add_reference_field",
+    "validate_reference_format",
+    "use_fixture_or_mock_data",
+    "wire_reference_in_api_or_ui",
+    "create_entity_crud",
+    "create_entity_repository",
+    "create_entity_admin_page",
+    "create_entity_migration",
+    "implement_entity_lifecycle",
+    "add_or_update_tests",
+    "add_or_update_config",
+    "implement_frontend_experience_contract",
+    "implement_runtime_delivery_contract",
+    "refactor_supporting_code",
+];
+
+const VERIFICATION_EVIDENCE_VALUES: &[&str] = &[
+    "automated_test",
+    "manual_command_output",
+    "runtime_api_check",
+    "static_check",
+    "agent_review_explanation",
+];
 
 pub fn materialize_request(
     project_root: &str,
@@ -185,10 +233,49 @@ fn build_request_root(
     let group_schema = serde_json::to_value(schema_for!(TaskPlanGroupCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let requirement_transfer = requirement_detail_transfer(pgc, aac);
+    let runtime_requirement_template =
+        runtime_delivery_requirement_template(aac.runtime_delivery.as_ref());
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
     let group_result_template = taskplan_group_result_template(request_id, delivery_id, phase_id);
+    let mut output_contract = json!({
+        "artifactKind": ArtifactKind::TaskPlanCandidate,
+        "writeMode": "taskplan_grouped",
+        "submitTool": "loom.taskPlanAcceptFile",
+        "outlineFile": outline_file,
+        "groupFilePattern": group_file_pattern,
+        "writeTargets": [
+            {
+                "targetId": "outline",
+                "path": outline_file,
+                "required": true,
+                "description": "Write the TaskPlan outline JSON."
+            },
+            {
+                "targetId": "groups",
+                "path": group_file_pattern,
+                "required": false,
+                "description": "Write one TaskPlan group JSON for each outline.groups[].groupId."
+            }
+        ],
+        "pathAuthority": {
+            "currentRequestOnly": true,
+            "currentRequestId": request_id,
+            "rule": "Only outputContract.outlineFile and outputContract.groupFilePattern belong to this TaskPlan generation."
+        },
+        "outlineSchemaShape": outline_schema,
+        "groupSchemaShape": group_schema,
+        "outlineResultTemplate": outline_result_template,
+        "groupResultTemplate": group_result_template
+    });
+    if !runtime_requirement_template.is_null() {
+        output_contract["runtimeDeliveryRequirementTemplate"] =
+            runtime_requirement_template.clone();
+    }
+    if !runtime_closure_template.is_null() {
+        output_contract["runtimeDeliveryClosureTaskTemplate"] = runtime_closure_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -219,50 +306,25 @@ fn build_request_root(
         "allowedRefs": allowed_refs(pgc, aac),
         "generationRules": generation_rules(aac),
         "enumRefs": enum_refs(),
-        "outputContract": {
-            "artifactKind": ArtifactKind::TaskPlanCandidate,
-            "writeMode": "taskplan_grouped",
-            "submitTool": "loom.taskPlanAcceptFile",
-            "outlineFile": outline_file,
-            "groupFilePattern": group_file_pattern,
-            "writeTargets": [
-                {
-                    "targetId": "outline",
-                    "path": outline_file,
-                    "required": true,
-                    "description": "Write the TaskPlan outline JSON."
-                },
-                {
-                    "targetId": "groups",
-                    "path": group_file_pattern,
-                    "required": false,
-                    "description": "Write one TaskPlan group JSON for each outline.groups[].groupId."
-                }
-            ],
-            "pathAuthority": {
-                "currentRequestOnly": true,
-                "currentRequestId": request_id,
-                "rule": "Only outputContract.outlineFile and outputContract.groupFilePattern belong to this TaskPlan generation."
-            },
-            "outlineSchemaShape": outline_schema,
-            "groupSchemaShape": group_schema,
-            "outlineResultTemplate": outline_result_template,
-            "groupResultTemplate": group_result_template,
-            "runtimeDeliveryClosureTaskTemplate": runtime_closure_template
-        },
+        "outputContract": output_contract,
         "blockedOutput": {
             "status": "blocked",
             "blockedReasonCode": "AAC_INSUFFICIENT",
             "nextNode": "architecture_artifact_repair"
         },
         "requestReadPlan": {
-            "groups": taskplan_read_groups(aac, &runtime_closure_template)
+            "groups": taskplan_read_groups(
+                aac,
+                &runtime_requirement_template,
+                &runtime_closure_template
+            )
         }
     })
 }
 
 fn taskplan_read_groups(
     aac: &ArchitectureArtifactContract,
+    runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
 ) -> Value {
     let mut groups = vec![
@@ -324,7 +386,10 @@ fn taskplan_read_groups(
             "required": true,
             "purpose": "Read output paths, schema shapes, and enum refs before writing candidates.",
             "whenToRead": "Read before writing output files.",
-            "fields": taskplan_candidate_contract_fields(runtime_closure_template)
+            "fields": taskplan_candidate_contract_fields(
+                runtime_requirement_template,
+                runtime_closure_template
+            )
         }),
     ];
     let optional_fields = taskplan_optional_projection_fields(aac);
@@ -340,7 +405,10 @@ fn taskplan_read_groups(
     Value::Array(groups)
 }
 
-fn taskplan_candidate_contract_fields(runtime_closure_template: &Value) -> Vec<&'static str> {
+fn taskplan_candidate_contract_fields(
+    runtime_requirement_template: &Value,
+    runtime_closure_template: &Value,
+) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
         "enumRefs.implementationAction",
@@ -351,6 +419,9 @@ fn taskplan_candidate_contract_fields(runtime_closure_template: &Value) -> Vec<&
         "outputContract.outlineResultTemplate",
         "outputContract.groupResultTemplate",
     ];
+    if !runtime_requirement_template.is_null() {
+        fields.push("outputContract.runtimeDeliveryRequirementTemplate");
+    }
     if !runtime_closure_template.is_null() {
         fields.push("outputContract.runtimeDeliveryClosureTaskTemplate");
     }
@@ -536,7 +607,24 @@ where
         "decisionRefs": value_field(&fields, "allowedRefs.decisionRefs"),
         "riskRefs": value_field(&fields, "allowedRefs.riskRefs")
     });
-    let outline: TaskPlanOutlineCandidateAgentWritable = read_project_json(root, &outline_ref)?;
+    let outline_value = read_project_json_value(root, &outline_ref)?;
+    let outline: TaskPlanOutlineCandidateAgentWritable = match deserialize_candidate(
+        outline_value,
+        "outline",
+        "TASKPLAN_OUTLINE_SCHEMA_INVALID",
+        Some("outline"),
+    ) {
+        Ok(outline) => outline,
+        Err(issue) => {
+            return Ok(repairable(
+                input,
+                authorized,
+                outline_ref,
+                vec![issue],
+                mode,
+            ));
+        }
+    };
     let mut issues = validate_outline(&outline, &authorized.request_id, &delivery_id, &phase_id);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
@@ -555,7 +643,18 @@ where
     let mut tasks = Vec::new();
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
-        let candidate: TaskPlanGroupCandidateAgentWritable = read_project_json(root, &group_file)?;
+        let group_value = read_project_json_value(root, &group_file)?;
+        let candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
+            group_value,
+            "group",
+            "TASKPLAN_GROUP_SCHEMA_INVALID",
+            Some(&group.group_id),
+        ) {
+            Ok(candidate) => candidate,
+            Err(issue) => {
+                return Ok(repairable(input, authorized, group_file, vec![issue], mode));
+            }
+        };
         issues.extend(validate_group_candidate(
             &candidate,
             group,
@@ -1451,23 +1550,9 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
 
 fn enum_refs() -> Value {
     json!({
-        "taskKind": [
-            "feature_increment", "data_model_increment", "interface_increment", "ui_flow_increment",
-            "frontend_experience", "runtime_delivery", "runtime_delivery_closure",
-            "integration_increment", "verification_increment", "refactor_support", "configuration_support"
-        ],
-        "implementationAction": [
-            "create_or_update_entity", "create_or_update_persistence", "create_or_update_interface",
-            "create_or_update_ui_flow", "create_or_update_state_machine", "create_or_update_business_rule",
-            "add_reference_field", "validate_reference_format", "use_fixture_or_mock_data",
-            "wire_reference_in_api_or_ui", "create_entity_crud", "create_entity_repository",
-            "create_entity_admin_page", "create_entity_migration", "implement_entity_lifecycle",
-            "add_or_update_tests", "add_or_update_config", "implement_frontend_experience_contract",
-            "implement_runtime_delivery_contract", "refactor_supporting_code"
-        ],
-        "verificationEvidence": [
-            "automated_test", "manual_command_output", "runtime_api_check", "static_check", "agent_review_explanation"
-        ]
+        "taskKind": TASK_KIND_VALUES,
+        "implementationAction": IMPLEMENTATION_ACTION_VALUES,
+        "verificationEvidence": VERIFICATION_EVIDENCE_VALUES
     })
 }
 
@@ -1595,6 +1680,42 @@ fn issue(
     }
 }
 
+fn deserialize_candidate<T>(
+    value: Value,
+    fallback_path: &str,
+    code: &str,
+    target_id: Option<&str>,
+) -> Result<T, delivery_core::RepairIssue>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let text = serde_json::to_string(&value).map_err(|error| {
+        issue(
+            code,
+            fallback_path,
+            &format!(
+                "TaskPlan candidate JSON could not be prepared for schema validation: {error}."
+            ),
+            target_id,
+        )
+    })?;
+    let mut deserializer = serde_json::Deserializer::from_str(&text);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|error| {
+        let path = error.path().to_string();
+        let field_path = if path == "." || path.is_empty() {
+            fallback_path.to_string()
+        } else {
+            path
+        };
+        issue(
+            code,
+            &field_path,
+            &format!("TaskPlan candidate JSON does not match the expected schema: {error}."),
+            target_id,
+        )
+    })
+}
+
 fn value_to_write_target(
     value: &Value,
 ) -> Result<delivery_core::WriteTarget, state::store::StateError> {
@@ -1625,6 +1746,14 @@ fn read_project_json<T: serde::de::DeserializeOwned>(
     project_root: &Path,
     relative: &str,
 ) -> Result<T, state::store::StateError> {
+    let path = from_project_relative(project_root, relative)?;
+    state::store::read_json(&path)
+}
+
+fn read_project_json_value(
+    project_root: &Path,
+    relative: &str,
+) -> Result<Value, state::store::StateError> {
     let path = from_project_relative(project_root, relative)?;
     state::store::read_json(&path)
 }

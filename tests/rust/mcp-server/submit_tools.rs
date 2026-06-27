@@ -910,6 +910,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         fields: vec![
             "outputContract.outlineResultTemplate".to_string(),
             "outputContract.groupResultTemplate".to_string(),
+            "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
         ],
     })
     .expect("read taskplan contract fields")
@@ -924,6 +925,19 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert!(
         taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
             .is_object()
+    );
+    let runtime_requirement_template =
+        &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
+    assert!(runtime_requirement_template.is_object());
+    assert!(
+        runtime_requirement_template["requiredCodeLevelChecks"][0]["checkId"].is_string(),
+        "{runtime_requirement_template:#}"
+    );
+    assert!(
+        runtime_requirement_template["requiredCodeLevelChecks"][0]["acceptableEvidence"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "{runtime_requirement_template:#}"
     );
     assert!(inspected
         .read_groups
@@ -1581,6 +1595,87 @@ fn manual_review_resolution_routes_to_execution_repair() {
 }
 
 #[test]
+fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
+    let fixture = Fixture::new("taskplan-runtime-requirement-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["runtimeDeliveryRequirement"] = json!({
+        "appliesToThisTask": true,
+        "reason": "This task touches runtime delivery.",
+        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
+        "affectedContractFields": ["runtimeSurfaces"],
+        "requiredCodeLevelChecks": ["manual_command_output"],
+        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "forbiddenActions": []
+    });
+    write_json_atomic(&group_path, &group_value).expect("write invalid group file");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(result["targetFile"], json!(group_file));
+    assert!(
+        result["issues"].as_array().unwrap().iter().any(|issue| {
+            issue["fieldPath"] == "tasks[0].runtimeDeliveryRequirement.requiredCodeLevelChecks[0]"
+                && issue["code"] == "TASKPLAN_GROUP_SCHEMA_INVALID"
+        }),
+        "{result:#}"
+    );
+}
+
+#[test]
+fn taskplan_submit_repairs_task_enum_shape_before_parse() {
+    let fixture = Fixture::new("taskplan-enum-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["verificationIntents"][0]["acceptableEvidence"] =
+        json!(["static_check", "shell_output"]);
+    write_json_atomic(&group_path, &group_value).expect("write invalid group file");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(result["targetFile"], json!(group_file));
+    assert!(
+        result["issues"].as_array().unwrap().iter().any(|issue| {
+            issue["fieldPath"] == "tasks[0].verificationIntents[0].acceptableEvidence[1]"
+                && issue["code"] == "TASKPLAN_GROUP_SCHEMA_INVALID"
+        }),
+        "{result:#}"
+    );
+}
+
+#[test]
 fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
     let fixture = Fixture::new("repair-submit-taskplan");
     let review_request_ref = complete_task_execution_to_review(&fixture);
@@ -1609,6 +1704,36 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         .as_str()
         .expect("repair action requestRef")
         .to_string();
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+        fields: vec![
+            "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
+            "outputContract.runtimeDeliveryClosureTaskTemplate".to_string(),
+        ],
+    })
+    .expect("read taskplan repair runtime templates")
+    .fields;
+    assert!(
+        repair_fields["outputContract.runtimeDeliveryRequirementTemplate"]
+            .value
+            .is_object()
+    );
+    assert!(
+        repair_fields["outputContract.runtimeDeliveryClosureTaskTemplate"]
+            .value
+            .is_object()
+    );
+    let repair_inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+    })
+    .expect("inspect taskplan repair request");
+    assert!(repair_inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .any(|field| field == "outputContract.runtimeDeliveryRequirementTemplate"));
     write_taskplan_grouped_candidates(&fixture, &repair_action_ref);
 
     let result = call_submit(
@@ -2379,6 +2504,35 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
         }),
     )
     .expect("write taskplan group");
+}
+
+fn first_taskplan_group_file(fixture: &Fixture, request_ref: &str) -> String {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "outputContract.outlineFile".to_string(),
+            "outputContract.groupFilePattern".to_string(),
+        ],
+    })
+    .expect("read taskplan file fields")
+    .fields;
+    let outline_file = fields["outputContract.outlineFile"]
+        .value
+        .as_str()
+        .expect("outline file");
+    let group_pattern = fields["outputContract.groupFilePattern"]
+        .value
+        .as_str()
+        .expect("group file pattern");
+    let outline_path = fixture.root.join(outline_file);
+    let outline_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(outline_path).expect("read outline file"))
+            .expect("parse outline file");
+    let group_id = outline_value["groups"][0]["groupId"]
+        .as_str()
+        .expect("first group id");
+    group_pattern.replace("{groupId}", group_id)
 }
 
 fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {

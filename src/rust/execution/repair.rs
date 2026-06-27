@@ -29,7 +29,8 @@ use crate::{
     task_execution::{load_current_plan_and_run, save_run},
     task_plan::update_run_summary,
     templates::{
-        task_result_template, taskplan_group_result_template, taskplan_outline_result_template,
+        runtime_delivery_requirement_template, task_result_template,
+        taskplan_group_result_template, taskplan_outline_result_template,
     },
 };
 
@@ -678,6 +679,19 @@ fn materialize_taskplan_repair_action(
         "contextProjection.runtimeDeliveryProjection",
         "outputContract.runtimeDeliveryProjection",
     );
+    let mut runtime_requirement_template = value_field(
+        &contract_fields,
+        "outputContract.runtimeDeliveryRequirementTemplate",
+    );
+    if runtime_requirement_template.is_null() {
+        runtime_requirement_template = runtime_delivery_requirement_template(
+            (!runtime_projection.is_null()).then_some(&runtime_projection),
+        );
+    }
+    let runtime_closure_template = value_field(
+        &contract_fields,
+        "outputContract.runtimeDeliveryClosureTaskTemplate",
+    );
     context_projection["frontendExperienceProjection"] = frontend_projection.clone();
     context_projection["runtimeDeliveryProjection"] = runtime_projection.clone();
     let optional_projection_fields =
@@ -809,6 +823,36 @@ fn materialize_taskplan_repair_action(
             ]
         }
     });
+    if !runtime_requirement_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "runtimeDeliveryRequirementTemplate".to_string(),
+                runtime_requirement_template,
+            );
+        request_root
+            .pointer_mut("/requestReadPlan/groups/2/fields")
+            .and_then(Value::as_array_mut)
+            .expect("taskplan repair write contract fields")
+            .push(json!("outputContract.runtimeDeliveryRequirementTemplate"));
+    }
+    if !runtime_closure_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "runtimeDeliveryClosureTaskTemplate".to_string(),
+                runtime_closure_template,
+            );
+        request_root
+            .pointer_mut("/requestReadPlan/groups/2/fields")
+            .and_then(Value::as_array_mut)
+            .expect("taskplan repair write contract fields")
+            .push(json!("outputContract.runtimeDeliveryClosureTaskTemplate"));
+    }
     if !optional_projection_fields.is_empty() {
         request_root
             .pointer_mut("/requestReadPlan/groups")

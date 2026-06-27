@@ -87,6 +87,26 @@ pub(crate) fn taskplan_group_result_template(
     })
 }
 
+pub(crate) fn runtime_delivery_requirement_template(runtime_delivery: Option<&Value>) -> Value {
+    if runtime_delivery.is_none() {
+        return Value::Null;
+    }
+    json!({
+        "appliesToThisTask": true,
+        "reason": "Why this task changes build, start, runtime entry, static serving, generated artifacts, or runtime surface.",
+        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
+        "affectedContractFields": ["runtimeSurfaces"],
+        "requiredCodeLevelChecks": [{
+            "checkId": "check-task-current-001-runtime",
+            "contractField": "runtimeSurfaces",
+            "objective": "Verify this task preserves the runtime delivery contract it touches.",
+            "acceptableEvidence": ["manual_command_output", "runtime_api_check", "static_check"]
+        }],
+        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "forbiddenActions": []
+    })
+}
+
 pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) -> Value {
     let verification_results = task
         .verification_intents
