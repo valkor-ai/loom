@@ -10,6 +10,7 @@ name = "planning"
 path = "lib.rs"
 
 [dependencies]
+brainstorm = { path = "../brainstorm" }
 contracts = { path = "../contracts" }
 delivery-core = { path = "../core" }
 schemars.workspace = true

@@ -352,14 +352,6 @@ where
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
     }
-    if !current_phase_scope_confirmed(&input.project_root, &delivery_id, &phase_id)? {
-        return Ok(repository_context_user_gate(
-            input,
-            authorized,
-            "The current phase boundary has not been confirmed yet. Confirm the current phase scope with the user before accepting repository context and creating the planning contract.".to_string(),
-            "phase_scope_confirmation_required".to_string(),
-        ));
-    }
     let now = state::store::now_string();
     let persisted = RepositoryContextContract {
         schema_version: "1.0".to_string(),
@@ -403,12 +395,28 @@ where
         );
         phase
             .latest_refs
-            .insert("latestRepositoryContext".to_string(), context_ref);
+            .insert("latestRepositoryContext".to_string(), context_ref.clone());
     }
     delivery.updated_at = now;
     store
         .save_delivery_index(&input.project_root, &delivery)
         .map_err(to_state_error)?;
+
+    if !current_phase_scope_confirmed(&input.project_root, &delivery_id, &phase_id)? {
+        if let Some(phase_brainstorm) = brainstorm::materialize_phase_brainstorm_from_preview(
+            &input.project_root,
+            &delivery_id,
+            &phase_id,
+            Some(&context_ref),
+        )? {
+            return Ok(phase_brainstorm_user_gate(
+                &input.project_root,
+                &delivery_id,
+                &phase_id,
+                &phase_brainstorm.request_ref,
+            ));
+        }
+    }
 
     let engine = TransitionEngine {
         store: FileTransitionStore,
@@ -472,6 +480,9 @@ fn current_phase_scope_confirmed(
     let brainstorm: BrainstormContract =
         state::store::read_json(&from_project_relative(root, brainstorm_ref)?)?;
     if !matches!(brainstorm.status, BrainstormStatus::Confirmed) {
+        return Ok(false);
+    }
+    if brainstorm.phase_id != phase_id || brainstorm.phase_plan.current.phase_id != phase_id {
         return Ok(false);
     }
     Ok(brainstorm
@@ -659,22 +670,23 @@ fn repairable(
     })
 }
 
-fn repository_context_user_gate(
-    input: &FileSubmitInput,
-    authorized: &AuthorizedWriteSet,
-    prompt: String,
-    gate_id: String,
+fn phase_brainstorm_user_gate(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    request_ref: &str,
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: input.project_root.clone(),
-        prompt,
+        project_root: project_root.to_string(),
+        prompt: "RepositoryContext accepted. Read the generated Brainstorm request, query request-scoped knowledge, and continue the progressive clarification for this phase.".to_string(),
         accepted_responses: vec!["reply_in_chat".to_string()],
-        request_ref: Some(input.request_ref.clone()),
-        delivery_id: authorized.delivery_id.clone(),
-        phase_id: authorized.phase_id.clone(),
+        request_ref: Some(request_ref.to_string()),
+        delivery_id: Some(delivery_id.to_string()),
+        phase_id: Some(phase_id.to_string()),
         gate: Some(json!({
-            "gateId": gate_id,
-            "kind": "repository_context_scope_confirmation"
+            "gateId": "phase_brainstorm_required",
+            "kind": "phase_brainstorm_continuation",
+            "requestRef": request_ref
         })),
     })
 }

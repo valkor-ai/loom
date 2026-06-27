@@ -305,7 +305,7 @@ fn confirm_block_inner(
             keyword_hints_ref,
             Some(state_ref.clone()),
         );
-        let request_root = build_brainstorm_candidate_write_request_root(
+        let mut request_root = build_brainstorm_candidate_write_request_root(
             root,
             &request_id,
             &delivery_id,
@@ -314,6 +314,18 @@ fn confirm_block_inner(
             &user_facing_language,
             context_refs,
         );
+        if phase.latest_refs.contains_key("latestRepositoryContext") {
+            request_root["postSubmit"]["nextAction"] = json!(RouteAction {
+                kind: RouteActionKind::PlanningContractCreate,
+                source: "phase_brainstorm_accept".to_string(),
+                reason: "phase_scope_confirmed_with_repository_context".to_string(),
+                prompt: None,
+                accepted_responses: vec![],
+                request_ref: None,
+                details: None,
+                target_phase_id: None,
+            });
+        }
         let stored = state::write_native_request(
             &project_root,
             state::NativeRequestInput {

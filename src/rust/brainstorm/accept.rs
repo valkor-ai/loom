@@ -186,6 +186,10 @@ where
         &source_ids.iter().cloned().collect::<Vec<_>>(),
         &formal_sources,
         user_facing_language,
+        authorized
+            .next_action
+            .as_ref()
+            .map(|action| action.kind.clone()),
         &state::store::now_string(),
     )?;
 

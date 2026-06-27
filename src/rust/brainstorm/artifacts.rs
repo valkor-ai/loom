@@ -5,6 +5,7 @@ use contracts::{
     BrainstormStatus, ConceptGroundingRefs, DeliveryContext, FrontendExperienceRefs,
     OriginalRequestContext, RequirementSource,
 };
+use delivery_core::RouteActionKind;
 use state::{
     paths::to_project_relative,
     store::{write_json_atomic, StateResult},
@@ -35,6 +36,7 @@ pub fn write_accepted_artifacts(
     requirement_input_refs: &[String],
     formal_sources: &[RequirementSource],
     user_facing_language: contracts::UserFacingLanguageConstraint,
+    next_action_kind: Option<RouteActionKind>,
     now: &str,
 ) -> StateResult<PersistedArtifacts> {
     let glossary_ref = if let Some(concept) = &candidate.concept_grounding {
@@ -148,7 +150,7 @@ pub fn write_accepted_artifacts(
         frontend_experience_refs: frontend_refs.clone(),
         handoff: BrainstormHandoff {
             ready: true,
-            next_node: BrainstormHandoffNode::TechnicalBaselineGeneration,
+            next_node: brainstorm_handoff_node(next_action_kind),
             blocking_reasons: vec![],
         },
         created_at: now.to_string(),
@@ -254,4 +256,16 @@ pub fn write_accepted_artifacts(
         }),
         frontend_experience_refs: frontend_refs,
     })
+}
+
+fn brainstorm_handoff_node(next_action_kind: Option<RouteActionKind>) -> BrainstormHandoffNode {
+    match next_action_kind {
+        Some(RouteActionKind::PlanningContractCreate) => {
+            BrainstormHandoffNode::PlanningGenerationContract
+        }
+        Some(RouteActionKind::BrainstormClarification) => {
+            BrainstormHandoffNode::BrainstormClarification
+        }
+        _ => BrainstormHandoffNode::TechnicalBaselineGeneration,
+    }
 }

@@ -35,6 +35,14 @@ pub struct NextPhaseHandoff {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhaseBrainstormRequest {
+    pub phase_id: String,
+    pub request_id: String,
+    pub request_ref: String,
+    pub brainstorm_run_id: String,
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BrainstormDomainDispatcher;
 
@@ -137,17 +145,153 @@ pub fn materialize_next_phase_from_preview(
         .iter()
         .find(|phase| phase.phase_id == source_phase_id)
         .ok_or_else(|| StateError::InvalidArgument(format!("phase {source_phase_id} not found")))?;
-    let contract = read_phase_brainstorm_contract(root, &delivery, source_phase_id)?;
     let now = state::store::now_string();
-    let brainstorm_run_id = format!("brainstorm-run-{}", state::store::now_millis());
-    let request_id = format!("brainstorm-session-{}", state::store::now_millis());
     let contract_ref = latest_ref(source_phase, "brainstormContract")?;
     let requirement_context_ref = latest_ref(source_phase, "requirementContext")?;
-    let context_refs = json!({
-        "requirementContextRef": requirement_context_ref,
-        "normalizedRequirementTextRef": source_phase.latest_refs.get("normalizedRequirementText"),
-        "keywordHintsRef": source_phase.latest_refs.get("keywordHints"),
+    let mut latest_refs = BTreeMap::new();
+    latest_refs.insert("brainstormContract".to_string(), contract_ref.to_string());
+    latest_refs.insert(
+        "requirementContext".to_string(),
+        requirement_context_ref.to_string(),
+    );
+    if let Some(normalized) = source_phase.latest_refs.get("normalizedRequirementText") {
+        latest_refs.insert("normalizedRequirementText".to_string(), normalized.clone());
+    }
+    if let Some(keyword_hints) = source_phase.latest_refs.get("keywordHints") {
+        latest_refs.insert("keywordHints".to_string(), keyword_hints.clone());
+    }
+    if let Some(technical_baseline) = source_phase.latest_refs.get("technicalBaseline") {
+        latest_refs.insert("technicalBaseline".to_string(), technical_baseline.clone());
+    } else {
+        let baseline_file = root
+            .join(".loom")
+            .join("deliveries")
+            .join(delivery_id)
+            .join("contracts")
+            .join("technical-baseline.json");
+        if baseline_file.exists() {
+            latest_refs.insert(
+                "technicalBaseline".to_string(),
+                state::paths::to_project_relative(root, &baseline_file)?,
+            );
+        }
+    }
+    if let Some(decision) = source_phase.latest_refs.get("brainstormDecisionSnapshot") {
+        latest_refs.insert(
+            "latestConfirmedRequirementDecision".to_string(),
+            decision.clone(),
+        );
+    }
+    let decisions_index = paths::brainstorm_decisions_index_file(root, delivery_id);
+    if decisions_index.exists() {
+        latest_refs.insert(
+            "confirmedRequirementDecisionsIndex".to_string(),
+            state::paths::to_project_relative(root, &decisions_index)?,
+        );
+    }
+    delivery.phases.push(DeliveryPhaseState {
+        phase_id: handoff.phase_id.clone(),
+        latest_refs,
+        next_action: Some(RouteAction {
+            kind: RouteActionKind::RepositoryContextRequest,
+            source: "phase_handoff".to_string(),
+            reason: "next_phase_preview_candidate".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: Some(json!({
+                "fromPhaseId": source_phase_id,
+                "phaseId": handoff.phase_id.clone(),
+                "title": handoff.title.clone(),
+                "goal": handoff.goal.clone(),
+                "scopePreview": handoff.scope_preview.clone(),
+                "reason": handoff.reason.clone()
+            })),
+            target_phase_id: None,
+        }),
     });
+    delivery.status = DeliveryLifecycleStatus::Planning;
+    delivery.updated_at = now;
+    store
+        .save_delivery_index(project_root, &delivery)
+        .map_err(to_state_error)?;
+    apply_delivery_index(&mut status, &delivery);
+    store
+        .save_status(project_root, &status)
+        .map_err(to_state_error)?;
+    Ok(Some(handoff))
+}
+
+pub fn materialize_phase_brainstorm_from_preview(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    repository_context_ref: Option<&str>,
+) -> StateResult<Option<PhaseBrainstormRequest>> {
+    let root = Path::new(project_root);
+    let store = FileTransitionStore;
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
+    let mut delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let phase = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+        .ok_or_else(|| StateError::InvalidArgument(format!("phase {phase_id} not found")))?;
+    if let Some(existing_request_ref) = phase.latest_refs.get("brainstormRequestRef").cloned() {
+        if state::inspect_request(delivery_core::InspectRequestInput {
+            project_root: project_root.to_string(),
+            request_ref: existing_request_ref.clone(),
+        })
+        .map(|request| request.request_kind == "brainstorm_clarification_block")
+        .unwrap_or(false)
+        {
+            let request_id = phase
+                .latest_refs
+                .get("brainstormRequestId")
+                .cloned()
+                .unwrap_or_else(|| "brainstorm-session".to_string());
+            let brainstorm_run_id = phase
+                .latest_refs
+                .get("brainstormRunId")
+                .cloned()
+                .unwrap_or_else(|| "brainstorm-run".to_string());
+            return Ok(Some(PhaseBrainstormRequest {
+                phase_id: phase_id.to_string(),
+                request_id,
+                request_ref: existing_request_ref,
+                brainstorm_run_id,
+            }));
+        }
+    }
+
+    let contract_ref = latest_ref(phase, "brainstormContract")?;
+    let contract: BrainstormContract =
+        state::store::read_json(&from_project_relative(root, contract_ref)?)?;
+    let source_phase_id = contract.phase_id.clone();
+    let Some(handoff) = next_phase_handoff_from_preview(
+        project_root,
+        delivery_id,
+        &source_phase_id,
+        Some(phase_id),
+    )?
+    else {
+        return Ok(None);
+    };
+    let brainstorm_run_id = format!("brainstorm-run-{}", state::store::now_millis());
+    let request_id = format!("brainstorm-session-{}", state::store::now_millis());
+    let mut context_refs = json!({
+        "deliveryContextRef": contract_ref,
+        "requirementContextRef": phase.latest_refs.get("requirementContext"),
+        "normalizedRequirementTextRef": phase.latest_refs.get("normalizedRequirementText"),
+        "keywordHintsRef": phase.latest_refs.get("keywordHints"),
+        "latestConfirmedRequirementDecisionRef": phase.latest_refs.get("latestConfirmedRequirementDecision"),
+        "confirmedRequirementDecisionsIndexRef": phase.latest_refs.get("confirmedRequirementDecisionsIndex"),
+    });
+    if let Some(repository_context_ref) = repository_context_ref {
+        context_refs["latestRepositoryContextRef"] = json!(repository_context_ref);
+    }
     let mut request_root = request::build_brainstorm_request_root(
         root,
         &request_id,
@@ -157,7 +301,13 @@ pub fn materialize_next_phase_from_preview(
         &contract.delivery_context.user_facing_language,
         context_refs,
     );
-    attach_next_phase_seed(&mut request_root, source_phase_id, &handoff);
+    attach_next_phase_seed(&mut request_root, &source_phase_id, &handoff);
+    attach_phase_continuation_context(
+        &mut request_root,
+        &source_phase_id,
+        &handoff,
+        repository_context_ref.is_some(),
+    );
     let stored = state::write_native_request(
         project_root,
         state::NativeRequestInput {
@@ -186,54 +336,54 @@ pub fn materialize_next_phase_from_preview(
             .join("brainstorm-knowledge")
             .join(&request_id),
     )?;
-    let mut latest_refs = BTreeMap::new();
-    latest_refs.insert("brainstormRequestId".to_string(), request_id);
-    latest_refs.insert(
-        "brainstormRequestRef".to_string(),
-        stored.request_ref.clone(),
-    );
-    latest_refs.insert("brainstormRunId".to_string(), brainstorm_run_id);
-    latest_refs.insert("brainstormContract".to_string(), contract_ref.to_string());
-    latest_refs.insert(
-        "brainstormClarificationState".to_string(),
-        clarification_state_ref,
-    );
-    latest_refs.insert(
-        "requirementContext".to_string(),
-        requirement_context_ref.to_string(),
-    );
-    if let Some(normalized) = source_phase.latest_refs.get("normalizedRequirementText") {
-        latest_refs.insert("normalizedRequirementText".to_string(), normalized.clone());
-    }
-    if let Some(keyword_hints) = source_phase.latest_refs.get("keywordHints") {
-        latest_refs.insert("keywordHints".to_string(), keyword_hints.clone());
-    }
-    delivery.phases.push(DeliveryPhaseState {
-        phase_id: handoff.phase_id.clone(),
-        latest_refs,
-        next_action: Some(RouteAction {
+    if let Some(active_phase) = delivery
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase_id == handoff.phase_id)
+    {
+        active_phase
+            .latest_refs
+            .insert("brainstormRequestId".to_string(), request_id.clone());
+        active_phase.latest_refs.insert(
+            "brainstormRequestRef".to_string(),
+            stored.request_ref.clone(),
+        );
+        active_phase
+            .latest_refs
+            .insert("brainstormRunId".to_string(), brainstorm_run_id.clone());
+        active_phase.latest_refs.insert(
+            "brainstormClarificationState".to_string(),
+            clarification_state_ref,
+        );
+        if let Some(repository_context_ref) = repository_context_ref {
+            active_phase.latest_refs.insert(
+                "latestRepositoryContext".to_string(),
+                repository_context_ref.to_string(),
+            );
+        }
+        active_phase.next_action = Some(RouteAction {
             kind: RouteActionKind::BrainstormClarification,
-            source: "phase_handoff".to_string(),
-            reason: "next_phase_preview_candidate".to_string(),
+            source: "repository_context_accept".to_string(),
+            reason: "repository_context_ready_for_phase_brainstorm".to_string(),
             prompt: Some(
                 "Read the current Brainstorm block request, query request-scoped knowledge for this block, and confirm the next active phase boundary in the user's language."
                     .to_string(),
             ),
             accepted_responses: vec!["reply_in_chat".to_string()],
-            request_ref: Some(stored.request_ref),
+            request_ref: Some(stored.request_ref.clone()),
             details: Some(json!({
                 "fromPhaseId": source_phase_id,
-                "phaseId": handoff.phase_id.clone(),
-                "title": handoff.title.clone(),
-                "goal": handoff.goal.clone(),
-                "scopePreview": handoff.scope_preview.clone(),
-                "reason": handoff.reason.clone()
+                "phaseId": handoff.phase_id,
+                "title": handoff.title,
+                "goal": handoff.goal,
+                "scopePreview": handoff.scope_preview,
+                "reason": handoff.reason
             })),
             target_phase_id: None,
-        }),
-    });
+        });
+    }
     delivery.status = DeliveryLifecycleStatus::Planning;
-    delivery.updated_at = now;
+    delivery.updated_at = state::store::now_string();
     store
         .save_delivery_index(project_root, &delivery)
         .map_err(to_state_error)?;
@@ -241,7 +391,12 @@ pub fn materialize_next_phase_from_preview(
     store
         .save_status(project_root, &status)
         .map_err(to_state_error)?;
-    Ok(Some(handoff))
+    Ok(Some(PhaseBrainstormRequest {
+        phase_id: phase_id.to_string(),
+        request_id,
+        request_ref: stored.request_ref,
+        brainstorm_run_id,
+    }))
 }
 
 fn read_phase_brainstorm_contract(
@@ -299,6 +454,68 @@ fn attach_next_phase_seed(root: &mut Value, source_phase_id: &str, handoff: &Nex
                     "purpose": "Read the next phase seed before composing phase continuation options.",
                     "whenToRead": "Read after the conversation protocol and compact requirement context, before querying knowledge or presenting phase_scope options.",
                     "fields": ["nextPhaseSeed"]
+                }),
+            );
+        }
+    }
+}
+
+fn attach_phase_continuation_context(
+    root: &mut Value,
+    source_phase_id: &str,
+    handoff: &NextPhaseHandoff,
+    has_repository_context: bool,
+) {
+    root["phaseContinuationContext"] = json!({
+        "activePhase": {
+            "phaseId": handoff.phase_id,
+            "title": handoff.title,
+            "goal": handoff.goal
+        },
+        "previousPhaseId": source_phase_id,
+        "rules": [
+            "Use nextPhaseSeed as the non-binding starting point for this phase clarification.",
+            "Use latestRepositoryContext as current code facts so implemented prior-phase capabilities are not re-asked as new scope.",
+            "Use deliveryContext as the accepted prior Brainstorm contract for source, deferred, and boundary facts.",
+            "Confirm only the current phase; do not regenerate a complete future roadmap."
+        ]
+    });
+    if let Some(groups) = root
+        .pointer_mut("/requestReadPlan/groups")
+        .and_then(Value::as_array_mut)
+    {
+        if !groups.iter().any(|group| {
+            group.get("groupId").and_then(Value::as_str) == Some("phase_continuation_context")
+        }) {
+            let mut fields = vec![
+                "phaseContinuationContext.activePhase",
+                "phaseContinuationContext.previousPhaseId",
+                "phaseContinuationContext.rules",
+                "deliveryContext.phasePlan.current",
+                "deliveryContext.scope.deferred",
+                "deliveryContext.phasePlan.nextPhasePreview",
+            ];
+            if has_repository_context {
+                fields.extend([
+                    "latestRepositoryContext.repoOverview.summary",
+                    "latestRepositoryContext.existingCapabilities",
+                    "latestRepositoryContext.relevantSurfaces",
+                ]);
+            }
+            fields.extend([
+                "latestConfirmedRequirementDecision.summary",
+                "latestConfirmedRequirementDecision.phasePlan",
+                "confirmedRequirementDecisionsIndex.decisions",
+            ]);
+            let insert_at = groups.len().min(3);
+            groups.insert(
+                insert_at,
+                json!({
+                    "groupId": "phase_continuation_context",
+                    "required": true,
+                    "purpose": "Read phase continuation context before presenting the current phase scope.",
+                    "whenToRead": "Read before knowledge queries and before presenting phase_scope options.",
+                    "fields": fields
                 }),
             );
         }

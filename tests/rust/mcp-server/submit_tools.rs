@@ -1576,7 +1576,11 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "user_gate", "{result:#}");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(
+        result["next"]["artifactKind"], "repository_context_candidate",
+        "{result:#}"
+    );
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     assert_eq!(
         active_phase_id(fixture.root_str(), &delivery_id),
@@ -1597,11 +1601,63 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         .iter()
         .find(|phase| phase["phaseId"] == "phase-2")
         .expect("phase-2");
-    assert_eq!(phase_2["nextAction"]["kind"], "brainstorm_clarification");
-    assert!(phase_2["latestRefs"]["brainstormRequestRef"].is_string());
-    let phase_2_request_ref = phase_2["latestRefs"]["brainstormRequestRef"]
+    assert_eq!(phase_2["nextAction"]["kind"], "repository_context_request");
+    assert!(phase_2["latestRefs"]["brainstormRequestRef"].is_null());
+    assert!(phase_2["latestRefs"]["technicalBaseline"].is_string());
+
+    let repository_context_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repository context request ref");
+    let brainstorm_contract_ref = phase_2["latestRefs"]["brainstormContract"]
+        .as_str()
+        .expect("brainstorm contract ref");
+    let technical_baseline_ref =
+        format!(".loom/deliveries/{delivery_id}/contracts/technical-baseline.json");
+    write_candidate_target(
+        &fixture,
+        repository_context_request_ref,
+        &repository_context_candidate_json(
+            repository_context_request_ref,
+            brainstorm_contract_ref,
+            &technical_baseline_ref,
+        ),
+    );
+
+    let repository_result = call_submit(
+        "loom.repositoryContextAcceptFile",
+        repository_context_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        repository_result["state"], "user_gate",
+        "{repository_result:#}"
+    );
+    assert_eq!(
+        repository_result["gate"]["gateId"],
+        "phase_brainstorm_required"
+    );
+    let phase_2_request_ref = repository_result["requestRef"]
         .as_str()
         .expect("phase-2 brainstorm request ref");
+    let refreshed_index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let refreshed_index: Value = serde_json::from_str(
+        &std::fs::read_to_string(refreshed_index_path).expect("read refreshed index"),
+    )
+    .expect("parse refreshed index");
+    let refreshed_phase_2 = refreshed_index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .find(|phase| phase["phaseId"] == "phase-2")
+        .expect("refreshed phase-2");
+    assert_eq!(
+        refreshed_phase_2["latestRefs"]["brainstormRequestRef"],
+        phase_2_request_ref
+    );
     let phase_2_request = read_request_root_value(fixture.root_str(), phase_2_request_ref);
     assert_eq!(phase_2_request["nextPhaseSeed"]["phaseId"], "phase-2");
     assert_eq!(
@@ -1618,6 +1674,49 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         .iter()
         .any(|group| group["groupId"] == "next_phase_seed"
             && group["fields"] == json!(["nextPhaseSeed"])));
+    assert!(phase_2_request["requestReadPlan"]["groups"]
+        .as_array()
+        .expect("read groups")
+        .iter()
+        .any(|group| group["groupId"] == "phase_continuation_context"));
+
+    let phase_2_candidate_request_ref =
+        confirm_phase2_brainstorm_to_candidate_write(&fixture, phase_2_request_ref);
+    let phase_2_candidate_request =
+        read_request_root_value(fixture.root_str(), &phase_2_candidate_request_ref);
+    assert_eq!(
+        phase_2_candidate_request["postSubmit"]["nextAction"]["kind"],
+        "planning_contract_create"
+    );
+    write_candidate_target(
+        &fixture,
+        &phase_2_candidate_request_ref,
+        &phase2_candidate_json(),
+    );
+    let phase_2_brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &phase_2_candidate_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        phase_2_brainstorm_result["state"], "auto_runnable",
+        "{phase_2_brainstorm_result:#}"
+    );
+    assert_eq!(
+        phase_2_brainstorm_result["next"]["artifactKind"],
+        "architecture_section_candidate"
+    );
+    let phase_2_contract_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "brainstormContract");
+    let phase_2_contract: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(&phase_2_contract_ref))
+            .expect("read phase-2 brainstorm contract"),
+    )
+    .expect("parse phase-2 brainstorm contract");
+    assert_eq!(
+        phase_2_contract["handoff"]["nextNode"],
+        "planning_generation_contract"
+    );
 }
 
 #[test]
@@ -2362,6 +2461,83 @@ fn confirm_brainstorm_block(
         "{result:#}"
     );
     result
+}
+
+fn confirm_phase2_brainstorm_to_candidate_write(
+    fixture: &Fixture,
+    phase_2_request_ref: &str,
+) -> String {
+    let server = LoomMcpServer::default();
+    let mut request_ref = confirm_brainstorm_block(
+        &server,
+        fixture,
+        phase_2_request_ref,
+        "phase_scope",
+        "确认第二阶段为资金账户基础能力。",
+        json!({
+            "scope": {
+                "included": ["资金账户开户", "密码管理", "存款与取款", "证券账户与资金账户关联"],
+                "deferred": ["交易客户端", "中央撮合", "行情发布"],
+                "excluded": []
+            },
+            "recommendation": {
+                "label": "资金账户基础能力",
+                "reason": "资金账户承接已完成的证券账户闭环，是交易客户端和撮合前的依赖。"
+            }
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("phase2 concept requestRef")
+        .to_string();
+    request_ref = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "concept_grounding",
+        "确认资金账户业务规则、状态和边界。",
+        json!({
+            "objects": ["资金账户", "证券账户关联关系"],
+            "operations": ["开户", "密码管理", "存款", "取款", "账户关联"],
+            "rules": ["资金账户负责现金余额和资金冻结", "证券账户负责交易身份和持仓", "资金账户销户前需要清空余额和解除关联"],
+            "boundaries": ["交易撮合递延", "行情发布递延"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("phase2 frontend requestRef")
+        .to_string();
+    request_ref = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "frontend_experience",
+        "确认工作人员后台资金账户管理页面路径。",
+        json!({
+            "required": true,
+            "surfaces": ["资金账户管理页面"],
+            "targetDiscovery": ["分页查询列表", "按投资者、资金账户号、关联证券账户查询"],
+            "operationPaths": ["开户从新建入口进入", "存取款和关联操作先查询并选择目标账户"],
+            "mustNot": ["不能把资金账户能力混入证券账户模块"]
+        }),
+    )["requestRef"]
+        .as_str()
+        .expect("phase2 final summary requestRef")
+        .to_string();
+    let write_action = confirm_brainstorm_block(
+        &server,
+        fixture,
+        &request_ref,
+        "final_summary",
+        "用户已确认第二阶段范围、业务理解、页面办理路径和提交前核对。",
+        json!({
+            "coverageChecklist": ["资金账户基础能力", "开户/密码/存取款/账户关联规则", "工作人员后台办理路径"],
+            "readyToWriteCandidate": true
+        }),
+    );
+    assert_eq!(write_action["state"], "auto_runnable", "{write_action:#}");
+    write_action["next"]["requestRef"]
+        .as_str()
+        .expect("phase2 candidate write requestRef")
+        .to_string()
 }
 
 fn run_knowledge_context(
@@ -3902,6 +4078,37 @@ fn candidate_with_next_phase_preview() -> Value {
         "scopePreview": ["资金账户开户", "密码管理", "存款与取款", "账户关联"],
         "reason": "资金账户是交易客户端和撮合前的下一层依赖。"
     });
+    candidate
+}
+
+fn phase2_candidate_json() -> Value {
+    let mut candidate = valid_candidate_json();
+    candidate["requestSummary"]["title"] = json!("资金账户基础能力");
+    candidate["requestSummary"]["oneLine"] = json!("实现资金账户开户、密码、存取款与账户关联");
+    candidate["requestSummary"]["businessGoal"] = json!("承接证券账户闭环，完成资金账户基础能力");
+    candidate["scope"]["included"][0]["label"] = json!("资金账户基础能力");
+    candidate["scope"]["included"][0]["items"] = json!([
+        "资金账户开户",
+        "密码管理",
+        "存款与取款",
+        "证券账户与资金账户关联"
+    ]);
+    candidate["scope"]["included"][0]["reason"] =
+        json!("phase2 承接已完成的证券账户底座，补齐交易前置的资金账户能力。");
+    candidate["roadmap"]["currentPhaseId"] = json!("phase-2");
+    candidate["roadmap"]["phases"][0]["phaseId"] = json!("phase-2");
+    candidate["roadmap"]["phases"][0]["title"] = json!("资金账户基础能力");
+    candidate["roadmap"]["phases"][0]["name"] = json!("资金账户基础能力");
+    candidate["roadmap"]["phases"][0]["goal"] = json!("实现资金账户开户、密码、存取款与账户关联。");
+    candidate["phasePlan"]["current"]["phaseId"] = json!("phase-2");
+    candidate["phasePlan"]["current"]["title"] = json!("资金账户基础能力");
+    candidate["phasePlan"]["current"]["goal"] = json!("实现资金账户开户、密码、存取款与账户关联。");
+    candidate["phasePlan"]["nextPhasePreview"] = json!({
+        "kind": "none",
+        "reason": "phase2 之后的范围由后续阶段确认。"
+    });
+    candidate["acceptance"][0]["statement"] =
+        json!("工作人员可以完成资金账户开户、密码管理、存取款和证券账户关联。");
     candidate
 }
 
