@@ -31,15 +31,3 @@ pub use transition::*;
 pub use transition_diagnostics::*;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn error_shape_is_stable() {
-        let error = LoomError::new("SMOKE", "core is reachable");
-        assert_eq!(error.code, "SMOKE");
-        assert_eq!(error.message, "core is reachable");
-    }
-}

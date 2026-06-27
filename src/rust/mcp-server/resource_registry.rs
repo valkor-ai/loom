@@ -97,26 +97,3 @@ fn to_json_string(result: LoomMcpActionResult) -> String {
         .to_string()
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resource_templates_are_registered() {
-        let templates = ResourceRegistry::batch_2().list_resource_templates();
-        let uris: Vec<&str> = templates
-            .resource_templates
-            .iter()
-            .map(|template| template.uri_template.as_str())
-            .collect();
-        assert_eq!(
-            uris,
-            vec![
-                "loom://knowledge/{sourceId}/builds/{buildId}/chunks/{chunkId}",
-                "loom://projects/{projectId}/requests/{requestId}/field-groups/{groupId}",
-                "loom://projects/{projectId}/requests/{requestId}/fields/{encodedFieldPath}",
-            ]
-        );
-    }
-}

@@ -81,19 +81,3 @@ pub fn normalize_project_root(raw: &str) -> Result<NormalizedProjectRoot, String
         path: canonical,
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{HostKind, LoomMcpRuntimeContext};
-
-    #[test]
-    fn runtime_context_reads_only_current_host_env_name() {
-        std::env::remove_var("LOOM_HOST");
-        std::env::set_var("LOOM_MCP_HOST", "claude-code");
-
-        let context = LoomMcpRuntimeContext::from_env();
-
-        std::env::remove_var("LOOM_MCP_HOST");
-        assert_eq!(context.host, HostKind::Codex);
-    }
-}

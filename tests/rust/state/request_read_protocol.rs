@@ -1,12 +1,70 @@
 use serde_json::json;
 use state::{
     legacy_ts_reader::register_legacy_ts_request,
+    paths::{
+        delivery_dir, delivery_index_file, operation_lease_file, phase_tmp_dir, project_paths,
+        task_run_file, workspace_dir, DeliveryPhaseLocator, DeliveryPhaseRunLocator,
+    },
     request_resolver::{read_field_by_resource_uri, read_field_group_by_resource_uri},
     store::{read_json_value, write_json_atomic, write_text_atomic},
     write_native_request, NativeRequestInput, WriteTargetAuthorizationError,
 };
 use std::fs::read_to_string;
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
+
+#[test]
+fn project_paths_include_delivery_and_status_roots() {
+    let root = std::env::current_dir().expect("current dir");
+    let paths = project_paths(root.to_str().expect("current dir utf8")).expect("project paths");
+    assert!(paths.status_file.ends_with(".loom/status.json"));
+    assert!(paths.gitignore_file.ends_with(".loom/.gitignore"));
+    assert!(paths.deliveries_dir.ends_with(".loom/deliveries"));
+    assert!(paths.tmp_dir.ends_with(".loom/tmp"));
+}
+
+#[test]
+fn delivery_phase_and_run_locators_match_ts_layout() {
+    let root = PathBuf::from("/tmp/loom-state-paths");
+    let phase = DeliveryPhaseLocator {
+        delivery_id: "delivery_1".to_string(),
+        phase_id: "phase_scope".to_string(),
+    };
+    let run = DeliveryPhaseRunLocator {
+        delivery_id: "delivery_1".to_string(),
+        phase_id: "phase_scope".to_string(),
+        run_id: "run_1".to_string(),
+    };
+
+    assert_eq!(
+        delivery_dir(&root, &phase.delivery_id),
+        PathBuf::from("/tmp/loom-state-paths/.loom/deliveries/delivery_1")
+    );
+    assert_eq!(
+        delivery_index_file(&root, &phase.delivery_id),
+        PathBuf::from("/tmp/loom-state-paths/.loom/deliveries/delivery_1/index.json")
+    );
+    assert_eq!(
+        phase_tmp_dir(&root, &phase),
+        PathBuf::from("/tmp/loom-state-paths/.loom/deliveries/delivery_1/tmp/phase_scope")
+    );
+    assert_eq!(
+        workspace_dir(&root, &phase),
+        PathBuf::from("/tmp/loom-state-paths/.loom/deliveries/delivery_1/workspace/phase_scope")
+    );
+    assert_eq!(
+        task_run_file(&root, &run),
+        PathBuf::from(
+            "/tmp/loom-state-paths/.loom/deliveries/delivery_1/tasks/phase_scope/runs/run_1.json"
+        )
+    );
+    assert_eq!(
+        operation_lease_file(&root, &phase.delivery_id),
+        PathBuf::from(
+            "/tmp/loom-state-paths/.loom/deliveries/delivery_1/operations/active-lease.json"
+        )
+    );
+}
 
 #[test]
 fn native_request_read_protocol_resolves_declared_fields() {
