@@ -295,7 +295,7 @@ fn native_request_rejects_legacy_agent_action_authority() {
 }
 
 #[test]
-fn native_request_rejects_unresolvable_or_broad_read_plan_fields() {
+fn native_request_omits_missing_read_fields_and_rejects_broad_fields() {
     let fixture = Fixture::new("native-read-plan-validation");
     let missing = write_native_request(
         fixture.root_str(),
@@ -316,8 +316,21 @@ fn native_request_rejects_unresolvable_or_broad_read_plan_fields() {
             }),
         },
     )
-    .expect_err("missing read field is rejected before request is returned");
-    assert!(missing.to_string().contains("task.missing"));
+    .expect("missing read field does not block request generation");
+    let missing_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: missing.request_ref.clone(),
+        group_id: "core".to_string(),
+    })
+    .expect("read missing group");
+    assert!(missing_group.fields.is_empty());
+    let missing_fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: missing.request_ref,
+        fields: vec!["task.missing".to_string()],
+    })
+    .expect("read missing allowed field");
+    assert!(missing_fields.fields.is_empty());
 
     let broad = write_native_request(
         fixture.root_str(),

@@ -568,13 +568,16 @@ fn validate_read_plan_contract(
     for group in read_groups {
         let mut group_bytes = 0usize;
         for field in &group.fields {
-            let value = resolve_field_for_validation(project_root, root_object, refs, field)
-                .map_err(|error| {
-                    StateError::InvalidArgument(format!(
+            let value = match resolve_field_for_validation(project_root, root_object, refs, field) {
+                Ok(value) => value,
+                Err(error) if is_field_not_found(&error) => continue,
+                Err(error) => {
+                    return Err(StateError::InvalidArgument(format!(
                         "requestReadPlan field validation failed: request group {} field {}: {}",
                         group.group_id, field, error
-                    ))
-                })?;
+                    )));
+                }
+            };
             let field_bytes = pretty_len(&value);
             if field_bytes > MAX_READ_FIELD_BYTES {
                 return Err(StateError::InvalidArgument(format!(
@@ -592,6 +595,10 @@ fn validate_read_plan_contract(
         }
     }
     Ok(())
+}
+
+fn is_field_not_found(error: &StateError) -> bool {
+    matches!(error, StateError::InvalidArgument(message) if message.starts_with("FIELD_NOT_FOUND:"))
 }
 
 fn resolve_field_for_validation(

@@ -184,7 +184,13 @@ fn resolve_fields(
 ) -> StateResult<BTreeMap<String, FieldReadResult>> {
     let mut resolved = BTreeMap::new();
     for field in fields {
-        resolved.insert(field.clone(), resolve_field(project_root, request, field)?);
+        match resolve_field(project_root, request, field) {
+            Ok(value) => {
+                resolved.insert(field.clone(), value);
+            }
+            Err(error) if is_field_not_found(&error) => {}
+            Err(error) => return Err(error),
+        }
     }
     Ok(resolved)
 }
@@ -299,6 +305,10 @@ fn resolve_context_ref_field(
 
 fn field_result(value: Value) -> FieldReadResult {
     FieldReadResult { value }
+}
+
+fn is_field_not_found(error: &StateError) -> bool {
+    matches!(error, StateError::InvalidArgument(message) if message.starts_with("FIELD_NOT_FOUND:"))
 }
 
 fn request_storage_manifest_ref(
