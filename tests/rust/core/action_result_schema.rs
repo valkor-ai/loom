@@ -38,6 +38,12 @@ fn action_result_states_have_expected_next_boundaries() {
             "auto_runnable" => {
                 assert_eq!(value["stopAllowed"], false);
                 assert!(
+                    value["agentInstruction"].as_str().is_some_and(|text| {
+                        text.contains("Continue immediately") && text.contains("submit")
+                    }),
+                    "auto_runnable must include agentInstruction: {value}"
+                );
+                assert!(
                     value.get("next").is_some(),
                     "auto_runnable must include next"
                 );
@@ -108,6 +114,25 @@ fn next_action_shapes_are_stable() {
     for value in values {
         assert_no_forbidden_keys(&value);
     }
+}
+
+#[test]
+fn execute_task_auto_runnable_instruction_forbids_progress_only_stop() {
+    let result = LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
+        "/tmp/project",
+        sample_execute_task_next(),
+    ));
+    let value = serde_json::to_value(result).expect("result json");
+
+    assert_eq!(value["state"], "auto_runnable");
+    assert_eq!(value["stopAllowed"], false);
+    let instruction = value["agentInstruction"]
+        .as_str()
+        .expect("agentInstruction");
+    assert!(instruction.contains("execute only this task"));
+    assert!(instruction.contains("write resultFile"));
+    assert!(instruction.contains("submit with submitTool"));
+    assert_eq!(value["next"]["kind"], "execute_task");
 }
 
 fn sample_results() -> Vec<LoomMcpActionResult> {

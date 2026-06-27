@@ -56,6 +56,7 @@ impl LoomMcpActionResult {
 pub struct LoomMcpAutoRunnableResult {
     pub project_root: String,
     pub stop_allowed: bool,
+    pub agent_instruction: String,
     pub next: LoomMcpNextAction,
 }
 
@@ -64,7 +65,25 @@ impl LoomMcpAutoRunnableResult {
         Self {
             project_root: project_root.into(),
             stop_allowed: false,
+            agent_instruction: auto_runnable_agent_instruction(&next).to_string(),
             next,
+        }
+    }
+}
+
+fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
+    match next {
+        LoomMcpNextAction::WriteArtifact(_) => {
+            "Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress."
+        }
+        LoomMcpNextAction::ExecuteTask(_) => {
+            "Continue immediately: inspect requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress."
+        }
+        LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
+            "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated."
+        }
+        LoomMcpNextAction::DeployRepairAssets(_) => {
+            "Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress."
         }
     }
 }
