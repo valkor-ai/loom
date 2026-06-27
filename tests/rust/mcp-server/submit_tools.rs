@@ -1062,6 +1062,15 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         task_result_repair_fields["outputContract.resultTemplate"].value["verificationResults"][0]
             .is_object()
     );
+    assert_eq!(
+        task_result_repair_fields["outputContract.resultTemplate"].value["changedFiles"],
+        json!(["src/main.tsx"])
+    );
+    assert!(
+        task_result_repair_fields["outputContract.resultTemplate"].value
+            ["requirementDetailEvidence"][0]
+            .is_object()
+    );
     let task_result_repair_root =
         read_request_root_value(fixture.root_str(), &task_result_repair_action_ref);
     assert!(task_result_repair_root["requestReadPlan"]["groups"]
@@ -1081,6 +1090,22 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert_eq!(task_result["next"]["kind"], "write_artifact");
     assert_eq!(task_result["next"]["artifactKind"], "review_result");
     assert_eq!(task_result["next"]["submitTool"], "loom.reviewAcceptFile");
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    let latest_refs = index["phases"][0]["latestRefs"]
+        .as_object()
+        .expect("latest refs");
+    assert!(
+        !latest_refs.contains_key("activeTaskResultRepairActionRef"),
+        "accepted repair must clear stale activeTaskResultRepairActionRef: {latest_refs:#?}"
+    );
     let review_request_ref = task_result["next"]["requestRef"]
         .as_str()
         .expect("review requestRef");
@@ -2654,6 +2679,27 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
     write_task_result_candidate_with_detail_evidence(fixture, request_ref, true, false);
 }
 
+fn write_task_result_candidate_with_empty_changed_files(fixture: &Fixture, request_ref: &str) {
+    write_task_result_candidate(fixture, request_ref);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["outputContract.resultFile".to_string()],
+    })
+    .expect("read result file")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("resultFile");
+    let result_path = fixture.root.join(result_file);
+    let mut result: Value =
+        serde_json::from_str(&std::fs::read_to_string(&result_path).expect("read task result"))
+            .expect("parse task result");
+    result["changedFiles"] = json!([]);
+    write_json_atomic(&result_path, &result).expect("write empty changedFiles task result");
+}
+
 fn write_large_task_result_candidate(fixture: &Fixture, request_ref: &str) {
     write_task_result_candidate_with_detail_evidence(fixture, request_ref, true, true);
 }
@@ -2785,6 +2831,50 @@ fn complete_task_execution_to_review_with_candidate(fixture: &Fixture, candidate
         .as_str()
         .expect("review requestRef")
         .to_string()
+}
+
+#[test]
+fn task_result_repair_template_preserves_previous_changed_files_for_replacement() {
+    let fixture = Fixture::new("task-result-repair-preserves-changed-files");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+
+    write_task_result_candidate_with_empty_changed_files(&fixture, &execution_request_ref);
+    let invalid_replacement = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        invalid_replacement["state"], "auto_runnable",
+        "{invalid_replacement:#}"
+    );
+    assert_eq!(
+        invalid_replacement["next"]["artifactKind"],
+        "task_result_repair"
+    );
+    let repair_request_ref = invalid_replacement["next"]["requestRef"]
+        .as_str()
+        .expect("repair request ref");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read repair fields")
+    .fields;
+
+    assert_eq!(
+        repair_fields["outputContract.resultTemplate"].value["changedFiles"],
+        json!(["src/main.tsx"])
+    );
 }
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {

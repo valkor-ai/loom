@@ -201,6 +201,11 @@ where
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "blockedOutput.blockedReasons")
     });
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.clone(),
+        phase_id: phase_id.clone(),
+    };
+    let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
     let issues = validate_result(
         &raw_result,
         &result,
@@ -227,13 +232,11 @@ where
                 result_file,
                 required_top_level_fields,
                 blocked_output,
+                submitted_result: raw_result.clone(),
+                previous_changed_files,
             }),
         );
     }
-    let locator = DeliveryPhaseLocator {
-        delivery_id: delivery_id.clone(),
-        phase_id: phase_id.clone(),
-    };
     let (_task_plan, mut run) = load_current_plan_and_run(root, &locator)?;
     if run.run_id != run_id {
         return Ok(failed(
@@ -1136,6 +1139,8 @@ struct RepairContextInput {
     result_file: String,
     required_top_level_fields: Vec<String>,
     blocked_output: Value,
+    submitted_result: Value,
+    previous_changed_files: Vec<String>,
 }
 
 fn repair_task_result_or_error(
@@ -1195,7 +1200,7 @@ fn materialize_task_result_repair(
     )?;
     let schema_shape = serde_json::to_value(schema_for!(TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let result_template = task_result_template(&context.task_plan_id, &context.task);
+    let result_template = task_result_repair_template(&context, &issues);
     let root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "task_result_repair",
@@ -1336,6 +1341,78 @@ fn materialize_task_result_repair(
     ))
 }
 
+fn previous_persisted_changed_files(
+    root: &Path,
+    locator: &DeliveryPhaseLocator,
+    run_id: &str,
+    result: &TaskResult,
+) -> Vec<String> {
+    let path = task_result_file(
+        root,
+        locator,
+        run_id,
+        &result.task_id,
+        &result.task_result_id,
+    );
+    if !path.exists() {
+        return Vec::new();
+    }
+    state::store::read_json::<TaskResult>(&path)
+        .map(|previous| previous.changed_files)
+        .unwrap_or_default()
+}
+
+fn task_result_repair_template(
+    context: &RepairContextInput,
+    issues: &[delivery_core::RepairIssue],
+) -> Value {
+    let mut template = task_result_template(&context.task_plan_id, &context.task);
+    merge_submitted_task_result_fields(&mut template, &context.submitted_result);
+    if changed_files_issue(issues)
+        && context
+            .previous_changed_files
+            .iter()
+            .any(|path| !path.is_empty())
+        && template
+            .get("changedFiles")
+            .and_then(Value::as_array)
+            .is_none_or(|items| items.is_empty())
+    {
+        template["changedFiles"] = json!(context.previous_changed_files);
+        template["noChangeReason"] = Value::Null;
+    }
+    template
+}
+
+fn merge_submitted_task_result_fields(template: &mut Value, submitted: &Value) {
+    let (Some(template_object), Some(submitted_object)) =
+        (template.as_object_mut(), submitted.as_object())
+    else {
+        return;
+    };
+    for (key, submitted_value) in submitted_object {
+        if keeps_template_array_shape(template_object.get(key), submitted_value) {
+            continue;
+        }
+        template_object.insert(key.clone(), submitted_value.clone());
+    }
+}
+
+fn keeps_template_array_shape(template_value: Option<&Value>, submitted_value: &Value) -> bool {
+    matches!(
+        (template_value.and_then(Value::as_array), submitted_value.as_array()),
+        (Some(template_items), Some(submitted_items))
+            if !template_items.is_empty() && submitted_items.is_empty()
+    )
+}
+
+fn changed_files_issue(issues: &[delivery_core::RepairIssue]) -> bool {
+    issues.iter().any(|issue| {
+        issue.field_path.as_deref() == Some("changedFiles")
+            || issue.code == "TASK_RESULT_STATUS_INCONSISTENT"
+    })
+}
+
 fn update_latest_task_result_repair_action(
     project_root: &str,
     delivery_id: &str,
@@ -1393,6 +1470,7 @@ fn update_delivery_after_result(
         phase
             .latest_refs
             .insert("latestTaskResult".to_string(), result_ref.to_string());
+        phase.latest_refs.remove("activeTaskResultRepairActionRef");
         phase.next_action = next_action.cloned();
     }
     delivery.status = if matches!(
