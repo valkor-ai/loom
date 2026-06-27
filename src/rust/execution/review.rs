@@ -116,6 +116,8 @@ fn materialize_review_request_inner(
     let result_file = to_project_relative(root, &review_result_candidate_file(root, &review_id))?;
     let request_file = to_project_relative(root, &review_request_file(root, &locator, &review_id))?;
     let task_results = load_task_results(root, &locator, &task_plan, &run);
+    let next_phase_handoff =
+        brainstorm::next_phase_handoff_from_preview(project_root, delivery_id, phase_id, None)?;
     let request_root = build_review_request(
         &review_id,
         delivery_id,
@@ -124,6 +126,7 @@ fn materialize_review_request_inner(
         &task_plan,
         &run,
         &task_results,
+        next_phase_handoff.as_ref(),
     )?;
     let stored = state::write_native_request(
         project_root,
@@ -176,6 +179,7 @@ fn build_review_request(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     task_results: &[TaskResult],
+    next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Result<Value, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -281,7 +285,7 @@ fn build_review_request(
                 "description": "Write the ReviewResult JSON for this phase run."
             }],
             "schemaShape": schema_shape,
-            "resultTemplate": review_result_template(review_id, phase_id, task_plan, run),
+            "resultTemplate": review_result_template(review_id, phase_id, task_plan, run, next_phase_handoff),
             "allowedRefs": allowed_refs,
             "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
             "reviewSignals": build_review_signals(task_plan, task_results),
@@ -412,6 +416,7 @@ fn review_result_template(
     phase_id: &str,
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
+    next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Value {
     let first_task_result_ref = run
         .task_states
@@ -432,6 +437,22 @@ fn review_result_template(
             })
         })
         .collect::<Vec<_>>();
+    let next_action = if let Some(handoff) = next_phase_handoff {
+        json!({
+            "type": "continue_to_next_phase",
+            "reason": handoff.reason,
+            "targetPhaseId": handoff.phase_id,
+            "targetTaskIds": [],
+            "findingRefs": []
+        })
+    } else {
+        json!({
+            "type": "done",
+            "reason": "",
+            "targetTaskIds": [],
+            "findingRefs": []
+        })
+    };
     json!({
         "schemaVersion": "1.0",
         "reviewId": review_id,
@@ -484,12 +505,7 @@ fn review_result_template(
         },
         "limitations": [],
         "pendingActions": [],
-        "nextAction": {
-            "type": "done",
-            "reason": "",
-            "targetTaskIds": [],
-            "findingRefs": []
-        },
+        "nextAction": next_action,
         "createdAt": "ISO-8601 datetime",
         "updatedAt": "ISO-8601 datetime"
     })
@@ -601,7 +617,7 @@ where
     }
     let root = Path::new(&input.project_root);
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let result: ReviewResult = match serde_json::from_value(raw) {
+    let mut result: ReviewResult = match serde_json::from_value(raw) {
         Ok(result) => result,
         Err(error) => {
             return repairable_or_fallback_manual_review(
@@ -643,6 +659,13 @@ where
             target.path.clone(),
             issues,
         );
+    }
+    if let Some(handoff) =
+        normalize_approved_next_phase(&input.project_root, &delivery_id, &phase_id, &result)?
+    {
+        result.next_action.r#type = "continue_to_next_phase".to_string();
+        result.next_action.target_phase_id = Some(handoff.phase_id);
+        result.next_action.reason = handoff.reason;
     }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
@@ -1027,6 +1050,28 @@ fn review_route_action(result: &ReviewResult, result_ref: &str) -> RouteAction {
         })),
         target_phase_id: result.next_action.target_phase_id.clone(),
     }
+}
+
+fn normalize_approved_next_phase(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    result: &ReviewResult,
+) -> Result<Option<brainstorm::NextPhaseHandoff>, state::store::StateError> {
+    if !matches!(result.decision.as_str(), "approved" | "approved_with_notes")
+        || !matches!(
+            result.next_action.r#type.as_str(),
+            "done" | "continue_to_next_phase"
+        )
+    {
+        return Ok(None);
+    }
+    brainstorm::materialize_next_phase_from_preview(
+        project_root,
+        delivery_id,
+        phase_id,
+        result.next_action.target_phase_id.as_deref(),
+    )
 }
 
 fn materialize_manual_review_request(

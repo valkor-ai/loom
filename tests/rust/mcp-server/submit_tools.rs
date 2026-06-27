@@ -1547,6 +1547,61 @@ fn review_accept_continue_to_next_phase_records_phase_transition() {
 }
 
 #[test]
+fn review_accept_approved_materializes_next_phase_from_preview() {
+    let fixture = Fixture::new("review-auto-next-phase");
+    let review_request_ref = complete_task_execution_to_review_with_candidate(
+        &fixture,
+        candidate_with_next_phase_preview(),
+    );
+    let template_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.clone(),
+        fields: vec!["outputContract.resultTemplate".to_string()],
+    })
+    .expect("read review template")
+    .fields;
+    assert_eq!(
+        template_fields["outputContract.resultTemplate"].value["nextAction"]["type"],
+        "continue_to_next_phase"
+    );
+    assert_eq!(
+        template_fields["outputContract.resultTemplate"].value["nextAction"]["targetPhaseId"],
+        "phase-2"
+    );
+
+    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "user_gate", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    assert_eq!(
+        active_phase_id(fixture.root_str(), &delivery_id),
+        "phase-2".to_string()
+    );
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    assert_eq!(index["status"], "planning");
+    let phase_2 = index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .find(|phase| phase["phaseId"] == "phase-2")
+        .expect("phase-2");
+    assert_eq!(phase_2["nextAction"]["kind"], "brainstorm_clarification");
+    assert!(phase_2["latestRefs"]["brainstormRequestRef"].is_string());
+}
+
+#[test]
 fn review_environment_blocker_cannot_route_execution_repair() {
     let fixture = Fixture::new("review-env-blocker");
     let review_request_ref = complete_task_execution_to_review(&fixture);
@@ -3808,6 +3863,27 @@ fn valid_candidate_json() -> Value {
             "finalSummaryConfirmed": true
         }
     })
+}
+
+fn candidate_with_next_phase_preview() -> Value {
+    let mut candidate = valid_candidate_json();
+    candidate["scope"]["deferred"] = json!([{
+        "id": "deferred_1",
+        "label": "资金账户基础能力",
+        "items": ["资金账户开户", "密码管理", "存款与取款", "证券账户与资金账户关联"],
+        "reason": "资金账户依赖已完成的证券账户主数据，适合作为下一阶段。",
+        "source": "user_confirmed"
+    }]);
+    candidate["roadmap"]["required"] = json!(true);
+    candidate["phasePlan"]["nextPhasePreview"] = json!({
+        "kind": "candidate",
+        "suggestedPhaseId": "phase-next",
+        "title": "资金账户基础能力",
+        "goal": "在证券账户基础上实现资金账户开户、密码、存取款与账户关联。",
+        "scopePreview": ["资金账户开户", "密码管理", "存款与取款", "账户关联"],
+        "reason": "资金账户是交易客户端和撮合前的下一层依赖。"
+    });
+    candidate
 }
 
 fn valid_candidate_with_frontend_json() -> Value {
