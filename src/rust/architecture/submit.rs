@@ -779,6 +779,7 @@ struct SectionStateOutput {
     candidate_file: String,
     schema_ref: String,
     schema_shape: Value,
+    result_template: Value,
     enum_refs: Value,
     generation_rules: Vec<String>,
 }

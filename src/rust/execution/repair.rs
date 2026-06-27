@@ -995,8 +995,13 @@ fn materialize_architecture_repair_action(
     } else {
         json!("No previous runtime delivery exists for this phase. runtimeDelivery.status must be modified or not_applicable; do not use unchanged and do not write basis.previousRuntimeDeliveryRef.")
     };
-    let section_outputs =
-        build_architecture_repair_section_outputs(root, &request_id, delivery_id, phase_id)?;
+    let section_outputs = build_architecture_repair_section_outputs(
+        root,
+        &request_id,
+        delivery_id,
+        phase_id,
+        &frontend_experience_source,
+    )?;
     let candidate_files = section_outputs
         .iter()
         .filter_map(|output| {
@@ -1199,6 +1204,21 @@ fn frontend_experience_source_from_source_refs(source_refs: &Value) -> Value {
     Value::Object(object)
 }
 
+fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
+    let authority_ref = frontend_experience_source
+        .get("confirmedFrontendExperienceRef")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            frontend_experience_source
+                .get("currentFrontendExperienceRef")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default();
+    json!({
+        "brainstormFrontendExperienceRef": authority_ref
+    })
+}
+
 fn read_project_json_value(
     project_root: &Path,
     relative: &str,
@@ -1321,6 +1341,7 @@ fn build_architecture_repair_section_outputs(
     request_id: &str,
     delivery_id: &str,
     phase_id: &str,
+    frontend_experience_source: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1341,7 +1362,8 @@ fn build_architecture_repair_section_outputs(
                     request_id,
                     delivery_id,
                     phase_id,
-                    *section
+                    *section,
+                    frontend_experience_source
                 ),
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
@@ -1363,6 +1385,7 @@ fn architecture_repair_section_result_template(
     delivery_id: &str,
     phase_id: &str,
     section: ArchitectureSectionGroup,
+    frontend_experience_source: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -1371,13 +1394,19 @@ fn architecture_repair_section_result_template(
         "phaseId": phase_id,
         "section": section,
         "status": "ready",
-        "content": architecture_repair_section_content_template(section),
+        "content": architecture_repair_section_content_template(
+            section,
+            frontend_experience_source
+        ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
     })
 }
 
-fn architecture_repair_section_content_template(section: ArchitectureSectionGroup) -> Value {
+fn architecture_repair_section_content_template(
+    section: ArchitectureSectionGroup,
+    frontend_experience_source: &Value,
+) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
             "source": {
@@ -1477,9 +1506,7 @@ fn architecture_repair_section_content_template(section: ArchitectureSectionGrou
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
-                "sourceRefs": {
-                    "brainstormFrontendExperienceRef": ""
-                }
+                "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
         ArchitectureSectionGroup::RuntimeDelivery => json!({

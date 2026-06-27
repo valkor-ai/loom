@@ -650,7 +650,10 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
 #[test]
 fn architecture_section_submit_advances_same_request_to_next_section() {
     let fixture = Fixture::new("architecture-next-section");
-    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
     let architecture_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
     assert!(architecture_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
     let architecture_rules =
@@ -680,6 +683,29 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     ] {
         assert!(artifact_refs[key].is_array(), "missing artifactRefs.{key}");
     }
+    let frontend_authority_ref = architecture_root
+        .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            architecture_root
+                .pointer("/frontendExperienceSource/currentFrontendExperienceRef")
+                .and_then(Value::as_str)
+        })
+        .expect("frontend authority ref");
+    let frontend_template_refs = architecture_root["sectionOutputs"]
+        .as_array()
+        .expect("section outputs")
+        .iter()
+        .find(|section| section["section"].as_str() == Some("frontend_experience"))
+        .expect("frontend section")["resultTemplate"]["content"]["frontendExperience"]
+        ["sourceRefs"]
+        .as_object()
+        .expect("frontend sourceRefs");
+    assert_eq!(frontend_template_refs.len(), 1);
+    assert_eq!(
+        frontend_template_refs["brainstormFrontendExperienceRef"],
+        json!(frontend_authority_ref)
+    );
 
     write_candidate_target(
         &fixture,
@@ -1494,7 +1520,10 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
 #[test]
 fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     let fixture = Fixture::new("repair-submit-architecture");
-    let review_request_ref = complete_task_execution_to_review(&fixture);
+    let review_request_ref = complete_task_execution_to_review_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     let old_taskplan_request_ref =
         latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlanRequestRef");
@@ -1552,6 +1581,25 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             .fields
             .get("frontendExperienceSource.currentFrontendExperienceRef"))
         .is_some());
+    let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
+    let frontend_authority_ref = repair_root
+        .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            repair_root
+                .pointer("/frontendExperienceSource/currentFrontendExperienceRef")
+                .and_then(Value::as_str)
+        })
+        .expect("repair frontend authority ref");
+    let frontend_template_refs = repair_root["currentSectionContract"]["resultTemplate"]["content"]
+        ["frontendExperience"]["sourceRefs"]
+        .as_object()
+        .expect("repair frontend sourceRefs");
+    assert_eq!(frontend_template_refs.len(), 1);
+    assert_eq!(
+        frontend_template_refs["brainstormFrontendExperienceRef"],
+        json!(frontend_authority_ref)
+    );
     let result = complete_architecture_sections(&fixture, &repair_action_ref);
 
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
@@ -1890,6 +1938,13 @@ fn write_candidate_target(fixture: &Fixture, request_ref: &str, value: &Value) {
 }
 
 fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
+    start_existing_project_architecture_flow_with_candidate(fixture, valid_candidate_json())
+}
+
+fn start_existing_project_architecture_flow_with_candidate(
+    fixture: &Fixture,
+    candidate: Value,
+) -> String {
     write_json_atomic(
         &fixture.root.join("package.json"),
         &json!({ "name": "loom-fixture", "private": true }),
@@ -1903,7 +1958,7 @@ fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
     .expect("write entrypoint");
 
     let request_ref = start_brainstorm_candidate_write_request(fixture);
-    write_candidate_target(fixture, &request_ref, &valid_candidate_json());
+    write_candidate_target(fixture, &request_ref, &candidate);
 
     let brainstorm_result = call_submit(
         "loom.brainstormAcceptFile",
@@ -2289,7 +2344,11 @@ fn write_task_result_candidate_with_detail_evidence(
 }
 
 fn complete_task_execution_to_review(fixture: &Fixture) -> String {
-    let execution_request_ref = start_planned_task_execution(fixture);
+    complete_task_execution_to_review_with_candidate(fixture, valid_candidate_json())
+}
+
+fn complete_task_execution_to_review_with_candidate(fixture: &Fixture, candidate: Value) -> String {
+    let execution_request_ref = start_planned_task_execution_with_candidate(fixture, candidate);
     write_task_result_candidate(fixture, &execution_request_ref);
     let task_result = call_submit(
         "loom.recordTaskResultFile",
@@ -2305,7 +2364,12 @@ fn complete_task_execution_to_review(fixture: &Fixture) -> String {
 }
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {
-    let architecture_request_ref = start_existing_project_architecture_flow(fixture);
+    start_planned_task_execution_with_candidate(fixture, valid_candidate_json())
+}
+
+fn start_planned_task_execution_with_candidate(fixture: &Fixture, candidate: Value) -> String {
+    let architecture_request_ref =
+        start_existing_project_architecture_flow_with_candidate(fixture, candidate);
     let taskplan_result = complete_architecture_sections(fixture, &architecture_request_ref);
     let taskplan_request_ref = taskplan_result["next"]["requestRef"]
         .as_str()
@@ -2321,11 +2385,10 @@ fn start_planned_task_execution(fixture: &Fixture) -> String {
         execution_result["state"], "auto_runnable",
         "{execution_result:#}"
     );
-    let execution_request_ref = execution_result["next"]["requestRef"]
+    execution_result["next"]["requestRef"]
         .as_str()
         .expect("execution requestRef")
-        .to_string();
-    execution_request_ref
+        .to_string()
 }
 
 fn write_failed_task_result_candidate(fixture: &Fixture, request_ref: &str) {
@@ -3171,6 +3234,95 @@ fn valid_candidate_json() -> Value {
             "finalSummaryConfirmed": true
         }
     })
+}
+
+fn valid_candidate_with_frontend_json() -> Value {
+    let mut candidate = valid_candidate_json();
+    candidate["frontendExperience"] = json!({
+        "required": true,
+        "kind": "staff_console",
+        "experienceLevel": "usable_internal_product",
+        "audiences": [{
+            "audienceId": "audience_staff",
+            "name": "工作人员",
+            "primaryJobs": ["办理证券账户业务"]
+        }],
+        "surfaces": [{
+            "surfaceId": "surface_account_admin",
+            "name": "证券账户管理",
+            "audienceRefs": ["audience_staff"],
+            "primaryJobs": ["开户", "挂失补办", "销户"]
+        }],
+        "dataViews": [{
+            "viewId": "view_account_list",
+            "name": "证券账户列表",
+            "purpose": "查询并选择证券账户办理后续动作",
+            "targetObject": "证券账户",
+            "selectionMode": "query_and_select",
+            "paginationRequired": true,
+            "defaultLoadsFirstPage": true,
+            "searchCriteria": [{
+                "criterionId": "criterion_account_no",
+                "label": "证券账户号",
+                "fieldRef": "securityAccountNo",
+                "reason": "工作人员按账户号定位办理对象",
+                "sourceRefs": []
+            }],
+            "sourceRefs": []
+        }],
+        "actions": [{
+            "actionId": "action_open_account",
+            "label": "新建证券账户",
+            "targetObject": "证券账户",
+            "entryPoint": "navigation_entry",
+            "inputFields": ["个人开户信息", "法人开户信息"],
+            "resultObservation": ["response_message", "list_refresh"],
+            "refreshPolicy": "办理完成后返回列表并刷新状态",
+            "successFeedback": ["开户成功并显示证券账户号"],
+            "blockingOrErrorFeedback": ["开户资格不满足时显示中文阻断原因"],
+            "sourceRefs": []
+        }],
+        "operationPaths": [{
+            "pathId": "path_account_lifecycle",
+            "name": "证券账户生命周期办理",
+            "userGoal": "工作人员完成证券账户开户、挂失补办和销户办理",
+            "surfaceRef": "surface_account_admin",
+            "targetObject": "证券账户",
+            "selectionMode": "query_and_select",
+            "selectionSummary": "开户从新建入口进入；挂失补办和销户先查询列表并选择目标账户",
+            "dataViewRefs": ["view_account_list"],
+            "actionRefs": ["action_open_account"],
+            "requiredStates": ["success", "business_blocking", "error"],
+            "sourceRefs": []
+        }],
+        "mustNot": ["不能只靠内部主键触发挂失补办或销户"],
+        "confirmationSummary": "已确认工作人员后台证券账户管理页面路径。"
+    });
+    candidate["clarificationProgress"]["confirmedBlocks"] = json!([
+        {
+            "block": "phase_scope",
+            "summary": "已确认当前阶段范围。",
+            "confirmedByUser": true
+        },
+        {
+            "block": "concept_grounding",
+            "summary": "已确认业务规则和边界。",
+            "confirmedByUser": true
+        },
+        {
+            "block": "frontend_experience",
+            "summary": "已确认页面办理路径。",
+            "confirmedByUser": true
+        }
+    ]);
+    candidate["clarificationProgress"]["skippedBlocks"] = json!([]);
+    candidate["userConfirmation"]["confirmationBasis"]["presentedItems"] = json!([
+        "phase_scope",
+        "concept_grounding",
+        "frontend_experience",
+        "final_summary"
+    ]);
+    candidate
 }
 
 struct Fixture {

@@ -124,12 +124,14 @@ fn materialize_request_inner(
 
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
+    let frontend_experience_source = build_frontend_experience_source(phase);
     let section_outputs = build_section_outputs(
         root,
         &request_id,
         delivery_id,
         phase_id,
         has_previous_runtime_delivery,
+        &frontend_experience_source,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
@@ -147,6 +149,7 @@ fn materialize_request_inner(
         &brainstorm_contract_ref,
         phase,
         has_previous_runtime_delivery,
+        &frontend_experience_source,
         &current_output,
         &section_outputs,
     )?;
@@ -200,6 +203,7 @@ fn build_request_root(
     brainstorm_contract_ref: &str,
     phase: &delivery_core::DeliveryPhaseState,
     has_previous_runtime_delivery: bool,
+    frontend_experience_source: &Value,
     current_output: &SectionOutput,
     section_outputs: &[SectionOutput],
 ) -> Result<Value, state::store::StateError> {
@@ -214,12 +218,6 @@ fn build_request_root(
     );
     let allowed_refs = build_allowed_refs(planning_contract);
     let context_projection = build_context_projection(planning_contract);
-    let frontend_experience_source = json!({
-        "confirmedFrontendExperienceRef": phase.latest_refs.get("confirmedFrontendExperience"),
-        "currentFrontendExperienceRef": phase.latest_refs.get("currentFrontendExperience"),
-        "repositoryContextRef": phase.latest_refs.get("latestRepositoryContext"),
-        "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."
-    });
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -434,6 +432,30 @@ fn build_source_refs(
     value
 }
 
+fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -> Value {
+    json!({
+        "confirmedFrontendExperienceRef": phase.latest_refs.get("confirmedFrontendExperience"),
+        "currentFrontendExperienceRef": phase.latest_refs.get("currentFrontendExperience"),
+        "repositoryContextRef": phase.latest_refs.get("latestRepositoryContext"),
+        "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."
+    })
+}
+
+fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
+    let authority_ref = frontend_experience_source
+        .get("confirmedFrontendExperienceRef")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            frontend_experience_source
+                .get("currentFrontendExperienceRef")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default();
+    json!({
+        "brainstormFrontendExperienceRef": authority_ref
+    })
+}
+
 fn build_allowed_refs(planning_contract: &PlanningGenerationContract) -> Value {
     json!({
         "scopeRefs": planning_contract
@@ -491,6 +513,7 @@ fn build_section_outputs(
     delivery_id: &str,
     phase_id: &str,
     has_previous_runtime_delivery: bool,
+    frontend_experience_source: &Value,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
     SECTION_ORDER
         .iter()
@@ -510,6 +533,7 @@ fn build_section_outputs(
                     phase_id,
                     section,
                     has_previous_runtime_delivery,
+                    frontend_experience_source,
                 ),
                 enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
                 generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
@@ -693,6 +717,7 @@ fn section_result_template(
     phase_id: &str,
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    frontend_experience_source: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -701,7 +726,11 @@ fn section_result_template(
         "phaseId": phase_id,
         "section": section,
         "status": "ready",
-        "content": section_content_template(section, has_previous_runtime_delivery),
+        "content": section_content_template(
+            section,
+            has_previous_runtime_delivery,
+            frontend_experience_source
+        ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
     })
@@ -710,6 +739,7 @@ fn section_result_template(
 fn section_content_template(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    frontend_experience_source: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -810,9 +840,7 @@ fn section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
-                "sourceRefs": {
-                    "brainstormFrontendExperienceRef": ""
-                }
+                "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
         ArchitectureSectionGroup::RuntimeDelivery => {
