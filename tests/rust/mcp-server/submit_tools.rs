@@ -1497,6 +1497,22 @@ fn review_accept_approved_marks_delivery_done() {
         latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult"),
         format!(".loom/deliveries/{delivery_id}/reviews/phase-1/results/review-phase-1.json")
     );
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    assert_eq!(index["status"], "completed");
+    let status: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(".loom/status.json")).expect("read status"),
+    )
+    .expect("parse status");
+    assert_eq!(status["activeDeliveryId"], Value::Null);
+    assert_eq!(status["lastCompletedDeliveryId"], delivery_id);
+    assert_eq!(status["deliveries"][0]["status"], "completed");
     let continued = continue_delivery(fixture.root_str());
     assert_eq!(continued["state"], "done", "{continued:#}");
 }

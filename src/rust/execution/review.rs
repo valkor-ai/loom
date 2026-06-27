@@ -5,11 +5,11 @@ use contracts::{
     TaskPlanRun, TaskPlanRunStatus, TaskResult,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
-    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, RouteAction,
-    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore, WriteArtifactNext,
-    WriteMode, WriteTarget,
+    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    WriteArtifactNext, WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -1502,6 +1502,7 @@ fn update_delivery_after_review(
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
+    let next_kind = route_kind_for_review_action(&result.next_action.r#type);
     if let Some(phase) = delivery
         .phases
         .iter_mut()
@@ -1511,7 +1512,7 @@ fn update_delivery_after_review(
             .latest_refs
             .insert("reviewResult".to_string(), result_ref.to_string());
         phase.next_action = Some(RouteAction {
-            kind: route_kind_for_review_action(&result.next_action.r#type),
+            kind: next_kind.clone(),
             source: "review_result".to_string(),
             reason: result.next_action.reason.clone(),
             prompt: None,
@@ -1524,6 +1525,9 @@ fn update_delivery_after_review(
             })),
             target_phase_id: result.next_action.target_phase_id.clone(),
         });
+    }
+    if next_kind == RouteActionKind::Done {
+        delivery.status = DeliveryLifecycleStatus::Completed;
     }
     delivery.updated_at = state::store::now_string();
     store
