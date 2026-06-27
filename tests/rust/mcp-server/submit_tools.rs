@@ -1599,6 +1599,25 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         .expect("phase-2");
     assert_eq!(phase_2["nextAction"]["kind"], "brainstorm_clarification");
     assert!(phase_2["latestRefs"]["brainstormRequestRef"].is_string());
+    let phase_2_request_ref = phase_2["latestRefs"]["brainstormRequestRef"]
+        .as_str()
+        .expect("phase-2 brainstorm request ref");
+    let phase_2_request = read_request_root_value(fixture.root_str(), phase_2_request_ref);
+    assert_eq!(phase_2_request["nextPhaseSeed"]["phaseId"], "phase-2");
+    assert_eq!(
+        phase_2_request["nextPhaseSeed"]["title"],
+        "资金账户基础能力"
+    );
+    assert_eq!(
+        phase_2_request["nextPhaseSeed"]["scopePreview"],
+        json!(["资金账户开户", "密码管理", "存款与取款", "账户关联"])
+    );
+    assert!(phase_2_request["requestReadPlan"]["groups"]
+        .as_array()
+        .expect("read groups")
+        .iter()
+        .any(|group| group["groupId"] == "next_phase_seed"
+            && group["fields"] == json!(["nextPhaseSeed"])));
 }
 
 #[test]

@@ -16,7 +16,7 @@ use delivery_core::{
     DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, TransitionStore,
     ValidatedPlanInput,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
     paths::{from_project_relative, DeliveryPhaseLocator},
@@ -31,6 +31,7 @@ pub struct NextPhaseHandoff {
     pub phase_id: String,
     pub title: String,
     pub goal: String,
+    pub scope_preview: Vec<String>,
     pub reason: String,
 }
 
@@ -83,6 +84,7 @@ pub fn next_phase_handoff_from_preview(
         suggested_phase_id,
         title,
         goal,
+        scope_preview,
         reason,
         ..
     } = &contract.phase_plan.next_phase_preview
@@ -97,6 +99,7 @@ pub fn next_phase_handoff_from_preview(
         phase_id,
         title: title.clone(),
         goal: goal.clone(),
+        scope_preview: scope_preview.clone(),
         reason: reason.clone(),
     }))
 }
@@ -145,7 +148,7 @@ pub fn materialize_next_phase_from_preview(
         "normalizedRequirementTextRef": source_phase.latest_refs.get("normalizedRequirementText"),
         "keywordHintsRef": source_phase.latest_refs.get("keywordHints"),
     });
-    let request_root = request::build_brainstorm_request_root(
+    let mut request_root = request::build_brainstorm_request_root(
         root,
         &request_id,
         delivery_id,
@@ -154,6 +157,7 @@ pub fn materialize_next_phase_from_preview(
         &contract.delivery_context.user_facing_language,
         context_refs,
     );
+    attach_next_phase_seed(&mut request_root, source_phase_id, &handoff);
     let stored = state::write_native_request(
         project_root,
         state::NativeRequestInput {
@@ -219,10 +223,11 @@ pub fn materialize_next_phase_from_preview(
             request_ref: Some(stored.request_ref),
             details: Some(json!({
                 "fromPhaseId": source_phase_id,
-                "phaseId": handoff.phase_id,
-                "title": handoff.title,
-                "goal": handoff.goal,
-                "reason": handoff.reason
+                "phaseId": handoff.phase_id.clone(),
+                "title": handoff.title.clone(),
+                "goal": handoff.goal.clone(),
+                "scopePreview": handoff.scope_preview.clone(),
+                "reason": handoff.reason.clone()
             })),
             target_phase_id: None,
         }),
@@ -264,6 +269,40 @@ fn latest_ref<'a>(phase: &'a DeliveryPhaseState, key: &str) -> StateResult<&'a s
                 phase.phase_id
             ))
         })
+}
+
+fn attach_next_phase_seed(root: &mut Value, source_phase_id: &str, handoff: &NextPhaseHandoff) {
+    root["nextPhaseSeed"] = json!({
+        "source": "phasePlan.nextPhasePreview",
+        "fromPhaseId": source_phase_id,
+        "phaseId": handoff.phase_id,
+        "title": handoff.title,
+        "goal": handoff.goal,
+        "scopePreview": handoff.scope_preview,
+        "reason": handoff.reason,
+        "usageRule": "Use this as the non-binding seed for the active phase boundary. Query request-scoped knowledge before presenting options, and do not turn this seed into a full-project roadmap."
+    });
+    if let Some(groups) = root
+        .pointer_mut("/requestReadPlan/groups")
+        .and_then(Value::as_array_mut)
+    {
+        if !groups
+            .iter()
+            .any(|group| group.get("groupId").and_then(Value::as_str) == Some("next_phase_seed"))
+        {
+            let insert_at = groups.len().min(2);
+            groups.insert(
+                insert_at,
+                json!({
+                    "groupId": "next_phase_seed",
+                    "required": true,
+                    "purpose": "Read the next phase seed before composing phase continuation options.",
+                    "whenToRead": "Read after the conversation protocol and compact requirement context, before querying knowledge or presenting phase_scope options.",
+                    "fields": ["nextPhaseSeed"]
+                }),
+            );
+        }
+    }
 }
 
 fn normalize_next_phase_id(delivery: &DeliveryIndex, suggested_phase_id: &str) -> String {
