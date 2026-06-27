@@ -1,8 +1,8 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
-    ManualReviewResolution, ReviewFinding, ReviewResult, TaskPlan, TaskPlanRun, TaskPlanRunStatus,
-    TaskResult,
+    ManualReviewResolution, ReviewFinding, ReviewResult, TaskDefinition, TaskPlan, TaskPlanGroup,
+    TaskPlanRun, TaskPlanRunStatus, TaskResult,
 };
 use delivery_core::{
     apply_delivery_index, ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
@@ -208,9 +208,9 @@ fn build_review_request(
         "reviewPacket": {
             "taskPlanId": task_plan.task_plan_id,
             "taskPlanRunId": run.run_id,
-            "groups": task_plan.groups,
-            "tasks": task_plan.tasks,
-            "taskResults": task_results
+            "groupSummaries": compact_group_summaries(&task_plan.groups),
+            "taskSummaries": compact_task_summaries(&task_plan.tasks),
+            "taskResultSummaries": compact_task_result_summaries(task_results)
         },
         "changeContext": {
             "mode": "current_file_content",
@@ -249,7 +249,7 @@ fn build_review_request(
         },
         "reviewRules": {
             "commonRules": [
-                "Read reviewPacket, changeContext, review matrices, reviewSignals, and outputContract before writing ReviewResult.",
+                "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
                 "Every finding must include non-empty readRefs.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
@@ -327,9 +327,9 @@ fn build_review_request(
                     "fields": [
                         "reviewPacket.taskPlanId",
                         "reviewPacket.taskPlanRunId",
-                        "reviewPacket.groups",
-                        "reviewPacket.tasks",
-                        "reviewPacket.taskResults"
+                        "reviewPacket.groupSummaries",
+                        "reviewPacket.taskSummaries",
+                        "reviewPacket.taskResultSummaries"
                     ]
                 },
                 {
@@ -1756,6 +1756,97 @@ fn build_review_signals(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Va
         "requirementDetailEvidence": detail,
         "frontendWorkflowClosure": frontend
     })
+}
+
+fn compact_group_summaries(groups: &[TaskPlanGroup]) -> Vec<Value> {
+    groups
+        .iter()
+        .map(|group| {
+            json!({
+                "groupId": group.group_id,
+                "title": group.title,
+                "objective": group.objective,
+                "dependsOn": group.depends_on,
+                "scopeRefs": group.scope_refs,
+                "acceptanceRefs": group.acceptance_refs,
+                "taskIds": group.task_ids
+            })
+        })
+        .collect()
+}
+
+fn compact_task_summaries(tasks: &[TaskDefinition]) -> Vec<Value> {
+    tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "taskId": task.task_id,
+                "groupId": task.group_id,
+                "title": task.title,
+                "taskKind": task.task_kind,
+                "implementationActions": task.implementation_actions,
+                "objective": task.objective,
+                "dependsOn": task.depends_on,
+                "scopeRefs": task.scope_refs,
+                "acceptanceRefs": task.acceptance_refs,
+                "requirementDetailRefs": task.requirement_detail_refs,
+                "conceptRefs": task.concept_refs,
+                "writeBoundary": task.write_boundary,
+                "verificationIntents": task.verification_intents.iter().map(|intent| {
+                    json!({
+                        "verificationId": intent.verification_id,
+                        "acceptanceRefs": intent.acceptance_refs,
+                        "requirementDetailRefs": intent.requirement_detail_refs,
+                        "preferredEvidence": intent.preferred_evidence,
+                        "acceptableEvidence": intent.acceptable_evidence
+                    })
+                }).collect::<Vec<_>>(),
+                "frontendExperienceRequired": task.frontend_experience_requirement.is_some(),
+                "runtimeDeliveryRequired": task.runtime_delivery_requirement.is_some()
+            })
+        })
+        .collect()
+}
+
+fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
+    task_results
+        .iter()
+        .map(|result| {
+            json!({
+                "taskResultId": result.task_result_id,
+                "taskId": result.task_id,
+                "status": result.status,
+                "changedFiles": result.changed_files,
+                "verificationResults": result.verification_results.iter().map(|verification| {
+                    json!({
+                        "verificationId": verification.verification_id,
+                        "status": verification.status,
+                        "evidenceType": verification.evidence_type
+                    })
+                }).collect::<Vec<_>>(),
+                "requirementDetailEvidence": result.requirement_detail_evidence.iter().map(|evidence| {
+                    json!({
+                        "detailId": evidence.detail_id,
+                        "status": evidence.status,
+                        "verificationIds": evidence.verification_ids,
+                        "evidenceRefs": evidence.evidence_refs
+                    })
+                }).collect::<Vec<_>>(),
+                "conceptEvidence": result.concept_evidence.iter().map(|evidence| {
+                    json!({
+                        "conceptRef": evidence.concept_ref,
+                        "evidenceType": evidence.evidence_type,
+                        "refs": evidence.refs
+                    })
+                }).collect::<Vec<_>>(),
+                "frontendExperienceSelfCheckPresent": result.frontend_experience_self_check.is_some(),
+                "runtimeDeliveryEvidencePresent": result.runtime_delivery_evidence.is_some(),
+                "blockedReasonCodes": result.blocked_reasons.iter().map(|reason| reason.code.clone()).collect::<Vec<_>>(),
+                "failureCode": result.failure.as_ref().map(|failure| failure.code.clone()),
+                "noChangeReasonCode": result.no_change_reason.as_ref().map(|reason| reason.code.clone())
+            })
+        })
+        .collect()
 }
 
 fn allowed_refs(task_plan: &TaskPlan, run: &TaskPlanRun, task_results: &[TaskResult]) -> Value {

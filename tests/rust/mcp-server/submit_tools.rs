@@ -1098,6 +1098,30 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     .expect("read review result template")
     .fields;
     let review_root = read_request_root_value(fixture.root_str(), review_request_ref);
+    assert!(
+        review_root.get("reviewPacket").is_none(),
+        "review request root must not expose full reviewPacket: {review_root:#}"
+    );
+    assert!(
+        review_root.get("changeContext").is_none(),
+        "review request root must not expose full changeContext: {review_root:#}"
+    );
+    let review_request_id = request_id_from_ref(review_request_ref);
+    let review_storage_manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            fixture
+                .root
+                .join(format!(".loom/requests/{review_request_id}.manifest.json")),
+        )
+        .expect("read review private storage manifest"),
+    )
+    .expect("parse review private storage manifest");
+    let review_manifest_refs = review_storage_manifest["refs"]
+        .as_object()
+        .expect("review manifest refs");
+    assert!(review_manifest_refs.contains_key("reviewPacket"));
+    assert!(review_manifest_refs.contains_key("changeContext"));
+    assert!(review_manifest_refs.contains_key("outputContract"));
     assert_eq!(
         review_fields["outputContract.resultTemplate"].value["source"]["requestId"],
         review_root["requestId"]
@@ -1118,6 +1142,55 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .iter()
         .map(|group| group.group_id.as_str())
         .collect::<Vec<_>>();
+    let review_packet_group = review_inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "review_packets")
+        .expect("review_packets group");
+    assert!(review_packet_group
+        .fields
+        .iter()
+        .any(|field| field == "reviewPacket.groupSummaries"));
+    assert!(review_packet_group
+        .fields
+        .iter()
+        .any(|field| field == "reviewPacket.taskSummaries"));
+    assert!(review_packet_group
+        .fields
+        .iter()
+        .any(|field| field == "reviewPacket.taskResultSummaries"));
+    assert!(!review_packet_group
+        .fields
+        .iter()
+        .any(|field| field == "reviewPacket.groups"));
+    assert!(!review_packet_group
+        .fields
+        .iter()
+        .any(|field| field == "reviewPacket.tasks"));
+    assert!(!review_packet_group
+        .fields
+        .iter()
+        .any(|field| field == "reviewPacket.taskResults"));
+    let review_packets = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        group_id: "review_packets".to_string(),
+    })
+    .expect("read review packets");
+    assert!(review_packets.fields["reviewPacket.groupSummaries"]
+        .value
+        .is_array());
+    assert!(review_packets.fields["reviewPacket.taskSummaries"]
+        .value
+        .is_array());
+    assert!(review_packets.fields["reviewPacket.taskResultSummaries"]
+        .value
+        .is_array());
+    assert!(!review_packets.fields.contains_key("reviewPacket.groups"));
+    assert!(!review_packets.fields.contains_key("reviewPacket.tasks"));
+    assert!(!review_packets
+        .fields
+        .contains_key("reviewPacket.taskResults"));
     assert_eq!(
         review_group_ids,
         vec![

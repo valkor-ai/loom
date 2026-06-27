@@ -48,6 +48,8 @@ const SPLITTABLE_REF_KEYS: &[&str] = &[
     "executionArtifacts",
     "changeSet",
     "reviewScope",
+    "reviewPacket",
+    "changeContext",
     "task",
     "taskConceptGrounding",
     "outputContract",
