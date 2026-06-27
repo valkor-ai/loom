@@ -501,15 +501,15 @@ fn build_protocol_report(project_root: &str) -> Result<ProtocolSnapshotReport> {
         ));
     }
     let required_tools = [
-        "loom.plan",
-        "loom.continue",
-        "loom.readFieldGroup",
-        "loom.readRequestFields",
-        "loom.brainstormAcceptFile",
-        "loom.knowledgeBuild",
-        "loom.knowledgeSearch",
-        "loom.deployValidate",
-        "loom.repairSubmitFile",
+        "plan",
+        "continue",
+        "readFieldGroup",
+        "readRequestFields",
+        "brainstormAcceptFile",
+        "knowledgeBuild",
+        "knowledgeSearch",
+        "deployValidate",
+        "repairSubmitFile",
     ];
     let registered_tools = BATCH_2_TOOLS
         .iter()
@@ -603,9 +603,32 @@ fn collect_protocol_issues(request_id: &str, root: &Value, issues: &mut Vec<Veri
         for field in fields {
             if matches!(
                 field,
-                "rules"
+                "allowedRefs"
+                    | "blockConfirmationContract"
+                    | "blockedOutput"
+                    | "changeContext"
+                    | "confirmedClarificationState"
+                    | "contextProjection.phaseScope"
+                    | "contextProjection.technicalBaseline"
+                    | "currentSectionContract"
+                    | "enumRefs"
+                    | "executionRules"
+                    | "frontendExperienceSource"
+                    | "outputContract.allowedRefs"
+                    | "outputContract.reviewSignals"
                     | "outputContract.schemaShape"
+                    | "repairContext"
+                    | "repoEvidence"
+                    | "reviewPacket"
+                    | "reviewScope"
+                    | "reviewSignals"
+                    | "rules"
+                    | "scanPurpose"
                     | "clarificationConversationProtocol"
+                    | "sourceContext"
+                    | "sourceRefs"
+                    | "task"
+                    | "taskConceptGrounding"
                     | "executionRules.rules"
                     | "contextProjection.requirementDetailTransfer"
             ) || field.contains(".refs")

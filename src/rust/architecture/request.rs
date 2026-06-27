@@ -301,18 +301,40 @@ pub(crate) fn architecture_read_groups(
     include_repair_context: bool,
 ) -> Value {
     let mut core_fields = vec![
-        "sourceRefs",
-        "contextProjection.phaseScope",
+        "sourceRefs.planningContractRef",
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.brainstormContractRef",
+        "sourceRefs.repositoryContextRef",
+        "sourceRefs.deliveryConceptGlossaryRef",
+        "sourceRefs.phaseConceptGroundingRef",
+        "sourceRefs.confirmedFrontendExperienceRef",
+        "sourceRefs.currentFrontendExperienceRef",
+        "sourceRefs.previousRuntimeDeliveryRef",
+        "contextProjection.phaseScope.phaseName",
+        "contextProjection.phaseScope.phaseGoal",
+        "contextProjection.phaseScope.included",
+        "contextProjection.phaseScope.deferred",
+        "contextProjection.phaseScope.excluded",
+        "contextProjection.phaseScope.acceptanceCandidates",
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
-        "contextProjection.technicalBaseline",
+        "contextProjection.technicalBaseline.technicalBaselineId",
+        "contextProjection.technicalBaseline.status",
+        "contextProjection.technicalBaseline.scope",
+        "contextProjection.technicalBaseline.summary",
+        "contextProjection.technicalBaseline.mustFollow",
         "contextProjection.requirementDetailTransfer.requirementDetails",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
         "contextProjection.requirementDetailTransfer.businessFlows",
-        "allowedRefs",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.deferredScopeRefs",
+        "allowedRefs.excludedScopeRefs",
+        "allowedRefs.requirementDetailIds",
     ];
     if include_repair_context {
-        core_fields.insert(1, "repairContext");
+        core_fields.insert(9, "repairContext.sourceArchitectureRequestRef");
+        core_fields.insert(10, "repairContext.sourceRef");
     }
     let mut groups = vec![
         json!({
@@ -345,7 +367,12 @@ pub(crate) fn architecture_read_groups(
             },
             "fields": [
                 "sectionState.currentSection",
-                "currentSectionContract",
+                "currentSectionContract.section",
+                "currentSectionContract.candidateFile",
+                "currentSectionContract.schemaRef",
+                "currentSectionContract.resultTemplate",
+                "currentSectionContract.enumRefs",
+                "currentSectionContract.generationRules",
                 "outputContract.writeTargets",
                 "outputContract.submitTool",
                 "outputContract.schemaProjection",
@@ -363,7 +390,10 @@ pub(crate) fn architecture_read_groups(
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
             "fields": [
-                "frontendExperienceSource",
+                "frontendExperienceSource.confirmedFrontendExperienceRef",
+                "frontendExperienceSource.currentFrontendExperienceRef",
+                "frontendExperienceSource.repositoryContextRef",
+                "frontendExperienceSource.authorityRule",
                 "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
                 "contextProjection.requirementDetailTransfer.userFacingLanguage"
             ]

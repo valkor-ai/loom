@@ -119,7 +119,10 @@ pub fn build_brainstorm_clarification_request_root(
         "purpose": "Read the current block confirmation submit shape after the user visibly confirms this block.",
         "whenToRead": "Read only after the user confirms the current block in chat.",
         "fields": [
-            "blockConfirmationContract"
+            "blockConfirmationContract.tool",
+            "blockConfirmationContract.currentBlock",
+            "blockConfirmationContract.summary",
+            "blockConfirmationContract.confirmedDataShape"
         ]
     }));
 
@@ -220,7 +223,9 @@ pub fn build_brainstorm_candidate_write_request_root(
                     "purpose": "Read the confirmed Brainstorm blocks that must be structurally preserved in the candidate.",
                     "whenToRead": "Read before writing the Brainstorm candidate.",
                     "fields": [
-                        "confirmedClarificationState"
+                        "confirmedClarificationState.blocks",
+                        "confirmedClarificationState.skippedBlocks",
+                        "confirmedClarificationState.finalSummaryConfirmed"
                     ]
                 },
                 {

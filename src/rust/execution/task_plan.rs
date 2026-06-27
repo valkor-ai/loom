@@ -272,7 +272,11 @@ fn taskplan_read_groups(
             "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
             "fields": [
-                "sourceRefs",
+                "sourceRefs.technicalBaselineRef",
+                "sourceRefs.planningGenerationContractRef",
+                "sourceRefs.architectureArtifactContractRef",
+                "sourceRefs.phaseConceptGroundingRef",
+                "sourceRefs.deliveryConceptGlossaryRef",
                 "contextProjection.phaseId",
                 "contextProjection.planningContractId",
                 "contextProjection.architectureArtifactContractId",
@@ -285,7 +289,18 @@ fn taskplan_read_groups(
                 "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
                 "contextProjection.requirementDetailTransfer.conceptRefs",
                 "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
-                "allowedRefs"
+                "allowedRefs.scopeRefs",
+                "allowedRefs.acceptanceRefs",
+                "allowedRefs.deferredScopeRefs",
+                "allowedRefs.excludedScopeRefs",
+                "allowedRefs.requirementDetailIds",
+                "allowedRefs.moduleRefs",
+                "allowedRefs.entityRefs",
+                "allowedRefs.interfaceRefs",
+                "allowedRefs.userFlowRefs",
+                "allowedRefs.stateMachineRefs",
+                "allowedRefs.decisionRefs",
+                "allowedRefs.riskRefs"
             ]
         }),
         json!({
@@ -327,7 +342,9 @@ fn taskplan_read_groups(
 
 fn taskplan_candidate_contract_fields(runtime_closure_template: &Value) -> Vec<&'static str> {
     let mut fields = vec![
-        "enumRefs",
+        "enumRefs.taskKind",
+        "enumRefs.implementationAction",
+        "enumRefs.verificationEvidence",
         "outputContract.outlineFile",
         "outputContract.groupFilePattern",
         "outputContract.pathAuthority",
@@ -482,10 +499,21 @@ where
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
         fields: vec![
-            "sourceRefs".to_string(),
-            "contextProjection.planningContractId".to_string(),
-            "contextProjection.architectureArtifactContractId".to_string(),
-            "allowedRefs".to_string(),
+            "sourceRefs.technicalBaselineRef".to_string(),
+            "sourceRefs.planningGenerationContractRef".to_string(),
+            "sourceRefs.architectureArtifactContractRef".to_string(),
+            "allowedRefs.scopeRefs".to_string(),
+            "allowedRefs.acceptanceRefs".to_string(),
+            "allowedRefs.deferredScopeRefs".to_string(),
+            "allowedRefs.excludedScopeRefs".to_string(),
+            "allowedRefs.requirementDetailIds".to_string(),
+            "allowedRefs.moduleRefs".to_string(),
+            "allowedRefs.entityRefs".to_string(),
+            "allowedRefs.interfaceRefs".to_string(),
+            "allowedRefs.userFlowRefs".to_string(),
+            "allowedRefs.stateMachineRefs".to_string(),
+            "allowedRefs.decisionRefs".to_string(),
+            "allowedRefs.riskRefs".to_string(),
             "outputContract.outlineFile".to_string(),
             "outputContract.groupFilePattern".to_string(),
         ],
@@ -494,10 +522,20 @@ where
     let root = Path::new(&input.project_root);
     let outline_ref = string_field(&fields, "outputContract.outlineFile")?;
     let group_pattern = string_field(&fields, "outputContract.groupFilePattern")?;
-    let allowed_refs = fields
-        .get("allowedRefs")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
+    let allowed_refs = json!({
+        "scopeRefs": value_field(&fields, "allowedRefs.scopeRefs"),
+        "acceptanceRefs": value_field(&fields, "allowedRefs.acceptanceRefs"),
+        "deferredScopeRefs": value_field(&fields, "allowedRefs.deferredScopeRefs"),
+        "excludedScopeRefs": value_field(&fields, "allowedRefs.excludedScopeRefs"),
+        "requirementDetailIds": value_field(&fields, "allowedRefs.requirementDetailIds"),
+        "moduleRefs": value_field(&fields, "allowedRefs.moduleRefs"),
+        "entityRefs": value_field(&fields, "allowedRefs.entityRefs"),
+        "interfaceRefs": value_field(&fields, "allowedRefs.interfaceRefs"),
+        "userFlowRefs": value_field(&fields, "allowedRefs.userFlowRefs"),
+        "stateMachineRefs": value_field(&fields, "allowedRefs.stateMachineRefs"),
+        "decisionRefs": value_field(&fields, "allowedRefs.decisionRefs"),
+        "riskRefs": value_field(&fields, "allowedRefs.riskRefs")
+    });
     let outline: TaskPlanOutlineCandidateAgentWritable = read_project_json(root, &outline_ref)?;
     let mut issues = validate_outline(&outline, &authorized.request_id, &delivery_id, &phase_id);
     if !issues.is_empty() {
@@ -534,37 +572,12 @@ where
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
-    let source_refs = fields
-        .get("sourceRefs")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
-    let planning_ref = source_refs
-        .get("planningGenerationContractRef")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(
-                "TaskPlan request missing sourceRefs.planningGenerationContractRef".to_string(),
-            )
-        })?;
-    let architecture_ref = source_refs
-        .get("architectureArtifactContractRef")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(
-                "TaskPlan request missing sourceRefs.architectureArtifactContractRef".to_string(),
-            )
-        })?;
-    let baseline_ref = source_refs
-        .get("technicalBaselineRef")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted(
-                "TaskPlan request missing sourceRefs.technicalBaselineRef".to_string(),
-            )
-        })?;
-    let baseline: contracts::TechnicalBaselineContract = read_project_json(root, baseline_ref)?;
-    let pgc: contracts::PlanningGenerationContract = read_project_json(root, planning_ref)?;
-    let aac: ArchitectureArtifactContract = read_project_json(root, architecture_ref)?;
+    let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
+    let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
+    let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
+    let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
+    let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
+    let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     let now = state::store::now_string();
     let task_plan = TaskPlan {
         schema_version: "1.0".to_string(),
@@ -1599,6 +1612,13 @@ fn string_field(
         .ok_or_else(|| {
             state::store::StateError::StateCorrupted(format!("missing request field {name}"))
         })
+}
+
+fn value_field(fields: &BTreeMap<String, delivery_core::FieldReadResult>, name: &str) -> Value {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .unwrap_or(Value::Null)
 }
 
 fn read_project_json<T: serde::de::DeserializeOwned>(

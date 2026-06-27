@@ -137,7 +137,7 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         fields: vec![
             "clarificationConversationProtocol.userVisibleBlockTitle".to_string(),
             "clarificationConversationProtocol.blockRule".to_string(),
-            "blockConfirmationContract".to_string(),
+            "blockConfirmationContract.tool".to_string(),
             "knowledgeQueryPlan.toolContract".to_string(),
             "knowledgeQueryPlan.sharedRules".to_string(),
             "knowledgeQueryPlan.blocks.phase_scope.executionOrder".to_string(),
@@ -149,7 +149,7 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         "阶段范围确认"
     );
     assert_eq!(
-        knowledge_fields.fields["blockConfirmationContract"].value["tool"],
+        knowledge_fields.fields["blockConfirmationContract.tool"].value,
         "loom.brainstormConfirmBlock"
     );
     assert!(

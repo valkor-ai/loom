@@ -258,7 +258,8 @@ fn accept_deploy_execution_repair_file_inner(
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
         fields: vec![
-            "repairContext".to_string(),
+            "repairContext.failedContractFields".to_string(),
+            "repairContext.requiredCodeLevelChecks".to_string(),
             "editBoundary.protectedPaths".to_string(),
             "outputContract.repairId".to_string(),
             "outputContract.deploymentFailureRef".to_string(),
@@ -443,10 +444,18 @@ fn materialize_deploy_execution_repair(
                     "purpose": "Read deploy failure report and edit boundary before editing application code.",
                     "whenToRead": "Read before source edits.",
                     "fields": [
-                        "repairContext",
+                        "repairContext.repairOrigin",
+                        "repairContext.deploymentFailureRef",
+                        "repairContext.failureKind",
+                        "repairContext.failureOwner",
+                        "repairContext.failedContractFields",
+                        "repairContext.requiredCodeLevelChecks",
+                        "repairContext.errorWindow",
                         "editBoundary.allowedPaths",
                         "editBoundary.protectedPaths",
-                        "executionRules"
+                        "executionRules.scope",
+                        "executionRules.mustNotEditGeneratedAssets",
+                        "executionRules.mustNotClaimDeploymentSuccess"
                     ]
                 },
                 {
@@ -575,14 +584,10 @@ fn validate_runtime_delivery_evidence(
     result: &DeployExecutionRepairTaskResult,
     request_fields: &ReadRequestFieldsResult,
 ) -> StateResult<()> {
-    let repair_context = request_fields
+    let expected_fields = request_fields
         .fields
-        .get("repairContext")
-        .map(|field| &field.value)
-        .ok_or_else(|| StateError::StateCorrupted("repairContext was not readable.".to_string()))?;
-    let expected_fields = repair_context
-        .get("failedContractFields")
-        .and_then(Value::as_array)
+        .get("repairContext.failedContractFields")
+        .and_then(|field| field.value.as_array())
         .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
     let addressed_fields = result
@@ -598,9 +603,10 @@ fn validate_runtime_delivery_evidence(
             )));
         }
     }
-    let expected_checks = repair_context
-        .get("requiredCodeLevelChecks")
-        .and_then(Value::as_array)
+    let expected_checks = request_fields
+        .fields
+        .get("repairContext.requiredCodeLevelChecks")
+        .and_then(|field| field.value.as_array())
         .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
     let actual_checks = result

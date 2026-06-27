@@ -231,8 +231,11 @@ fn build_request_root(
                         "baselineProjectKind",
                         "repositoryMode",
                         "phaseDevelopmentMode",
-                        "scanPurpose",
-                        "source"
+                        "scanPurpose.scanPurpose",
+                        "scanPurpose.primaryConsumer",
+                        "scanPurpose.laterConsumers",
+                        "source.brainstormContractRef",
+                        "source.technicalBaselineRef"
                     ]
                 },
                 {

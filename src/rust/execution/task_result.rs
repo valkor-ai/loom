@@ -143,10 +143,17 @@ where
             "source.taskPlanId".to_string(),
             "source.taskId".to_string(),
             "source.taskPlanRunId".to_string(),
-            "task".to_string(),
+            "task.taskId".to_string(),
+            "task.taskKind".to_string(),
+            "task.acceptanceRefs".to_string(),
+            "task.requirementDetailRefs".to_string(),
+            "task.verificationIntents".to_string(),
+            "taskConceptGrounding.conceptRefs".to_string(),
+            "task.frontendExperienceRequirement".to_string(),
+            "task.runtimeDeliveryRequirement".to_string(),
             "outputContract.resultFile".to_string(),
             "outputContract.requiredTopLevelFields".to_string(),
-            "blockedOutput".to_string(),
+            "blockedOutput.blockedReasons".to_string(),
         ],
     })?
     .fields;
@@ -154,20 +161,34 @@ where
     let task_id = string_field(&fields, "source.taskId")?;
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
-    let task: TaskDefinition = fields
-        .get("task")
-        .map(|field| serde_json::from_value(field.value.clone()))
-        .transpose()
-        .map_err(state::store::StateError::Json)?
-        .ok_or_else(|| {
-            state::store::StateError::StateCorrupted("missing task field".to_string())
-        })?;
+    let task: TaskDefinition = serde_json::from_value(json!({
+        "taskId": value_field(&fields, "task.taskId"),
+        "groupId": "",
+        "title": "",
+        "taskKind": value_field(&fields, "task.taskKind"),
+        "implementationActions": [],
+        "objective": "",
+        "dependsOn": [],
+        "scopeRefs": [],
+        "acceptanceRefs": array_field(&fields, "task.acceptanceRefs"),
+        "requirementDetailRefs": array_field(&fields, "task.requirementDetailRefs"),
+        "writeBoundary": {
+            "forbiddenPaths": [],
+            "artifactRefs": {}
+        },
+        "verificationIntents": array_field(&fields, "task.verificationIntents"),
+        "conceptRefs": array_field(&fields, "taskConceptGrounding.conceptRefs"),
+        "conceptResponsibilities": [],
+        "conceptVerificationIntents": [],
+        "frontendExperienceRequirement": value_field(&fields, "task.frontendExperienceRequirement"),
+        "runtimeDeliveryRequirement": value_field(&fields, "task.runtimeDeliveryRequirement")
+    }))
+    .map_err(state::store::StateError::Json)?;
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
-    let blocked_output = fields
-        .get("blockedOutput")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
+    let blocked_output = json!({
+        "blockedReasons": value_field(&fields, "blockedOutput.blockedReasons")
+    });
     let issues = validate_result(
         &raw_result,
         &result,
@@ -1178,7 +1199,10 @@ fn materialize_task_result_repair(
             "originalResultFile": target_file,
             "issues": issues
         },
-        "task": context.task,
+        "task": context.task.clone(),
+        "taskConceptGrounding": {
+            "conceptRefs": context.task.concept_refs.clone()
+        },
         "blockedOutput": context.blocked_output,
         "repairRules": {
             "rule": "Rewrite the TaskResult JSON so it satisfies the original TaskExecutionRequest output contract. Do not edit source files for this repair."
@@ -1210,13 +1234,25 @@ fn materialize_task_result_repair(
                     "purpose": "Read the original TaskResult validation issues and task contract.",
                     "whenToRead": "Read before rewriting TaskResult.",
                     "fields": [
-                        "source",
                         "source.taskPlanId",
                         "source.taskId",
                         "source.taskPlanRunId",
-                        "task",
-                        "blockedOutput",
-                        "repairRules"
+                        "source.taskExecutionRequestRef",
+                        "source.originalResultFile",
+                        "source.issues",
+                        "task.taskId",
+                        "task.groupId",
+                        "task.title",
+                        "task.taskKind",
+                        "task.objective",
+                        "task.acceptanceRefs",
+                        "task.requirementDetailRefs",
+                        "task.verificationIntents",
+                        "taskConceptGrounding.conceptRefs",
+                        "task.frontendExperienceRequirement",
+                        "task.runtimeDeliveryRequirement",
+                        "blockedOutput.blockedReasons",
+                        "repairRules.rule"
                     ]
                 },
                 {
@@ -1572,6 +1608,27 @@ fn string_vec_field(
         .ok_or_else(|| {
             state::store::StateError::StateCorrupted(format!("missing request field {name}"))
         })
+}
+
+fn value_field(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> Value {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .unwrap_or(Value::Null)
+}
+
+fn array_field(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> Value {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .filter(Value::is_array)
+        .unwrap_or_else(|| json!([]))
 }
 
 fn read_project_json_value(

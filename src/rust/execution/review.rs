@@ -304,35 +304,77 @@ fn build_review_request(
                     "required": true,
                     "purpose": "Read review source identity and phase run scope.",
                     "whenToRead": "Read first.",
-                    "fields": ["source", "reviewScope", "sourceRefs"]
+                    "fields": [
+                        "source.phaseId",
+                        "source.taskPlanId",
+                        "source.taskPlanRunId",
+                        "source.architectureArtifactContractId",
+                        "source.technicalBaselineId",
+                        "sourceRefs.taskPlanRef",
+                        "sourceRefs.taskPlanRunRef",
+                        "reviewScope.type",
+                        "reviewScope.groupIds",
+                        "reviewScope.acceptanceRefs",
+                        "reviewScope.runStatus",
+                        "reviewScope.runSummary"
+                    ]
                 },
                 {
                     "groupId": "review_packets",
                     "required": true,
                     "purpose": "Read task plan and task results.",
                     "whenToRead": "Read before judging implementation quality.",
-                    "fields": ["reviewPacket"]
+                    "fields": [
+                        "reviewPacket.taskPlanId",
+                        "reviewPacket.taskPlanRunId",
+                        "reviewPacket.groups",
+                        "reviewPacket.tasks",
+                        "reviewPacket.taskResults"
+                    ]
                 },
                 {
                     "groupId": "change_context",
                     "required": true,
                     "purpose": "Read changed file context.",
                     "whenToRead": "Read before judging implementation quality.",
-                    "fields": ["changeContext"]
+                    "fields": [
+                        "changeContext.mode",
+                        "changeContext.changedFiles"
+                    ]
                 },
                 {
                     "groupId": "review_matrices",
                     "required": true,
                     "purpose": "Read concept, requirement detail, frontend, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
-                    "fields": ["conceptReviewMatrix", "detailReviewMatrix", "reviewSignals", "outputContract.reviewSignals"]
+                    "fields": [
+                        "conceptReviewMatrix",
+                        "detailReviewMatrix",
+                        "reviewSignals.requirementDetailEvidence",
+                        "reviewSignals.frontendWorkflowClosure",
+                        "outputContract.reviewSignals.requirementDetailEvidence",
+                        "outputContract.reviewSignals.frontendWorkflowClosure"
+                    ]
                 },
                 {
                     "groupId": "review_rules",
                     "required": true,
                     "purpose": "Read review enums and routing rules.",
                     "whenToRead": "Read before writing findings and nextAction.",
-                    "fields": ["enumRefs", "reviewRules.commonRules", "reviewRules.routingRules", "outputContract.routingRules"]
+                    "fields": [
+                        "enumRefs.decision",
+                        "enumRefs.findingSeverity",
+                        "enumRefs.severityClass",
+                        "enumRefs.evidenceKind",
+                        "enumRefs.failureClass",
+                        "enumRefs.findingCategory",
+                        "enumRefs.nextAction",
+                        "enumRefs.readRefType",
+                        "enumRefs.evidenceRefType",
+                        "reviewRules.commonRules",
+                        "reviewRules.routingRules",
+                        "outputContract.routingRules"
+                    ]
                 },
                 {
                     "groupId": "review_write_contract",
@@ -342,7 +384,13 @@ fn build_review_request(
                     "fields": [
                         "outputContract.resultFile",
                         "outputContract.writeTargets",
-                        "outputContract.allowedRefs",
+                        "outputContract.allowedRefs.taskIds",
+                        "outputContract.allowedRefs.groupIds",
+                        "outputContract.allowedRefs.acceptanceRefs",
+                        "outputContract.allowedRefs.taskResultIds",
+                        "outputContract.allowedRefs.changedFilePaths",
+                        "outputContract.allowedRefs.verificationEvidenceRefs",
+                        "outputContract.allowedRefs.readRefs",
                         "outputContract.requiredFields",
                         "outputContract.resultTemplate",
                         "outputContract.schemaShape.properties.source",
@@ -563,9 +611,18 @@ where
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
         fields: vec![
-            "source".to_string(),
-            "outputContract.allowedRefs".to_string(),
-            "reviewSignals".to_string(),
+            "source.phaseId".to_string(),
+            "source.taskPlanId".to_string(),
+            "source.taskPlanRunId".to_string(),
+            "outputContract.allowedRefs.taskIds".to_string(),
+            "outputContract.allowedRefs.groupIds".to_string(),
+            "outputContract.allowedRefs.acceptanceRefs".to_string(),
+            "outputContract.allowedRefs.taskResultIds".to_string(),
+            "outputContract.allowedRefs.changedFilePaths".to_string(),
+            "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
+            "outputContract.allowedRefs.readRefs".to_string(),
+            "reviewSignals.requirementDetailEvidence".to_string(),
+            "reviewSignals.frontendWorkflowClosure".to_string(),
         ],
     })?
     .fields;
@@ -618,19 +675,18 @@ fn validate_review_result(
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    let source = fields.get("source").map(|field| &field.value);
     if result.source.request_id != request_id
-        || source
-            .and_then(|value| value.get("phaseId"))
-            .and_then(Value::as_str)
+        || fields
+            .get("source.phaseId")
+            .and_then(|field| field.value.as_str())
             != Some(result.source.phase_id.as_str())
-        || source
-            .and_then(|value| value.get("taskPlanId"))
-            .and_then(Value::as_str)
+        || fields
+            .get("source.taskPlanId")
+            .and_then(|field| field.value.as_str())
             != Some(result.source.task_plan_id.as_str())
-        || source
-            .and_then(|value| value.get("taskPlanRunId"))
-            .and_then(Value::as_str)
+        || fields
+            .get("source.taskPlanRunId")
+            .and_then(|field| field.value.as_str())
             != Some(result.source.task_plan_run_id.as_str())
     {
         issues.push(issue(
@@ -640,14 +696,30 @@ fn validate_review_result(
         ));
     }
     validate_review_enums(result, &mut issues);
-    let allowed = fields
-        .get("outputContract.allowedRefs")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
+    let allowed = json!({
+        "taskIds": array_field(fields, "outputContract.allowedRefs.taskIds"),
+        "groupIds": array_field(fields, "outputContract.allowedRefs.groupIds"),
+        "acceptanceRefs": array_field(fields, "outputContract.allowedRefs.acceptanceRefs"),
+        "taskResultIds": array_field(fields, "outputContract.allowedRefs.taskResultIds"),
+        "changedFilePaths": array_field(fields, "outputContract.allowedRefs.changedFilePaths"),
+        "verificationEvidenceRefs": array_field(fields, "outputContract.allowedRefs.verificationEvidenceRefs"),
+        "readRefs": array_field(fields, "outputContract.allowedRefs.readRefs")
+    });
     validate_review_refs(result, &allowed, &mut issues);
     validate_review_decision(result, &mut issues);
     validate_review_signals(result, fields, &mut issues);
     issues
+}
+
+fn array_field(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> Value {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .filter(Value::is_array)
+        .unwrap_or_else(|| json!([]))
 }
 
 fn validate_review_enums(result: &ReviewResult, issues: &mut Vec<delivery_core::RepairIssue>) {
@@ -865,10 +937,10 @@ fn validate_review_signals(
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let signals = fields
-        .get("reviewSignals")
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null);
+    let signals = json!({
+        "requirementDetailEvidence": array_field(fields, "reviewSignals.requirementDetailEvidence"),
+        "frontendWorkflowClosure": array_field(fields, "reviewSignals.frontendWorkflowClosure")
+    });
     let unsatisfied_detail = signals
         .get("requirementDetailEvidence")
         .and_then(Value::as_array)
@@ -1116,7 +1188,20 @@ fn build_manual_review_request(
                     "required": true,
                     "purpose": "Read the review issue and allowed user decision protocol.",
                     "whenToRead": "Read after the user answers the manual review gate.",
-                    "fields": ["source", "manualReviewProtocol", "enumRefs"]
+                    "fields": [
+                        "source.reviewId",
+                        "source.reviewResultRef",
+                        "source.decision",
+                        "source.reviewNextAction",
+                        "source.blockingFindings",
+                        "manualReviewProtocol.acceptedDecisions",
+                        "manualReviewProtocol.approveOverrideRule",
+                        "manualReviewProtocol.requestChangesRule",
+                        "manualReviewProtocol.routeRules",
+                        "enumRefs.decision",
+                        "enumRefs.changeRequestRoute",
+                        "enumRefs.nextActionType"
+                    ]
                 },
                 {
                     "groupId": "manual_review_write_contract",
@@ -1194,7 +1279,12 @@ where
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
-        fields: vec!["source".to_string(), "enumRefs".to_string()],
+        fields: vec![
+            "source.reviewId".to_string(),
+            "enumRefs.decision".to_string(),
+            "enumRefs.changeRequestRoute".to_string(),
+            "enumRefs.nextActionType".to_string(),
+        ],
     })?
     .fields;
     let issues = validate_manual_review_resolution(&resolution, authorized, &fields);
@@ -1314,9 +1404,8 @@ fn validate_manual_review_resolution(
         )),
     }
     if fields
-        .get("source")
-        .and_then(|field| field.value.get("reviewId"))
-        .and_then(Value::as_str)
+        .get("source.reviewId")
+        .and_then(|field| field.value.as_str())
         .is_none()
     {
         issues.push(issue(

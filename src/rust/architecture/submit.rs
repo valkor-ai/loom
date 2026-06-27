@@ -222,18 +222,43 @@ where
     let request_fields = read_request_fields(
         &input.project_root,
         &input.request_ref,
-        &["allowedRefs", "sourceRefs"],
+        &[
+            "allowedRefs.scopeRefs",
+            "allowedRefs.acceptanceRefs",
+            "allowedRefs.deferredScopeRefs",
+            "allowedRefs.excludedScopeRefs",
+            "allowedRefs.requirementDetailIds",
+            "sourceRefs.planningContractRef",
+            "sourceRefs.technicalBaselineRef",
+            "sourceRefs.brainstormContractRef",
+            "sourceRefs.repositoryContextRef",
+            "sourceRefs.deliveryConceptGlossaryRef",
+            "sourceRefs.phaseConceptGroundingRef",
+            "sourceRefs.confirmedFrontendExperienceRef",
+            "sourceRefs.currentFrontendExperienceRef",
+            "sourceRefs.previousRuntimeDeliveryRef",
+        ],
     )?;
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
     let section_outputs = parse_section_outputs(&request_root)?;
-    let allowed_refs = request_fields
-        .get("allowedRefs")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let source_refs = request_fields
-        .get("sourceRefs")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let allowed_refs = json!({
+        "scopeRefs": value_field(&request_fields, "allowedRefs.scopeRefs"),
+        "acceptanceRefs": value_field(&request_fields, "allowedRefs.acceptanceRefs"),
+        "deferredScopeRefs": value_field(&request_fields, "allowedRefs.deferredScopeRefs"),
+        "excludedScopeRefs": value_field(&request_fields, "allowedRefs.excludedScopeRefs"),
+        "requirementDetailIds": value_field(&request_fields, "allowedRefs.requirementDetailIds")
+    });
+    let source_refs = json!({
+        "planningContractRef": value_field(&request_fields, "sourceRefs.planningContractRef"),
+        "technicalBaselineRef": value_field(&request_fields, "sourceRefs.technicalBaselineRef"),
+        "brainstormContractRef": value_field(&request_fields, "sourceRefs.brainstormContractRef"),
+        "repositoryContextRef": value_field(&request_fields, "sourceRefs.repositoryContextRef"),
+        "deliveryConceptGlossaryRef": value_field(&request_fields, "sourceRefs.deliveryConceptGlossaryRef"),
+        "phaseConceptGroundingRef": value_field(&request_fields, "sourceRefs.phaseConceptGroundingRef"),
+        "confirmedFrontendExperienceRef": value_field(&request_fields, "sourceRefs.confirmedFrontendExperienceRef"),
+        "currentFrontendExperienceRef": value_field(&request_fields, "sourceRefs.currentFrontendExperienceRef"),
+        "previousRuntimeDeliveryRef": value_field(&request_fields, "sourceRefs.previousRuntimeDeliveryRef")
+    });
     let expected_request_id = request_root
         .get("requestId")
         .and_then(Value::as_str)
@@ -1208,4 +1233,8 @@ fn read_request_fields(
         .into_iter()
         .map(|(field, result)| (field, result.value))
         .collect())
+}
+
+fn value_field(fields: &std::collections::BTreeMap<String, Value>, field: &str) -> Value {
+    fields.get(field).cloned().unwrap_or(Value::Null)
 }

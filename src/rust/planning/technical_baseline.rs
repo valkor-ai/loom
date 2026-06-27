@@ -317,7 +317,9 @@ fn build_request_root(
                     "whenToRead": "Read for existing_project or when repository continuity matters.",
                     "fields": [
                         "projectKind",
-                        "repoEvidence"
+                        "repoEvidence.detectedProjectKind",
+                        "repoEvidence.baselineExists",
+                        "repoEvidence.repositoryContextExists"
                     ]
                 },
                 {
