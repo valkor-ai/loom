@@ -186,7 +186,10 @@ fn build_request_root(
         "generationRules": [
             "Summarize repository code facts only.",
             "Do not restate or infer current phase scope, acceptance, tasks, or review conclusions.",
-            "All paths must stay inside projectRoot and must not use forbidden prefixes."
+            "All paths must stay inside projectRoot and must not use forbidden prefixes.",
+            "technologySignals and structureSignals are objects, not arrays.",
+            "repoOverview.primaryApplications, structureSignals.rootPaths, structureSignals.entryPoints, existingCapabilities, relevantSurfaces, and recommendedReadRefs are arrays of objects with the fields shown in outputContract.resultTemplate.",
+            "Every existingCapabilities[].surfaceRefs and recommendedReadRefs[].surfaceRefs value must reference a relevantSurfaces[].surfaceId."
         ],
         "enumRefs": {
             "projectKind": ["greenfield", "existing_project", "unknown"],
@@ -243,6 +246,13 @@ fn build_request_root(
                     "recommendedReadRefs[].priority": "enumRefs.readPriority",
                     "contextQuality.coverage": "enumRefs.contextCoverage",
                     "contextQuality.confidence": "enumRefs.confidence"
+                },
+                "objectShapeRules": {
+                    "technologySignals": "object with primaryLanguages, frameworks, packageManagers, buildCommands, testCommands, notes arrays",
+                    "structureSignals": "object with rootPaths, entryPoints, configurationFiles arrays",
+                    "repoOverview.primaryApplications[]": "objects with applicationId, name, kind, rootPath",
+                    "relevantSurfaces[]": "objects with surfaceId, kind, path, summary, relevance, suggestedUse",
+                    "recommendedReadRefs[]": "objects with path, reason, priority, summary, surfaceRefs"
                 }
             },
             "resultTemplate": {
@@ -262,26 +272,59 @@ fn build_request_root(
                     "laterConsumers": ["PGC", "AAC", "TaskPlan"]
                 },
                 "repoOverview": {
-                    "summary": "",
+                    "summary": "Short repository summary from the current phase perspective.",
                     "repositoryShape": "unknown",
-                    "primaryApplications": []
+                    "primaryApplications": [{
+                        "applicationId": "app-main",
+                        "name": "Main application",
+                        "kind": "service | cli | web_app | library | unknown",
+                        "rootPath": "."
+                    }]
                 },
                 "technologySignals": {
-                    "primaryLanguages": [],
-                    "frameworks": [],
-                    "packageManagers": [],
-                    "buildCommands": [],
-                    "testCommands": [],
-                    "notes": []
+                    "primaryLanguages": ["language-name"],
+                    "frameworks": ["framework-name"],
+                    "packageManagers": ["package-manager"],
+                    "buildCommands": ["build command"],
+                    "testCommands": ["test command"],
+                    "notes": ["Short technology note. Use [] only when none."]
                 },
                 "structureSignals": {
-                    "rootPaths": [],
-                    "entryPoints": [],
-                    "configurationFiles": []
+                    "rootPaths": [{
+                        "path": ".",
+                        "role": "source_root | app_root | config_root | test_root | documentation_root"
+                    }],
+                    "entryPoints": [{
+                        "path": "project-relative/path",
+                        "kind": "module | cli | server | page | test | config | unknown",
+                        "description": "Why this entry point matters."
+                    }],
+                    "configurationFiles": ["project-relative/config-file"]
                 },
-                "existingCapabilities": [],
-                "relevantSurfaces": [],
-                "recommendedReadRefs": [],
+                "existingCapabilities": [{
+                    "capabilityId": "cap-existing-example",
+                    "name": "Existing capability name",
+                    "status": "partial",
+                    "summary": "Observed repository capability from the current codebase.",
+                    "surfaceRefs": ["surface-example"],
+                    "confidence": "medium",
+                    "deliveryRelevance": "Why this matters to the overall delivery or upcoming Brainstorm."
+                }],
+                "relevantSurfaces": [{
+                    "surfaceId": "surface-example",
+                    "kind": "module",
+                    "path": "project-relative/path",
+                    "summary": "Surface summary.",
+                    "relevance": "extension_point",
+                    "suggestedUse": "inspect_or_extend"
+                }],
+                "recommendedReadRefs": [{
+                    "path": "project-relative/path",
+                    "reason": "implemented_capability",
+                    "priority": "medium",
+                    "summary": "Why the agent should read this file first.",
+                    "surfaceRefs": ["surface-example"]
+                }],
                 "contextQuality": {
                     "coverage": "focused",
                     "confidence": "medium",

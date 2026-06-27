@@ -419,6 +419,36 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
             ["contextQuality.coverage"],
         "enumRefs.contextCoverage"
     );
+    assert!(
+        write_contract.fields["outputContract.schemaProjection"].value["objectShapeRules"]
+            ["technologySignals"]
+            .as_str()
+            .expect("technologySignals shape rule")
+            .contains("object")
+    );
+
+    let mut repository_candidate = write_contract.fields["outputContract.resultTemplate"]
+        .value
+        .clone();
+    repository_candidate["source"]["requestRef"] = json!(repository_context_request_ref);
+    write_candidate_target(
+        &fixture,
+        repository_context_request_ref,
+        &repository_candidate,
+    );
+    let repository_result = call_submit(
+        "loom.repositoryContextAcceptFile",
+        repository_context_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        repository_result["state"], "auto_runnable",
+        "{repository_result:#}"
+    );
+    assert_eq!(
+        repository_result["next"]["artifactKind"],
+        "architecture_section_candidate"
+    );
 }
 
 #[test]
