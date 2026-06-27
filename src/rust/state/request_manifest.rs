@@ -18,7 +18,7 @@ use crate::{
         request_storage_manifest_file, to_project_relative,
     },
     project::initialize_project,
-    read_audit::{now_for_audit, record_request_size_audit, RequestSizeAudit},
+    read_audit::{now_for_audit, record_request_size_audit, ReadPlanSizeWarning, RequestSizeAudit},
     request_index::{
         upsert_request_index_entry, validate_request_id, RequestIndexEntry, RequestSourceProtocol,
     },
@@ -174,7 +174,7 @@ pub fn write_native_request(
         root_object,
         &used_ref_keys,
     )?;
-    validate_read_plan_contract(
+    let read_plan_warnings = validate_read_plan_contract(
         &project_paths.root,
         root_object,
         &manifest_refs,
@@ -216,6 +216,7 @@ pub fn write_native_request(
             full_bytes,
             compact_bytes,
             ref_count,
+            read_plan_warnings,
             recorded_at: now_for_audit(),
         },
     );
@@ -589,7 +590,8 @@ fn validate_read_plan_contract(
     root_object: &Map<String, Value>,
     refs: &BTreeMap<String, RequestStorageManifestRef>,
     read_groups: &[ReadGroupRef],
-) -> StateResult<()> {
+) -> StateResult<Vec<ReadPlanSizeWarning>> {
+    let mut warnings = Vec::new();
     for group in read_groups {
         let mut group_bytes = 0usize;
         for field in &group.fields {
@@ -605,21 +607,35 @@ fn validate_read_plan_contract(
             };
             let field_bytes = pretty_len(&value);
             if field_bytes > MAX_READ_FIELD_BYTES {
-                return Err(StateError::InvalidArgument(format!(
-                    "requestReadPlan field {} in group {} is too large: {} bytes > {} bytes",
-                    field, group.group_id, field_bytes, MAX_READ_FIELD_BYTES
-                )));
+                warnings.push(ReadPlanSizeWarning {
+                    level: "warn",
+                    group_id: group.group_id.clone(),
+                    field: Some(field.clone()),
+                    bytes: field_bytes,
+                    limit_bytes: MAX_READ_FIELD_BYTES,
+                    message: format!(
+                        "requestReadPlan field {} in group {} is too large: {} bytes > {} bytes",
+                        field, group.group_id, field_bytes, MAX_READ_FIELD_BYTES
+                    ),
+                });
             }
             group_bytes += field_bytes;
         }
         if group_bytes > MAX_READ_GROUP_BYTES {
-            return Err(StateError::InvalidArgument(format!(
-                "requestReadPlan group {} is too large: {} bytes > {} bytes",
-                group.group_id, group_bytes, MAX_READ_GROUP_BYTES
-            )));
+            warnings.push(ReadPlanSizeWarning {
+                level: "warn",
+                group_id: group.group_id.clone(),
+                field: None,
+                bytes: group_bytes,
+                limit_bytes: MAX_READ_GROUP_BYTES,
+                message: format!(
+                    "requestReadPlan group {} is too large: {} bytes > {} bytes",
+                    group.group_id, group_bytes, MAX_READ_GROUP_BYTES
+                ),
+            });
         }
     }
-    Ok(())
+    Ok(warnings)
 }
 
 fn is_field_not_found(error: &StateError) -> bool {

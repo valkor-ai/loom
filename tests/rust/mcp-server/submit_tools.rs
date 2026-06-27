@@ -1070,7 +1070,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .iter()
         .flat_map(|group| group["fields"].as_array().into_iter().flatten())
         .any(|field| field.as_str() == Some("outputContract.resultTemplate")));
-    write_task_result_candidate(&fixture, &task_result_repair_action_ref);
+    write_large_task_result_candidate(&fixture, &task_result_repair_action_ref);
     let task_result = call_submit(
         "loom.repairSubmitFile",
         &task_result_repair_action_ref,
@@ -1186,6 +1186,17 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(review_packets.fields["reviewPacket.taskResultSummaries"]
         .value
         .is_array());
+    let review_packets_text =
+        serde_json::to_string(&review_packets.fields).expect("serialize review packets");
+    assert!(!review_packets_text.contains("very large execution note"));
+    assert!(!review_packets_text.contains("very large verification summary"));
+    assert!(!review_packets_text.contains("very large detail evidence summary"));
+    assert!(
+        serde_json::to_vec_pretty(&review_packets.fields["reviewPacket.taskResultSummaries"].value)
+            .expect("serialize task result summaries")
+            .len()
+            < 32 * 1024
+    );
     assert!(!review_packets.fields.contains_key("reviewPacket.groups"));
     assert!(!review_packets.fields.contains_key("reviewPacket.tasks"));
     assert!(!review_packets
@@ -1224,6 +1235,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .join(&delivery_id)
         .join("tasks/phase-1/runs/latest.json")
         .exists());
+    assert_no_read_plan_size_warnings(&fixture);
 }
 
 #[test]
@@ -2609,20 +2621,25 @@ fn first_taskplan_group_file(fixture: &Fixture, request_ref: &str) -> String {
 }
 
 fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
-    write_task_result_candidate_with_detail_evidence(fixture, request_ref, true);
+    write_task_result_candidate_with_detail_evidence(fixture, request_ref, true, false);
+}
+
+fn write_large_task_result_candidate(fixture: &Fixture, request_ref: &str) {
+    write_task_result_candidate_with_detail_evidence(fixture, request_ref, true, true);
 }
 
 fn write_task_result_candidate_without_requirement_detail_evidence(
     fixture: &Fixture,
     request_ref: &str,
 ) {
-    write_task_result_candidate_with_detail_evidence(fixture, request_ref, false);
+    write_task_result_candidate_with_detail_evidence(fixture, request_ref, false, false);
 }
 
 fn write_task_result_candidate_with_detail_evidence(
     fixture: &Fixture,
     request_ref: &str,
     include_detail_evidence: bool,
+    include_large_text: bool,
 ) {
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
@@ -2652,13 +2669,29 @@ fn write_task_result_candidate_with_detail_evidence(
     let verification_id = fields["task.verificationIntents"].value[0]["verificationId"]
         .as_str()
         .expect("verification id");
+    let verification_summary = if include_large_text {
+        format!("very large verification summary {}", "x".repeat(20_000))
+    } else {
+        "Static verification passed for the account flow.".to_string()
+    };
+    let detail_summary = if include_large_text {
+        format!("very large detail evidence summary {}", "x".repeat(20_000))
+    } else {
+        "The account lifecycle detail is covered by the implemented flow and static verification."
+            .to_string()
+    };
+    let result_notes = if include_large_text {
+        json!([format!("very large execution note {}", "x".repeat(20_000))])
+    } else {
+        json!([])
+    };
     let requirement_detail_evidence = if include_detail_evidence {
         json!([{
             "detailId": detail_id,
             "status": "satisfied",
             "verificationIds": [verification_id],
             "evidenceRefs": ["src/main.tsx"],
-            "summary": "The account lifecycle detail is covered by the implemented flow and static verification."
+            "summary": detail_summary
         }])
     } else {
         json!([])
@@ -2677,7 +2710,7 @@ fn write_task_result_candidate_with_detail_evidence(
                 "verificationId": "verify-account-001",
                 "status": "passed",
                 "evidenceType": "static_check",
-                "summary": "Static verification passed for the account flow."
+                "summary": verification_summary
             }],
             "selfRepairSummary": {
                 "attempted": false,
@@ -2691,7 +2724,7 @@ fn write_task_result_candidate_with_detail_evidence(
                 "agentOwnedLongRunningWork": "none",
                 "notes": []
             },
-            "notes": [],
+            "notes": result_notes,
             "frontendExperienceSelfCheck": null,
             "runtimeDeliveryEvidence": null,
             "requirementDetailEvidence": requirement_detail_evidence,
@@ -3256,6 +3289,22 @@ fn assert_no_root_submit_metadata(root: &Value) {
         assert!(
             root.get(key).is_none(),
             "compact request root must not duplicate {key}: {root:#}"
+        );
+    }
+}
+
+fn assert_no_read_plan_size_warnings(fixture: &Fixture) {
+    let audit_path = fixture.root.join(".loom/metrics/request-size-audit.jsonl");
+    let audit = std::fs::read_to_string(&audit_path).expect("read request size audit");
+    for line in audit.lines() {
+        let entry: Value = serde_json::from_str(line).expect("parse request size audit entry");
+        let warnings = entry["readPlanWarnings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            warnings.is_empty(),
+            "generated request should not produce read-plan size warnings: {entry:#}"
         );
     }
 }

@@ -268,6 +268,63 @@ fn native_request_read_protocol_resolves_declared_fields() {
 }
 
 #[test]
+fn native_request_size_thresholds_are_audit_warnings_not_flow_blockers() {
+    let fixture = Fixture::new("native-size-warning");
+    let large_text = "证券账户开户规则。".repeat(5000);
+
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_size_warning_1".to_string(),
+            request_kind: "technical_baseline".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "context": {
+                    "largeField": large_text
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "large_context",
+                        "required": true,
+                        "purpose": "Read a large but valid field.",
+                        "whenToRead": "Before writing.",
+                        "fields": ["context.largeField"]
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("large fields should warn without blocking native request creation");
+
+    let group = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref,
+        group_id: "large_context".to_string(),
+    })
+    .expect("read large field group");
+    assert!(group.fields["context.largeField"]
+        .value
+        .as_str()
+        .expect("large field text")
+        .contains("证券账户开户规则"));
+
+    let audit = read_to_string(fixture.root.join(".loom/metrics/request-size-audit.jsonl"))
+        .expect("read request size audit");
+    let last_line = audit.lines().last().expect("audit line");
+    let audit_value: serde_json::Value = serde_json::from_str(last_line).expect("audit json");
+    let warnings = audit_value["readPlanWarnings"]
+        .as_array()
+        .expect("read plan warnings");
+    assert!(warnings.iter().any(|warning| {
+        warning["level"] == "warn"
+            && warning["groupId"] == "large_context"
+            && warning["field"] == "context.largeField"
+    }));
+}
+
+#[test]
 fn native_request_rejects_legacy_agent_action_authority() {
     let fixture = Fixture::new("native-forbidden-agent-action");
     let error = write_native_request(

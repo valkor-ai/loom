@@ -7,12 +7,26 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReadPlanSizeWarning {
+    pub level: &'static str,
+    pub group_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    pub bytes: usize,
+    pub limit_bytes: usize,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RequestSizeAudit<'a> {
     pub request_ref: &'a str,
     pub request_file: &'a str,
     pub full_bytes: usize,
     pub compact_bytes: usize,
     pub ref_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub read_plan_warnings: Vec<ReadPlanSizeWarning>,
     pub recorded_at: String,
 }
 
