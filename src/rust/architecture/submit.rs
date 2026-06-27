@@ -635,6 +635,15 @@ fn validate_coverage_section(
 ) -> Vec<delivery_core::RepairIssue> {
     let detail_ids = string_set(allowed_refs.pointer("/requirementDetailIds"));
     let mut issues = Vec::new();
+    let allowed_coverage_statuses = std::collections::BTreeSet::from([
+        "covered",
+        "partial",
+        "not_applicable",
+        "deferred",
+        "uncovered",
+    ]);
+    let allowed_acceptance_priorities =
+        std::collections::BTreeSet::from(["must", "should", "could"]);
     let Some(detail_coverage) = content.get("detailCoverage").and_then(Value::as_array) else {
         issues.push(issue(
             "DETAIL_COVERAGE_REQUIRED",
@@ -659,6 +668,13 @@ fn validate_coverage_section(
             .get("coverageStatus")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if !allowed_coverage_statuses.contains(coverage_status) {
+            issues.push(issue(
+                "DETAIL_COVERAGE_INVALID",
+                &format!("content.detailCoverage[{index}].coverageStatus"),
+                "detailCoverage.coverageStatus must be one of covered, partial, not_applicable, deferred, or uncovered.",
+            ));
+        }
         let Some(artifact_refs) = entry.get("artifactRefs").and_then(Value::as_object) else {
             issues.push(issue(
                 "DETAIL_COVERAGE_INVALID",
@@ -683,7 +699,15 @@ fn validate_coverage_section(
         let mut total_refs = 0usize;
         for key in expected_keys {
             match artifact_refs.get(key) {
-                Some(Value::Array(values)) => total_refs += values.len(),
+                Some(Value::Array(values)) => {
+                    total_refs += values.len();
+                    validate_array_entries_are_strings(
+                        values,
+                        &format!("content.detailCoverage[{index}].artifactRefs.{key}"),
+                        "DETAIL_COVERAGE_INVALID",
+                        &mut issues,
+                    );
+                }
                 _ => issues.push(issue(
                     "DETAIL_COVERAGE_INVALID",
                     &format!("content.detailCoverage[{index}].artifactRefs.{key}"),
@@ -706,6 +730,12 @@ fn validate_coverage_section(
                 "non-covered detailCoverage entries must explain the reason.",
             ));
         }
+        validate_optional_string(
+            entry.get("reason"),
+            &format!("content.detailCoverage[{index}].reason"),
+            "DETAIL_COVERAGE_INVALID",
+            &mut issues,
+        );
     }
     let Some(acceptance_matrix) = content.get("acceptanceMatrix").and_then(Value::as_array) else {
         issues.push(issue(
@@ -726,6 +756,28 @@ fn validate_coverage_section(
                 "INVALID_ACCEPTANCE_REF",
                 &format!("content.acceptanceMatrix[{index}].acceptanceId"),
                 "acceptanceMatrix.acceptanceId must come from allowedRefs.acceptanceRefs.",
+            ));
+        }
+        let priority = entry
+            .get("priority")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !allowed_acceptance_priorities.contains(priority) {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].priority"),
+                "acceptanceMatrix.priority must be one of must, should, or could.",
+            ));
+        }
+        let coverage_status = entry
+            .get("coverageStatus")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !allowed_coverage_statuses.contains(coverage_status) {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].coverageStatus"),
+                "acceptanceMatrix.coverageStatus must be one of covered, partial, not_applicable, deferred, or uncovered.",
             ));
         }
         if entry
@@ -780,6 +832,13 @@ fn validate_coverage_section(
                     &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].refs"),
                     "acceptanceMatrix.coverage[].refs must be an array.",
                 ));
+            } else if let Some(values) = coverage_entry.get("refs").and_then(Value::as_array) {
+                validate_array_entries_are_strings(
+                    values,
+                    &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].refs"),
+                    "ACCEPTANCE_MATRIX_INVALID",
+                    &mut issues,
+                );
             }
             if coverage_entry
                 .get("description")
@@ -797,8 +856,157 @@ fn validate_coverage_section(
                 ));
             }
         }
+        match entry.get("verificationHints") {
+            Some(Value::Array(hints)) => {
+                for (hint_index, hint) in hints.iter().enumerate() {
+                    let Some(hint_object) = hint.as_object() else {
+                        issues.push(issue(
+                            "ACCEPTANCE_MATRIX_INVALID",
+                            &format!(
+                                "content.acceptanceMatrix[{index}].verificationHints[{hint_index}]"
+                            ),
+                            "acceptanceMatrix.verificationHints[] must be objects with kind and description.",
+                        ));
+                        continue;
+                    };
+                    if hint_object
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        .is_empty()
+                    {
+                        issues.push(issue(
+                            "ACCEPTANCE_MATRIX_INVALID",
+                            &format!(
+                                "content.acceptanceMatrix[{index}].verificationHints[{hint_index}].kind"
+                            ),
+                            "acceptanceMatrix.verificationHints[].kind is required.",
+                        ));
+                    }
+                    if hint_object
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .unwrap_or_default()
+                        .is_empty()
+                    {
+                        issues.push(issue(
+                            "ACCEPTANCE_MATRIX_INVALID",
+                            &format!(
+                                "content.acceptanceMatrix[{index}].verificationHints[{hint_index}].description"
+                            ),
+                            "acceptanceMatrix.verificationHints[].description is required.",
+                        ));
+                    }
+                }
+            }
+            Some(_) => issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].verificationHints"),
+                "acceptanceMatrix.verificationHints must be an array.",
+            )),
+            None => {}
+        }
+        validate_optional_string(
+            entry.get("reason"),
+            &format!("content.acceptanceMatrix[{index}].reason"),
+            "ACCEPTANCE_MATRIX_INVALID",
+            &mut issues,
+        );
     }
+    validate_coverage_handoff(content.get("handoff"), &mut issues);
     issues
+}
+
+fn validate_array_entries_are_strings(
+    values: &[Value],
+    field_path: &str,
+    code: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    for (index, value) in values.iter().enumerate() {
+        if !value.is_string() {
+            issues.push(issue(
+                code,
+                &format!("{field_path}[{index}]"),
+                "array entries must be strings.",
+            ));
+        }
+    }
+}
+
+fn validate_optional_string(
+    value: Option<&Value>,
+    field_path: &str,
+    code: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if let Some(value) = value {
+        if !(value.is_null() || value.is_string()) {
+            issues.push(issue(
+                code,
+                field_path,
+                "field must be a string when present.",
+            ));
+        }
+    }
+}
+
+fn validate_coverage_handoff(value: Option<&Value>, issues: &mut Vec<delivery_core::RepairIssue>) {
+    let Some(value) = value else {
+        return;
+    };
+    let Some(object) = value.as_object() else {
+        issues.push(issue(
+            "COVERAGE_HANDOFF_INVALID",
+            "content.handoff",
+            "coverage handoff must be an object.",
+        ));
+        return;
+    };
+    if !object
+        .get("readyForTaskPlan")
+        .map(Value::is_boolean)
+        .unwrap_or(false)
+    {
+        issues.push(issue(
+            "COVERAGE_HANDOFF_INVALID",
+            "content.handoff.readyForTaskPlan",
+            "coverage handoff.readyForTaskPlan must be a boolean.",
+        ));
+    }
+    match object.get("blockingReasons") {
+        Some(Value::Array(values)) => validate_array_entries_are_strings(
+            values,
+            "content.handoff.blockingReasons",
+            "COVERAGE_HANDOFF_INVALID",
+            issues,
+        ),
+        Some(_) => issues.push(issue(
+            "COVERAGE_HANDOFF_INVALID",
+            "content.handoff.blockingReasons",
+            "coverage handoff.blockingReasons must be an array.",
+        )),
+        None => issues.push(issue(
+            "COVERAGE_HANDOFF_INVALID",
+            "content.handoff.blockingReasons",
+            "coverage handoff.blockingReasons is required.",
+        )),
+    }
+    if object
+        .get("nextNode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        issues.push(issue(
+            "COVERAGE_HANDOFF_INVALID",
+            "content.handoff.nextNode",
+            "coverage handoff.nextNode is required.",
+        ));
+    }
 }
 
 fn load_request_root(

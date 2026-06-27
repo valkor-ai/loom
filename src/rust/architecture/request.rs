@@ -869,7 +869,10 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
                 "coverageStatus": "covered",
                 "reason": "",
                 "coverage": [],
-                "verificationHints": []
+                "verificationHints": [{
+                    "kind": "manual",
+                    "description": ""
+                }]
             })
         })
         .collect::<Vec<_>>();

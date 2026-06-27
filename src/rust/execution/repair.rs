@@ -1560,7 +1560,10 @@ fn coverage_content_template(context_projection: &Value) -> Value {
                         "coverageStatus": "covered",
                         "reason": "",
                         "coverage": [],
-                        "verificationHints": []
+                        "verificationHints": [{
+                            "kind": "manual",
+                            "description": ""
+                        }]
                     })
                 })
                 .collect::<Vec<_>>()

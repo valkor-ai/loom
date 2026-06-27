@@ -682,6 +682,13 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         "acceptanceMatrix must not template artifactRefs"
     );
     assert!(coverage_template["acceptanceMatrix"][0]["coverage"].is_array());
+    assert_eq!(
+        coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["kind"],
+        json!("manual")
+    );
+    assert!(
+        coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["description"].is_string()
+    );
     assert!(
         coverage_template["detailCoverage"][0]["detailId"]
             .as_str()
@@ -789,6 +796,58 @@ fn architecture_coverage_submit_repairs_missing_acceptance_statement() {
         result["issues"][0]["fieldPath"],
         "content.acceptanceMatrix[0].statement"
     );
+}
+
+#[test]
+fn architecture_coverage_submit_repairs_string_verification_hints() {
+    let fixture = Fixture::new("architecture-coverage-string-hints");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["acceptanceMatrix"][0]["verificationHints"] =
+        json!(["Verify the flow manually."]);
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "ACCEPTANCE_MATRIX_INVALID"
+            && issue["fieldPath"] == "content.acceptanceMatrix[0].verificationHints[0]"
+    }));
+}
+
+#[test]
+fn architecture_coverage_submit_repairs_schema_shape_before_assembly() {
+    let fixture = Fixture::new("architecture-coverage-contract-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["detailCoverage"][0]["artifactRefs"]["modules"] =
+        json!(["module.account-service", 42]);
+    candidate["content"]["handoff"]["readyForTaskPlan"] = json!("yes");
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    let issues = result["issues"].as_array().unwrap();
+    assert!(issues.iter().any(|issue| {
+        issue["code"] == "DETAIL_COVERAGE_INVALID"
+            && issue["fieldPath"] == "content.detailCoverage[0].artifactRefs.modules[1]"
+    }));
+    assert!(issues.iter().any(|issue| {
+        issue["code"] == "COVERAGE_HANDOFF_INVALID"
+            && issue["fieldPath"] == "content.handoff.readyForTaskPlan"
+    }));
 }
 
 #[test]
@@ -1649,6 +1708,14 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         "repair coverage template must preserve acceptance statements"
     );
     assert!(repair_coverage_template["acceptanceMatrix"][0]["coverage"].is_array());
+    assert_eq!(
+        repair_coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["kind"],
+        json!("manual")
+    );
+    assert!(
+        repair_coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["description"]
+            .is_string()
+    );
     let frontend_authority_ref = repair_root
         .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
         .and_then(Value::as_str)
