@@ -1354,12 +1354,36 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repair_request_ref.to_string(),
-        fields: vec!["outputContract.resultTemplate".to_string()],
+        fields: vec![
+            "outputContract.resultTemplate".to_string(),
+            "taskConceptGrounding.conceptRefs".to_string(),
+            "blockedOutput.blockedReasons".to_string(),
+        ],
     })
     .expect("read execution repair result template")
     .fields;
     assert!(
         repair_fields["outputContract.resultTemplate"].value["verificationResults"][0].is_object()
+    );
+    assert!(repair_fields["taskConceptGrounding.conceptRefs"]
+        .value
+        .is_array());
+    assert!(repair_fields["blockedOutput.blockedReasons"]
+        .value
+        .is_array());
+    write_task_result_candidate(&fixture, repair_request_ref);
+    let repaired_result = call_submit(
+        "loom.recordTaskResultFile",
+        repair_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        repaired_result["state"], "auto_runnable",
+        "{repaired_result:#}"
+    );
+    assert_ne!(
+        repaired_result["error"]["code"], "FIELD_NOT_ALLOWED",
+        "{repaired_result:#}"
     );
 }
 

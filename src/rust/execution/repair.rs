@@ -409,6 +409,11 @@ fn build_repair_execution_request(
             "groupId": task.group_id
         },
         "task": task,
+        "taskConceptGrounding": {
+            "conceptRefs": task.concept_refs,
+            "conceptResponsibilities": task.concept_responsibilities,
+            "conceptVerificationIntents": task.concept_verification_intents
+        },
         "repairContext": {
             "sourceTaskId": task.task_id,
             "repairOrigin": repair_origin,
@@ -472,6 +477,13 @@ fn build_repair_execution_request(
                 "If status is completed, evidence must show the repair was verified."
             ]
         },
+        "blockedOutput": {
+            "blockedReasons": [
+                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
+                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
+                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
+            ]
+        },
         "requestReadPlan": {
             "groups": [
                 {
@@ -499,6 +511,9 @@ fn build_repair_execution_request(
                         "task.writeBoundary.forbiddenPaths",
                         "task.writeBoundary.artifactRefs",
                         "task.verificationIntents",
+                        "taskConceptGrounding.conceptRefs",
+                        "taskConceptGrounding.conceptResponsibilities",
+                        "taskConceptGrounding.conceptVerificationIntents",
                         "task.frontendExperienceRequirement",
                         "task.runtimeDeliveryRequirement",
                         "repairContext.sourceTaskId",
@@ -538,6 +553,7 @@ fn build_repair_execution_request(
                         "outputContract.schemaShape.properties.conceptEvidence",
                         "outputContract.schemaShape.properties.blockedReasons",
                         "outputContract.resultRules",
+                        "blockedOutput.blockedReasons",
                         "executionRules.completionBarrier"
                     ]
                 }
