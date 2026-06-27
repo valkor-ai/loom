@@ -728,6 +728,75 @@ fn validate_coverage_section(
                 "acceptanceMatrix.acceptanceId must come from allowedRefs.acceptanceRefs.",
             ));
         }
+        if entry
+            .get("statement")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].statement"),
+                "acceptanceMatrix.statement is required and must preserve the acceptance statement.",
+            ));
+        }
+        if entry.get("artifactRefs").is_some() {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].artifactRefs"),
+                "acceptanceMatrix must use coverage[] entries, not artifactRefs.",
+            ));
+        }
+        let Some(coverage) = entry.get("coverage").and_then(Value::as_array) else {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].coverage"),
+                "acceptanceMatrix.coverage must be an array of artifact coverage entries.",
+            ));
+            continue;
+        };
+        for (coverage_index, coverage_entry) in coverage.iter().enumerate() {
+            if coverage_entry
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                issues.push(issue(
+                    "ACCEPTANCE_MATRIX_INVALID",
+                    &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].type"),
+                    "acceptanceMatrix.coverage[].type is required.",
+                ));
+            }
+            if !coverage_entry
+                .get("refs")
+                .map(Value::is_array)
+                .unwrap_or(false)
+            {
+                issues.push(issue(
+                    "ACCEPTANCE_MATRIX_INVALID",
+                    &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].refs"),
+                    "acceptanceMatrix.coverage[].refs must be an array.",
+                ));
+            }
+            if coverage_entry
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                issues.push(issue(
+                    "ACCEPTANCE_MATRIX_INVALID",
+                    &format!(
+                        "content.acceptanceMatrix[{index}].coverage[{coverage_index}].description"
+                    ),
+                    "acceptanceMatrix.coverage[].description is required.",
+                ));
+            }
+        }
     }
     issues
 }

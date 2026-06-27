@@ -1001,6 +1001,7 @@ fn materialize_architecture_repair_action(
         delivery_id,
         phase_id,
         &frontend_experience_source,
+        &context_projection,
     )?;
     let candidate_files = section_outputs
         .iter()
@@ -1342,6 +1343,7 @@ fn build_architecture_repair_section_outputs(
     delivery_id: &str,
     phase_id: &str,
     frontend_experience_source: &Value,
+    context_projection: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1363,7 +1365,8 @@ fn build_architecture_repair_section_outputs(
                     delivery_id,
                     phase_id,
                     *section,
-                    frontend_experience_source
+                    frontend_experience_source,
+                    context_projection
                 ),
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
@@ -1386,6 +1389,7 @@ fn architecture_repair_section_result_template(
     phase_id: &str,
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
+    context_projection: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -1396,7 +1400,8 @@ fn architecture_repair_section_result_template(
         "status": "ready",
         "content": architecture_repair_section_content_template(
             section,
-            frontend_experience_source
+            frontend_experience_source,
+            context_projection
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -1406,6 +1411,7 @@ fn architecture_repair_section_result_template(
 fn architecture_repair_section_content_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
+    context_projection: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -1535,52 +1541,77 @@ fn architecture_repair_section_content_template(
                 }
             }
         }),
-        ArchitectureSectionGroup::Coverage => json!({
-            "acceptanceMatrix": [{
-                "acceptanceId": "",
-                "priority": "must",
-                "statement": "",
-                "coverageStatus": "covered",
-                "reason": "",
-                "coverage": [{
-                    "type": "",
-                    "refs": [],
-                    "description": ""
-                }],
-                "verificationHints": [{
-                    "kind": "",
-                    "description": ""
-                }]
-            }],
-            "detailCoverage": [{
-                "detailId": "",
-                "coverageStatus": "covered",
-                "artifactRefs": {
-                    "modules": [],
-                    "entities": [],
-                    "fields": [],
-                    "constraints": [],
-                    "interfaces": [],
-                    "userFlows": [],
-                    "stateMachines": [],
-                    "frontendDataViews": [],
-                    "frontendActions": [],
-                    "frontendOperationPaths": [],
-                    "acceptanceMatrix": []
-                },
-                "reason": ""
-            }],
-            "risksAndDecisions": {
-                "decisions": [],
-                "risks": []
-            },
-            "handoff": {
-                "readyForTaskPlan": true,
-                "blockingReasons": [],
-                "nextNode": "task_plan"
-            }
-        }),
+        ArchitectureSectionGroup::Coverage => coverage_content_template(context_projection),
     }
+}
+
+fn coverage_content_template(context_projection: &Value) -> Value {
+    let acceptance_matrix = context_projection
+        .pointer("/requirementDetailTransfer/acceptanceDetails")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|acceptance| {
+                    json!({
+                        "acceptanceId": acceptance.get("id").cloned().unwrap_or(Value::Null),
+                        "priority": acceptance.get("priority").cloned().unwrap_or_else(|| json!("must")),
+                        "statement": acceptance.get("statement").cloned().unwrap_or(Value::Null),
+                        "coverageStatus": "covered",
+                        "reason": "",
+                        "coverage": [],
+                        "verificationHints": []
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let detail_coverage = context_projection
+        .pointer("/requirementDetailTransfer/requirementDetails/items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|detail| {
+                    json!({
+                        "detailId": detail.get("detailId").cloned().unwrap_or(Value::Null),
+                        "coverageStatus": "covered",
+                        "artifactRefs": detail_coverage_artifact_refs_template(),
+                        "reason": ""
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "acceptanceMatrix": acceptance_matrix,
+        "detailCoverage": detail_coverage,
+        "risksAndDecisions": {
+            "decisions": [],
+            "risks": []
+        },
+        "handoff": {
+            "readyForTaskPlan": true,
+            "blockingReasons": [],
+            "nextNode": "task_plan"
+        }
+    })
+}
+
+fn detail_coverage_artifact_refs_template() -> Value {
+    json!({
+        "modules": [],
+        "entities": [],
+        "fields": [],
+        "constraints": [],
+        "interfaces": [],
+        "userFlows": [],
+        "stateMachines": [],
+        "frontendDataViews": [],
+        "frontendActions": [],
+        "frontendOperationPaths": [],
+        "acceptanceMatrix": []
+    })
 }
 
 fn section_name(section: ArchitectureSectionGroup) -> &'static str {

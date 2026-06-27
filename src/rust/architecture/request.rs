@@ -132,6 +132,7 @@ fn materialize_request_inner(
         phase_id,
         has_previous_runtime_delivery,
         &frontend_experience_source,
+        &planning_contract,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
@@ -514,6 +515,7 @@ fn build_section_outputs(
     phase_id: &str,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
+    planning_contract: &PlanningGenerationContract,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
     SECTION_ORDER
         .iter()
@@ -534,6 +536,7 @@ fn build_section_outputs(
                     section,
                     has_previous_runtime_delivery,
                     frontend_experience_source,
+                    planning_contract,
                 ),
                 enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
                 generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
@@ -718,6 +721,7 @@ fn section_result_template(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
+    planning_contract: &PlanningGenerationContract,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -729,7 +733,8 @@ fn section_result_template(
         "content": section_content_template(
             section,
             has_previous_runtime_delivery,
-            frontend_experience_source
+            frontend_experience_source,
+            planning_contract
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -740,6 +745,7 @@ fn section_content_template(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
+    planning_contract: &PlanningGenerationContract,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -846,40 +852,53 @@ fn section_content_template(
         ArchitectureSectionGroup::RuntimeDelivery => {
             runtime_delivery_content_template(has_previous_runtime_delivery)
         }
-        ArchitectureSectionGroup::Coverage => json!({
-            "acceptanceMatrix": [{
-                "acceptanceId": "",
-                "priority": "must",
-                "statement": "",
+        ArchitectureSectionGroup::Coverage => coverage_content_template(planning_contract),
+    }
+}
+
+fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> Value {
+    let acceptance_matrix = planning_contract
+        .phase_scope
+        .acceptance_candidates
+        .iter()
+        .map(|acceptance| {
+            json!({
+                "acceptanceId": acceptance.id,
+                "priority": acceptance.priority,
+                "statement": acceptance.statement,
                 "coverageStatus": "covered",
                 "reason": "",
-                "coverage": [{
-                    "type": "",
-                    "refs": [],
-                    "description": ""
-                }],
-                "verificationHints": [{
-                    "kind": "",
-                    "description": ""
-                }]
-            }],
-            "detailCoverage": [{
-                "detailId": "",
+                "coverage": [],
+                "verificationHints": []
+            })
+        })
+        .collect::<Vec<_>>();
+    let detail_coverage = planning_contract
+        .requirement_details
+        .items
+        .iter()
+        .map(|detail| {
+            json!({
+                "detailId": detail.detail_id,
                 "coverageStatus": "covered",
                 "artifactRefs": detail_coverage_artifact_refs_template(),
                 "reason": ""
-            }],
-            "risksAndDecisions": {
-                "decisions": [],
-                "risks": []
-            },
-            "handoff": {
-                "readyForTaskPlan": true,
-                "blockingReasons": [],
-                "nextNode": "task_plan"
-            }
-        }),
-    }
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "acceptanceMatrix": acceptance_matrix,
+        "detailCoverage": detail_coverage,
+        "risksAndDecisions": {
+            "decisions": [],
+            "risks": []
+        },
+        "handoff": {
+            "readyForTaskPlan": true,
+            "blockingReasons": [],
+            "nextNode": "task_plan"
+        }
+    })
 }
 
 fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Value {

@@ -667,6 +667,28 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         .find(|section| section["section"].as_str() == Some("coverage"))
         .expect("coverage section")["resultTemplate"]["content"]
         .clone();
+    assert_eq!(
+        coverage_template["acceptanceMatrix"][0]["acceptanceId"],
+        json!("acc_1")
+    );
+    assert_eq!(
+        coverage_template["acceptanceMatrix"][0]["statement"],
+        json!("工作人员可以完成证券账户开户并得到成功反馈。")
+    );
+    assert!(
+        coverage_template["acceptanceMatrix"][0]
+            .get("artifactRefs")
+            .is_none(),
+        "acceptanceMatrix must not template artifactRefs"
+    );
+    assert!(coverage_template["acceptanceMatrix"][0]["coverage"].is_array());
+    assert!(
+        coverage_template["detailCoverage"][0]["detailId"]
+            .as_str()
+            .map(|value| !value.is_empty())
+            .unwrap_or(false),
+        "detailCoverage rows must be pre-keyed by detailId"
+    );
     let artifact_refs = &coverage_template["detailCoverage"][0]["artifactRefs"];
     for key in [
         "modules",
@@ -740,6 +762,32 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     assert_eq!(
         continued["next"]["writeTargets"][0]["targetId"],
         "domain_contract"
+    );
+}
+
+#[test]
+fn architecture_coverage_submit_repairs_missing_acceptance_statement() {
+    let fixture = Fixture::new("architecture-coverage-missing-statement");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["acceptanceMatrix"][0]
+        .as_object_mut()
+        .expect("acceptance row")
+        .remove("statement");
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(result["issues"][0]["code"], "ACCEPTANCE_MATRIX_INVALID");
+    assert_eq!(
+        result["issues"][0]["fieldPath"],
+        "content.acceptanceMatrix[0].statement"
     );
 }
 
@@ -1582,6 +1630,25 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             .get("frontendExperienceSource.currentFrontendExperienceRef"))
         .is_some());
     let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
+    let repair_coverage_template = repair_root["sectionOutputs"]
+        .as_array()
+        .expect("repair section outputs")
+        .iter()
+        .find(|section| section["section"].as_str() == Some("coverage"))
+        .expect("repair coverage section")["resultTemplate"]["content"]
+        .clone();
+    assert_eq!(
+        repair_coverage_template["acceptanceMatrix"][0]["acceptanceId"],
+        json!("acc_1")
+    );
+    assert!(
+        repair_coverage_template["acceptanceMatrix"][0]["statement"]
+            .as_str()
+            .map(|value| !value.is_empty())
+            .unwrap_or(false),
+        "repair coverage template must preserve acceptance statements"
+    );
+    assert!(repair_coverage_template["acceptanceMatrix"][0]["coverage"].is_array());
     let frontend_authority_ref = repair_root
         .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
         .and_then(Value::as_str)
