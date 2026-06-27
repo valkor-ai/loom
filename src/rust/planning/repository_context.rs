@@ -192,9 +192,15 @@ fn build_request_root(
             "projectKind": ["greenfield", "existing_project", "unknown"],
             "repositoryMode": ["empty_project", "existing_project", "unknown"],
             "phaseDevelopmentMode": ["initial_delivery", "incremental_delivery", "unknown"],
+            "repositoryShape": ["single_package", "monorepo", "multi_application", "unknown"],
+            "capabilityStatus": ["implemented", "partial", "missing", "unknown"],
             "relevantSurfaceKind": ["entrypoint", "module", "service", "controller", "data_access", "ui", "config", "test", "script", "documentation", "unknown"],
+            "surfaceRelevance": ["implemented_capability", "architecture_boundary", "extension_point", "validation_surface", "delivery_context", "unrelated"],
+            "suggestedUse": ["inspect_only", "inspect_or_extend", "reuse_existing_pattern", "avoid_modifying"],
             "recommendedReadReason": ["implemented_capability", "dependency_context", "integration_boundary", "test_or_validation", "risk_review", "extension_point"],
-            "readPriority": ["high", "medium", "low"]
+            "readPriority": ["high", "medium", "low"],
+            "contextCoverage": ["focused", "partial", "broad", "insufficient"],
+            "confidence": ["low", "medium", "high", "unknown"]
         },
         "outputContract": {
             "artifactKind": ArtifactKind::RepositoryContextCandidate,
@@ -206,6 +212,10 @@ fn build_request_root(
                 "required": true,
                 "description": "Write the RepositoryContext candidate JSON."
             }],
+            "bindingRules": [
+                "source.requestRef must equal the current requestRef passed to loom.repositoryContextAcceptFile.",
+                "Do not write source.requestId; requestRef is the required field."
+            ],
             "schemaShape": schema_shape,
             "schemaProjection": {
                 "requiredTopLevelFields": [
@@ -217,7 +227,67 @@ fn build_request_root(
                     "structureSignals",
                     "relevantSurfaces",
                     "contextQuality"
-                ]
+                ],
+                "enumFields": {
+                    "requestLens.projectKind": "enumRefs.projectKind",
+                    "requestLens.baselineProjectKind": "enumRefs.projectKind",
+                    "requestLens.repositoryMode": "enumRefs.repositoryMode",
+                    "requestLens.phaseDevelopmentMode": "enumRefs.phaseDevelopmentMode",
+                    "repoOverview.repositoryShape": "enumRefs.repositoryShape",
+                    "existingCapabilities[].status": "enumRefs.capabilityStatus",
+                    "existingCapabilities[].confidence": "enumRefs.confidence",
+                    "relevantSurfaces[].kind": "enumRefs.relevantSurfaceKind",
+                    "relevantSurfaces[].relevance": "enumRefs.surfaceRelevance",
+                    "relevantSurfaces[].suggestedUse": "enumRefs.suggestedUse",
+                    "recommendedReadRefs[].reason": "enumRefs.recommendedReadReason",
+                    "recommendedReadRefs[].priority": "enumRefs.readPriority",
+                    "contextQuality.coverage": "enumRefs.contextCoverage",
+                    "contextQuality.confidence": "enumRefs.confidence"
+                }
+            },
+            "resultTemplate": {
+                "status": "ready",
+                "source": {
+                    "requestRef": "{current requestRef}",
+                    "brainstormContractRef": brainstorm_contract_ref,
+                    "technicalBaselineRef": format!(".loom/deliveries/{}/contracts/technical-baseline.json", delivery_id)
+                },
+                "requestLens": {
+                    "projectKind": baseline.project_kind,
+                    "baselineProjectKind": baseline.project_kind,
+                    "repositoryMode": "existing_project",
+                    "phaseDevelopmentMode": "initial_delivery",
+                    "scanPurpose": "phase_start_repository_snapshot",
+                    "primaryConsumer": "phase_brainstorm",
+                    "laterConsumers": ["PGC", "AAC", "TaskPlan"]
+                },
+                "repoOverview": {
+                    "summary": "",
+                    "repositoryShape": "unknown",
+                    "primaryApplications": []
+                },
+                "technologySignals": {
+                    "primaryLanguages": [],
+                    "frameworks": [],
+                    "packageManagers": [],
+                    "buildCommands": [],
+                    "testCommands": [],
+                    "notes": []
+                },
+                "structureSignals": {
+                    "rootPaths": [],
+                    "entryPoints": [],
+                    "configurationFiles": []
+                },
+                "existingCapabilities": [],
+                "relevantSurfaces": [],
+                "recommendedReadRefs": [],
+                "contextQuality": {
+                    "coverage": "focused",
+                    "confidence": "medium",
+                    "warnings": []
+                },
+                "warnings": []
             }
         },
         "requestReadPlan": {
@@ -248,9 +318,15 @@ fn build_request_root(
                         "enumRefs.projectKind",
                         "enumRefs.repositoryMode",
                         "enumRefs.phaseDevelopmentMode",
+                        "enumRefs.repositoryShape",
+                        "enumRefs.capabilityStatus",
                         "enumRefs.relevantSurfaceKind",
+                        "enumRefs.surfaceRelevance",
+                        "enumRefs.suggestedUse",
                         "enumRefs.recommendedReadReason",
-                        "enumRefs.readPriority"
+                        "enumRefs.readPriority",
+                        "enumRefs.contextCoverage",
+                        "enumRefs.confidence"
                     ]
                 },
                 {
@@ -261,7 +337,9 @@ fn build_request_root(
                     "fields": [
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
-                        "outputContract.schemaProjection"
+                        "outputContract.bindingRules",
+                        "outputContract.schemaProjection",
+                        "outputContract.resultTemplate"
                     ]
                 }
             ]

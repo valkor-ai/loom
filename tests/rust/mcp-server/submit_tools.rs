@@ -351,6 +351,74 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         result["next"]["submitTool"],
         "loom.repositoryContextAcceptFile"
     );
+    let repository_context_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repository context requestRef");
+    let generation_rules = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repository_context_request_ref.to_string(),
+        group_id: "repository_context_generation_rules".to_string(),
+    })
+    .expect("read repository context generation rules");
+    for field in [
+        "enumRefs.repositoryShape",
+        "enumRefs.capabilityStatus",
+        "enumRefs.surfaceRelevance",
+        "enumRefs.suggestedUse",
+        "enumRefs.contextCoverage",
+        "enumRefs.confidence",
+    ] {
+        assert!(
+            generation_rules.fields.get(field).is_some(),
+            "missing RepositoryContext enum field {field}"
+        );
+    }
+    assert_eq!(
+        generation_rules.fields["enumRefs.contextCoverage"].value,
+        json!(["focused", "partial", "broad", "insufficient"])
+    );
+    assert_eq!(
+        generation_rules.fields["enumRefs.surfaceRelevance"].value,
+        json!([
+            "implemented_capability",
+            "architecture_boundary",
+            "extension_point",
+            "validation_surface",
+            "delivery_context",
+            "unrelated"
+        ])
+    );
+    let write_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repository_context_request_ref.to_string(),
+        group_id: "repository_context_write_contract".to_string(),
+    })
+    .expect("read repository context write contract");
+    assert_eq!(
+        write_contract.fields["outputContract.resultTemplate"].value["contextQuality"]["coverage"],
+        "focused"
+    );
+    assert!(
+        write_contract.fields["outputContract.bindingRules"].value[0]
+            .as_str()
+            .expect("binding rule")
+            .contains("source.requestRef")
+    );
+    assert!(
+        write_contract.fields["outputContract.resultTemplate"].value["source"]
+            .get("requestRef")
+            .is_some()
+    );
+    assert!(
+        write_contract.fields["outputContract.resultTemplate"].value["source"]
+            .get("requestId")
+            .is_none()
+    );
+    assert_eq!(
+        write_contract.fields["outputContract.schemaProjection"].value["enumFields"]
+            ["contextQuality.coverage"],
+        "enumRefs.contextCoverage"
+    );
 }
 
 #[test]
