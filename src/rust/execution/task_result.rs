@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
     TaskDefinition, TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult,
@@ -136,25 +136,37 @@ where
             )
         }
     };
+    let allowed_read_fields = authorized
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut fields_to_read = vec![
+        "source.taskPlanId".to_string(),
+        "source.taskId".to_string(),
+        "source.taskPlanRunId".to_string(),
+        "task.taskId".to_string(),
+        "task.taskKind".to_string(),
+        "task.acceptanceRefs".to_string(),
+        "task.requirementDetailRefs".to_string(),
+        "task.verificationIntents".to_string(),
+        "task.frontendExperienceRequirement".to_string(),
+        "task.runtimeDeliveryRequirement".to_string(),
+        "outputContract.resultFile".to_string(),
+        "outputContract.requiredTopLevelFields".to_string(),
+    ];
+    for optional_field in [
+        "taskConceptGrounding.conceptRefs",
+        "blockedOutput.blockedReasons",
+    ] {
+        if allowed_read_fields.contains(optional_field) {
+            fields_to_read.push(optional_field.to_string());
+        }
+    }
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
-        fields: vec![
-            "source.taskPlanId".to_string(),
-            "source.taskId".to_string(),
-            "source.taskPlanRunId".to_string(),
-            "task.taskId".to_string(),
-            "task.taskKind".to_string(),
-            "task.acceptanceRefs".to_string(),
-            "task.requirementDetailRefs".to_string(),
-            "task.verificationIntents".to_string(),
-            "taskConceptGrounding.conceptRefs".to_string(),
-            "task.frontendExperienceRequirement".to_string(),
-            "task.runtimeDeliveryRequirement".to_string(),
-            "outputContract.resultFile".to_string(),
-            "outputContract.requiredTopLevelFields".to_string(),
-            "blockedOutput.blockedReasons".to_string(),
-        ],
+        fields: fields_to_read,
     })?
     .fields;
     let task_plan_id = string_field(&fields, "source.taskPlanId")?;
@@ -187,7 +199,7 @@ where
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let blocked_output = json!({
-        "blockedReasons": value_field(&fields, "blockedOutput.blockedReasons")
+        "blockedReasons": array_field(&fields, "blockedOutput.blockedReasons")
     });
     let issues = validate_result(
         &raw_result,

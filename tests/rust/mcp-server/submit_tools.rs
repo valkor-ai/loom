@@ -1371,6 +1371,7 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
     assert!(repair_fields["blockedOutput.blockedReasons"]
         .value
         .is_array());
+    remove_task_result_optional_validation_fields(&fixture, repair_request_ref);
     write_task_result_candidate(&fixture, repair_request_ref);
     let repaired_result = call_submit(
         "loom.recordTaskResultFile",
@@ -3305,6 +3306,34 @@ fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
     let request_path = std::path::Path::new(project_root).join(index.request_file);
     serde_json::from_str(&std::fs::read_to_string(request_path).expect("read request file"))
         .expect("parse request file")
+}
+
+fn remove_task_result_optional_validation_fields(fixture: &Fixture, request_ref: &str) {
+    let request_id = request_ref
+        .split("/requests/")
+        .nth(1)
+        .expect("request id in ref");
+    let index = state::request_index::get_request_index_entry(fixture.root_str(), request_id)
+        .expect("request index entry");
+    let request_path = fixture.root.join(index.request_file);
+    let mut root: Value =
+        serde_json::from_str(&std::fs::read_to_string(&request_path).expect("read request file"))
+            .expect("parse request file");
+    let groups = root["requestReadPlan"]["groups"]
+        .as_array_mut()
+        .expect("read plan groups");
+    for group in groups {
+        let Some(fields) = group["fields"].as_array_mut() else {
+            continue;
+        };
+        fields.retain(|field| {
+            !matches!(
+                field.as_str(),
+                Some("taskConceptGrounding.conceptRefs" | "blockedOutput.blockedReasons")
+            )
+        });
+    }
+    write_json_atomic(&request_path, &root).expect("write legacy-shaped request");
 }
 
 fn assert_no_root_submit_metadata(root: &Value) {
