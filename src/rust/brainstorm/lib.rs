@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
     paths::{from_project_relative, DeliveryPhaseLocator},
-    store::{ensure_dir, StateError, StateResult},
+    store::{ensure_dir, read_json_value, StateError, StateResult},
 };
 
 pub use accept::accept_brainstorm_file;
@@ -302,11 +302,18 @@ pub fn materialize_phase_brainstorm_from_preview(
         context_refs,
     );
     attach_next_phase_seed(&mut request_root, &source_phase_id, &handoff);
+    let repository_projection = match repository_context_ref {
+        Some(repository_context_ref) => Some(repository_continuation_projection(
+            root,
+            repository_context_ref,
+        )?),
+        None => None,
+    };
     attach_phase_continuation_context(
         &mut request_root,
         &source_phase_id,
         &handoff,
-        repository_context_ref.is_some(),
+        repository_projection,
     );
     let stored = state::write_native_request(
         project_root,
@@ -453,18 +460,78 @@ fn attach_next_phase_seed(root: &mut Value, source_phase_id: &str, handoff: &Nex
                     "required": true,
                     "purpose": "Read the next phase seed before composing phase continuation options.",
                     "whenToRead": "Read after the conversation protocol and compact requirement context, before querying knowledge or presenting phase_scope options.",
-                    "fields": ["nextPhaseSeed"]
+                    "fields": [
+                        "nextPhaseSeed.fromPhaseId",
+                        "nextPhaseSeed.phaseId",
+                        "nextPhaseSeed.title",
+                        "nextPhaseSeed.goal",
+                        "nextPhaseSeed.scopePreview",
+                        "nextPhaseSeed.reason",
+                        "nextPhaseSeed.usageRule"
+                    ]
                 }),
             );
         }
     }
 }
 
+fn repository_continuation_projection(
+    root: &Path,
+    repository_context_ref: &str,
+) -> StateResult<Value> {
+    let repository_context =
+        read_json_value(&from_project_relative(root, repository_context_ref)?)?;
+    let capability_summaries = repository_context
+        .get("existingCapabilities")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name").and_then(Value::as_str)?;
+                    let status = item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let summary = item.get("summary").and_then(Value::as_str).unwrap_or("");
+                    Some(format!("{name} [{status}]: {summary}"))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let surface_summaries = repository_context
+        .get("relevantSurfaces")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let path = item.get("path").and_then(Value::as_str)?;
+                    let kind = item
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or("surface");
+                    let summary = item.get("summary").and_then(Value::as_str).unwrap_or("");
+                    Some(format!("{path} [{kind}]: {summary}"))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "repoSummary": repository_context
+            .pointer("/repoOverview/summary")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        "capabilitySummaries": capability_summaries,
+        "surfaceSummaries": surface_summaries
+    }))
+}
+
 fn attach_phase_continuation_context(
     root: &mut Value,
     source_phase_id: &str,
     handoff: &NextPhaseHandoff,
-    has_repository_context: bool,
+    repository_projection: Option<Value>,
 ) {
     root["phaseContinuationContext"] = json!({
         "activePhase": {
@@ -475,11 +542,17 @@ fn attach_phase_continuation_context(
         "previousPhaseId": source_phase_id,
         "rules": [
             "Use nextPhaseSeed as the non-binding starting point for this phase clarification.",
-            "Use latestRepositoryContext as current code facts so implemented prior-phase capabilities are not re-asked as new scope.",
-            "Use deliveryContext as the accepted prior Brainstorm contract for source, deferred, and boundary facts.",
+            "Use phaseContinuationContext.repository as current code facts so implemented prior-phase capabilities are not re-asked as new scope.",
+            "Use the field-level deliveryContext and latestConfirmedRequirementDecision reads as accepted prior Brainstorm facts.",
             "Confirm only the current phase; do not regenerate a complete future roadmap."
         ]
     });
+    if let Some(repository_projection) = repository_projection {
+        root["phaseContinuationContext"]["repository"] = repository_projection;
+    }
+    let has_repository_projection = root
+        .pointer("/phaseContinuationContext/repository")
+        .is_some();
     if let Some(groups) = root
         .pointer_mut("/requestReadPlan/groups")
         .and_then(Value::as_array_mut)
@@ -488,25 +561,37 @@ fn attach_phase_continuation_context(
             group.get("groupId").and_then(Value::as_str) == Some("phase_continuation_context")
         }) {
             let mut fields = vec![
-                "phaseContinuationContext.activePhase",
+                "phaseContinuationContext.activePhase.phaseId",
+                "phaseContinuationContext.activePhase.title",
+                "phaseContinuationContext.activePhase.goal",
                 "phaseContinuationContext.previousPhaseId",
                 "phaseContinuationContext.rules",
-                "deliveryContext.phasePlan.current",
-                "deliveryContext.scope.deferred",
-                "deliveryContext.phasePlan.nextPhasePreview",
+                "deliveryContext.phasePlan.current.phaseId",
+                "deliveryContext.phasePlan.current.title",
+                "deliveryContext.phasePlan.current.goal",
+                "deliveryContext.phasePlan.current.status",
+                "deliveryContext.phasePlan.current.scopeRefs",
+                "deliveryContext.phasePlan.current.acceptanceRefs",
+                "latestConfirmedRequirementDecision.summary.title",
+                "latestConfirmedRequirementDecision.summary.oneLine",
+                "latestConfirmedRequirementDecision.summary.businessGoal",
+                "latestConfirmedRequirementDecision.phasePlan.current.phaseId",
+                "latestConfirmedRequirementDecision.phasePlan.current.title",
+                "latestConfirmedRequirementDecision.phasePlan.current.goal",
+                "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.kind",
+                "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.suggestedPhaseId",
+                "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.title",
+                "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.goal",
+                "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.scopePreview",
+                "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.reason",
             ];
-            if has_repository_context {
+            if has_repository_projection {
                 fields.extend([
-                    "latestRepositoryContext.repoOverview.summary",
-                    "latestRepositoryContext.existingCapabilities",
-                    "latestRepositoryContext.relevantSurfaces",
+                    "phaseContinuationContext.repository.repoSummary",
+                    "phaseContinuationContext.repository.capabilitySummaries",
+                    "phaseContinuationContext.repository.surfaceSummaries",
                 ]);
             }
-            fields.extend([
-                "latestConfirmedRequirementDecision.summary",
-                "latestConfirmedRequirementDecision.phasePlan",
-                "confirmedRequirementDecisionsIndex.decisions",
-            ]);
             let insert_at = groups.len().min(3);
             groups.insert(
                 insert_at,

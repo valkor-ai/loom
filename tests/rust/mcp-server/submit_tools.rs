@@ -1668,17 +1668,70 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         phase_2_request["nextPhaseSeed"]["scopePreview"],
         json!(["资金账户开户", "密码管理", "存款与取款", "账户关联"])
     );
-    assert!(phase_2_request["requestReadPlan"]["groups"]
+    let phase_2_read_groups = phase_2_request["requestReadPlan"]["groups"]
         .as_array()
-        .expect("read groups")
+        .expect("read groups");
+    assert!(
+        phase_2_read_groups
+            .iter()
+            .any(|group| group["groupId"] == "knowledge_context_plan"),
+        "phase continuation Brainstorm request must keep request-scoped knowledge reads"
+    );
+    let next_phase_seed_group = phase_2_read_groups
         .iter()
-        .any(|group| group["groupId"] == "next_phase_seed"
-            && group["fields"] == json!(["nextPhaseSeed"])));
-    assert!(phase_2_request["requestReadPlan"]["groups"]
+        .find(|group| group["groupId"] == "next_phase_seed")
+        .expect("next phase seed group");
+    assert_eq!(
+        next_phase_seed_group["fields"],
+        json!([
+            "nextPhaseSeed.fromPhaseId",
+            "nextPhaseSeed.phaseId",
+            "nextPhaseSeed.title",
+            "nextPhaseSeed.goal",
+            "nextPhaseSeed.scopePreview",
+            "nextPhaseSeed.reason",
+            "nextPhaseSeed.usageRule"
+        ])
+    );
+    let phase_continuation_group = phase_2_read_groups
+        .iter()
+        .find(|group| group["groupId"] == "phase_continuation_context")
+        .expect("phase continuation context group");
+    let phase_continuation_fields = phase_continuation_group["fields"]
         .as_array()
-        .expect("read groups")
-        .iter()
-        .any(|group| group["groupId"] == "phase_continuation_context"));
+        .expect("phase continuation fields");
+    for broad_field in [
+        "phaseContinuationContext.activePhase",
+        "deliveryContext.phasePlan.current",
+        "deliveryContext.scope.deferred",
+        "deliveryContext.phasePlan.nextPhasePreview",
+        "latestRepositoryContext.existingCapabilities",
+        "latestRepositoryContext.relevantSurfaces",
+        "confirmedRequirementDecisionsIndex.decisions",
+    ] {
+        assert!(
+            !phase_continuation_fields
+                .iter()
+                .any(|field| field.as_str() == Some(broad_field)),
+            "broad read field leaked into phase continuation group: {broad_field}"
+        );
+    }
+    for required_field in [
+        "phaseContinuationContext.activePhase.phaseId",
+        "phaseContinuationContext.activePhase.title",
+        "phaseContinuationContext.activePhase.goal",
+        "phaseContinuationContext.repository.repoSummary",
+        "phaseContinuationContext.repository.capabilitySummaries",
+        "phaseContinuationContext.repository.surfaceSummaries",
+        "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.title",
+    ] {
+        assert!(
+            phase_continuation_fields
+                .iter()
+                .any(|field| field.as_str() == Some(required_field)),
+            "missing field-level phase continuation read: {required_field}"
+        );
+    }
 
     let phase_2_candidate_request_ref =
         confirm_phase2_brainstorm_to_candidate_write(&fixture, phase_2_request_ref);
