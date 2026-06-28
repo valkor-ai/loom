@@ -730,7 +730,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
         .unwrap_or_default()
         .contains("Do not ask the user to reconfirm"));
 
-    structured(
+    let dependency_empty = structured(
         server
             .invoke_tool(
                 "loom.knowledgeBrainstormContext",
@@ -746,7 +746,8 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("dependency order knowledge context"),
     );
-    structured(
+    assert_eq!(dependency_empty["details"]["status"], "empty");
+    let closure_a_empty = structured(
         server
             .invoke_tool(
                 "loom.knowledgeBrainstormContext",
@@ -763,6 +764,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("single capability closure knowledge context"),
     );
+    assert_eq!(closure_a_empty["details"]["status"], "empty");
     let still_missing = structured(
         server
             .invoke_tool(
@@ -793,7 +795,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
         .unwrap_or_default()
         .contains("distinct queryId"));
 
-    structured(
+    let closure_b_empty = structured(
         server
             .invoke_tool(
                 "loom.knowledgeBrainstormContext",
@@ -810,6 +812,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("second capability closure knowledge context"),
     );
+    assert_eq!(closure_b_empty["details"]["status"], "empty");
     let confirmed = structured(
         server
             .invoke_tool(
