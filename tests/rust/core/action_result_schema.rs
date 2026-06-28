@@ -37,9 +37,20 @@ fn action_result_states_have_expected_next_boundaries() {
         match value["state"].as_str().expect("state") {
             "auto_runnable" => {
                 assert_eq!(value["stopAllowed"], false);
+                assert_eq!(value["continuationPolicy"]["mustContinue"], true);
+                assert_eq!(value["continuationPolicy"]["progressReportAllowed"], false);
+                assert!(value["continuationPolicy"]["completionBarrier"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("not complete")));
+                assert!(value["continuationPolicy"]["stopConditions"]
+                    .as_array()
+                    .expect("stopConditions")
+                    .contains(&Value::String("user_gate".to_string())));
                 assert!(
                     value["agentInstruction"].as_str().is_some_and(|text| {
-                        text.contains("Continue immediately") && text.contains("submit")
+                        text.contains("Do not report progress now")
+                            && text.contains("Continue immediately")
+                            && text.contains("submit")
                     }),
                     "auto_runnable must include agentInstruction: {value}"
                 );
@@ -126,9 +137,16 @@ fn execute_task_auto_runnable_instruction_forbids_progress_only_stop() {
 
     assert_eq!(value["state"], "auto_runnable");
     assert_eq!(value["stopAllowed"], false);
+    assert_eq!(value["continuationPolicy"]["mustContinue"], true);
+    assert_eq!(value["continuationPolicy"]["progressReportAllowed"], false);
+    assert!(value["continuationPolicy"]["completionBarrier"]
+        .as_str()
+        .expect("completionBarrier")
+        .contains("resultFile is written"));
     let instruction = value["agentInstruction"]
         .as_str()
         .expect("agentInstruction");
+    assert!(instruction.contains("Do not report progress now"));
     assert!(instruction.contains("execute only this task"));
     assert!(instruction.contains("write resultFile"));
     assert!(instruction.contains("submit with submitTool"));

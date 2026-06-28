@@ -56,6 +56,7 @@ impl LoomMcpActionResult {
 pub struct LoomMcpAutoRunnableResult {
     pub project_root: String,
     pub stop_allowed: bool,
+    pub continuation_policy: LoomMcpContinuationPolicy,
     pub agent_instruction: String,
     pub next: LoomMcpNextAction,
 }
@@ -65,26 +66,66 @@ impl LoomMcpAutoRunnableResult {
         Self {
             project_root: project_root.into(),
             stop_allowed: false,
+            continuation_policy: auto_runnable_continuation_policy(&next),
             agent_instruction: auto_runnable_agent_instruction(&next).to_string(),
             next,
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LoomMcpContinuationPolicy {
+    pub must_continue: bool,
+    pub progress_report_allowed: bool,
+    pub completion_barrier: String,
+    pub stop_conditions: Vec<String>,
+}
+
 fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
     match next {
         LoomMcpNextAction::WriteArtifact(_) => {
-            "Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress."
+            "Do not report progress now. Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress."
         }
         LoomMcpNextAction::ExecuteTask(_) => {
-            "Continue immediately: inspect requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress."
+            "Do not report progress now. Continue immediately: inspect requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress."
         }
         LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
-            "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated."
+            "Do not report progress now. Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated."
         }
         LoomMcpNextAction::DeployRepairAssets(_) => {
-            "Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress."
+            "Do not report progress now. Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress."
         }
+    }
+}
+
+fn auto_runnable_continuation_policy(next: &LoomMcpNextAction) -> LoomMcpContinuationPolicy {
+    let completion_barrier = match next {
+        LoomMcpNextAction::WriteArtifact(_) => {
+            "The artifact step is not complete until the returned writeTargets are written, submitTool succeeds, and the returned state is followed."
+        }
+        LoomMcpNextAction::ExecuteTask(_) => {
+            "The execution step is not complete until source work is done, resultFile is written, submitTool succeeds, and the returned state is followed."
+        }
+        LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
+            "The semantic build step is not complete until the returned semantic result is submitted and the semantic chain reaches published, blocked, failed, or user_gate."
+        }
+        LoomMcpNextAction::DeployRepairAssets(_) => {
+            "The deploy repair step is not complete until the returned deployment assets are edited and the returned deploy tool is retried."
+        }
+    };
+    LoomMcpContinuationPolicy {
+        must_continue: true,
+        progress_report_allowed: false,
+        completion_barrier: completion_barrier.to_string(),
+        stop_conditions: vec![
+            "user_gate".to_string(),
+            "done".to_string(),
+            "blocked".to_string(),
+            "failed".to_string(),
+            "repairable_error".to_string(),
+            "active_operation".to_string(),
+        ],
     }
 }
 

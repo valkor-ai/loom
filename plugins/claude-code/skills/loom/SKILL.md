@@ -17,7 +17,7 @@ Do not replace Loom with Claude Plan Mode. Do not inspect project `.loom` state 
 - `repairable_error`: repair only the returned target and resubmit with the returned tool.
 - `done`, `blocked`, `failed`: report the returned status and stop.
 
-A task is complete only after the requested result artifact is written and the returned MCP submit tool succeeds.
+Do not stop at a recap while `state=auto_runnable`. If `continuationPolicy.mustContinue=true` or `continuationPolicy.progressReportAllowed=false`, do not emit a progress summary; keep following the returned action until one of the returned stop conditions is reached. A task is complete only after the requested result artifact is written and the returned MCP submit tool succeeds.
 
 ## Request Reading
 

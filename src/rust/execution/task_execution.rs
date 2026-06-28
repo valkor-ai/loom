@@ -74,6 +74,11 @@ fn continue_execution_inner(
                 "TaskPlanRun references missing task {task_id}"
             ))
         })?;
+    if let Some(existing) =
+        existing_execution_next_if_current(project_root, delivery_id, phase_id, &task)?
+    {
+        return Ok(existing);
+    }
 
     let now = state::store::now_string();
     if let Some(state) = run
@@ -154,6 +159,53 @@ fn continue_execution_inner(
         &run,
     )?;
     execute_task_next_from_request(project_root, &stored.request_ref, &task, result_file)
+}
+
+fn existing_execution_next_if_current(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    task: &TaskDefinition,
+) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
+    let store = FileTransitionStore;
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let Some(phase) = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+    else {
+        return Ok(None);
+    };
+    let Some(action) = phase.next_action.as_ref() else {
+        return Ok(None);
+    };
+    if action.kind != RouteActionKind::ContinueExecution
+        || action.source != "task_execution_request"
+    {
+        return Ok(None);
+    }
+    if action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("taskId"))
+        .and_then(Value::as_str)
+        != Some(task.task_id.as_str())
+    {
+        return Ok(None);
+    }
+    let Some(request_ref) = phase
+        .latest_refs
+        .get("taskExecutionRequestRef")
+        .or(action.request_ref.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(result_file) = phase.latest_refs.get("taskExecutionResultFile") else {
+        return Ok(None);
+    };
+    execute_task_next_from_request(project_root, request_ref, task, result_file.clone()).map(Some)
 }
 
 fn build_execution_request(

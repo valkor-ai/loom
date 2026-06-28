@@ -30,7 +30,7 @@ Follow `LoomMcpActionResult.state`.
 - `repairable_error`: edit only the returned target file or target ids, then call the returned resubmit tool.
 - `done`, `blocked`, `failed`: stop and report the returned user-facing status.
 
-Do not stop at a recap while `state=auto_runnable`. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
+Do not stop at a recap while `state=auto_runnable`. If `continuationPolicy.mustContinue=true` or `continuationPolicy.progressReportAllowed=false`, do not emit a progress summary; keep following the returned action until one of the returned stop conditions is reached. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
 
 ## Request Reading
 
