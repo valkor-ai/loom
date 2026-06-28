@@ -18,11 +18,19 @@ fn main() {
                 SetupError::DoctorFailed(_) => "doctor_failed",
                 _ => "failed",
             };
+            let details = match &error {
+                SetupError::LegacyCleanupBlocked(blocked) => {
+                    serde_json::json!({ "blocked": blocked })
+                }
+                SetupError::DoctorFailed(checks) => serde_json::json!({ "checks": checks }),
+                _ => serde_json::json!({}),
+            };
             eprintln!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "status": status,
-                    "error": error.to_string()
+                    "error": error.to_string(),
+                    "details": details
                 }))
                 .expect("error serializes")
             );

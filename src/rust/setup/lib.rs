@@ -49,6 +49,12 @@ const LEGACY_MARKERS: &[&str] = &[
     "CLI envelope",
     "commandInvocation",
     "submitCommand",
+    "Route Loom delivery, knowledge, and deploy commands through MCP",
+    "Route Loom deployment commands through MCP",
+    "export const LoomPlugin = async ({ client, directory })",
+    "Loom MCP-only OpenCode",
+    "Loom request artifacts remain the source of truth",
+    "Use this reference when implementing or repairing loom deploy",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1032,15 +1038,16 @@ fn install_opencode_plugin(env: &SetupEnvironment, template: &Path) -> Result<()
         source,
     })?;
     for name in ["loom.md", "loom-deploy.md"] {
+        let command_target = command_root.join(name);
         copy_path(
             &template.join(".opencode/commands").join(name),
-            &command_root.join(name),
+            &command_target,
         )?;
+        write_file_marker(&command_target, "Loom MCP-only OpenCode command")?;
     }
-    copy_path(
-        &template.join(".opencode/plugins/loom.js"),
-        &plugin_root.join("loom.js"),
-    )?;
+    let plugin_target = plugin_root.join("loom.js");
+    copy_path(&template.join(".opencode/plugins/loom.js"), &plugin_target)?;
+    write_js_file_marker(&plugin_target, "Loom MCP-only OpenCode plugin")?;
     install_standalone_references(
         env,
         SHARED_LOOM_REFERENCES,
@@ -1983,6 +1990,18 @@ fn write_file_marker(path: &Path, marker: &str) -> Result<(), SetupError> {
     })?;
     if !text.contains(marker) {
         text.push_str(&format!("\n<!-- {marker} -->\n"));
+        write_text(path, &text)?;
+    }
+    Ok(())
+}
+
+fn write_js_file_marker(path: &Path, marker: &str) -> Result<(), SetupError> {
+    let mut text = fs::read_to_string(path).map_err(|source| SetupError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !text.contains(marker) {
+        text.push_str(&format!("\n// {marker}\n"));
         write_text(path, &text)?;
     }
     Ok(())

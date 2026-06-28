@@ -28,6 +28,8 @@ After a local runtime or plugin fix, refresh the local agent through the Quick S
 
 ```bash
 ./install.sh --agent codex --local-build
+./scripts/install-local-claude-code.sh
+./scripts/install-local-opencode.sh
 ```
 
 This validates the Rust release build, package layout, `loom-setup install`, MCP registration, and plugin refresh as one path.
