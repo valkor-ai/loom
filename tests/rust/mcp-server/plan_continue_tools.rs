@@ -453,6 +453,57 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         write_contract["fields"]["enumRefs.conceptPriority"][0],
         "must_understand"
     );
+    let enum_fields = &write_contract["fields"]["outputContract.schemaProjection"]["enumFields"];
+    assert_eq!(
+        enum_fields["requestSummary.complexity"],
+        "enumRefs.complexity"
+    );
+    assert_eq!(
+        enum_fields["scope.included[].source"],
+        "enumRefs.scopeSource"
+    );
+    assert_eq!(
+        enum_fields["acceptance[].priority"],
+        "enumRefs.acceptancePriority"
+    );
+    assert_eq!(
+        enum_fields["conceptGrounding.phaseConceptGrounding.concepts[].riskFactors[]"],
+        "enumRefs.conceptRiskFactor"
+    );
+    assert_eq!(
+        enum_fields["frontendExperience.actions[].resultObservation[]"],
+        "enumRefs.frontendResultObservationMode"
+    );
+    assert_eq!(
+        enum_fields["frontendExperience.operationPaths[].requiredStates[]"],
+        "enumRefs.frontendInteractionState"
+    );
+    assert!(
+        !write_contract["fields"]["enumRefs.frontendResultObservationMode"]
+            .as_array()
+            .expect("frontend result observation enum")
+            .contains(&json!("empty"))
+    );
+    assert!(
+        write_contract["fields"]["enumRefs.frontendInteractionState"]
+            .as_array()
+            .expect("frontend interaction state enum")
+            .contains(&json!("empty"))
+    );
+    assert!(
+        write_contract["fields"]["outputContract.schemaProjection"]["objectShapeRules"]
+            ["frontendExperience.actions[].resultObservation[]"]
+            .as_str()
+            .expect("result observation shape rule")
+            .contains("empty is not a result observation")
+    );
+    assert!(
+        write_contract["fields"]["outputContract.schemaProjection"]["objectShapeRules"]
+            ["frontendExperience.operationPaths[].requiredStates[]"]
+            .as_str()
+            .expect("required states shape rule")
+            .contains("empty is valid only here")
+    );
     assert!(write_contract["fields"]["enumRefs.conceptRiskFactor"]
         .as_array()
         .expect("concept risk factor enum")
