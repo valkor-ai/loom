@@ -398,6 +398,22 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         write_contract.fields["outputContract.resultTemplate"].value["contextQuality"]["coverage"],
         "focused"
     );
+    assert_eq!(
+        write_contract.fields["outputContract.resultTemplate"].value["contextQuality"]["warnings"]
+            [0]["code"],
+        "LOW_CONFIDENCE_REPOSITORY_SCAN"
+    );
+    assert!(
+        write_contract.fields["outputContract.resultTemplate"].value["contextQuality"]["warnings"]
+            [0]["message"]
+            .as_str()
+            .expect("contextQuality warning message")
+            .contains("Use [] only when there are no warnings")
+    );
+    assert_eq!(
+        write_contract.fields["outputContract.resultTemplate"].value["warnings"][0]["code"],
+        "LOW_CONFIDENCE_REPOSITORY_SCAN"
+    );
     assert!(
         write_contract.fields["outputContract.bindingRules"].value[0]
             .as_str()
@@ -425,6 +441,20 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
             .as_str()
             .expect("technologySignals shape rule")
             .contains("object")
+    );
+    assert!(
+        write_contract.fields["outputContract.schemaProjection"].value["objectShapeRules"]
+            ["contextQuality.warnings[]"]
+            .as_str()
+            .expect("contextQuality warnings shape rule")
+            .contains("code and message")
+    );
+    assert!(
+        write_contract.fields["outputContract.schemaProjection"].value["objectShapeRules"]
+            ["warnings[]"]
+            .as_str()
+            .expect("warnings shape rule")
+            .contains("code and message")
     );
 
     let mut repository_candidate = write_contract.fields["outputContract.resultTemplate"]

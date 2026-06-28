@@ -252,7 +252,9 @@ fn build_request_root(
                     "structureSignals": "object with rootPaths, entryPoints, configurationFiles arrays",
                     "repoOverview.primaryApplications[]": "objects with applicationId, name, kind, rootPath",
                     "relevantSurfaces[]": "objects with surfaceId, kind, path, summary, relevance, suggestedUse",
-                    "recommendedReadRefs[]": "objects with path, reason, priority, summary, surfaceRefs"
+                    "recommendedReadRefs[]": "objects with path, reason, priority, summary, surfaceRefs",
+                    "contextQuality.warnings[]": "objects with code and message; use [] only when there are no warnings",
+                    "warnings[]": "objects with code and message; use [] only when there are no warnings"
                 }
             },
             "resultTemplate": {
@@ -328,9 +330,15 @@ fn build_request_root(
                 "contextQuality": {
                     "coverage": "focused",
                     "confidence": "medium",
-                    "warnings": []
+                    "warnings": [{
+                        "code": "LOW_CONFIDENCE_REPOSITORY_SCAN",
+                        "message": "Use [] only when there are no warnings."
+                    }]
                 },
-                "warnings": []
+                "warnings": [{
+                    "code": "LOW_CONFIDENCE_REPOSITORY_SCAN",
+                    "message": "Use [] only when there are no warnings."
+                }]
             }
         },
         "requestReadPlan": {
