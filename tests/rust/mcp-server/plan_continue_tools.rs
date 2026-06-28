@@ -173,6 +173,23 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
             .to_string()
             .contains("Do not output or confirm the overall dependency sequence")
     );
+    assert_eq!(
+        knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"].value[1]
+            ["repeatMode"],
+        "per_candidate_phase_cut"
+    );
+    assert_eq!(
+        knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"].value[1]
+            ["minimumQueryCount"],
+        2
+    );
+    assert!(
+        knowledge_fields.fields["knowledgeQueryPlan.toolContract"].value["conditionalInputFields"]
+            ["queryId"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("per_candidate_phase_cut")
+    );
 }
 
 #[test]
@@ -604,6 +621,35 @@ fn run_knowledge_context(
         .expect("knowledge executionOrder");
     for step in steps {
         let step_id = step["stepId"].as_str().expect("stepId");
+        if step["repeatMode"].as_str() == Some("per_candidate_phase_cut") {
+            for query_id in ["capability_closure_A", "capability_closure_B"] {
+                let result = structured(
+                    server
+                        .invoke_tool(
+                            "loom.knowledgeBrainstormContext",
+                            Some(args(json!({
+                                "projectRoot": fixture.root_str(),
+                                "requestRef": request_ref,
+                                "block": block,
+                                "stepId": step_id,
+                                "queryId": query_id,
+                                "querySubject": format!("{block} {step_id} {query_id}"),
+                                "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                                "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户"]
+                            }))),
+                        )
+                        .expect("knowledge brainstorm context"),
+                );
+                let details = &result["details"];
+                assert!(details.get("requestRef").is_none());
+                assert!(details.get("stepId").is_none());
+                assert!(details.get("querySubject").is_none());
+                assert!(details.get("naturalLanguageQuery").is_none());
+                assert!(details.get("semanticFocus").is_none());
+                assert_no_key_recursive(details, "inspect");
+            }
+            continue;
+        }
         let result = structured(
             server
                 .invoke_tool(
@@ -683,6 +729,113 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
         .as_str()
         .unwrap_or_default()
         .contains("Do not ask the user to reconfirm"));
+
+    structured(
+        server
+            .invoke_tool(
+                "loom.knowledgeBrainstormContext",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "stepId": "phase_scope_dependency_order",
+                    "querySubject": "证券账户模块与后续资金账户、交易客户端的依赖边界",
+                    "naturalLanguageQuery": "证券账户 资金账户 交易客户端 依赖 边界",
+                    "semanticFocus": ["证券账户", "资金账户", "交易客户端"]
+                }))),
+            )
+            .expect("dependency order knowledge context"),
+    );
+    structured(
+        server
+            .invoke_tool(
+                "loom.knowledgeBrainstormContext",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "stepId": "phase_scope_capability_closure",
+                    "queryId": "capability_closure_A",
+                    "querySubject": "方案A：证券账户模块闭环",
+                    "naturalLanguageQuery": "证券账户 开户 挂失补办 销户 闭环",
+                    "semanticFocus": ["证券账户", "开户", "挂失补办", "销户"]
+                }))),
+            )
+            .expect("single capability closure knowledge context"),
+    );
+    let still_missing = structured(
+        server
+            .invoke_tool(
+                "loom.brainstormConfirmBlock",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "summary": "确认第一阶段为证券账户模块闭环。",
+                    "confirmedData": {
+                        "scope": {
+                            "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
+                            "deferred": ["资金账户", "交易客户端"],
+                            "excluded": []
+                        },
+                        "recommendation": {
+                            "label": "证券账户模块闭环",
+                            "reason": "证券账户是交易身份基础。"
+                        }
+                    }
+                }))),
+            )
+            .expect("confirm brainstorm block with one closure"),
+    );
+    assert_eq!(still_missing["state"], "failed", "{still_missing:#}");
+    assert!(still_missing["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("distinct queryId"));
+
+    structured(
+        server
+            .invoke_tool(
+                "loom.knowledgeBrainstormContext",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "stepId": "phase_scope_capability_closure",
+                    "queryId": "capability_closure_B",
+                    "querySubject": "方案B：证券账户加工作人员办理页面闭环",
+                    "naturalLanguageQuery": "证券账户 工作人员界面 开户 挂失补办 销户",
+                    "semanticFocus": ["证券账户", "工作人员界面", "开户", "销户"]
+                }))),
+            )
+            .expect("second capability closure knowledge context"),
+    );
+    let confirmed = structured(
+        server
+            .invoke_tool(
+                "loom.brainstormConfirmBlock",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "summary": "确认第一阶段为证券账户模块闭环。",
+                    "confirmedData": {
+                        "scope": {
+                            "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
+                            "deferred": ["资金账户", "交易客户端"],
+                            "excluded": []
+                        },
+                        "recommendation": {
+                            "label": "证券账户模块闭环",
+                            "reason": "证券账户是交易身份基础。"
+                        }
+                    }
+                }))),
+            )
+            .expect("confirm brainstorm block after per-candidate closure"),
+    );
+    assert_eq!(confirmed["state"], "user_gate", "{confirmed:#}");
+    assert_eq!(confirmed["gate"]["currentBlock"], "concept_grounding");
 }
 
 #[test]

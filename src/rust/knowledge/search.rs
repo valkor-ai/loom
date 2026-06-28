@@ -22,6 +22,11 @@ const DEFAULT_CONTEXT_SOURCE_LIMIT: usize = 2;
 const DEFAULT_CONTEXT_CHUNK_LIMIT_PER_SOURCE: usize = 5;
 const MAX_CONTEXT_CHUNKS_PER_BLOCK: usize = 5;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BrainstormKnowledgeStepRequirement {
+    repeat_mode: Option<String>,
+}
+
 pub fn search_knowledge(input: KnowledgeSearchInput) -> KnowledgeResult<KnowledgeSearchResult> {
     let cards = search_cards(
         &input.natural_language_query,
@@ -66,12 +71,13 @@ pub fn brainstorm_context(
             "requestRef, stepId, and querySubject are required for knowledge brainstorm context",
         ));
     }
-    validate_brainstorm_request_scope(
+    let step_requirement = validate_brainstorm_request_scope(
         &input.project_root,
         &input.request_ref,
         &input.block,
         &input.step_id,
     )?;
+    validate_brainstorm_query_id(&input, &step_requirement)?;
     let request_scope = resolve_brainstorm_request_scope(&input.project_root, &input.request_ref)?;
     let cards = search_cards(
         &format!("{} {}", input.query_subject, input.natural_language_query),
@@ -763,7 +769,7 @@ fn validate_brainstorm_request_scope(
     request_ref: &str,
     block: &str,
     step_id: &str,
-) -> KnowledgeResult<()> {
+) -> KnowledgeResult<BrainstormKnowledgeStepRequirement> {
     state::inspect_request(delivery_core::InspectRequestInput {
         project_root: project_root.to_string(),
         request_ref: request_ref.to_string(),
@@ -789,17 +795,68 @@ fn validate_brainstorm_request_scope(
                 "knowledgeQueryPlan.blocks.{block}.executionOrder is missing from request"
             ))
         })?;
-    if !execution_order.iter().any(|step| {
+    let Some(step) = execution_order.iter().find(|step| {
         step.get("stepId")
             .and_then(serde_json::Value::as_str)
             .map(|value| value == step_id)
             .unwrap_or(false)
-    }) {
+    }) else {
         return Err(KnowledgeError::invalid(format!(
             "stepId {step_id} does not belong to request knowledgeQueryPlan block {block}"
         )));
+    };
+    Ok(BrainstormKnowledgeStepRequirement {
+        repeat_mode: step
+            .get("repeatMode")
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string),
+    })
+}
+
+fn validate_brainstorm_query_id(
+    input: &KnowledgeBrainstormContextInput,
+    step_requirement: &BrainstormKnowledgeStepRequirement,
+) -> KnowledgeResult<()> {
+    if step_requirement.repeat_mode.as_deref() != Some("per_candidate_phase_cut") {
+        return Ok(());
+    }
+    let query_id = input
+        .query_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            KnowledgeError::invalid(
+                "queryId is required for per_candidate_phase_cut knowledge steps",
+            )
+        })?;
+    validate_query_id_segment(query_id)?;
+    if query_id == "atomic_scope"
+        && input
+            .atomic_scope_reason
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+    {
+        return Err(KnowledgeError::invalid(
+            "atomicScopeReason is required when queryId is atomic_scope",
+        ));
     }
     Ok(())
+}
+
+fn validate_query_id_segment(query_id: &str) -> KnowledgeResult<()> {
+    let valid = query_id.len() <= 80
+        && query_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-');
+    if valid {
+        return Ok(());
+    }
+    Err(KnowledgeError::invalid(
+        "queryId must be 1-80 ASCII letters, numbers, underscores, or hyphens",
+    ))
 }
 
 fn resolve_brainstorm_request_scope(
@@ -842,10 +899,17 @@ fn persist_brainstorm_context(
         .join(&scope.request_id)
         .join(&input.block)
         .join(&input.step_id);
-    state::store::ensure_dir(&step_dir)
+    let output_dir = match input.query_id.as_deref().map(str::trim) {
+        Some(query_id) if !query_id.is_empty() => {
+            validate_query_id_segment(query_id)?;
+            step_dir.join(query_id)
+        }
+        _ => step_dir,
+    };
+    state::store::ensure_dir(&output_dir)
         .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
     state::store::write_json_atomic(
-        &step_dir.join("query.json"),
+        &output_dir.join("query.json"),
         &serde_json::json!({
             "schemaVersion": "1.0",
             "requestRef": input.request_ref,
@@ -854,13 +918,15 @@ fn persist_brainstorm_context(
             "phaseId": scope.phase_id,
             "block": input.block,
             "stepId": input.step_id,
+            "queryId": input.query_id,
+            "atomicScopeReason": input.atomic_scope_reason,
             "querySubject": input.query_subject,
             "naturalLanguageQuery": input.natural_language_query,
             "semanticFocus": input.semantic_focus,
         }),
     )
     .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
-    state::store::write_json_atomic(&step_dir.join("result.json"), result)
+    state::store::write_json_atomic(&output_dir.join("result.json"), result)
         .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
     Ok(())
 }

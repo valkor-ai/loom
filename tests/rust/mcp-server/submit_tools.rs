@@ -2760,6 +2760,31 @@ fn run_knowledge_context(
         .expect("knowledge executionOrder");
     for step in steps {
         let step_id = step["stepId"].as_str().expect("stepId");
+        if step["repeatMode"].as_str() == Some("per_candidate_phase_cut") {
+            for query_id in ["capability_closure_A", "capability_closure_B"] {
+                server
+                    .invoke_tool(
+                        "loom.knowledgeBrainstormContext",
+                        Some(
+                            json!({
+                                "projectRoot": fixture.root_str(),
+                                "requestRef": request_ref,
+                                "block": block,
+                                "stepId": step_id,
+                                "queryId": query_id,
+                                "querySubject": format!("{block} {step_id} {query_id}"),
+                                "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                                "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户"]
+                            })
+                            .as_object()
+                            .expect("arguments object")
+                            .clone(),
+                        ),
+                    )
+                    .expect("knowledge brainstorm context");
+            }
+            continue;
+        }
         server
             .invoke_tool(
                 "loom.knowledgeBrainstormContext",

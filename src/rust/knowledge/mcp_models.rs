@@ -70,6 +70,10 @@ pub struct KnowledgeBrainstormContextInput {
     pub request_ref: String,
     pub block: String,
     pub step_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atomic_scope_reason: Option<String>,
     pub query_subject: String,
     pub natural_language_query: String,
     #[serde(default)]

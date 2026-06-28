@@ -638,7 +638,8 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
                         "phase_scope": {
                             "executionOrder": [{
                                 "stepId": "phase_scope_closure",
-                                "queryKind": "capability_closure"
+                                "queryKind": "capability_closure",
+                                "repeatMode": "per_candidate_phase_cut"
                             }]
                         },
                         "concept_grounding": {
@@ -671,6 +672,8 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
         request_ref: stored.request_ref.clone(),
         block: "frontend_experience".to_string(),
         step_id: "frontend_paths".to_string(),
+        query_id: None,
+        atomic_scope_reason: None,
         query_subject: "证券账户管理页面".to_string(),
         natural_language_query: "开户 挂失补办 销户 页面办理路径".to_string(),
         semantic_focus: vec![
@@ -711,11 +714,54 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     assert!(persisted_result.get("naturalLanguageQuery").is_none());
     assert!(persisted_result.get("semanticFocus").is_none());
 
+    let missing_query_id = brainstorm_context(KnowledgeBrainstormContextInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        block: "phase_scope".to_string(),
+        step_id: "phase_scope_closure".to_string(),
+        query_id: None,
+        atomic_scope_reason: None,
+        query_subject: "方案A：证券账户模块闭环".to_string(),
+        natural_language_query: "证券账户 开户 挂失补办 销户".to_string(),
+        semantic_focus: vec!["证券账户".to_string(), "开户".to_string()],
+    })
+    .expect_err("repeat knowledge step requires queryId");
+    assert!(missing_query_id.to_string().contains("queryId is required"));
+
+    for query_id in ["capability_closure_A", "capability_closure_B"] {
+        brainstorm_context(KnowledgeBrainstormContextInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: stored.request_ref.clone(),
+            block: "phase_scope".to_string(),
+            step_id: "phase_scope_closure".to_string(),
+            query_id: Some(query_id.to_string()),
+            atomic_scope_reason: None,
+            query_subject: format!("{query_id}：证券账户模块边界"),
+            natural_language_query: "证券账户 开户 挂失补办 销户".to_string(),
+            semantic_focus: vec!["证券账户".to_string(), "开户".to_string()],
+        })
+        .expect("candidate closure context");
+        let query_file = fixture.root.join(format!(
+            ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/phase_scope/phase_scope_closure/{query_id}/query.json"
+        ));
+        let result_file = fixture.root.join(format!(
+            ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/phase_scope/phase_scope_closure/{query_id}/result.json"
+        ));
+        assert!(query_file.exists(), "missing query file for {query_id}");
+        assert!(result_file.exists(), "missing result file for {query_id}");
+        let persisted_query: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&query_file).expect("read query"))
+                .expect("parse query");
+        assert_eq!(persisted_query["queryId"], query_id);
+    }
+
     let wrong_step = brainstorm_context(KnowledgeBrainstormContextInput {
         project_root: fixture.root_str().to_string(),
         request_ref: stored.request_ref,
         block: "frontend_experience".to_string(),
         step_id: "phase_scope_closure".to_string(),
+        query_id: None,
+        atomic_scope_reason: None,
         query_subject: "证券账户管理页面".to_string(),
         natural_language_query: "页面办理路径".to_string(),
         semantic_focus: vec![],

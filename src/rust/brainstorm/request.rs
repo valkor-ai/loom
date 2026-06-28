@@ -105,7 +105,7 @@ pub fn build_brainstorm_clarification_request_root(
             "groupId": "knowledge_context_plan",
             "required": true,
             "purpose": "Read the request-scoped knowledge query plan and call loom.knowledgeBrainstormContext for the current Brainstorm block before presenting it.",
-            "whenToRead": "Read before forming the current block response; call loom.knowledgeBrainstormContext for every listed executionOrder step.",
+            "whenToRead": "Read before forming the current block response; call loom.knowledgeBrainstormContext for every listed executionOrder step, and for repeatMode steps run the required query set.",
             "fields": [
                 "knowledgeQueryPlan.sharedRules",
                 "knowledgeQueryPlan.toolContract",
@@ -570,6 +570,7 @@ fn knowledge_query_plan() -> Value {
             "Use request-scoped knowledge context only for phase_scope, concept_grounding, and frontend_experience.",
             "Do not carry knowledge chunks from one Brainstorm block into another block without re-querying that block's step.",
             "For each executionOrder step, call loom.knowledgeBrainstormContext with projectRoot, requestRef, block, stepId, querySubject, naturalLanguageQuery, and semanticFocus.",
+            "When an executionOrder step declares repeatMode=per_candidate_phase_cut, call loom.knowledgeBrainstormContext once per candidate phase cut with a distinct queryId before presenting options.",
             "If loom.knowledgeBrainstormContext returns status available, inspect every chunk listed in readPlan before using it in the clarification block.",
             "If loom.knowledgeBrainstormContext returns status empty, continue with source requirements and mention no knowledge match only when it affects confidence.",
             "If any knowledge tool returns state failed or an error object, stop the clarification block and report the failure; do not silently fall back to a knowledge-free answer.",
@@ -590,7 +591,11 @@ fn knowledge_query_plan() -> Value {
                 "querySubject",
                 "naturalLanguageQuery",
                 "semanticFocus"
-            ]
+            ],
+            "conditionalInputFields": {
+                "queryId": "Required when executionOrder[].repeatMode is per_candidate_phase_cut. Use a stable value such as capability_closure_A, capability_closure_B, or atomic_scope.",
+                "atomicScopeReason": "Required only when queryId is atomic_scope."
+            }
         },
         "blocks": {
             "phase_scope": {
@@ -608,10 +613,13 @@ fn knowledge_query_plan() -> Value {
                     {
                         "stepId": "phase_scope_capability_closure",
                         "queryKind": "capability_closure",
+                        "repeatMode": "per_candidate_phase_cut",
+                        "minimumQueryCount": 2,
+                        "queryIdRule": "Use one distinct queryId per option candidate, for example capability_closure_A, capability_closure_B, capability_closure_C. If and only if the current phase is truly atomic and no meaningful narrower, broader, dependency, lifecycle, or UI/runtime boundary exists, use queryId=atomic_scope and provide atomicScopeReason.",
                         "querySubjectRule": "The subject is exactly one candidate capability unit or one closed current-phase slice.",
                         "queryConstructionRules": [
                             "Before composing options, identify candidate capability units from the requirement and dependency-order evidence.",
-                            "Run one capability_closure query per candidate phase cut.",
+                            "Run one capability_closure query per candidate phase cut with a distinct queryId.",
                             "Each capability_closure query covers exactly one module, object lifecycle, workflow, backend capability, or page-operation set.",
                             "Keep semanticFocus inside the current unit's object, operation, rule, state, field, or flow anchors.",
                             "Do not include sibling, downstream, or next-phase capability units in semanticFocus.",
@@ -820,7 +828,7 @@ fn phase_scope_rules() -> Value {
         "blockMission": [
             "This block confirms only the active phase implementation boundary.",
             "Use module dependency order only to compare active-phase candidate boundaries and deferred items.",
-            "Before presenting options, call loom.knowledgeBrainstormContext for every phase_scope executionOrder step in knowledge_context_plan. If the result is empty, continue with source requirements.",
+            "Before presenting options, call loom.knowledgeBrainstormContext for dependency_order and for every required per-candidate capability_closure query in knowledge_context_plan. If the result is empty, continue with source requirements.",
             "Even when the source asks for stage priorities or phased delivery, do not ask the user to confirm a full-project roadmap in this block."
         ],
         "presentation": [

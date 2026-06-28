@@ -479,22 +479,71 @@ fn ensure_block_knowledge_context(
     .join("brainstorm-knowledge")
     .join(request_id)
     .join(block_name);
-    let missing_steps = required_steps
-        .iter()
-        .filter(|step_id| !base_dir.join(step_id).join("result.json").is_file())
-        .copied()
-        .collect::<Vec<_>>();
+    let mut missing_steps = Vec::new();
+    for step_id in required_steps {
+        if *block == ClarificationBlockName::PhaseScope
+            && *step_id == "phase_scope_capability_closure"
+        {
+            if !phase_scope_capability_closure_complete(&base_dir.join(step_id)) {
+                missing_steps.push(*step_id);
+            }
+            continue;
+        }
+        if !base_dir.join(step_id).join("result.json").is_file() {
+            missing_steps.push(*step_id);
+        }
+    }
     if missing_steps.is_empty() {
         return Ok(());
     }
+    let repair_instruction = if *block == ClarificationBlockName::PhaseScope
+        && missing_steps.contains(&"phase_scope_capability_closure")
+    {
+        " For phase_scope_capability_closure, call loom.knowledgeBrainstormContext once per candidate phase boundary with distinct queryId values such as capability_closure_A and capability_closure_B. If the phase is genuinely atomic, call it once with queryId=atomic_scope and a non-empty atomicScopeReason."
+    } else {
+        ""
+    };
     Err(ConfirmError {
         project_root: project_root.to_string(),
         code: "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED".to_string(),
         message: format!(
-            "Before confirming {block_name}, the agent must read requestReadPlan group knowledge_context_plan for requestRef {request_ref} and call loom.knowledgeBrainstormContext for the missing stepIds: {}. Empty knowledge results are acceptable; missing request-scoped knowledge result files are not. Do not ask the user to reconfirm this block; run the missing Loom knowledge calls, then retry loom.brainstormConfirmBlock.",
-            missing_steps.join(", ")
+            "Before confirming {block_name}, the agent must read requestReadPlan group knowledge_context_plan for requestRef {request_ref} and call loom.knowledgeBrainstormContext for the missing stepIds: {}. Empty knowledge results are acceptable; missing request-scoped knowledge result files are not.{repair_instruction} Do not ask the user to reconfirm this block; run the missing Loom knowledge calls, then retry loom.brainstormConfirmBlock.",
+            missing_steps.join(", "),
         ),
     })
+}
+
+fn phase_scope_capability_closure_complete(step_dir: &Path) -> bool {
+    let candidate_result_count = std::fs::read_dir(step_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter(|entry| entry.file_name().to_string_lossy() != "atomic_scope")
+        .filter(|entry| entry.path().join("result.json").is_file())
+        .count();
+    if candidate_result_count >= 2 {
+        return true;
+    }
+    atomic_scope_closure_complete(step_dir)
+}
+
+fn atomic_scope_closure_complete(step_dir: &Path) -> bool {
+    let query_file = step_dir.join("atomic_scope").join("query.json");
+    if !step_dir.join("atomic_scope").join("result.json").is_file() || !query_file.is_file() {
+        return false;
+    }
+    let Ok(raw) = std::fs::read_to_string(query_file) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
+    value
+        .get("atomicScopeReason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|reason| !reason.is_empty())
 }
 
 fn materialize_confirmation_request_inner(
