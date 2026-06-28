@@ -50,40 +50,67 @@ pub fn dispatch_repair_route(
     action: &RouteAction,
 ) -> LoomMcpActionResult {
     match action.kind {
-        RouteActionKind::TaskplanRepair => materialize_taskplan_repair(
+        RouteActionKind::TaskplanRepair => {
+            if let Some(existing) = existing_active_repair_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                action,
+                "activeRepairActionRef",
+                ArtifactKind::TaskplanRepair,
+                WriteMode::TaskplanGrouped,
+            ) {
+                return existing;
+            }
+            materialize_taskplan_repair(project_root, delivery_id, phase_id, action.request_ref.clone())
+                .unwrap_or_else(|error| {
+                    failed(
+                        project_root,
+                        "TASKPLAN_REPAIR_FAILED",
+                        error.to_string(),
+                        "taskplan_repair",
+                    )
+                })
+        }
+        RouteActionKind::ArchitectureArtifactRepair => {
+            if let Some(existing) = existing_active_repair_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                action,
+                "activeRepairActionRef",
+                ArtifactKind::ArchitectureArtifactRepair,
+                WriteMode::ArchitectureSection,
+            ) {
+                return existing;
+            }
+            materialize_architecture_repair(project_root, delivery_id, phase_id, action.request_ref.clone())
+                .unwrap_or_else(|error| {
+                    failed(
+                        project_root,
+                        "ARCHITECTURE_REPAIR_FAILED",
+                        error.to_string(),
+                        "architecture_artifact_repair",
+                    )
+                })
+        }
+        RouteActionKind::TaskResultRepair => existing_active_repair_action(
             project_root,
             delivery_id,
             phase_id,
-            action.request_ref.clone(),
+            action,
+            "activeTaskResultRepairActionRef",
+            ArtifactKind::TaskResultRepair,
+            WriteMode::SingleJson,
         )
-        .unwrap_or_else(|error| {
+        .unwrap_or_else(|| {
             failed(
                 project_root,
-                "TASKPLAN_REPAIR_FAILED",
-                error.to_string(),
-                "taskplan_repair",
+                "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
+                "The active TaskResult repair request is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
+                "task_result_repair",
             )
         }),
-        RouteActionKind::ArchitectureArtifactRepair => materialize_architecture_repair(
-            project_root,
-            delivery_id,
-            phase_id,
-            action.request_ref.clone(),
-        )
-        .unwrap_or_else(|error| {
-            failed(
-                project_root,
-                "ARCHITECTURE_REPAIR_FAILED",
-                error.to_string(),
-                "architecture_artifact_repair",
-            )
-        }),
-        RouteActionKind::TaskResultRepair => failed(
-            project_root,
-            "TASK_RESULT_REPAIR_REQUIRES_TASK_EXECUTION_REQUEST",
-            "TaskResult repair must be created from the original TaskExecutionRequest after TaskResult validation fails.".to_string(),
-            "task_result_repair",
-        ),
         _ => failed(
             project_root,
             "REPAIR_ROUTE_UNSUPPORTED",
@@ -245,6 +272,15 @@ fn materialize_delivery_execution_repair_inner(
         .find(|state| state.task_id == task.task_id)
         .map(|state| state.attempts.len() as u32)
         .unwrap_or(0);
+    if let Some(existing) = existing_delivery_execution_repair_next_if_current(
+        project_root,
+        delivery_id,
+        phase_id,
+        &task,
+        attempt_count,
+    )? {
+        return Ok(existing);
+    }
     let now = state::store::now_string();
     if let Some(state) = run
         .task_states
@@ -310,9 +346,115 @@ fn materialize_delivery_execution_repair_inner(
         source_ref.clone(),
         finding_refs.clone(),
     )?;
+    delivery_execution_repair_next(
+        project_root,
+        stored.request_ref,
+        result_file,
+        &task,
+        repair_origin,
+        origin,
+        source_ref,
+        finding_refs,
+        attempt_count,
+    )
+}
+
+fn existing_delivery_execution_repair_next_if_current(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    task: &TaskDefinition,
+    attempt_count: u32,
+) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
+    let store = FileTransitionStore;
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let Some(phase) = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+    else {
+        return Ok(None);
+    };
+    let Some(action) = phase.next_action.as_ref() else {
+        return Ok(None);
+    };
+    if action.kind != RouteActionKind::ExecutionRepair
+        || action.source != "delivery_execution_repair"
+    {
+        return Ok(None);
+    }
+    let Some(request_ref) = phase
+        .latest_refs
+        .get("taskExecutionRequestRef")
+        .or(action.request_ref.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(result_file) = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("resultFile"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            phase
+                .latest_refs
+                .get("taskExecutionResultFile")
+                .map(String::as_str)
+        })
+    else {
+        return Ok(None);
+    };
+    let origin = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("origin"))
+        .and_then(Value::as_str)
+        .unwrap_or("task_failure");
+    let source_ref = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("sourceRef"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let finding_refs = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("findingRefs"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    delivery_execution_repair_next(
+        project_root,
+        request_ref.to_string(),
+        result_file.to_string(),
+        task,
+        repair_origin(origin),
+        origin,
+        source_ref,
+        finding_refs,
+        attempt_count,
+    )
+    .map(Some)
+}
+
+fn delivery_execution_repair_next(
+    project_root: &str,
+    request_ref: String,
+    result_file: String,
+    task: &TaskDefinition,
+    repair_origin: RepairOrigin,
+    origin: &str,
+    source_ref: Option<String>,
+    finding_refs: Vec<String>,
+    attempt_count: u32,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
     let inspected = state::inspect_request(delivery_core::InspectRequestInput {
         project_root: project_root.to_string(),
-        request_ref: stored.request_ref.clone(),
+        request_ref: request_ref.clone(),
     })?;
     Ok(LoomMcpActionResult::AutoRunnable(
         LoomMcpAutoRunnableResult::new(
@@ -320,7 +462,7 @@ fn materialize_delivery_execution_repair_inner(
             LoomMcpNextAction::ExecuteTask(ExecuteTaskNext {
                 execution_kind: ExecutionKind::DeliveryExecutionRepair,
                 repair_origin: Some(repair_origin.clone()),
-                request_ref: stored.request_ref,
+                request_ref,
                 result_file,
                 task_id: task.task_id.clone(),
                 group_id: Some(task.group_id.clone()),
@@ -343,7 +485,7 @@ fn materialize_delivery_execution_repair_inner(
                     evidence_required: true,
                 },
                 repair_context: Some(RepairContext {
-                    repair_origin: repair_origin.clone(),
+                    repair_origin,
                     source_task_id: task.task_id.clone(),
                     issues: vec![origin.to_string()],
                     review_result_ref: if origin == "review_result" {
@@ -357,7 +499,11 @@ fn materialize_delivery_execution_repair_inner(
                     } else {
                         None
                     },
-                    user_change_summary: user_change_summary(root, origin, source_ref.as_deref()),
+                    user_change_summary: user_change_summary(
+                        Path::new(project_root),
+                        origin,
+                        source_ref.as_deref(),
+                    ),
                     failed_task_result_ref: if origin == "task_failure" {
                         source_ref.clone()
                     } else {
@@ -1755,6 +1901,10 @@ fn update_latest_execution_request(
             "taskExecutionRequestRef".to_string(),
             request_ref.to_string(),
         );
+        phase.latest_refs.insert(
+            "taskExecutionResultFile".to_string(),
+            result_file.to_string(),
+        );
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ExecutionRepair,
             source: "delivery_execution_repair".to_string(),
@@ -1776,6 +1926,112 @@ fn update_latest_execution_request(
     store
         .save_delivery_index(project_root, &delivery)
         .map_err(to_state_error)
+}
+
+fn existing_active_repair_action(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    action: &RouteAction,
+    latest_ref_key: &str,
+    artifact_kind: ArtifactKind,
+    write_mode: WriteMode,
+) -> Option<LoomMcpActionResult> {
+    let store = FileTransitionStore;
+    let delivery = match store.load_delivery_index(project_root, delivery_id) {
+        Ok(delivery) => delivery,
+        Err(error) => {
+            return Some(failed(
+                project_root,
+                "REPAIR_ROUTE_STATE_READ_FAILED",
+                error.to_string(),
+                "repair",
+            ));
+        }
+    };
+    let Some(phase) = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+    else {
+        return Some(failed(
+            project_root,
+            "REPAIR_PHASE_NOT_FOUND",
+            format!("Phase {phase_id} was not found for delivery {delivery_id}."),
+            "repair",
+        ));
+    };
+    let latest = phase.latest_refs.get(latest_ref_key).map(String::as_str);
+    if latest.is_none()
+        && action.source != "repair_action"
+        && action.kind != RouteActionKind::TaskResultRepair
+    {
+        return None;
+    }
+    let request_ref = action.request_ref.as_deref().or(latest)?;
+    if latest != Some(request_ref) {
+        return Some(failed(
+            project_root,
+            "STALE_REPAIR_ACTION",
+            "Continue found a stale repair action requestRef; rerun loom.continue after the active phase state is refreshed.".to_string(),
+            "repair",
+        ));
+    }
+    Some(existing_write_artifact_next(
+        project_root,
+        request_ref,
+        artifact_kind,
+        write_mode,
+    ))
+}
+
+fn existing_write_artifact_next(
+    project_root: &str,
+    request_ref: &str,
+    artifact_kind: ArtifactKind,
+    write_mode: WriteMode,
+) -> LoomMcpActionResult {
+    let inspected = match state::inspect_request(delivery_core::InspectRequestInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+    }) {
+        Ok(inspected) => inspected,
+        Err(error) => {
+            return failed(
+                project_root,
+                "REPAIR_REQUEST_INSPECT_FAILED",
+                error.to_string(),
+                "repair",
+            );
+        }
+    };
+    let write_targets = match inspected
+        .write_targets
+        .iter()
+        .map(value_to_write_target)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(targets) => targets,
+        Err(error) => {
+            return failed(
+                project_root,
+                "REPAIR_WRITE_TARGET_INVALID",
+                error.to_string(),
+                "repair",
+            );
+        }
+    };
+    LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
+        project_root.to_string(),
+        LoomMcpNextAction::WriteArtifact(WriteArtifactNext {
+            artifact_kind,
+            request_ref: request_ref.to_string(),
+            write_mode,
+            write_targets,
+            read_groups: inspected.read_groups,
+            submit_tool: "loom.repairSubmitFile".to_string(),
+        }),
+    ))
 }
 
 fn update_latest_repair_action(

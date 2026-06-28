@@ -1212,6 +1212,20 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .as_str()
         .expect("task result repair action requestRef")
         .to_string();
+    let resumed_task_result_repair = continue_delivery(fixture.root_str());
+    assert_eq!(
+        resumed_task_result_repair["state"], "auto_runnable",
+        "{resumed_task_result_repair:#}"
+    );
+    assert_eq!(
+        resumed_task_result_repair["next"]["requestRef"],
+        json!(task_result_repair_action_ref),
+        "{resumed_task_result_repair:#}"
+    );
+    assert_eq!(
+        resumed_task_result_repair["next"]["artifactKind"],
+        "task_result_repair"
+    );
     let task_result_repair_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: task_result_repair_action_ref.clone(),
@@ -1537,6 +1551,13 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         .contains("/tasks/phase-1/results/"));
     assert_eq!(result["next"]["repairContext"]["attemptCount"], 1);
     let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["state"], "auto_runnable", "{resumed:#}");
+    assert_eq!(
+        resumed["next"]["executionKind"],
+        "delivery_execution_repair"
+    );
+    assert_eq!(resumed["next"]["requestRef"], json!(repair_request_ref));
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repair_request_ref.to_string(),
@@ -1596,6 +1617,10 @@ fn blocked_task_result_routes_to_taskplan_repair() {
     assert_eq!(result["next"]["artifactKind"], "taskplan_repair");
     assert_eq!(result["next"]["submitTool"], "loom.repairSubmitFile");
     let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["state"], "auto_runnable", "{resumed:#}");
+    assert_eq!(resumed["next"]["artifactKind"], "taskplan_repair");
+    assert_eq!(resumed["next"]["requestRef"], json!(repair_request_ref));
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repair_request_ref.to_string(),
@@ -1636,6 +1661,13 @@ fn blocked_task_result_routes_to_architecture_repair() {
     );
     assert_eq!(result["next"]["submitTool"], "loom.repairSubmitFile");
     let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["state"], "auto_runnable", "{resumed:#}");
+    assert_eq!(
+        resumed["next"]["artifactKind"],
+        "architecture_artifact_repair"
+    );
+    assert_eq!(resumed["next"]["requestRef"], json!(repair_request_ref));
     let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
     assert!(repair_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
 }
