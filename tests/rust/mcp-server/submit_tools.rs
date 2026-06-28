@@ -1111,17 +1111,15 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         "{execution_result:#}"
     );
     assert_eq!(
-        execution_result["continuationPolicy"]["mustContinue"],
-        json!(true)
+        execution_result["stopAllowed"],
+        json!(false),
+        "{execution_result:#}"
     );
-    assert_eq!(
-        execution_result["continuationPolicy"]["progressReportAllowed"],
-        json!(false)
-    );
-    assert!(execution_result["continuationPolicy"]["completionBarrier"]
+    assert!(execution_result.get("continuationPolicy").is_none());
+    assert!(execution_result["agentInstruction"]
         .as_str()
-        .expect("completion barrier")
-        .contains("resultFile is written"));
+        .expect("agent instruction")
+        .contains("Do not stop at a progress recap"));
     assert_eq!(execution_result["next"]["kind"], "execute_task");
     assert_eq!(
         execution_result["next"]["submitTool"],
@@ -1139,9 +1137,11 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         json!(execution_request_ref)
     );
     assert_eq!(
-        resumed_execution["continuationPolicy"]["progressReportAllowed"],
-        json!(false)
+        resumed_execution["stopAllowed"],
+        json!(false),
+        "{resumed_execution:#}"
     );
+    assert!(resumed_execution.get("continuationPolicy").is_none());
     let execution_inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.clone(),
