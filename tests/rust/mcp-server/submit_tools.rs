@@ -1830,9 +1830,7 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         .expect("phase continuation fields");
     for broad_field in [
         "phaseContinuationContext.activePhase",
-        "deliveryContext.phasePlan.current",
         "deliveryContext.scope.deferred",
-        "deliveryContext.phasePlan.nextPhasePreview",
         "latestRepositoryContext.existingCapabilities",
         "latestRepositoryContext.relevantSurfaces",
         "confirmedRequirementDecisionsIndex.decisions",
@@ -1844,6 +1842,19 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
             "broad read field leaked into phase continuation group: {broad_field}"
         );
     }
+    for stale_or_duplicate_prefix in [
+        "deliveryContext.phasePlan.current.",
+        "deliveryContext.phasePlan.nextPhasePreview.",
+        "latestConfirmedRequirementDecision.phasePlan.current.",
+        "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.",
+    ] {
+        assert!(
+            !phase_continuation_fields.iter().any(|field| field
+                .as_str()
+                .is_some_and(|field| field.starts_with(stale_or_duplicate_prefix))),
+            "stale or duplicate phase read leaked into phase continuation group: {stale_or_duplicate_prefix}"
+        );
+    }
     for required_field in [
         "phaseContinuationContext.activePhase.phaseId",
         "phaseContinuationContext.activePhase.title",
@@ -1851,7 +1862,6 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         "phaseContinuationContext.repository.repoSummary",
         "phaseContinuationContext.repository.capabilitySummaries",
         "phaseContinuationContext.repository.surfaceSummaries",
-        "latestConfirmedRequirementDecision.phasePlan.nextPhasePreview.title",
     ] {
         assert!(
             phase_continuation_fields
