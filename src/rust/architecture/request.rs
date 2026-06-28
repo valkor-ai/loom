@@ -868,7 +868,7 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
                 "statement": acceptance.statement,
                 "coverageStatus": "covered",
                 "reason": "",
-                "coverage": [],
+                "coverage": [acceptance_coverage_artifact_template()],
                 "verificationHints": [{
                     "kind": "manual",
                     "description": ""
@@ -901,6 +901,14 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
             "blockingReasons": [],
             "nextNode": "task_plan"
         }
+    })
+}
+
+fn acceptance_coverage_artifact_template() -> Value {
+    json!({
+        "type": "modules",
+        "refs": [],
+        "description": ""
     })
 }
 
@@ -1029,6 +1037,8 @@ fn section_generation_rules(
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
+                .to_string(),
+            "acceptanceMatrix.coverage entries must be objects with type, refs, and description."
                 .to_string(),
             "Use requirementDetailTransfer.requirementDetails.items as the canonical detail index."
                 .to_string(),

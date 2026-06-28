@@ -809,7 +809,12 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
             .is_none(),
         "acceptanceMatrix must not template artifactRefs"
     );
-    assert!(coverage_template["acceptanceMatrix"][0]["coverage"].is_array());
+    assert_eq!(
+        coverage_template["acceptanceMatrix"][0]["coverage"][0]["type"],
+        json!("modules")
+    );
+    assert!(coverage_template["acceptanceMatrix"][0]["coverage"][0]["refs"].is_array());
+    assert!(coverage_template["acceptanceMatrix"][0]["coverage"][0]["description"].is_string());
     assert_eq!(
         coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["kind"],
         json!("manual")
@@ -957,6 +962,7 @@ fn architecture_coverage_submit_repairs_schema_shape_before_assembly() {
     let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
     candidate["content"]["detailCoverage"][0]["artifactRefs"]["modules"] =
         json!(["module.account-service", 42]);
+    candidate["content"]["acceptanceMatrix"][0]["coverage"] = json!(["module.account-service"]);
     candidate["content"]["handoff"]["readyForTaskPlan"] = json!("yes");
     write_candidate_target(&fixture, &architecture_request_ref, &candidate);
 
@@ -971,6 +977,10 @@ fn architecture_coverage_submit_repairs_schema_shape_before_assembly() {
     assert!(issues.iter().any(|issue| {
         issue["code"] == "DETAIL_COVERAGE_INVALID"
             && issue["fieldPath"] == "content.detailCoverage[0].artifactRefs.modules[1]"
+    }));
+    assert!(issues.iter().any(|issue| {
+        issue["code"] == "ACCEPTANCE_MATRIX_INVALID"
+            && issue["fieldPath"] == "content.acceptanceMatrix[0].coverage[0].type"
     }));
     assert!(issues.iter().any(|issue| {
         issue["code"] == "COVERAGE_HANDOFF_INVALID"
@@ -2352,7 +2362,14 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             .unwrap_or(false),
         "repair coverage template must preserve acceptance statements"
     );
-    assert!(repair_coverage_template["acceptanceMatrix"][0]["coverage"].is_array());
+    assert_eq!(
+        repair_coverage_template["acceptanceMatrix"][0]["coverage"][0]["type"],
+        json!("modules")
+    );
+    assert!(repair_coverage_template["acceptanceMatrix"][0]["coverage"][0]["refs"].is_array());
+    assert!(
+        repair_coverage_template["acceptanceMatrix"][0]["coverage"][0]["description"].is_string()
+    );
     assert_eq!(
         repair_coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["kind"],
         json!("manual")

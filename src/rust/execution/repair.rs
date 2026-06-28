@@ -1619,7 +1619,7 @@ fn coverage_content_template(context_projection: &Value) -> Value {
                         "statement": acceptance.get("statement").cloned().unwrap_or(Value::Null),
                         "coverageStatus": "covered",
                         "reason": "",
-                        "coverage": [],
+                        "coverage": [acceptance_coverage_artifact_template()],
                         "verificationHints": [{
                             "kind": "manual",
                             "description": ""
@@ -1658,6 +1658,14 @@ fn coverage_content_template(context_projection: &Value) -> Value {
             "blockingReasons": [],
             "nextNode": "task_plan"
         }
+    })
+}
+
+fn acceptance_coverage_artifact_template() -> Value {
+    json!({
+        "type": "modules",
+        "refs": [],
+        "description": ""
     })
 }
 
