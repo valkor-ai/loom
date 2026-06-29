@@ -21,7 +21,9 @@ use state::{
 
 use crate::{
     paths::task_result_file,
-    task_execution::{load_current_plan_and_run, save_run},
+    task_execution::{
+        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+    },
     task_plan::update_run_summary,
     templates::task_result_template,
 };
@@ -163,6 +165,21 @@ where
             fields_to_read.push(optional_field.to_string());
         }
     }
+    for runtime_field in [
+        "task.runtimeDeliveryRequirement.appliesToThisTask",
+        "task.runtimeDeliveryRequirement.reason",
+        "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+        "task.runtimeDeliveryRequirement.affectedContractFields",
+        "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+        "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+        "task.runtimeDeliveryRequirement.forbiddenActions",
+        "task.runtimeDeliveryRequirement.source",
+        "task.runtimeDeliveryRequirement.deploymentFailureRef",
+    ] {
+        if allowed_read_fields.contains(runtime_field) {
+            fields_to_read.push(runtime_field.to_string());
+        }
+    }
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
@@ -203,7 +220,7 @@ where
         "conceptResponsibilities": [],
         "conceptVerificationIntents": [],
         "frontendExperienceRequirement": frontend_experience_requirement,
-        "runtimeDeliveryRequirement": value_field(&fields, "task.runtimeDeliveryRequirement")
+        "runtimeDeliveryRequirement": runtime_delivery_requirement_from_fields(&fields)
     }))
     .map_err(state::store::StateError::Json)?;
     let required_top_level_fields =
@@ -1233,10 +1250,11 @@ fn materialize_task_result_repair(
         context_fields.push("task.conceptRefs");
     }
     if context.task.frontend_experience_requirement.is_some() {
-        context_fields.push("task.frontendExperienceRequirement");
+        context_fields
+            .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
     }
     if context.task.runtime_delivery_requirement.is_some() {
-        context_fields.push("task.runtimeDeliveryRequirement");
+        context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
     }
     let mut write_contract_fields = vec![
         "outputContract.resultFile",
@@ -1742,6 +1760,43 @@ fn array_field(
         .map(|field| field.value.clone())
         .filter(Value::is_array)
         .unwrap_or_else(|| json!([]))
+}
+
+fn runtime_delivery_requirement_from_fields(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    let whole = value_field(fields, "task.runtimeDeliveryRequirement");
+    if !whole.is_null() {
+        return whole;
+    }
+    if !fields.contains_key("task.runtimeDeliveryRequirement.appliesToThisTask") {
+        return Value::Null;
+    }
+    let mut requirement = json!({
+        "appliesToThisTask": value_field(fields, "task.runtimeDeliveryRequirement.appliesToThisTask"),
+        "reason": value_field(fields, "task.runtimeDeliveryRequirement.reason"),
+        "affectedContractFields": array_field(fields, "task.runtimeDeliveryRequirement.affectedContractFields"),
+        "requiredCodeLevelChecks": array_field(fields, "task.runtimeDeliveryRequirement.requiredCodeLevelChecks"),
+        "evidenceExpectedInTaskResult": array_field(fields, "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult"),
+        "forbiddenActions": array_field(fields, "task.runtimeDeliveryRequirement.forbiddenActions")
+    });
+    for (field, key) in [
+        (
+            "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+            "runtimeDeliveryRef",
+        ),
+        ("task.runtimeDeliveryRequirement.source", "source"),
+        (
+            "task.runtimeDeliveryRequirement.deploymentFailureRef",
+            "deploymentFailureRef",
+        ),
+    ] {
+        let value = value_field(fields, field);
+        if !value.is_null() {
+            requirement[key] = value;
+        }
+    }
+    requirement
 }
 
 fn read_project_json_value(

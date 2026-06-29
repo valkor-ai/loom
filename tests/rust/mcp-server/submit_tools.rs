@@ -1312,6 +1312,15 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert!(core_group.fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs".to_string()
     ));
+    assert!(core_group
+        .fields
+        .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
+    assert!(core_group
+        .fields
+        .contains(&"executionRules.interactiveVerificationProbePolicy".to_string()));
+    assert!(core_group
+        .fields
+        .contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
     assert!(!core_group
         .fields
         .contains(&"sourceContext.architectureArtifactProjection.frontendExperience".to_string()));
@@ -1325,6 +1334,9 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"
                 .to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
+            "executionRules.frontendImplementationOrganizationRules".to_string(),
+            "executionRules.interactiveVerificationProbePolicy".to_string(),
+            "executionRules.controlledRuntimeProbeRules".to_string(),
             "outputContract.resultFile".to_string(),
             "outputContract.resultTemplate".to_string(),
         ],
@@ -1344,6 +1356,21 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     let interfaces = &fields["sourceContext.architectureArtifactProjection.interfaces"].value;
     assert_eq!(interfaces.as_array().expect("interfaces").len(), 1);
     assert_eq!(interfaces[0]["interfaceId"], json!("api.account.open"));
+    assert!(serde_json::to_string(
+        &fields["executionRules.frontendImplementationOrganizationRules"].value
+    )
+    .unwrap()
+    .contains("reachable entry"));
+    assert!(serde_json::to_string(
+        &fields["executionRules.interactiveVerificationProbePolicy"].value
+    )
+    .unwrap()
+    .contains("smallest applicable probe plan"));
+    assert!(
+        serde_json::to_string(&fields["executionRules.controlledRuntimeProbeRules"].value)
+            .unwrap()
+            .contains("Never run long-lived runtime")
+    );
     assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendExperienceSelfCheck"]
             ["closureRequirementIds"],
@@ -1448,7 +1475,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     );
     let execution_rules_text =
         serde_json::to_string(&execution_fields).expect("serialize execution rules");
-    assert!(execution_rules_text.contains("smallest meaningful verification signal"));
+    assert!(execution_rules_text.contains("write-producing verification commands"));
     assert!(execution_rules_text.contains("confirmed business language"));
     assert!(execution_inspected
         .read_groups
@@ -1459,6 +1486,17 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .iter()
         .flat_map(|group| group.fields.iter())
         .all(|field| field != "outputContract.schemaShape"));
+    assert!(execution_inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .all(
+            |field| field != "executionRules.frontendImplementationOrganizationRules"
+                && field != "executionRules.interactiveVerificationProbePolicy"
+                && field != "executionRules.controlledRuntimeProbeRules"
+                && field != "executionRules.runtimeDeliveryExecutionRules"
+                && field != "task.runtimeDeliveryRequirement"
+        ));
 
     write_task_result_candidate_without_requirement_detail_evidence(
         &fixture,
@@ -1737,6 +1775,94 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .join("tasks/phase-1/runs/latest.json")
         .exists());
     assert_no_read_plan_size_warnings(&fixture);
+}
+
+#[test]
+fn runtime_task_execution_request_uses_field_level_runtime_rules() {
+    let fixture = Fixture::new("task-exec-runtime-rules");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["runtimeDeliveryRequirement"] = json!({
+        "appliesToThisTask": true,
+        "reason": "This task changes runtime delivery wiring.",
+        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
+        "affectedContractFields": ["runtimeSurfaces"],
+        "requiredCodeLevelChecks": [{
+            "checkId": "check-runtime-wiring",
+            "contractField": "runtimeSurfaces",
+            "objective": "Verify runtime surface wiring still works.",
+            "acceptableEvidence": ["runtime_api_check", "static_check"]
+        }],
+        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "forbiddenActions": []
+    });
+    write_json_atomic(&group_path, &group_value).expect("write runtime group file");
+
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+    })
+    .expect("inspect runtime execution request");
+    let read_fields = inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(read_fields.contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
+    assert!(read_fields.contains(&"executionRules.runtimeDeliveryExecutionRules".to_string()));
+    assert!(read_fields
+        .contains(&"task.runtimeDeliveryRequirement.requiredCodeLevelChecks".to_string()));
+    assert!(!read_fields.contains(&"task.runtimeDeliveryRequirement".to_string()));
+    assert!(!read_fields
+        .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
+
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+        fields: vec![
+            "task.runtimeDeliveryRequirement.requiredCodeLevelChecks".to_string(),
+            "executionRules.controlledRuntimeProbeRules".to_string(),
+            "executionRules.runtimeDeliveryExecutionRules".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read runtime execution fields")
+    .fields;
+    assert_eq!(
+        fields["task.runtimeDeliveryRequirement.requiredCodeLevelChecks"].value[0]["checkId"],
+        json!("check-runtime-wiring")
+    );
+    assert!(
+        serde_json::to_string(&fields["executionRules.controlledRuntimeProbeRules"].value)
+            .unwrap()
+            .contains("foreground blocking verification commands")
+    );
+    assert_eq!(
+        fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]["codeLevelChecks"]
+            [0]["checkId"],
+        json!("check-runtime-wiring")
+    );
 }
 
 #[test]

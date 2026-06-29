@@ -4,8 +4,8 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureArtifactContract, TaskDefinition, TaskPlan, TaskPlanRun, TaskPlanRunNextAction,
-    TaskPlanRunStatus, TaskRunStatus,
+    ArchitectureArtifactContract, ImplementationAction, TaskDefinition, TaskKind, TaskPlan,
+    TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, DeliveryLifecycleStatus, LoomMcpActionResult, LoomMcpFailure,
@@ -250,6 +250,10 @@ fn build_execution_request(
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let read_groups = task_execution_read_groups(&request_task);
+    let user_facing_language = pgc.planning_inputs.user_facing_language.clone();
+    let execution_rules =
+        task_execution_rules(result_file, &request_task, user_facing_language.clone());
+    let result_rules = task_result_rules(&request_task);
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "execute_task",
@@ -284,43 +288,10 @@ fn build_execution_request(
             "requirementDetailSnapshot": pgc.requirement_details.items.iter()
                 .filter(|detail| request_task.requirement_detail_refs.iter().any(|id| id == &detail.detail_id))
                 .collect::<Vec<_>>(),
-            "userFacingLanguage": &pgc.planning_inputs.user_facing_language,
+            "userFacingLanguage": user_facing_language,
             "dependencyResults": dependency_results(run, task)
         },
-        "executionRules": {
-            "sourceEditPreparationContract": {
-                "rule": "Before source edits, read task, sourceContext, executionRules, and outputContract through requestReadPlan groups."
-            },
-            "completionBarrier": {
-                "resultFile": result_file,
-                "submitTool": "loom.recordTaskResultFile",
-                "rule": "The task is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."
-            },
-            "finalResponseGuard": {
-                "mustNotReportProgressBeforeSubmit": true,
-                "rule": "Do not stop with a progress-only summary before submitting TaskResult."
-            },
-            "completionContinuityRequirement": {
-                "taskResultSubmittedAfterVerification": true,
-                "agentOwnedLongRunningWork": "none | started_and_released | unknown"
-            },
-            "verificationCommandSchedulingRules": [
-                "Verification method is agent-chosen and must return control before TaskResult submission.",
-                "Use the smallest meaningful verification signal that proves the current task's behavior or contract obligation.",
-                "Do not leave long-running servers, watchers, browsers, or workers unreleased before TaskResult submission."
-            ],
-            "userFacingLanguage": {
-                "constraint": pgc.planning_inputs.user_facing_language,
-                "rule": "Preserve user-facing language from confirmed requirements in generated UI and feedback."
-            },
-            "boundaryRules": [
-                "Execute only the current task.",
-                "Do not modify Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, or other protected Loom artifacts.",
-                "Do not implement deferred scope.",
-                "Use confirmed business language in user-visible UI, feedback, test names, and TaskResult evidence when applicable.",
-                "Write TaskResult JSON only to outputContract.resultFile."
-            ]
-        },
+        "executionRules": execution_rules,
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
             "verificationStatus": ["passed", "not_run", "failed", "inconclusive"],
@@ -352,17 +323,218 @@ fn build_execution_request(
             ],
             "schemaShape": schema_shape,
             "resultTemplate": task_result_template(&task_plan.task_plan_id, &request_task),
-            "resultRules": [
-                "TaskResult must include every requiredTopLevelFields entry.",
-                "If status is completed, every verification intent should have passed evidence.",
-                "If status is failed, failure is required."
-            ]
+            "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
     }))
 }
 
+pub(crate) fn task_execution_rules(
+    result_file: &str,
+    task: &TaskDefinition,
+    user_facing_language: Option<contracts::UserFacingLanguageConstraint>,
+) -> Value {
+    let mut rules = json!({
+        "sourceEditPreparationContract": source_edit_preparation_contract(result_file),
+        "completionBarrier": {
+            "resultFile": result_file,
+            "submitTool": "loom.recordTaskResultFile",
+            "rule": "The task is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."
+        },
+        "finalResponseGuard": {
+            "mustNotReportProgressBeforeSubmit": true,
+            "rule": "Do not stop with a progress-only summary before submitting TaskResult."
+        },
+        "completionContinuityRequirement": {
+            "rule": "Verification method is agent-chosen, but it must return control before TaskResult submission.",
+            "forbiddenOutcome": "Do not leave this task waiting on a long-running command, browser session, interactive tool, server, watcher, worker, progress summary, or handoff note.",
+            "requiredCloseout": "Write TaskResult and run loom.recordTaskResultFile in this same task turn unless a declared stop condition is reached.",
+            "taskResultField": "executionContinuity",
+            "statusRule": "If agent-owned long-running work was started and its release state is unknown, use completed_with_notes with notes unless an independent failure or blocked condition remains."
+        },
+        "verificationCommandSchedulingRules": verification_command_scheduling_rules(),
+        "userFacingLanguage": {
+            "constraint": user_facing_language,
+            "rule": "Preserve the confirmed user-facing language in generated UI, validation, feedback, test labels, and TaskResult evidence when applicable."
+        },
+        "boundaryRules": [
+            "Execute only the current task.",
+            "Do not modify Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, or other protected Loom artifacts.",
+            "Do not implement deferred scope.",
+            "Use confirmed business language in user-visible UI, feedback, test names, and TaskResult evidence when applicable.",
+            "Write TaskResult JSON only to outputContract.resultFile."
+        ]
+    });
+    let Some(object) = rules.as_object_mut() else {
+        return rules;
+    };
+    if task_has_frontend_execution(task) {
+        object.insert(
+            "frontendImplementationOrganizationRules".to_string(),
+            frontend_implementation_organization_rules(),
+        );
+        object.insert(
+            "interactiveVerificationProbePolicy".to_string(),
+            interactive_verification_probe_policy(),
+        );
+    }
+    if task_needs_controlled_runtime_probe_rules(task) {
+        object.insert(
+            "controlledRuntimeProbeRules".to_string(),
+            controlled_runtime_probe_rules(),
+        );
+    }
+    if task.runtime_delivery_requirement.is_some() {
+        object.insert(
+            "runtimeDeliveryExecutionRules".to_string(),
+            runtime_delivery_execution_rules(),
+        );
+    }
+    rules
+}
+
+fn source_edit_preparation_contract(result_file: &str) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "contractKind": "source_edit_preparation",
+        "resultFile": result_file,
+        "requiredWritePlanFields": {
+            "targetPath": "Concrete project-relative or absolute path to create, replace, edit, or write as result artifact.",
+            "writeKind": ["create", "replace", "edit", "multi_edit", "artifact_result"],
+            "contentBasis": [
+                "task.objective",
+                "task.acceptanceRefs and sourceContext.acceptanceSnapshot",
+                "task.requirementDetailRefs and sourceContext.requirementDetailSnapshot",
+                "task.frontendExperienceRequirement when present",
+                "task.runtimeDeliveryRequirement when present",
+                "current source file contents for source edits"
+            ],
+            "writePayloadReady": "true only when complete file content or a complete edit set has been formed before invoking the write method"
+        },
+        "sequence": [
+            "Read required requestReadPlan groups and current source files that will be changed.",
+            "Form an internal write plan with targetPath, writeKind, contentBasis, and writePayloadReady=true.",
+            "Invoke file write/edit only after path and payload are complete.",
+            "If a write tool rejects missing or invalid path/content/edit arguments, rebuild complete arguments before retrying.",
+            "If targetPath or payload cannot be determined within this task boundary, write a failed or blocked TaskResult and submit it."
+        ],
+        "forbiddenOutcomes": [
+            "Do not invoke write/edit tools with missing path, content, or edit arguments.",
+            "Do not repeat a malformed write/edit tool call.",
+            "Do not begin a write while writePayloadReady is false.",
+            "Do not ask the user how to continue when the uncertainty can be represented as a failed or blocked TaskResult.",
+            "Do not stop with a progress-only summary after source edits."
+        ]
+    })
+}
+
+pub(crate) fn verification_command_scheduling_rules() -> Value {
+    json!([
+        "Run verification commands serially by default; only read-only inspection commands may be parallelized.",
+        "Do not issue multiple tool calls in the same response for commands that may install dependencies, build artifacts, run tests, start or probe runtimes, clean outputs, generate code, format files, mutate caches, or write files.",
+        "For write-producing verification commands, run one command, wait for it to finish, inspect the result, then decide the next command.",
+        "Treat commands as write-producing when unsure, including install, build, clean, test, e2e, lint with cache/fix, format with write, codegen, dev/start/preview servers, runtime checks, and commands that may write node_modules, dist, build, coverage, cache, reports, logs, or lockfiles.",
+        "When a temporary runtime is running for a bounded probe, run only readiness, HTTP, API, or browser probes against that runtime until cleanup is complete.",
+        "Record verification commands in TaskResult in the actual order they completed."
+    ])
+}
+
+pub(crate) fn controlled_runtime_probe_rules() -> Value {
+    json!([
+        "Never run long-lived runtime or server commands as foreground blocking verification commands.",
+        "This applies to commands that listen on a port, serve requests, watch files, open preview/dev servers, start workers, start queues, or keep the process alive.",
+        "If a runtime probe is needed, start only a task-owned temporary runtime in the background with a bounded readiness window, record pid, port, and command when available, run the probe, then stop that task-owned runtime before writing TaskResult.",
+        "If the runtime reports ready or listening, do not wait for natural process exit; probe the ready target and close out.",
+        "If the environment cannot safely start, probe, and clean up a temporary runtime, skip the live probe and record static/code-level evidence plus unverifiedItems or completed_with_notes.",
+        "Runtime probe cleanup failure, unknown cleanup, or not-safe cleanup is non-blocking by itself; record runtimeProbeCleanup and use completed_with_notes unless an independent defect remains."
+    ])
+}
+
+fn frontend_implementation_organization_rules() -> Value {
+    json!([
+        "For frontend tasks, organize implementation by responsibility boundaries rather than one giant mixed file.",
+        "Use the project's existing frontend structure when present.",
+        "When adding a frontend module to an existing app, add it as a reachable entry, route, tab, or navigation item in the existing app shell.",
+        "Do not replace, hide, or remove existing reachable module entries unless the requirement explicitly asks for that replacement or removal.",
+        "Follow sourceContext.userFacingLanguage or executionRules.userFacingLanguage for user-visible copy; do not translate code identifiers, API paths, database fields, enum values, package names, framework terms, or internal artifact ids.",
+        "Make UI/view, API or service interaction, state or feedback handling, and verification evidence distinguishable.",
+        "Do not force every responsibility into a separate file for small tasks, and do not collapse multiple frontend responsibilities into an unmaintainable single blob."
+    ])
+}
+
+fn interactive_verification_probe_policy() -> Value {
+    json!({
+        "appliesWhen": "The task uses browser, e2e, interactive UI, runtime UI, or API-backed UI verification.",
+        "deriveProbePlanFrom": [
+            "task.verificationIntents[].behavior",
+            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+            "task.frontendExperienceRequirement.executionGuidance.workflowsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.runtimeDeliveryRequirement.requiredCodeLevelChecks"
+        ],
+        "requiredExecutionPattern": [
+            "Before running browser, e2e, or interactive code, derive the smallest applicable probe plan from the current task fields.",
+            "Select only probes that match the current task responsibility; do not run probes for absent surfaces, workflows, actions, bindings, or runtime checks.",
+            "Each probe must verify one interaction target: one verification intent, workflow step, user action, frontend/backend binding, or runtime check.",
+            "Each probe must be bounded, return before the next probe starts, and produce an observable result such as reachable page, visible state, response status, result message, list/detail change, or state transition.",
+            "Do not bundle multiple business workflows into one browser/e2e script."
+        ],
+        "failureProgressRule": [
+            "When a probe fails, the next attempt must be smaller, more specific, reset tool context, or change the failure condition.",
+            "Continue while new observable evidence appears or the failure signature changes.",
+            "Stop retrying that verification method when the same failure signature repeats without new observable evidence."
+        ],
+        "taskResultEvidence": [
+            "Record successful probe facts in verificationResults[].summary for the matching verificationId.",
+            "Record runtime command or probe evidence in runtimeDeliveryEvidence.commandsRun when runtimeDeliveryEvidence applies.",
+            "Record remaining unverified responsibility in notes or runtimeDeliveryEvidence.unverifiedItems according to TaskResult rules."
+        ]
+    })
+}
+
+fn runtime_delivery_execution_rules() -> Value {
+    json!({
+        "readRuntimeDeliveryRequirement": true,
+        "verificationBoundary": "code_level_only",
+        "mustKeepContractAndCodeAligned": true,
+        "mayEditApplicationCode": true,
+        "mayEditPackageScripts": true,
+        "mayEditDeployGeneratedFiles": false,
+        "mayEditRuntimeDeliveryContract": false,
+        "mustRecordRuntimeDeliveryEvidence": true,
+        "mustRecordRuntimeProbeCleanupWhenTemporaryRuntimeStarted": true,
+        "foregroundRuntimeCommandsForbidden": true,
+        "controlledRuntimeProbeRulesField": "executionRules.controlledRuntimeProbeRules",
+        "runtimeProbeCleanupFailureSeverity": "completed_with_notes_only",
+        "selfRepairWhenCodeLevelCheckFails": true
+    })
+}
+
+fn task_result_rules(task: &TaskDefinition) -> Value {
+    let mut rules = vec![
+        "TaskResult must include every requiredTopLevelFields entry.".to_string(),
+        "If status is completed, every verification intent should have passed evidence.".to_string(),
+        "If status is failed, failure is required.".to_string(),
+        "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
+        "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
+    ];
+    if task.frontend_experience_requirement.is_some() {
+        rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present.".to_string());
+        rules.push("For browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy and record evidence through existing TaskResult fields.".to_string());
+    }
+    if task.runtime_delivery_requirement.is_some() {
+        rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
+        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, use only the exact checkId values listed in task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId.".to_string());
+        rules.push("If a temporary runtime/probe/server/container was started, include runtimeDeliveryEvidence.runtimeProbeCleanup; cleanup failure alone should be completed_with_notes, not failed or blocked.".to_string());
+    }
+    json!(rules)
+}
+
 fn task_execution_read_groups(task: &TaskDefinition) -> Value {
+    let has_frontend_execution = task_has_frontend_execution(task);
+    let has_frontend_requirement = task.frontend_experience_requirement.is_some();
+    let needs_runtime_probe_rules = task_needs_controlled_runtime_probe_rules(task);
     let mut core_fields = vec![
         "source.taskPlanId",
         "source.taskId",
@@ -398,7 +570,7 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
         "executionRules.userFacingLanguage",
         "executionRules.boundaryRules",
     ];
-    if task.frontend_experience_requirement.is_some() {
+    if has_frontend_requirement {
         core_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
             "task.frontendExperienceRequirement.executionGuidance.purpose",
@@ -415,9 +587,19 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
             "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
         ]);
     }
+    if has_frontend_execution {
+        core_fields.extend([
+            "executionRules.frontendImplementationOrganizationRules",
+            "executionRules.interactiveVerificationProbePolicy",
+        ]);
+    }
+    if needs_runtime_probe_rules {
+        core_fields.push("executionRules.controlledRuntimeProbeRules");
+    }
     if task.runtime_delivery_requirement.is_some() {
-        core_fields.push("task.runtimeDeliveryRequirement");
+        core_fields.extend(runtime_delivery_requirement_read_fields(task));
         core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
+        core_fields.push("executionRules.runtimeDeliveryExecutionRules");
     }
     if !task.concept_refs.is_empty() {
         core_fields.push("task.conceptRefs");
@@ -493,6 +675,66 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
             ]
         }),
     ])
+}
+
+fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
+    task.frontend_experience_requirement.is_some()
+        || matches!(
+            task.task_kind,
+            TaskKind::UiFlowIncrement | TaskKind::FrontendExperience
+        )
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::WireReferenceInApiOrUi
+                    | ImplementationAction::ImplementFrontendExperienceContract
+            )
+        })
+}
+
+fn task_needs_controlled_runtime_probe_rules(task: &TaskDefinition) -> bool {
+    task.runtime_delivery_requirement.is_some()
+        || task_has_frontend_execution(task)
+        || task.verification_intents.iter().any(|intent| {
+            intent
+                .preferred_evidence
+                .iter()
+                .chain(intent.acceptable_evidence.iter())
+                .any(|evidence| *evidence == VerificationEvidence::RuntimeApiCheck)
+        })
+}
+
+pub(crate) fn runtime_delivery_requirement_read_fields(task: &TaskDefinition) -> Vec<&'static str> {
+    let Some(requirement) = task.runtime_delivery_requirement.as_ref() else {
+        return vec![];
+    };
+    let mut fields = vec![
+        "task.runtimeDeliveryRequirement.appliesToThisTask",
+        "task.runtimeDeliveryRequirement.reason",
+    ];
+    if requirement.runtime_delivery_ref.is_some() {
+        fields.push("task.runtimeDeliveryRequirement.runtimeDeliveryRef");
+    }
+    if !requirement.affected_contract_fields.is_empty() {
+        fields.push("task.runtimeDeliveryRequirement.affectedContractFields");
+    }
+    if !requirement.required_code_level_checks.is_empty() {
+        fields.push("task.runtimeDeliveryRequirement.requiredCodeLevelChecks");
+    }
+    if !requirement.evidence_expected_in_task_result.is_empty() {
+        fields.push("task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult");
+    }
+    if !requirement.forbidden_actions.is_empty() {
+        fields.push("task.runtimeDeliveryRequirement.forbiddenActions");
+    }
+    if requirement.source.is_some() {
+        fields.push("task.runtimeDeliveryRequirement.source");
+    }
+    if requirement.deployment_failure_ref.is_some() {
+        fields.push("task.runtimeDeliveryRequirement.deploymentFailureRef");
+    }
+    fields
 }
 
 fn task_with_execution_guidance(

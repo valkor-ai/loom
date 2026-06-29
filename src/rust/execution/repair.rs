@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, TaskDefinition, TaskPlan,
@@ -26,7 +29,10 @@ use crate::{
         task_execution_request_file, task_execution_result_candidate_file, task_plan_group_pattern,
         task_plan_outline_candidate_file,
     },
-    task_execution::{load_current_plan_and_run, save_run},
+    task_execution::{
+        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+        task_execution_rules,
+    },
     task_plan::update_run_summary,
     templates::{
         runtime_delivery_requirement_template, task_result_template,
@@ -540,6 +546,38 @@ fn build_repair_execution_request(
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let result_template = task_result_template(&task_plan.task_plan_id, task);
+    let mut execution_rules = task_execution_rules(result_file, task, None);
+    if let Some(object) = execution_rules.as_object_mut() {
+        object.insert(
+            "boundaryRules".to_string(),
+            json!([
+                "Use repairContext as the failure boundary; do not repair unrelated issues.",
+                "Do not edit Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, ReviewResult, ManualReviewResolution, or .loom state.",
+                "Do not expand scope.",
+                "Write TaskResult JSON only to outputContract.resultFile."
+            ]),
+        );
+        if let Some(barrier) = object
+            .get_mut("completionBarrier")
+            .and_then(Value::as_object_mut)
+        {
+            barrier.insert(
+                "rule".to_string(),
+                json!("The repair is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."),
+            );
+        }
+        if let Some(rules) = object
+            .get_mut("verificationCommandSchedulingRules")
+            .and_then(Value::as_array_mut)
+        {
+            rules.push(json!(
+                "Run the verification needed for the repaired task before TaskResult submission."
+            ));
+            rules.push(json!(
+                "When a failing signal is available in repairContext, rerun that signal or the closest stable equivalent after the fix."
+            ));
+        }
+    }
     let mut repair_core_fields = vec![
         "source.deliveryId",
         "source.phaseId",
@@ -581,11 +619,55 @@ fn build_repair_execution_request(
         repair_core_fields.push("task.conceptVerificationIntents");
     }
     if task.frontend_experience_requirement.is_some() {
-        repair_core_fields.push("task.frontendExperienceRequirement");
+        repair_core_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
+            "task.frontendExperienceRequirement.executionGuidance.purpose",
+            "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
+            "task.frontendExperienceRequirement.executionGuidance.responsibility",
+            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+            "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
+            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+            "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
+            "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+            "executionRules.frontendImplementationOrganizationRules",
+            "executionRules.interactiveVerificationProbePolicy",
+            "executionRules.controlledRuntimeProbeRules",
+        ]);
     }
     if task.runtime_delivery_requirement.is_some() {
-        repair_core_fields.push("task.runtimeDeliveryRequirement");
+        repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
+        repair_core_fields.extend([
+            "executionRules.controlledRuntimeProbeRules",
+            "executionRules.runtimeDeliveryExecutionRules",
+        ]);
     }
+    if execution_rules
+        .get("frontendImplementationOrganizationRules")
+        .is_some()
+    {
+        repair_core_fields.push("executionRules.frontendImplementationOrganizationRules");
+    }
+    if execution_rules
+        .get("interactiveVerificationProbePolicy")
+        .is_some()
+    {
+        repair_core_fields.push("executionRules.interactiveVerificationProbePolicy");
+    }
+    if execution_rules.get("controlledRuntimeProbeRules").is_some() {
+        repair_core_fields.push("executionRules.controlledRuntimeProbeRules");
+    }
+    if execution_rules
+        .get("runtimeDeliveryExecutionRules")
+        .is_some()
+    {
+        repair_core_fields.push("executionRules.runtimeDeliveryExecutionRules");
+    }
+    let mut seen_repair_core_fields = BTreeSet::new();
+    repair_core_fields.retain(|field| seen_repair_core_fields.insert(*field));
     let mut repair_result_fields = vec![
         "enumRefs.taskResultStatus",
         "enumRefs.verificationStatus",
@@ -636,33 +718,7 @@ fn build_repair_execution_request(
             "sourceRef": source_ref,
             "findingRefs": finding_refs
         },
-        "executionRules": {
-            "sourceEditPreparationContract": {
-                "rule": "Repair only the execution issue for the current task. Do not modify Loom contracts or protected artifacts."
-            },
-            "completionBarrier": {
-                "resultFile": result_file,
-                "submitTool": "loom.recordTaskResultFile",
-                "rule": "The repair is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."
-            },
-            "finalResponseGuard": {
-                "mustNotReportProgressBeforeSubmit": true
-            },
-            "completionContinuityRequirement": {
-                "taskResultSubmittedAfterVerification": true,
-                "agentOwnedLongRunningWork": "none | started_and_released | unknown"
-            },
-            "verificationCommandSchedulingRules": [
-                "Run the verification needed for the repaired task before TaskResult submission.",
-                "When a failing signal is available in repairContext, rerun that signal or the closest stable equivalent after the fix."
-            ],
-            "boundaryRules": [
-                "Use repairContext as the failure boundary; do not repair unrelated issues.",
-                "Do not edit Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, ReviewResult, ManualReviewResolution, or .loom state.",
-                "Do not expand scope.",
-                "Write TaskResult JSON only to outputContract.resultFile."
-            ]
-        },
+        "executionRules": execution_rules,
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
             "verificationStatus": ["passed", "not_run", "failed", "inconclusive"]
