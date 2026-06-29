@@ -511,6 +511,16 @@ fn validate_result(
             "Completed TaskResult must not leave agent-owned long-running work as unknown.",
         ));
     }
+    if result.execution_continuity.agent_owned_long_running_work == "unknown"
+        && result.notes.is_empty()
+        && result.execution_continuity.notes.is_empty()
+    {
+        issues.push(issue(
+            "EXECUTION_CONTINUITY_REQUIRED",
+            "executionContinuity.notes",
+            "TaskResult must explain unknown agent-owned long-running work in notes or executionContinuity.notes.",
+        ));
+    }
     issues
 }
 

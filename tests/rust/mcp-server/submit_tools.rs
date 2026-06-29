@@ -2255,6 +2255,13 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
         json!(["api.account.open"]);
     group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["userFlows"] =
         json!(["flow.account-lifecycle"]);
+    group_value["tasks"][0]["verificationIntents"][0]["preferredEvidence"] =
+        json!(["runtime_api_check"]);
+    group_value["tasks"][0]["verificationIntents"][0]["acceptableEvidence"] = json!([
+        "automated_test",
+        "runtime_api_check",
+        "manual_command_output"
+    ]);
     group_value["tasks"][0]["conceptRefs"] = json!(["concept-account-ui"]);
     group_value["tasks"][0]["frontendExperienceRequirement"] = json!({
         "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
@@ -2322,7 +2329,7 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
     result["taskId"] = json!("wrong-task");
     result["changedFiles"] = json!(["src/App.tsx"]);
     result["verificationResults"][0]["verificationId"] = json!("wrong-verification");
-    result["verificationResults"][0]["evidenceType"] = json!("static_check");
+    result["verificationResults"][0]["evidenceType"] = json!("runtime_api_check");
     result["failure"] = json!({
         "code": "STALE_FAILURE",
         "summary": "This stale failure must not force a repair for a completed result."
@@ -3309,6 +3316,47 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         repaired_result["error"]["code"], "FIELD_NOT_ALLOWED",
         "{repaired_result:#}"
     );
+}
+
+#[test]
+fn task_result_requires_notes_for_unknown_long_running_work() {
+    let fixture = Fixture::new("task-result-unknown-long-running-work");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["status"] = json!("completed_with_notes");
+        result["notes"] = json!([]);
+        result["executionContinuity"]["agentOwnedLongRunningWork"] = json!("unknown");
+        result["executionContinuity"]["notes"] = json!([]);
+    });
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read task result repair issue conflicts")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "EXECUTION_CONTINUITY_REQUIRED"
+                && issue["fieldPath"] == "executionContinuity.notes"
+        }));
 }
 
 #[test]
@@ -5984,6 +6032,29 @@ fn taskplan_group_files(fixture: &Fixture, request_ref: &str) -> Vec<String> {
 
 fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
     write_task_result_candidate_with_detail_evidence(fixture, request_ref, true, false);
+}
+
+fn mutate_task_result_candidate<F>(fixture: &Fixture, request_ref: &str, mutate: F)
+where
+    F: FnOnce(&mut Value),
+{
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["outputContract.resultFile".to_string()],
+    })
+    .expect("read task result file")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("resultFile");
+    let result_path = fixture.root.join(result_file);
+    let mut result: Value =
+        serde_json::from_str(&std::fs::read_to_string(&result_path).expect("read task result"))
+            .expect("parse task result");
+    mutate(&mut result);
+    write_json_atomic(&result_path, &result).expect("write mutated task result");
 }
 
 fn write_task_result_candidate_with_empty_changed_files(fixture: &Fixture, request_ref: &str) {
