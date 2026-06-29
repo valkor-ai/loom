@@ -592,7 +592,11 @@ fn architecture_read_groups_follow_current_section() {
     assert_architecture_group_ids(
         &fixture,
         &architecture_request_ref,
-        &["architecture_core_context", "architecture_section_contract"],
+        &[
+            "architecture_core_context",
+            "architecture_section_contract",
+            "architecture_domain_model_context",
+        ],
     );
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
@@ -906,6 +910,99 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     assert_eq!(
         continued["next"]["writeTargets"][0]["targetId"],
         "domain_contract"
+    );
+}
+
+#[test]
+fn planning_contract_preserves_brainstorm_requirement_detail_index() {
+    let fixture = Fixture::new("pgc-detail-index");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        candidate_with_planning_details_json(),
+    );
+    let architecture_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
+    let source_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref.clone(),
+        fields: vec!["sourceRefs.planningContractRef".to_string()],
+    })
+    .expect("read planning contract ref")
+    .fields;
+    let planning_contract_ref = source_fields["sourceRefs.planningContractRef"]
+        .value
+        .as_str()
+        .expect("planning contract ref");
+    let planning_contract: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(planning_contract_ref))
+            .expect("read planning contract"),
+    )
+    .expect("parse planning contract");
+
+    assert_eq!(
+        planning_contract["planningInputs"]["actors"][0]["id"],
+        json!("actor_staff")
+    );
+    assert_eq!(
+        planning_contract["planningInputs"]["capabilityGroups"][0]["id"],
+        json!("cap_account_opening")
+    );
+
+    let details = planning_contract["requirementDetails"]["items"]
+        .as_array()
+        .expect("requirement details");
+    for expected_detail_id in [
+        "detail.scope.scope_1.1",
+        "detail.scope.scope_1.2",
+        "detail.acceptance.acc_1",
+        "detail.businessFlow.flow_account_opening",
+        "detail.concept.concept_security_account",
+        "detail.frontend.view.view_account_list",
+        "detail.frontend.action.action_open_account",
+        "detail.frontend.path_account_lifecycle",
+        "detail.assumption.assumption_1",
+    ] {
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail["detailId"] == json!(expected_detail_id)),
+            "missing PGC requirement detail {expected_detail_id}"
+        );
+    }
+    assert!(details.iter().any(|detail| {
+        detail["detailId"] == json!("detail.concept.concept_security_account")
+            && detail["conceptRefs"] == json!(["concept_security_account"])
+    }));
+
+    let core_group = architecture_root["requestReadPlan"]["groups"]
+        .as_array()
+        .expect("read groups")
+        .iter()
+        .find(|group| group["groupId"] == json!("architecture_core_context"))
+        .expect("architecture core group");
+    let core_fields = core_group["fields"].as_array().expect("core fields");
+    assert!(core_fields.contains(&json!(
+        "contextProjection.requirementDetailTransfer.requirementDetails"
+    )));
+    assert!(core_fields.contains(&json!(
+        "contextProjection.requirementDetailTransfer.businessFlows"
+    )));
+    assert!(!core_fields.contains(&json!("contextProjection")));
+    assert!(!core_fields.contains(&json!("contextProjection.requirementDetailTransfer")));
+    assert!(!core_fields.contains(&json!(
+        "contextProjection.requirementDetailTransfer.frontendExperienceDetails"
+    )));
+    let domain_group = architecture_root["requestReadPlan"]["groups"]
+        .as_array()
+        .expect("read groups")
+        .iter()
+        .find(|group| group["groupId"] == json!("architecture_domain_model_context"))
+        .expect("domain model group");
+    assert_eq!(
+        domain_group["fields"],
+        json!([
+            "contextProjection.requirementDetailTransfer.actors",
+            "contextProjection.requirementDetailTransfer.capabilityGroups"
+        ])
     );
 }
 
@@ -4510,6 +4607,54 @@ fn valid_candidate_with_frontend_json() -> Value {
         "frontend_experience",
         "final_summary"
     ]);
+    candidate
+}
+
+fn candidate_with_planning_details_json() -> Value {
+    let mut candidate = valid_candidate_with_frontend_json();
+    candidate["acceptance"][0]["capabilityRefs"] = json!(["cap_account_opening"]);
+    candidate["scope"]["assumptions"] = json!([{
+        "id": "assumption_1",
+        "text": "开户前工作人员已完成必要身份材料核验。",
+        "requiresConfirmation": false
+    }]);
+    candidate["domainModel"] = json!({
+        "actors": [{
+            "id": "actor_staff",
+            "name": "工作人员",
+            "description": "办理证券账户开户、挂失补办和销户。"
+        }],
+        "capabilityGroups": [{
+            "id": "cap_account_opening",
+            "name": "证券账户开户",
+            "description": "个人与法人证券账户开户能力。"
+        }],
+        "businessFlows": [{
+            "id": "flow_account_opening",
+            "name": "证券账户开户流程",
+            "actors": ["actor_staff"],
+            "capabilityRefs": ["cap_account_opening"],
+            "summary": "工作人员录入开户材料，系统校验资格并创建证券账户后给出中文成功反馈。"
+        }]
+    });
+    candidate["conceptGrounding"]["phaseConceptGrounding"] = json!({
+        "mode": "concepts_present",
+        "reason": "证券账户与资金账户容易混淆，需要在规划合同中保留语义边界。",
+        "concepts": [{
+            "conceptId": "concept_security_account",
+            "term": "证券账户",
+            "normalizedName": "证券账户",
+            "explanation": "证券账户用于登记证券持有与交易资格，不等同于资金账户。",
+            "mustNotMisinterpretAs": ["资金账户"],
+            "phaseRelevance": "current",
+            "priority": "must_understand",
+            "attentionRank": 1,
+            "riskFactors": ["scope_confusion_risk"],
+            "scopeRefs": ["scope_1"],
+            "acceptanceRefs": ["acc_1"],
+            "humanReadableReason": "当前阶段只实现证券账户闭环。"
+        }]
+    });
     candidate
 }
 

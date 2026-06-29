@@ -522,6 +522,10 @@ pub struct PlanningContractTechnicalBaseline {
 pub struct PlanningInputs {
     pub business_goal: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actors: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capability_groups: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub business_flows: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontend_experience: Option<FrontendExperience>,

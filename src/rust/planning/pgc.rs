@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, path::Path};
 
 use contracts::{
-    BrainstormContract, ContextWarning, PlanningContractContextRefs, PlanningContractPhaseScope,
-    PlanningContractSource, PlanningContractStatus, PlanningContractTechnicalBaseline,
-    PlanningDeploymentRules, PlanningGenerationContract, PlanningHandoff, PlanningInputs,
-    PlanningRules, QualityGates, RequirementDetailItem, RequirementDetailsIndex,
-    ScopeIsolationRules, ScopeItem, TechnicalBaselineContract,
+    BrainstormContract, ConceptPhaseRelevance, ConceptPriority, PlanningContractContextRefs,
+    PlanningContractPhaseScope, PlanningContractSource, PlanningContractStatus,
+    PlanningContractTechnicalBaseline, PlanningDeploymentRules, PlanningGenerationContract,
+    PlanningHandoff, PlanningInputs, PlanningRules, QualityGates, RequirementDetailItem,
+    RequirementDetailsIndex, ScopeIsolationRules, ScopeItem, TechnicalBaselineContract,
 };
 use delivery_core::{
     apply_delivery_index, DeliveryLifecycleStatus, DomainDispatcher, LoomMcpActionResult,
@@ -148,16 +148,20 @@ where
         .unwrap_or_else(|| brainstorm.summary.one_line.clone());
     let planning_inputs = PlanningInputs {
         business_goal,
+        actors: brainstorm
+            .domain_model
+            .as_ref()
+            .map(|model| values_from_iter(&model.actors))
+            .unwrap_or_default(),
+        capability_groups: brainstorm
+            .domain_model
+            .as_ref()
+            .map(|model| values_from_iter(&model.capability_groups))
+            .unwrap_or_default(),
         business_flows: brainstorm
             .domain_model
             .as_ref()
-            .map(|model| {
-                model
-                    .business_flows
-                    .iter()
-                    .map(|flow| serde_json::to_value(flow).unwrap_or(serde_json::Value::Null))
-                    .collect::<Vec<_>>()
-            })
+            .map(|model| values_from_iter(&model.business_flows))
             .unwrap_or_default(),
         frontend_experience: brainstorm.frontend_experience.clone(),
         user_facing_language: Some(brainstorm.delivery_context.user_facing_language.clone()),
@@ -284,26 +288,54 @@ fn build_requirement_details_index(
     current_acceptance_ids: &[String],
 ) -> RequirementDetailsIndex {
     let mut items = Vec::new();
+    let fallback_source_refs = fallback_source_refs(brainstorm, brainstorm_contract_ref);
+    let current_scope_ids = phase_scope
+        .included
+        .iter()
+        .map(|scope| scope.id.clone())
+        .collect::<Vec<_>>();
 
     for scope in &phase_scope.included {
-        items.push(RequirementDetailItem {
-            detail_id: format!("detail.scope.{}", scope.id),
-            kind: "scope_item".to_string(),
-            title: scope.label.clone(),
-            summary: scope.reason.clone().unwrap_or_else(|| scope.label.clone()),
-            required_for_current_phase: true,
-            priority: "must".to_string(),
-            source_field_refs: vec!["scope.included".to_string()],
-            source_refs: vec![brainstorm_contract_ref.to_string()],
-            scope_refs: vec![scope.id.clone()],
-            acceptance_refs: vec![],
-            concept_refs: vec![],
-            frontend_refs: vec![],
-            impact_tags: vec!["scope".to_string()],
-            lifecycle_stage: "current_phase".to_string(),
-            quality: "confirmed".to_string(),
-            unresolved_note: None,
-        });
+        let details = if scope.items.is_empty() {
+            vec![scope.label.clone()]
+        } else {
+            scope.items.clone()
+        };
+        for (index, detail) in details.iter().enumerate() {
+            push_detail(
+                &mut items,
+                RequirementDetailItem {
+                    detail_id: format!("detail.scope.{}.{}", scope.id, index + 1),
+                    kind: infer_requirement_detail_kind(detail, "scope_boundary"),
+                    title: format!("{}: {}", scope.label, detail),
+                    summary: detail.clone(),
+                    required_for_current_phase: true,
+                    priority: "must".to_string(),
+                    source_field_refs: vec![format!(
+                        "brainstorm.scope.included[{scope_id}].{}",
+                        if scope.items.is_empty() {
+                            "label"
+                        } else {
+                            "items"
+                        },
+                        scope_id = scope.id
+                    )],
+                    source_refs: fallback_source_refs.clone(),
+                    scope_refs: vec![scope.id.clone()],
+                    acceptance_refs: vec![],
+                    concept_refs: vec![],
+                    frontend_refs: vec![],
+                    impact_tags: infer_impact_tags(detail),
+                    lifecycle_stage: infer_lifecycle_stage(detail),
+                    quality: "confirmed".to_string(),
+                    unresolved_note: if scope.items.is_empty() {
+                        Some("Scope item has no detailed items array; label was used as the detail source.".to_string())
+                    } else {
+                        None
+                    },
+                },
+            );
+        }
     }
 
     for acceptance in brainstorm
@@ -311,75 +343,475 @@ fn build_requirement_details_index(
         .iter()
         .filter(|item| current_acceptance_ids.iter().any(|id| id == &item.id))
     {
-        items.push(RequirementDetailItem {
-            detail_id: format!("detail.acceptance.{}", acceptance.id),
-            kind: "acceptance_candidate".to_string(),
-            title: acceptance.id.clone(),
-            summary: acceptance.statement.clone(),
-            required_for_current_phase: true,
-            priority: format!("{:?}", acceptance.priority).to_lowercase(),
-            source_field_refs: vec!["acceptance".to_string()],
-            source_refs: if acceptance.source_refs.is_empty() {
-                vec![brainstorm_contract_ref.to_string()]
-            } else {
-                acceptance.source_refs.clone()
+        push_detail(
+            &mut items,
+            RequirementDetailItem {
+                detail_id: format!("detail.acceptance.{}", acceptance.id),
+                kind: infer_requirement_detail_kind(&acceptance.statement, "acceptance_outcome"),
+                title: acceptance.id.clone(),
+                summary: acceptance.statement.clone(),
+                required_for_current_phase: true,
+                priority: format!("{:?}", acceptance.priority).to_lowercase(),
+                source_field_refs: vec![format!(
+                    "brainstorm.acceptance[{}].statement",
+                    acceptance.id
+                )],
+                source_refs: if acceptance.source_refs.is_empty() {
+                    fallback_source_refs.clone()
+                } else {
+                    acceptance.source_refs.clone()
+                },
+                scope_refs: current_scope_ids.clone(),
+                acceptance_refs: vec![acceptance.id.clone()],
+                concept_refs: vec![],
+                frontend_refs: vec![],
+                impact_tags: infer_impact_tags(&acceptance.statement),
+                lifecycle_stage: infer_lifecycle_stage(&acceptance.statement),
+                quality: "confirmed".to_string(),
+                unresolved_note: None,
             },
-            scope_refs: phase_scope
-                .included
+        );
+    }
+
+    if let Some(model) = &brainstorm.domain_model {
+        for flow in &model.business_flows {
+            let acceptance_refs = brainstorm
+                .acceptance
                 .iter()
-                .map(|scope| scope.id.clone())
-                .collect(),
-            acceptance_refs: vec![acceptance.id.clone()],
-            concept_refs: vec![],
-            frontend_refs: vec![],
-            impact_tags: vec!["acceptance".to_string()],
-            lifecycle_stage: "acceptance".to_string(),
-            quality: "confirmed".to_string(),
-            unresolved_note: None,
-        });
+                .filter(|acceptance| {
+                    current_acceptance_ids.iter().any(|id| id == &acceptance.id)
+                        && acceptance
+                            .capability_refs
+                            .iter()
+                            .any(|capability_ref| flow.capability_refs.contains(capability_ref))
+                })
+                .map(|acceptance| acceptance.id.clone())
+                .collect::<Vec<_>>();
+            push_detail(
+                &mut items,
+                RequirementDetailItem {
+                    detail_id: format!("detail.businessFlow.{}", flow.id),
+                    kind: "business_flow".to_string(),
+                    title: flow.name.clone(),
+                    summary: flow.summary.clone(),
+                    required_for_current_phase: true,
+                    priority: "must".to_string(),
+                    source_field_refs: vec![format!(
+                        "brainstorm.domainModel.businessFlows[{}].summary",
+                        flow.id
+                    )],
+                    source_refs: fallback_source_refs.clone(),
+                    scope_refs: current_scope_ids.clone(),
+                    acceptance_refs,
+                    concept_refs: vec![],
+                    frontend_refs: vec![],
+                    impact_tags: infer_impact_tags(&flow.summary),
+                    lifecycle_stage: infer_lifecycle_stage(&flow.summary),
+                    quality: "confirmed".to_string(),
+                    unresolved_note: None,
+                },
+            );
+        }
+    }
+
+    if let Some(concept_grounding) = &brainstorm.concept_grounding {
+        let concept_sets = concept_grounding
+            .delivery_concept_glossary
+            .iter()
+            .chain(std::iter::once(&concept_grounding.phase_concept_grounding));
+        for concept_set in concept_sets {
+            for concept in &concept_set.concepts {
+                let concept_scope_refs = concept
+                    .scope_refs
+                    .iter()
+                    .filter(|scope_ref| current_scope_ids.iter().any(|id| id == *scope_ref))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let concept_acceptance_refs = concept
+                    .acceptance_refs
+                    .iter()
+                    .filter(|acceptance_ref| {
+                        current_acceptance_ids
+                            .iter()
+                            .any(|id| id == *acceptance_ref)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let current_phase_relevant = matches!(
+                    concept.phase_relevance,
+                    ConceptPhaseRelevance::Current | ConceptPhaseRelevance::CurrentAdjacent
+                ) || !concept_scope_refs.is_empty()
+                    || !concept_acceptance_refs.is_empty();
+                if !current_phase_relevant {
+                    continue;
+                }
+                push_detail(
+                    &mut items,
+                    RequirementDetailItem {
+                        detail_id: format!("detail.concept.{}", concept.concept_id),
+                        kind: infer_requirement_detail_kind(
+                            &concept.explanation,
+                            "business_scenario",
+                        ),
+                        title: concept.term.clone(),
+                        summary: concept.explanation.clone(),
+                        required_for_current_phase: matches!(
+                            concept.phase_relevance,
+                            ConceptPhaseRelevance::Current
+                        ),
+                        priority: match concept.priority {
+                            ConceptPriority::MustUnderstand => "must",
+                            ConceptPriority::ShouldUnderstand => "should",
+                            ConceptPriority::NiceToUnderstand => "could",
+                        }
+                        .to_string(),
+                        source_field_refs: vec![format!(
+                            "brainstorm.conceptGrounding.concepts[{}].explanation",
+                            concept.concept_id
+                        )],
+                        source_refs: fallback_source_refs.clone(),
+                        scope_refs: concept_scope_refs,
+                        acceptance_refs: concept_acceptance_refs,
+                        concept_refs: vec![concept.concept_id.clone()],
+                        frontend_refs: vec![],
+                        impact_tags: infer_impact_tags(&concept.explanation),
+                        lifecycle_stage: infer_lifecycle_stage(&concept.explanation),
+                        quality: "confirmed".to_string(),
+                        unresolved_note: None,
+                    },
+                );
+            }
+        }
     }
 
     if let Some(frontend) = &brainstorm.frontend_experience {
-        for path in &frontend.operation_paths {
-            items.push(RequirementDetailItem {
-                detail_id: format!("detail.frontend.{}", path.path_id),
-                kind: "frontend_operation_path".to_string(),
-                title: path.name.clone(),
-                summary: path.user_goal.clone(),
-                required_for_current_phase: true,
-                priority: "should".to_string(),
-                source_field_refs: vec!["frontendExperience.operationPaths".to_string()],
-                source_refs: if path.source_refs.is_empty() {
-                    vec![brainstorm_contract_ref.to_string()]
-                } else {
-                    path.source_refs.clone()
+        for view in &frontend.data_views {
+            let summary = format!(
+                "{} Selection: {:?}. Pagination required: {}.",
+                view.purpose, view.selection_mode, view.pagination_required
+            );
+            push_detail(
+                &mut items,
+                RequirementDetailItem {
+                    detail_id: format!("detail.frontend.view.{}", view.view_id),
+                    kind: "frontend_operation_path".to_string(),
+                    title: view.name.clone(),
+                    summary: summary.clone(),
+                    required_for_current_phase: frontend.required,
+                    priority: if frontend.required { "must" } else { "could" }.to_string(),
+                    source_field_refs: vec![format!(
+                        "brainstorm.frontendExperience.dataViews[{}]",
+                        view.view_id
+                    )],
+                    source_refs: if view.source_refs.is_empty() {
+                        fallback_source_refs.clone()
+                    } else {
+                        view.source_refs.clone()
+                    },
+                    scope_refs: current_scope_ids.clone(),
+                    acceptance_refs: vec![],
+                    concept_refs: vec![],
+                    frontend_refs: vec![view.view_id.clone()],
+                    impact_tags: infer_impact_tags(&summary),
+                    lifecycle_stage: "frontend".to_string(),
+                    quality: "confirmed".to_string(),
+                    unresolved_note: None,
                 },
-                scope_refs: phase_scope
-                    .included
-                    .iter()
-                    .map(|scope| scope.id.clone())
-                    .collect(),
+            );
+        }
+        for action in &frontend.actions {
+            let summary = format!(
+                "{}. Entry: {:?}. Refresh: {}. Success feedback: {}. Blocking or error feedback: {}.",
+                action.label,
+                action.entry_point,
+                action.refresh_policy,
+                action.success_feedback.join("; "),
+                action.blocking_or_error_feedback.join("; ")
+            );
+            push_detail(
+                &mut items,
+                RequirementDetailItem {
+                    detail_id: format!("detail.frontend.action.{}", action.action_id),
+                    kind: "frontend_operation_path".to_string(),
+                    title: action.label.clone(),
+                    summary: summary.clone(),
+                    required_for_current_phase: frontend.required,
+                    priority: if frontend.required { "must" } else { "could" }.to_string(),
+                    source_field_refs: vec![format!(
+                        "brainstorm.frontendExperience.actions[{}]",
+                        action.action_id
+                    )],
+                    source_refs: if action.source_refs.is_empty() {
+                        fallback_source_refs.clone()
+                    } else {
+                        action.source_refs.clone()
+                    },
+                    scope_refs: current_scope_ids.clone(),
+                    acceptance_refs: vec![],
+                    concept_refs: vec![],
+                    frontend_refs: vec![action.action_id.clone()],
+                    impact_tags: infer_impact_tags(&summary),
+                    lifecycle_stage: "frontend".to_string(),
+                    quality: "confirmed".to_string(),
+                    unresolved_note: None,
+                },
+            );
+        }
+        for path in &frontend.operation_paths {
+            push_detail(
+                &mut items,
+                RequirementDetailItem {
+                    detail_id: format!("detail.frontend.{}", path.path_id),
+                    kind: "frontend_operation_path".to_string(),
+                    title: path.name.clone(),
+                    summary: path.selection_summary.clone(),
+                    required_for_current_phase: frontend.required,
+                    priority: if frontend.required { "must" } else { "could" }.to_string(),
+                    source_field_refs: vec![format!(
+                        "brainstorm.frontendExperience.operationPaths[{}]",
+                        path.path_id
+                    )],
+                    source_refs: if path.source_refs.is_empty() {
+                        fallback_source_refs.clone()
+                    } else {
+                        path.source_refs.clone()
+                    },
+                    scope_refs: current_scope_ids.clone(),
+                    acceptance_refs: vec![],
+                    concept_refs: vec![],
+                    frontend_refs: std::iter::once(path.path_id.clone())
+                        .chain(path.data_view_refs.iter().cloned())
+                        .chain(path.action_refs.iter().cloned())
+                        .collect(),
+                    impact_tags: infer_impact_tags(&path.selection_summary),
+                    lifecycle_stage: "frontend".to_string(),
+                    quality: "confirmed".to_string(),
+                    unresolved_note: None,
+                },
+            );
+        }
+    }
+
+    for assumption in &brainstorm.scope.assumptions {
+        push_detail(
+            &mut items,
+            RequirementDetailItem {
+                detail_id: format!("detail.assumption.{}", assumption.id),
+                kind: "assumption".to_string(),
+                title: assumption.id.clone(),
+                summary: assumption.text.clone(),
+                required_for_current_phase: !assumption.requires_confirmation,
+                priority: if assumption.requires_confirmation {
+                    "should"
+                } else {
+                    "could"
+                }
+                .to_string(),
+                source_field_refs: vec![format!(
+                    "brainstorm.scope.assumptions[{}].text",
+                    assumption.id
+                )],
+                source_refs: fallback_source_refs.clone(),
+                scope_refs: vec![],
                 acceptance_refs: vec![],
                 concept_refs: vec![],
-                frontend_refs: vec![path.path_id.clone()],
-                impact_tags: vec!["frontend".to_string()],
-                lifecycle_stage: "frontend".to_string(),
+                frontend_refs: vec![],
+                impact_tags: infer_impact_tags(&assumption.text),
+                lifecycle_stage: infer_lifecycle_stage(&assumption.text),
                 quality: "confirmed".to_string(),
-                unresolved_note: None,
-            });
-        }
+                unresolved_note: if assumption.requires_confirmation {
+                    Some("Assumption still requires confirmation.".to_string())
+                } else {
+                    None
+                },
+            },
+        );
     }
 
     RequirementDetailsIndex {
         schema_version: "1.0".to_string(),
-        authority: "brainstorm_confirmed_scope".to_string(),
+        authority: "brainstorm_contract".to_string(),
         source_brainstorm_contract_ref: brainstorm_contract_ref.to_string(),
         items,
-        extraction_warnings: vec![ContextWarning {
-            code: "MECHANICAL_PGC_INDEX".to_string(),
-            message: "Requirement details are mechanically projected from the confirmed Brainstorm contract.".to_string(),
-        }],
+        extraction_warnings: vec![],
     }
+}
+
+fn values_from_iter<T: serde::Serialize>(items: &[T]) -> Vec<serde_json::Value> {
+    items
+        .iter()
+        .filter_map(|item| serde_json::to_value(item).ok())
+        .collect()
+}
+
+fn fallback_source_refs(
+    brainstorm: &BrainstormContract,
+    brainstorm_contract_ref: &str,
+) -> Vec<String> {
+    let source_refs = brainstorm
+        .sources
+        .iter()
+        .map(|source| source.source_id.clone())
+        .filter(|source_id| !source_id.trim().is_empty())
+        .collect::<Vec<_>>();
+    if source_refs.is_empty() {
+        vec![brainstorm_contract_ref.to_string()]
+    } else {
+        source_refs
+    }
+}
+
+fn push_detail(items: &mut Vec<RequirementDetailItem>, detail: RequirementDetailItem) {
+    if detail.summary.trim().is_empty()
+        || items
+            .iter()
+            .any(|item| item.detail_id == detail.detail_id || item.summary == detail.summary)
+    {
+        return;
+    }
+    items.push(detail);
+}
+
+fn infer_requirement_detail_kind(value: &str, fallback: &str) -> String {
+    let text = value.to_lowercase();
+    if matches_any(
+        &text,
+        &[
+            "frontend", "ui", "page", "screen", "list", "query", "select", "refresh", "页面",
+            "列表", "查询", "选择", "刷新", "反馈",
+        ],
+    ) {
+        return "frontend_operation_path".to_string();
+    }
+    if matches_any(
+        &text,
+        &[
+            "block", "blocking", "deny", "reject", "error", "invalid", "阻断", "拒绝", "失败",
+            "无效", "原因",
+        ],
+    ) {
+        return "blocking_rule".to_string();
+    }
+    if matches_any(
+        &text,
+        &[
+            "validate",
+            "validation",
+            "required",
+            "format",
+            "校验",
+            "必填",
+            "格式",
+            "规则",
+        ],
+    ) {
+        return "validation_rule".to_string();
+    }
+    if matches_any(
+        &text,
+        &["state", "status", "transition", "状态", "变更", "流转"],
+    ) {
+        return "state_transition".to_string();
+    }
+    if matches_any(
+        &text,
+        &[
+            "field",
+            "input",
+            "display",
+            "relationship",
+            "字段",
+            "录入",
+            "展示",
+            "关系",
+        ],
+    ) {
+        return "object_field_set".to_string();
+    }
+    if matches_any(
+        &text,
+        &[
+            "create",
+            "update",
+            "approve",
+            "cancel",
+            "close",
+            "submit",
+            "operation",
+            "action",
+            "创建",
+            "修改",
+            "审批",
+            "提交",
+            "销户",
+            "操作",
+            "办理",
+        ],
+    ) {
+        return "object_operation".to_string();
+    }
+    if matches_any(&text, &["flow", "workflow", "process", "流程", "步骤"]) {
+        return "business_flow".to_string();
+    }
+    fallback.to_string()
+}
+
+fn infer_impact_tags(value: &str) -> Vec<String> {
+    let text = value.to_lowercase();
+    let mut tags = Vec::new();
+    if matches_any(
+        &text,
+        &[
+            "state",
+            "status",
+            "transition",
+            "状态",
+            "流转",
+            "冻结",
+            "销户",
+        ],
+    ) {
+        tags.push("state".to_string());
+    }
+    if matches_any(
+        &text,
+        &[
+            "validate",
+            "validation",
+            "校验",
+            "阻断",
+            "拒绝",
+            "禁",
+            "未成年人",
+            "授权",
+        ],
+    ) {
+        tags.push("validation".to_string());
+    }
+    if matches_any(&text, &["frontend", "ui", "页面", "列表", "按钮", "反馈"]) {
+        tags.push("frontend".to_string());
+    }
+    if tags.is_empty() {
+        tags.push("scope".to_string());
+    }
+    tags
+}
+
+fn infer_lifecycle_stage(value: &str) -> String {
+    let text = value.to_lowercase();
+    if matches_any(&text, &["frontend", "ui", "页面", "列表", "按钮", "反馈"]) {
+        "frontend".to_string()
+    } else if matches_any(&text, &["state", "status", "transition", "状态", "流转"]) {
+        "state_transition".to_string()
+    } else if matches_any(&text, &["validate", "validation", "校验", "阻断", "拒绝"]) {
+        "validation".to_string()
+    } else {
+        "current_phase".to_string()
+    }
+}
+
+fn matches_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
 }
 
 fn build_context_notes(repository_context_ref: &Option<String>) -> Vec<String> {

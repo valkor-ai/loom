@@ -398,6 +398,23 @@ pub(crate) fn architecture_read_groups(
             ]
         }));
     }
+    if matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+    ) {
+        groups.push(json!({
+            "groupId": "architecture_domain_model_context",
+            "required": true,
+            "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture sections.",
+            "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
+            "fields": [
+                "contextProjection.requirementDetailTransfer.actors",
+                "contextProjection.requirementDetailTransfer.capabilityGroups"
+            ]
+        }));
+    }
     Value::Array(groups)
 }
 
@@ -501,6 +518,8 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
         "requirementDetailTransfer": {
             "requirementDetails": planning_contract.requirement_details,
             "acceptanceDetails": planning_contract.phase_scope.acceptance_candidates,
+            "actors": planning_contract.planning_inputs.actors,
+            "capabilityGroups": planning_contract.planning_inputs.capability_groups,
             "frontendExperienceDetails": planning_contract.planning_inputs.frontend_experience,
             "userFacingLanguage": planning_contract.planning_inputs.user_facing_language,
             "businessFlows": planning_contract.planning_inputs.business_flows
