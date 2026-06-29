@@ -5,10 +5,10 @@ use contracts::{
     TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
-    ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
-    ReadRequestFieldsInput, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
-    TransitionStore,
+    ArtifactKind, DeliveryIndex, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
+    OperationContext, ReadRequestFieldsInput, RouteAction, RouteActionKind, SubmitAcceptedEvent,
+    TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -102,7 +102,6 @@ fn materialize_request_inner(
         })?
         .clone();
     let brainstorm = read_brainstorm_contract(root, &brainstorm_ref)?;
-    let project_kind = infer_project_kind(root);
     let request_id = format!("tbr_{}", state::store::now_millis());
     let candidate_file = to_project_relative(
         root,
@@ -120,6 +119,8 @@ fn materialize_request_inner(
     } else {
         None
     };
+    let project_kind =
+        infer_project_kind_for_baseline(root, &delivery, phase_id, previous_baseline.is_some());
     let request_root = build_request_root(
         root,
         &brainstorm,
@@ -1334,7 +1335,28 @@ fn normalize_stack_token(value: &str) -> String {
         .join("-")
 }
 
-fn infer_project_kind(project_root: &Path) -> ProjectKind {
+fn infer_project_kind_for_baseline(
+    project_root: &Path,
+    delivery: &DeliveryIndex,
+    phase_id: &str,
+    has_previous_baseline: bool,
+) -> ProjectKind {
+    if has_previous_baseline || is_after_first_delivery_phase(delivery, phase_id) {
+        return ProjectKind::ExistingProject;
+    }
+    infer_project_kind_from_repo(project_root)
+}
+
+fn is_after_first_delivery_phase(delivery: &DeliveryIndex, phase_id: &str) -> bool {
+    delivery
+        .phases
+        .iter()
+        .position(|phase| phase.phase_id == phase_id)
+        .map(|index| index > 0)
+        .unwrap_or(false)
+}
+
+fn infer_project_kind_from_repo(project_root: &Path) -> ProjectKind {
     let markers = [
         "package.json",
         "tsconfig.json",

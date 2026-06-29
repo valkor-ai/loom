@@ -766,6 +766,81 @@ fn technical_baseline_repo_signal_conflict_with_previous_stack_requires_user_gat
 }
 
 #[test]
+fn technical_baseline_request_treats_later_phase_without_repo_markers_as_existing_project() {
+    let fixture = Fixture::new("technical-baseline-later-phase");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+    let phase_1_brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        phase_1_brainstorm_result["next"]["artifactKind"], "technical_baseline_candidate",
+        "{phase_1_brainstorm_result:#}"
+    );
+    write_previous_technical_baseline(&fixture, &delivery_id);
+    append_phase_with_refs(
+        &fixture,
+        &delivery_id,
+        "phase-2",
+        json!({
+            "brainstormContract": format!(".loom/deliveries/{delivery_id}/brainstorm/contract.json")
+        }),
+    );
+
+    let result = planning::materialize_technical_baseline_request(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-2",
+    );
+    let value = serde_json::to_value(result).expect("technical baseline request result");
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+    let phase_2_request_ref = value["next"]["requestRef"]
+        .as_str()
+        .expect("phase-2 technical baseline requestRef");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: phase_2_request_ref.to_string(),
+        fields: vec![
+            "projectKind".to_string(),
+            "repoEvidence.detectedProjectKind".to_string(),
+            "repoEvidence.baselineExists".to_string(),
+            "previousBaselineContext.previousBaselineRef".to_string(),
+            "decisionNeeds".to_string(),
+        ],
+    })
+    .expect("read phase-2 technical baseline fields")
+    .fields;
+
+    assert_eq!(fields["projectKind"].value, json!("existing_project"));
+    let request_root = read_request_root_value(fixture.root_str(), phase_2_request_ref);
+    assert_eq!(
+        request_root["operation"],
+        json!("infer_existing_project_baseline")
+    );
+    assert_eq!(
+        fields["repoEvidence.detectedProjectKind"].value,
+        json!("existing_project")
+    );
+    assert_eq!(fields["repoEvidence.baselineExists"].value, json!(true));
+    assert_eq!(
+        fields["previousBaselineContext.previousBaselineRef"].value,
+        json!(format!(
+            ".loom/deliveries/{delivery_id}/contracts/technical-baseline.json"
+        ))
+    );
+    let decision_needs = fields["decisionNeeds"]
+        .value
+        .as_array()
+        .expect("decision needs");
+    assert!(decision_needs.iter().any(|item| item
+        .as_str()
+        .is_some_and(|text| text.contains("reuse the previous TechnicalBaseline unchanged"))));
+}
+
+#[test]
 fn greenfield_technical_baseline_needing_confirmation_uses_user_gate() {
     let fixture = Fixture::new("technical-baseline-greenfield-user-gate");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
@@ -6847,6 +6922,15 @@ fn append_done_phase(fixture: &Fixture, delivery_id: &str, phase_id: &str) {
 }
 
 fn append_unstarted_phase(fixture: &Fixture, delivery_id: &str, phase_id: &str) {
+    append_phase_with_refs(fixture, delivery_id, phase_id, json!({}));
+}
+
+fn append_phase_with_refs(
+    fixture: &Fixture,
+    delivery_id: &str,
+    phase_id: &str,
+    latest_refs: Value,
+) {
     let index_path = fixture
         .root
         .join(".loom/deliveries")
@@ -6857,7 +6941,7 @@ fn append_unstarted_phase(fixture: &Fixture, delivery_id: &str, phase_id: &str) 
             .expect("parse index");
     index["phases"].as_array_mut().expect("phases").push(json!({
         "phaseId": phase_id,
-        "latestRefs": {}
+        "latestRefs": latest_refs
     }));
     write_json_atomic(&index_path, &index).expect("write delivery index");
 }
