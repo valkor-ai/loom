@@ -333,13 +333,36 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         request_ref: request_ref.to_string(),
     })
     .expect("inspect final summary request");
+    let final_group_ids = final_request
+        .read_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        final_group_ids,
+        vec![
+            "conversation_protocol",
+            "current_block_rules",
+            "confirmed_clarification_state",
+            "block_confirmation_contract",
+        ]
+    );
     assert!(!final_request
         .read_groups
         .iter()
         .any(|group| group.group_id == "knowledge_context_plan"));
+    assert!(!final_request
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "requirement_context"));
+    assert!(!final_request
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "requirement_full_text"));
     let final_rules = read_block_rules_text(&server, &fixture, &request_ref);
     assert!(final_rules.contains("pre-submit coverage checklist"));
     assert!(final_rules.contains("Do not show internal names such as final_summary"));
+    assert!(!final_rules.contains("requirementSemanticGrounding"));
     assert!(final_rules
         .contains("one user-visible coverage checklist with exactly one confirmation action"));
     assert!(final_rules.contains("current phase to submit"));

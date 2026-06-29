@@ -42,26 +42,28 @@ pub fn build_brainstorm_clarification_request_root(
     let (rule_key, rules, rule_group_fields) = block_rules(&current_block);
     let mut rules_object = Map::new();
     rules_object.insert(rule_key.to_string(), rules);
-    rules_object.insert(
-        "requirementSemanticGrounding".to_string(),
-        json!({ "compactRules": requirement_semantic_compact_rules() }),
-    );
-    let mut groups = vec![
-        json!({
-            "groupId": "conversation_protocol",
-            "required": true,
-            "purpose": "Read the current Brainstorm block protocol before presenting anything to the user.",
-            "whenToRead": "Read at the beginning of this Brainstorm block.",
-            "fields": [
-                "userFacingLanguage",
-                "clarificationConversationProtocol.currentBlock",
-                "clarificationConversationProtocol.userVisibleBlockTitle",
-                "clarificationConversationProtocol.userFacingLanguageRule",
-                "clarificationConversationProtocol.blockRule",
-                "clarificationConversationProtocol.confirmToolRule"
-            ]
-        }),
-        json!({
+    if current_block != ClarificationBlockName::FinalSummary {
+        rules_object.insert(
+            "requirementSemanticGrounding".to_string(),
+            json!({ "compactRules": requirement_semantic_compact_rules() }),
+        );
+    }
+    let mut groups = vec![json!({
+        "groupId": "conversation_protocol",
+        "required": true,
+        "purpose": "Read the current Brainstorm block protocol before presenting anything to the user.",
+        "whenToRead": "Read at the beginning of this Brainstorm block.",
+        "fields": [
+            "userFacingLanguage",
+            "clarificationConversationProtocol.currentBlock",
+            "clarificationConversationProtocol.userVisibleBlockTitle",
+            "clarificationConversationProtocol.userFacingLanguageRule",
+            "clarificationConversationProtocol.blockRule",
+            "clarificationConversationProtocol.confirmToolRule"
+        ]
+    })];
+    if current_block != ClarificationBlockName::FinalSummary {
+        groups.push(json!({
             "groupId": "requirement_context",
             "required": true,
             "purpose": "Read compact source metadata and requirement hints for the current Brainstorm block.",
@@ -70,8 +72,8 @@ pub fn build_brainstorm_clarification_request_root(
                 "requirementContext.sourceItems",
                 "keywordHints.compact"
             ]
-        }),
-        json!({
+        }));
+        groups.push(json!({
             "groupId": "requirement_full_text",
             "required": false,
             "purpose": "Read the full normalized requirement text only when compact context and request-scoped knowledge are insufficient.",
@@ -79,15 +81,15 @@ pub fn build_brainstorm_clarification_request_root(
             "fields": [
                 "requirementContext.normalizedText"
             ]
-        }),
-        json!({
-            "groupId": "current_block_rules",
-            "required": true,
-            "purpose": "Read only the rules for the current Brainstorm confirmation block.",
-            "whenToRead": "Read before presenting the current block.",
-            "fields": rule_group_fields
-        }),
-    ];
+        }));
+    }
+    groups.push(json!({
+        "groupId": "current_block_rules",
+        "required": true,
+        "purpose": "Read only the rules for the current Brainstorm confirmation block.",
+        "whenToRead": "Read before presenting the current block.",
+        "fields": rule_group_fields
+    }));
     if current_block != ClarificationBlockName::PhaseScope {
         groups.push(json!({
             "groupId": "confirmed_clarification_state",
@@ -788,7 +790,6 @@ fn block_rules(block: &ClarificationBlockName) -> (&'static str, Value, Vec<&'st
                 "rules.finalSummary.correctionWriteback",
                 "rules.finalSummary.detailRetention",
                 "rules.finalSummary.confirmedDataShape",
-                "rules.requirementSemanticGrounding.compactRules",
             ],
         ),
     }
