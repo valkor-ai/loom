@@ -440,6 +440,12 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         scan_contract.fields["phaseDevelopmentMode"].value,
         json!("initial_delivery")
     );
+    assert!(
+        !scan_contract
+            .fields
+            .contains_key("scanPurpose.completedPhaseSummaries"),
+        "initial repository context request must not expose empty completed phase summaries"
+    );
     let generation_rules = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repository_context_request_ref.to_string(),
@@ -3526,6 +3532,30 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
     assert_eq!(
         phase_2_scan_contract.fields["phaseDevelopmentMode"].value,
         json!("incremental_delivery")
+    );
+    let completed_summaries = phase_2_scan_contract.fields["scanPurpose.completedPhaseSummaries"]
+        .value
+        .as_array()
+        .expect("completed phase summaries");
+    assert_eq!(completed_summaries.len(), 1);
+    assert_eq!(completed_summaries[0]["phaseId"], json!("phase-1"));
+    assert_eq!(completed_summaries[0]["status"], json!("completed"));
+    assert!(
+        completed_summaries[0]["title"].is_string(),
+        "completed phase summary should include compact title from BrainstormContract: {completed_summaries:#?}"
+    );
+    let phase_2_generation_rules = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repository_context_request_ref.to_string(),
+        group_id: "repository_context_generation_rules".to_string(),
+    })
+    .expect("read phase-2 repository context generation rules");
+    assert!(
+        phase_2_generation_rules.fields["generationRules"]
+            .value
+            .to_string()
+            .contains("after those delivered phases"),
+        "incremental repository context must tell the agent to scan after completed phases"
     );
     let brainstorm_contract_ref = phase_2["latestRefs"]["brainstormContract"]
         .as_str()
