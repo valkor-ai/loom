@@ -1,0 +1,20 @@
+[package]
+name = "execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "execution"
+path = "lib.rs"
+
+[dependencies]
+brainstorm = { path = "../brainstorm" }
+contracts = { path = "../contracts" }
+delivery-core = { path = "../core" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+state = { path = "../state" }

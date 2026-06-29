@@ -1,0 +1,24 @@
+[package]
+name = "deploy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "deploy"
+path = "lib.rs"
+
+[dependencies]
+delivery-core = { path = "../core" }
+contracts = { path = "../contracts" }
+state = { path = "../state" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+
+[[test]]
+name = "deploy_workflow"
+path = "../../../tests/rust/deploy/deploy_workflow.rs"

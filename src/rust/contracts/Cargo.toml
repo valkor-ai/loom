@@ -1,0 +1,16 @@
+[package]
+name = "contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "contracts"
+path = "lib.rs"
+
+[dependencies]
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+delivery-core = { path = "../core" }

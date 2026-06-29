@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+  "mcp-server",
+  "setup",
+  "core",
+  "state",
+  "contracts",
+  "workflow",
+  "brainstorm",
+  "planning",
+  "architecture",
+  "execution",
+  "knowledge",
+  "deploy",
+  "verification",
+  "algorithm-client",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/valkor-ai/loom"
+
+[workspace.dependencies]
+anyhow = "1.0"
+rmcp = { version = "1.7.0", features = ["server", "macros", "schemars", "transport-io"] }
+schemars = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_path_to_error = "0.1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "io-std", "signal"] }
+chrono = "0.4"
+quick-xml = "0.38"
+zip = "6.0"
+pdf-extract = "0.9"
+toml_edit = "0.25"

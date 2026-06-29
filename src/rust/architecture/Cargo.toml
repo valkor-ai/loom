@@ -1,0 +1,18 @@
+[package]
+name = "architecture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "architecture"
+path = "lib.rs"
+
+[dependencies]
+contracts = { path = "../contracts" }
+delivery-core = { path = "../core" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+state = { path = "../state" }

@@ -16,3 +16,12 @@ coverage/
 
 # TypeScript incremental build metadata
 *.tsbuildinfo
+
+# Rust build output
+target/
+
+# Python local caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/

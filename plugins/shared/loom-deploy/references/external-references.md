@@ -26,7 +26,7 @@ Use this file only when evaluating whether loom deploy should absorb ideas from 
 - Do not copy third-party `SKILL.md` text into loom.
 - Do not call external Dockerfile generator projects as part of the local deploy path.
 - Do not bind the deploy workflow to one agent vendor or one editor/plugin surface.
-- Do not add MCP-only behavior to v1. MCP/Docker Desktop integrations can become optional adapters later.
+- Do not make Docker Desktop MCP or other external MCP integrations required runtime dependencies.
 
 ## Evaluation Rules
 
@@ -36,6 +36,6 @@ When adding a new external idea, decide where it belongs:
 - Stack-specific deployment pattern -> `references/<stack>.md`.
 - Provider selection behavior -> `references/providers.md`.
 - Repair-loop behavior -> `references/repair.md`.
-- Runtime code -> `src/core/deployment/`, with tests or smoke coverage.
+- Runtime code -> `src/rust/deploy/`, with tests or smoke coverage.
 
 If an idea cannot be validated through `deploy prepare`, `deploy up`, `deploy validate`, or `deploy repair`, keep it as reference guidance only.

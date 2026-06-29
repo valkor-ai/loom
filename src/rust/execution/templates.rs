@@ -1,0 +1,241 @@
+use contracts::TaskDefinition;
+use serde_json::{json, Value};
+
+pub(crate) fn taskplan_outline_result_template(
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "status": "ready",
+        "taskPlanId": format!("taskplan-{phase_id}"),
+        "groups": [{
+            "groupId": "group-current-capability",
+            "title": "Current capability group",
+            "objective": "Deliver one taskable current-phase capability slice.",
+            "dependsOn": [],
+            "scopeRefs": ["allowedRefs.scopeRefs item"],
+            "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+            "taskIds": ["task-current-001"]
+        }],
+        "blockedReasons": [],
+        "createdAt": "ISO-8601 datetime"
+    })
+}
+
+pub(crate) fn taskplan_group_result_template(
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": request_id,
+        "deliveryId": delivery_id,
+        "phaseId": phase_id,
+        "status": "ready",
+        "group": {
+            "groupId": "group-current-capability",
+            "title": "Current capability group",
+            "objective": "Deliver one taskable current-phase capability slice.",
+            "dependsOn": [],
+            "scopeRefs": ["allowedRefs.scopeRefs item"],
+            "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+            "taskIds": ["task-current-001"]
+        },
+        "tasks": [{
+            "taskId": "task-current-001",
+            "groupId": "group-current-capability",
+            "title": "",
+            "taskKind": "feature_increment",
+            "implementationActions": ["create_or_update_business_rule"],
+            "objective": "",
+            "dependsOn": [],
+            "scopeRefs": ["allowedRefs.scopeRefs item"],
+            "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+            "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"],
+            "writeBoundary": {
+                "forbiddenPaths": [".loom"],
+                "artifactRefs": {
+                    "modules": [],
+                    "entities": [],
+                    "interfaces": [],
+                    "userFlows": [],
+                    "stateMachines": [],
+                    "decisions": [],
+                    "risks": []
+                }
+            },
+            "verificationIntents": [{
+                "verificationId": "verify-task-current-001",
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"],
+                "behavior": "",
+                "preferredEvidence": ["automated_test"],
+                "acceptableEvidence": ["automated_test", "manual_command_output", "static_check"]
+            }],
+            "conceptRefs": ["contextProjection.requirementDetailTransfer.conceptRefs item"],
+            "conceptResponsibilities": [{
+                "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
+                "responsibility": "How this task preserves or implements that concept."
+            }],
+            "conceptVerificationIntents": [{
+                "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
+                "evidenceType": "static_check",
+                "intent": "How verification will prove this task preserved or implemented that concept."
+            }]
+        }],
+        "blockedReasons": [],
+        "createdAt": "ISO-8601 datetime"
+    })
+}
+
+pub(crate) fn runtime_delivery_requirement_template(runtime_delivery: Option<&Value>) -> Value {
+    if runtime_delivery.is_none() {
+        return Value::Null;
+    }
+    json!({
+        "appliesToThisTask": true,
+        "reason": "Why this task changes build, start, runtime entry, static serving, generated artifacts, or runtime surface.",
+        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
+        "affectedContractFields": ["runtimeSurfaces"],
+        "requiredCodeLevelChecks": [{
+            "checkId": "check-task-current-001-runtime",
+            "contractField": "runtimeSurfaces",
+            "objective": "Verify this task preserves the runtime delivery contract it touches.",
+            "acceptableEvidence": ["manual_command_output", "runtime_api_check", "static_check"]
+        }],
+        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "forbiddenActions": []
+    })
+}
+
+pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) -> Value {
+    let verification_results = task
+        .verification_intents
+        .iter()
+        .map(|intent| {
+            json!({
+                "verificationId": intent.verification_id,
+                "status": "passed",
+                "evidenceType": "automated_test",
+                "summary": ""
+            })
+        })
+        .collect::<Vec<_>>();
+    let requirement_detail_evidence = task
+        .requirement_detail_refs
+        .iter()
+        .map(|detail_id| {
+            let verification_ids = task
+                .verification_intents
+                .iter()
+                .filter(|intent| {
+                    intent
+                        .requirement_detail_refs
+                        .iter()
+                        .any(|id| id == detail_id)
+                })
+                .map(|intent| intent.verification_id.clone())
+                .collect::<Vec<_>>();
+            json!({
+                "detailId": detail_id,
+                "status": "satisfied",
+                "verificationIds": verification_ids,
+                "evidenceRefs": [],
+                "summary": ""
+            })
+        })
+        .collect::<Vec<_>>();
+    let concept_evidence = task
+        .concept_refs
+        .iter()
+        .map(|concept_ref| {
+            json!({
+                "conceptRef": concept_ref,
+                "evidenceType": "code",
+                "refs": [],
+                "summary": ""
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schemaVersion": "1.0",
+        "taskResultId": format!("result-{}", task.task_id),
+        "taskId": task.task_id,
+        "taskPlanId": task_plan_id,
+        "status": "completed",
+        "changedFiles": [],
+        "noChangeReason": null,
+        "verificationResults": verification_results,
+        "selfRepairSummary": {
+            "attempted": false,
+            "attemptCount": 0,
+            "stopReason": "not_attempted",
+            "progressObserved": false
+        },
+        "failure": null,
+        "executionContinuity": {
+            "taskResultSubmittedAfterVerification": true,
+            "agentOwnedLongRunningWork": "none",
+            "notes": []
+        },
+        "notes": [],
+        "frontendExperienceSelfCheck": frontend_experience_self_check_template(task),
+        "runtimeDeliveryEvidence": runtime_delivery_evidence_template(task),
+        "requirementDetailEvidence": requirement_detail_evidence,
+        "conceptEvidence": concept_evidence,
+        "blockedReasons": [],
+        "createdAt": "ISO-8601 datetime",
+        "updatedAt": "ISO-8601 datetime"
+    })
+}
+
+fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
+    let Some(requirement) = &task.runtime_delivery_requirement else {
+        return Value::Null;
+    };
+    if !requirement.applies_to_this_task {
+        return Value::Null;
+    }
+    let code_level_checks = requirement
+        .required_code_level_checks
+        .iter()
+        .map(|check| {
+            json!({
+                "checkId": check.check_id,
+                "contractField": check.contract_field,
+                "status": "passed",
+                "evidence": ""
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "requirementRef": requirement.runtime_delivery_ref,
+        "checkedFields": requirement.affected_contract_fields,
+        "codeLevelChecks": code_level_checks,
+        "commandsRun": [],
+        "unverifiedItems": [],
+        "runtimeProbeCleanup": null
+    })
+}
+
+fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
+    if task.frontend_experience_requirement.is_none() {
+        return Value::Null;
+    }
+    json!({
+        "status": "satisfied",
+        "closureRequirementIds": [],
+        "dataBinding": {
+            "mode": "wired",
+            "knownGaps": []
+        },
+        "evidenceRefs": [],
+        "summary": ""
+    })
+}

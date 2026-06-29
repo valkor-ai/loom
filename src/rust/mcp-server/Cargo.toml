@@ -1,0 +1,59 @@
+[package]
+name = "mcp-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "mcp_server"
+path = "lib.rs"
+
+[[bin]]
+name = "loom-mcp-server"
+path = "main.rs"
+
+[dependencies]
+anyhow.workspace = true
+architecture = { path = "../architecture" }
+brainstorm = { path = "../brainstorm" }
+delivery-core = { path = "../core" }
+deploy = { path = "../deploy" }
+execution = { path = "../execution" }
+knowledge = { path = "../knowledge" }
+planning = { path = "../planning" }
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+state = { path = "../state" }
+tokio.workspace = true
+workflow = { path = "../workflow" }
+
+[[test]]
+name = "tool_surface"
+path = "../../../tests/rust/mcp-server/tool_surface.rs"
+
+[[test]]
+name = "server_smoke"
+path = "../../../tests/rust/mcp-server/server_smoke.rs"
+
+[[test]]
+name = "lifecycle_tools"
+path = "../../../tests/rust/mcp-server/lifecycle_tools.rs"
+
+[[test]]
+name = "plan_continue_tools"
+path = "../../../tests/rust/mcp-server/plan_continue_tools.rs"
+
+[[test]]
+name = "submit_tools"
+path = "../../../tests/rust/mcp-server/submit_tools.rs"
+
+[[test]]
+name = "knowledge_tools"
+path = "../../../tests/rust/mcp-server/knowledge_tools.rs"
+
+[[test]]
+name = "domain_dependency_boundaries"
+path = "../../../tests/rust/mcp-server/domain_dependency_boundaries.rs"

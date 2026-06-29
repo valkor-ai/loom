@@ -1,0 +1,29 @@
+[package]
+name = "knowledge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "knowledge"
+path = "lib.rs"
+
+[dependencies]
+algorithm-client = { path = "../algorithm-client" }
+chrono.workspace = true
+delivery-core = { path = "../core" }
+pdf-extract.workspace = true
+quick-xml.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+state = { path = "../state" }
+thiserror.workspace = true
+zip.workspace = true
+
+[[test]]
+name = "knowledge_workflow"
+path = "../../../tests/rust/knowledge/knowledge_workflow.rs"
