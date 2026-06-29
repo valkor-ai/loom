@@ -184,6 +184,7 @@ fn build_review_request(
     let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let allowed_refs = allowed_refs(task_plan, run, task_results);
+    let review_signals = build_review_signals(task_plan, task_results);
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "review_gate",
@@ -227,7 +228,6 @@ fn build_review_request(
         },
         "conceptReviewMatrix": build_concept_review_matrix(task_plan, task_results),
         "detailReviewMatrix": build_detail_review_matrix(task_plan, task_results),
-        "reviewSignals": build_review_signals(task_plan, task_results),
         "enumRefs": {
             "decision": ["approved", "approved_with_notes", "changes_requested", "blocked", "needs_user_decision"],
             "findingSeverity": ["critical", "major", "minor", "note"],
@@ -253,13 +253,13 @@ fn build_review_request(
         },
         "reviewRules": {
             "commonRules": [
-                "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, reviewSignals, and outputContract before writing ReviewResult.",
+                "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, outputContract.reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
                 "Every finding must include non-empty readRefs.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure."
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure."
             ],
             "routingRules": {
                 "actionPriority": [
@@ -288,7 +288,7 @@ fn build_review_request(
             "resultTemplate": review_result_template(review_id, phase_id, task_plan, run, next_phase_handoff),
             "allowedRefs": allowed_refs,
             "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
-            "reviewSignals": build_review_signals(task_plan, task_results),
+            "reviewSignals": review_signals,
             "routingRules": {
                 "topLevelNextActionPriority": [
                     "needs_user_decision",
@@ -354,8 +354,6 @@ fn build_review_request(
                     "fields": [
                         "conceptReviewMatrix",
                         "detailReviewMatrix",
-                        "reviewSignals.requirementDetailEvidence",
-                        "reviewSignals.frontendWorkflowClosure",
                         "outputContract.reviewSignals.requirementDetailEvidence",
                         "outputContract.reviewSignals.frontendWorkflowClosure"
                     ]
@@ -646,8 +644,8 @@ where
             "outputContract.allowedRefs.changedFilePaths".to_string(),
             "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
             "outputContract.allowedRefs.readRefs".to_string(),
-            "reviewSignals.requirementDetailEvidence".to_string(),
-            "reviewSignals.frontendWorkflowClosure".to_string(),
+            "outputContract.reviewSignals.requirementDetailEvidence".to_string(),
+            "outputContract.reviewSignals.frontendWorkflowClosure".to_string(),
         ],
     })?
     .fields;
@@ -970,8 +968,8 @@ fn validate_review_signals(
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
     let signals = json!({
-        "requirementDetailEvidence": array_field(fields, "reviewSignals.requirementDetailEvidence"),
-        "frontendWorkflowClosure": array_field(fields, "reviewSignals.frontendWorkflowClosure")
+        "requirementDetailEvidence": array_field(fields, "outputContract.reviewSignals.requirementDetailEvidence"),
+        "frontendWorkflowClosure": array_field(fields, "outputContract.reviewSignals.frontendWorkflowClosure")
     });
     let unsatisfied_detail = signals
         .get("requirementDetailEvidence")
@@ -991,7 +989,7 @@ fn validate_review_signals(
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
             "decision",
-            "ReviewResult cannot approve when reviewSignals contain unsatisfied requirement detail or frontend workflow closure.",
+            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail or frontend workflow closure.",
         ));
     }
 }

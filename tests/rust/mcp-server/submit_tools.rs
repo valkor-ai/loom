@@ -1581,6 +1581,10 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         review_root.get("changeContext").is_none(),
         "review request root must not expose full changeContext: {review_root:#}"
     );
+    assert!(
+        review_root.get("reviewSignals").is_none(),
+        "review request root must not duplicate outputContract.reviewSignals: {review_root:#}"
+    );
     let review_request_id = request_id_from_ref(review_request_ref);
     let review_storage_manifest: Value = serde_json::from_str(
         &std::fs::read_to_string(
@@ -1651,6 +1655,23 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .fields
         .iter()
         .any(|field| field == "reviewPacket.taskResults"));
+    let review_matrices_group = review_inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "review_matrices")
+        .expect("review_matrices group");
+    assert!(review_matrices_group
+        .fields
+        .iter()
+        .any(|field| field == "outputContract.reviewSignals.requirementDetailEvidence"));
+    assert!(review_matrices_group
+        .fields
+        .iter()
+        .any(|field| field == "outputContract.reviewSignals.frontendWorkflowClosure"));
+    assert!(!review_matrices_group
+        .fields
+        .iter()
+        .any(|field| field.starts_with("reviewSignals.")));
     let review_packets = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: review_request_ref.to_string(),
