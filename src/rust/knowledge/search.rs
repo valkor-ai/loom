@@ -503,8 +503,7 @@ fn block_affinity_score(affinity: Option<&BlockAffinity>, block: Option<&str>) -
         _ => affinity
             .phase_scope
             .max(affinity.concept_grounding)
-            .max(affinity.frontend_experience)
-            .max(affinity.business_rules),
+            .max(affinity.frontend_experience),
     }
 }
 
@@ -518,6 +517,14 @@ fn semantic_entries(chunk: &KnowledgeChunk) -> Vec<SemanticEntry> {
     let mut entries = Vec::new();
     for label in &chunk.semantic_labels {
         let mut terms = expand_focus(&label.text);
+        if let Some(normalized) = label.normalized_text.as_deref() {
+            terms.extend(expand_focus(normalized));
+            terms.push(normalize_focus(normalized));
+        }
+        for alias in &label.aliases {
+            terms.extend(expand_focus(alias));
+            terms.push(normalize_focus(alias));
+        }
         terms.push(normalize_focus(&format!("{}:{}", label.kind, label.text)));
         if matches!(
             label.kind.as_str(),

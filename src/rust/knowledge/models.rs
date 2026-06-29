@@ -307,6 +307,10 @@ pub struct SemanticLabel {
     pub kind: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<String>,
 }
 
@@ -319,8 +323,6 @@ pub struct BlockAffinity {
     pub concept_grounding: f64,
     #[serde(default)]
     pub frontend_experience: f64,
-    #[serde(default)]
-    pub business_rules: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

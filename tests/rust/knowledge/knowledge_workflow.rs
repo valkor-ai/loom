@@ -127,10 +127,10 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         "chunkResults": semantic.chunk_read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "",
                 "semanticLabels": [],
-                "semanticAliases": [],
+                "semanticAliases": ["旧重复字段"],
                 "blockAffinity": {
                     "phaseScope": 0.2,
                     "conceptGrounding": 0.9,
@@ -154,6 +154,14 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
                 .issues
                 .iter()
                 .any(|issue| issue.code == "SUMMARY_REQUIRED"));
+            assert!(error
+                .issues
+                .iter()
+                .any(|issue| issue.code == "SEMANTIC_ALIASES_NOT_ALLOWED"));
+            assert!(error
+                .issues
+                .iter()
+                .any(|issue| issue.code == "BLOCK_AFFINITY_FIELD_NOT_ALLOWED"));
         }
         other => panic!("expected repairable semantic result, got {other:?}"),
     }
@@ -165,20 +173,18 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         "chunkResults": semantic.chunk_read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "证券账户开户、挂失补办、销户和持仓清空限制。",
                 "semanticLabels": [
-                    {"kind": "object", "text": "证券账户", "confidence": "high"},
-                    {"kind": "operation", "text": "证券账户开户", "confidence": "high"},
-                    {"kind": "operation", "text": "销户", "confidence": "high"},
-                    {"kind": "rule", "text": "持仓清空后方可销户", "confidence": "high"}
+                    {"kind": "object", "text": "证券账户", "normalizedText": "证券账户", "aliases": [], "confidence": "high"},
+                    {"kind": "operation", "text": "证券账户开户", "normalizedText": "证券账户开户", "aliases": ["开户"], "confidence": "high"},
+                    {"kind": "operation", "text": "销户", "normalizedText": "销户", "aliases": ["证券账户销户"], "confidence": "high"},
+                    {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "aliases": ["恢复交易能力"], "confidence": "high"}
                 ],
-                "semanticAliases": ["开户", "证券账户销户", "恢复交易能力"],
                 "blockAffinity": {
                     "phaseScope": 0.7,
                     "conceptGrounding": 1.0,
-                    "frontendExperience": 0.4,
-                    "businessRules": 0.9
+                    "frontendExperience": 0.4
                 }
             })
         }).collect::<Vec<_>>()
@@ -271,7 +277,7 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     assert!(suffix_search.cards.iter().any(|card| card
         .matched_labels
         .iter()
-        .any(|label| label.text == "恢复交易能力")));
+        .any(|label| label.text == "持仓清空后方可销户")));
 
     disable_source(KnowledgeNameInput {
         project_root: fixture.root_str().to_string(),
@@ -830,7 +836,7 @@ fn focus_chunk(
         semantic_label,
         summary,
         json!([
-            {"kind": "operation", "text": semantic_label, "confidence": "high"}
+            {"kind": "operation", "text": semantic_label, "normalizedText": semantic_label, "aliases": [], "confidence": "high"}
         ]),
         json!([]),
         phase_scope,
@@ -862,8 +868,7 @@ fn semantic_chunk(
         "blockAffinity": {
             "phaseScope": phase_scope,
             "conceptGrounding": phase_scope,
-            "frontendExperience": 0.0,
-            "businessRules": phase_scope
+            "frontendExperience": 0.0
         }
     })
 }
@@ -891,19 +896,17 @@ fn publish_simple_source(fixture: &Fixture, name: &str) {
         "chunkResults": semantic.chunk_read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "证券账户管理页面的列表查询、开户、挂失补办和销户办理路径。",
                 "semanticLabels": [
-                    {"kind": "object", "text": "证券账户管理页面", "confidence": "high"},
-                    {"kind": "page_operation", "text": "证券账户销户办理路径", "confidence": "high"},
-                    {"kind": "operation", "text": "销户", "confidence": "high"}
+                    {"kind": "object", "text": "证券账户管理页面", "normalizedText": "证券账户管理页面", "aliases": ["证券账户页面"], "confidence": "high"},
+                    {"kind": "page", "text": "证券账户销户办理路径", "normalizedText": "证券账户销户办理路径", "aliases": ["页面办理路径", "销户办理"], "confidence": "high"},
+                    {"kind": "operation", "text": "销户", "normalizedText": "销户", "aliases": ["证券账户销户"], "confidence": "high"}
                 ],
-                "semanticAliases": ["页面办理路径", "销户办理", "证券账户"],
                 "blockAffinity": {
                     "phaseScope": 0.4,
                     "conceptGrounding": 0.6,
-                    "frontendExperience": 1.0,
-                    "businessRules": 0.7
+                    "frontendExperience": 1.0
                 }
             })
         }).collect::<Vec<_>>()
