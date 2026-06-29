@@ -235,6 +235,7 @@ pub fn materialize_delivery_execution_repair(
     origin: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
+    target_task_ids: Vec<String>,
 ) -> LoomMcpActionResult {
     match materialize_delivery_execution_repair_inner(
         project_root,
@@ -243,6 +244,7 @@ pub fn materialize_delivery_execution_repair(
         origin,
         source_ref,
         finding_refs,
+        target_task_ids,
     ) {
         Ok(result) => result,
         Err(error) => failed(
@@ -261,6 +263,7 @@ fn materialize_delivery_execution_repair_inner(
     origin: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
+    target_task_ids: Vec<String>,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let root = Path::new(project_root);
     let locator = DeliveryPhaseLocator {
@@ -268,10 +271,26 @@ fn materialize_delivery_execution_repair_inner(
         phase_id: phase_id.to_string(),
     };
     let (task_plan, mut run) = load_current_plan_and_run(root, &locator)?;
-    let task = repair_source_task(&task_plan, &run).ok_or_else(|| {
-        state::store::StateError::StateCorrupted(
-            "No task is available for delivery execution repair.".to_string(),
-        )
+    if let Some(existing) = existing_delivery_execution_repair_next_if_current(
+        project_root,
+        delivery_id,
+        phase_id,
+        &task_plan,
+        &run,
+        &target_task_ids,
+    )? {
+        return Ok(existing);
+    }
+    let task = repair_source_task(&task_plan, &run, &target_task_ids).ok_or_else(|| {
+        let message = if target_task_ids.is_empty() {
+            "No task is available for delivery execution repair.".to_string()
+        } else {
+            format!(
+                "Execution repair target task is not in the current task run: {}.",
+                target_task_ids.join(", ")
+            )
+        };
+        state::store::StateError::StateCorrupted(message)
     })?;
     let attempt_count = run
         .task_states
@@ -279,15 +298,6 @@ fn materialize_delivery_execution_repair_inner(
         .find(|state| state.task_id == task.task_id)
         .map(|state| state.attempts.len() as u32)
         .unwrap_or(0);
-    if let Some(existing) = existing_delivery_execution_repair_next_if_current(
-        project_root,
-        delivery_id,
-        phase_id,
-        &task,
-        attempt_count,
-    )? {
-        return Ok(existing);
-    }
     let now = state::store::now_string();
     if let Some(state) = run
         .task_states
@@ -370,8 +380,9 @@ fn existing_delivery_execution_repair_next_if_current(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
-    task: &TaskDefinition,
-    attempt_count: u32,
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+    target_task_ids: &[String],
 ) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
     let store = FileTransitionStore;
     let delivery = store
@@ -413,6 +424,38 @@ fn existing_delivery_execution_repair_next_if_current(
     else {
         return Ok(None);
     };
+    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["source.taskId".to_string()],
+    })?
+    .fields;
+    let Some(source_task_id) = fields
+        .get("source.taskId")
+        .and_then(|field| field.value.as_str())
+    else {
+        return Ok(None);
+    };
+    if !target_task_ids.is_empty()
+        && !target_task_ids
+            .iter()
+            .any(|target_task_id| target_task_id == source_task_id)
+    {
+        return Ok(None);
+    }
+    let Some(task) = task_plan
+        .tasks
+        .iter()
+        .find(|task| task.task_id == source_task_id)
+    else {
+        return Ok(None);
+    };
+    let attempt_count = run
+        .task_states
+        .iter()
+        .find(|state| state.task_id == task.task_id)
+        .map(|state| state.attempts.len() as u32)
+        .unwrap_or(0);
     let origin = action
         .details
         .as_ref()
@@ -2184,7 +2227,27 @@ fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<
     }
 }
 
-fn repair_source_task(task_plan: &TaskPlan, run: &TaskPlanRun) -> Option<TaskDefinition> {
+fn repair_source_task(
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+    target_task_ids: &[String],
+) -> Option<TaskDefinition> {
+    if !target_task_ids.is_empty() {
+        return target_task_ids.iter().find_map(|target_task_id| {
+            let in_current_run = run
+                .task_states
+                .iter()
+                .any(|state| state.task_id == *target_task_id);
+            if !in_current_run {
+                return None;
+            }
+            task_plan
+                .tasks
+                .iter()
+                .find(|task| task.task_id == *target_task_id)
+                .cloned()
+        });
+    }
     let preferred = run
         .task_states
         .iter()

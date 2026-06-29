@@ -5,8 +5,8 @@ use std::{
 };
 
 use contracts::{
-    ManualReviewResolution, ReviewFinding, ReviewResult, TaskDefinition, TaskPlan, TaskPlanGroup,
-    TaskPlanRun, TaskPlanRunStatus, TaskResult,
+    ManualReviewResolution, ReviewFinding, ReviewNextAction, ReviewResult, TaskDefinition,
+    TaskPlan, TaskPlanGroup, TaskPlanRun, TaskPlanRunStatus, TaskResult,
 };
 use delivery_core::{
     apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher, FileSubmitInput,
@@ -1399,6 +1399,8 @@ where
 }
 
 fn review_route_action(result: &ReviewResult, result_ref: &str) -> RouteAction {
+    let target_task_ids = review_execution_repair_target_task_ids(result);
+    let next_action = route_next_action_with_target_task_ids(&result.next_action, &target_task_ids);
     RouteAction {
         kind: route_kind_for_review_action(&result.next_action.r#type),
         source: "review_result".to_string(),
@@ -1409,10 +1411,31 @@ fn review_route_action(result: &ReviewResult, result_ref: &str) -> RouteAction {
         details: Some(json!({
             "reviewId": result.review_id,
             "decision": result.decision,
-            "nextAction": result.next_action
+            "nextAction": next_action
         })),
         target_phase_id: result.next_action.target_phase_id.clone(),
     }
+}
+
+fn review_execution_repair_target_task_ids(result: &ReviewResult) -> Vec<String> {
+    let selected_finding_refs = result
+        .next_action
+        .finding_refs
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut values = result.next_action.target_task_ids.clone();
+    for finding in &result.findings {
+        if finding.recommended_next_action != "execution_repair" {
+            continue;
+        }
+        if !selected_finding_refs.is_empty() && !selected_finding_refs.contains(&finding.finding_id)
+        {
+            continue;
+        }
+        values.extend(finding.task_refs.clone());
+    }
+    dedupe_non_empty(values)
 }
 
 fn normalize_approved_next_phase(
@@ -1850,6 +1873,9 @@ fn effective_manual_review_action(resolution: &ManualReviewResolution) -> RouteA
             format!("{}: {}", change.route, change.reason),
         )
     };
+    let target_task_ids = manual_review_target_task_ids(resolution);
+    let next_action =
+        route_next_action_with_target_task_ids(&resolution.next_action, &target_task_ids);
     RouteAction {
         kind,
         source: "manual_review_resolution".to_string(),
@@ -1861,10 +1887,43 @@ fn effective_manual_review_action(resolution: &ManualReviewResolution) -> RouteA
             "manualReviewResolutionId": resolution.manual_review_resolution_id,
             "decision": resolution.decision,
             "changeRequest": resolution.change_request,
-            "nextAction": resolution.next_action
+            "nextAction": next_action
         })),
         target_phase_id: resolution.next_action.target_phase_id.clone(),
     }
+}
+
+fn route_next_action_with_target_task_ids(
+    next_action: &ReviewNextAction,
+    target_task_ids: &[String],
+) -> ReviewNextAction {
+    let mut next_action = next_action.clone();
+    if next_action.target_task_ids.is_empty() && !target_task_ids.is_empty() {
+        next_action.target_task_ids = target_task_ids.to_vec();
+    }
+    next_action
+}
+
+fn manual_review_target_task_ids(resolution: &ManualReviewResolution) -> Vec<String> {
+    let mut values = resolution.next_action.target_task_ids.clone();
+    if let Some(change_request) = &resolution.change_request {
+        values.extend(
+            change_request
+                .details
+                .get("targetTaskIds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str().map(str::to_string)),
+        );
+    }
+    dedupe_non_empty(values)
+}
+
+fn dedupe_non_empty(mut values: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    values.retain(|value| !value.is_empty() && seen.insert(value.clone()));
+    values
 }
 
 fn route_after_manual_review<D>(

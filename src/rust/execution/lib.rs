@@ -42,14 +42,15 @@ impl DomainDispatcher for ExecutionDomainDispatcher {
                 review::materialize_review_request(project_root, delivery_id, phase_id)
             }
             RouteActionKind::ExecutionRepair => {
-                let (origin, finding_refs) = execution_repair_context(action);
+                let context = execution_repair_context(action);
                 repair::materialize_delivery_execution_repair(
                     project_root,
                     delivery_id,
                     phase_id,
-                    origin,
+                    context.origin,
                     action.request_ref.clone(),
-                    finding_refs,
+                    context.finding_refs,
+                    context.target_task_ids,
                 )
             }
             RouteActionKind::TaskResultRepair
@@ -71,12 +72,14 @@ pub fn module_name() -> &'static str {
     "execution"
 }
 
-fn execution_repair_context(action: &RouteAction) -> (&'static str, Vec<String>) {
-    let origin = match action.source.as_str() {
-        "review_result" => "review_result",
-        "manual_review_resolution" => "manual_review_resolution",
-        _ => "task_failure",
-    };
+struct ExecutionRepairRouteContext {
+    origin: &'static str,
+    finding_refs: Vec<String>,
+    target_task_ids: Vec<String>,
+}
+
+fn execution_repair_context(action: &RouteAction) -> ExecutionRepairRouteContext {
+    let origin = execution_repair_origin(action);
     let finding_refs = action
         .details
         .as_ref()
@@ -90,5 +93,46 @@ fn execution_repair_context(action: &RouteAction) -> (&'static str, Vec<String>)
         .flatten()
         .filter_map(|item| item.as_str().map(str::to_string))
         .collect();
-    (origin, finding_refs)
+    let target_task_ids = action
+        .details
+        .as_ref()
+        .map(target_task_ids_from_action_details)
+        .unwrap_or_default();
+    ExecutionRepairRouteContext {
+        origin,
+        finding_refs,
+        target_task_ids,
+    }
+}
+
+fn target_task_ids_from_action_details(details: &Value) -> Vec<String> {
+    let mut values = Vec::new();
+    for pointer in ["/nextAction/targetTaskIds", "/changeRequest/details/targetTaskIds"] {
+        values.extend(
+            details
+                .pointer(pointer)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str().map(str::to_string)),
+        );
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    values.retain(|value| !value.is_empty() && seen.insert(value.clone()));
+    values
+}
+
+fn execution_repair_origin(action: &RouteAction) -> &'static str {
+    let detail_origin = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("origin"))
+        .and_then(Value::as_str);
+    match (action.source.as_str(), detail_origin) {
+        ("review_result", _) | (_, Some("review_result")) => "review_result",
+        ("manual_review_resolution", _) | (_, Some("manual_review_resolution")) => {
+            "manual_review_resolution"
+        }
+        _ => "task_failure",
+    }
 }

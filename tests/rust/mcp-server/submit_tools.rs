@@ -4252,6 +4252,96 @@ fn review_execution_repair_materializes_repair_task() {
 }
 
 #[test]
+fn review_execution_repair_targets_review_finding_task_ref() {
+    let fixture = Fixture::new("review-execution-repair-target-task-ref");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    let target_task_id = "task-runtime-delivery-closure";
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-runtime-closure",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "verification",
+            "failureClass": "product_defect",
+            "category": "functional_correctness",
+            "summary": "Runtime closure verification does not prove the declared delivery contract.",
+            "evidence": "The runtime closure task result omitted the required runtime signal.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRefs": [target_task_id],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(result["next"]["taskId"], target_task_id);
+    assert_eq!(
+        result["next"]["repairContext"]["sourceTaskId"],
+        target_task_id
+    );
+    let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec![
+            "source.taskId".to_string(),
+            "repairContext.sourceTaskId".to_string(),
+        ],
+    })
+    .expect("read repair source task fields")
+    .fields;
+    assert_eq!(repair_fields["source.taskId"].value, json!(target_task_id));
+    assert_eq!(
+        repair_fields["repairContext.sourceTaskId"].value,
+        json!(target_task_id)
+    );
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let action: RouteAction = serde_json::from_value(
+        index["phases"]
+            .as_array()
+            .expect("phases")
+            .iter()
+            .find(|phase| phase["phaseId"] == "phase-1")
+            .expect("phase-1")["nextAction"]
+            .clone(),
+    )
+    .expect("parse current route action");
+    assert_eq!(action.source, "delivery_execution_repair");
+    let repeated = execution::ExecutionDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &action,
+    );
+    let repeated = serde_json::to_value(repeated).expect("serialize repeated result");
+    assert_eq!(repeated["state"], "auto_runnable", "{repeated:#}");
+    assert_eq!(repeated["next"]["taskId"], target_task_id);
+    assert_eq!(repeated["next"]["requestRef"], repair_request_ref);
+}
+
+#[test]
 fn manual_review_resolution_routes_to_execution_repair() {
     let fixture = Fixture::new("manual-review-resolution");
     let review_request_ref = complete_task_execution_to_review(&fixture);
