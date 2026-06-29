@@ -1,4 +1,8 @@
-use std::sync::{Mutex, MutexGuard};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::{Mutex, MutexGuard},
+};
 
 use delivery_core::{
     DomainDispatcher, InspectRequestInput, ReadFieldGroupInput, ReadRequestFieldsInput,
@@ -1620,6 +1624,10 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         "review request root must not expose full changeContext: {review_root:#}"
     );
     assert!(
+        review_root.get("changeSet").is_none(),
+        "review request root must not expose full changeSet: {review_root:#}"
+    );
+    assert!(
         review_root.get("reviewSignals").is_none(),
         "review request root must not duplicate outputContract.reviewSignals: {review_root:#}"
     );
@@ -2146,8 +2154,8 @@ fn review_accept_approved_marks_delivery_done() {
 }
 
 #[test]
-fn review_accept_continue_to_next_phase_records_phase_transition() {
-    let fixture = Fixture::new("review-continue-phase");
+fn review_accept_rejects_continue_without_next_phase_preview() {
+    let fixture = Fixture::new("review-continue-without-preview");
     let review_request_ref = complete_task_execution_to_review(&fixture);
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     append_done_phase(&fixture, &delivery_id, "phase-2");
@@ -2165,12 +2173,14 @@ fn review_accept_continue_to_next_phase_records_phase_transition() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "done", "{result:#}");
-    let continued = continue_delivery(fixture.root_str());
-    assert_eq!(continued["state"], "done", "{continued:#}");
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
+            && issue["fieldPath"] == "nextAction.type"
+    }));
     assert_eq!(
         active_phase_id(fixture.root_str(), &delivery_id),
-        "phase-2".to_string()
+        "phase-1".to_string()
     );
 }
 
@@ -2447,6 +2457,183 @@ fn review_environment_blocker_cannot_route_execution_repair() {
         issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
             && issue["fieldPath"] == "findings[].failureClass"
     }));
+}
+
+#[test]
+fn review_accept_allows_normalized_changed_file_refs() {
+    let fixture = Fixture::new("review-changed-file-ref-normalization");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-file-ref",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "code",
+            "failureClass": "product_defect",
+            "category": "functional_correctness",
+            "summary": "The changed file evidence supports this finding.",
+            "evidence": "The changed file was read through a normalized changed_file ref.",
+            "readRefs": [{"type": "changed_file", "ref": "./src/main.tsx", "reason": "Read the changed file."}],
+            "evidenceRefs": [{"type": "changed_file", "ref": "file:src/main.tsx", "reason": "Changed file evidence."}],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+}
+
+#[test]
+fn review_accept_rejects_pending_action_refs_with_wrong_route() {
+    let fixture = Fixture::new("review-pending-action-route-mismatch");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "blocked",
+        "architecture_artifact_repair",
+        vec![json!({
+            "findingId": "finding-arch",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "contract",
+            "failureClass": "contract_gap",
+            "category": "architecture_design_gap",
+            "summary": "Architecture contract is missing required detail.",
+            "evidence": "The review packet shows a contract gap.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "no",
+            "recommendedNextAction": "architecture_artifact_repair"
+        })],
+    );
+    mutate_review_result_candidate(&fixture, &review_request_ref, |candidate| {
+        candidate["pendingActions"] = json!([{
+            "type": "taskplan_repair",
+            "findingRefs": ["finding-arch"],
+            "reason": "Wrong route for this finding."
+        }]);
+    });
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
+            && issue["fieldPath"] == "pendingActions[].findingRefs"
+    }));
+}
+
+#[test]
+fn review_accept_rejects_warning_only_repair_route() {
+    let fixture = Fixture::new("review-warning-only-repair");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "approved_with_notes",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-warning",
+            "severity": "minor",
+            "severityClass": "warning",
+            "evidenceKind": "code",
+            "failureClass": "product_defect",
+            "category": "functional_correctness",
+            "summary": "Non-blocking warning.",
+            "evidence": "This should not route repair.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
+            && issue["fieldPath"] == "nextAction.type"
+    }));
+}
+
+#[test]
+fn review_request_uses_git_diff_refs_without_inlining_diffs() {
+    let fixture = Fixture::new("review-git-diff-refs");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    run_git(&fixture, &["init"]);
+    run_git(&fixture, &["config", "user.email", "loom@example.test"]);
+    run_git(&fixture, &["config", "user.name", "Loom Test"]);
+    run_git(&fixture, &["add", "."]);
+    run_git(&fixture, &["commit", "-m", "test: baseline"]);
+    std::fs::write(
+        fixture.root.join("src/main.tsx"),
+        "export const app = 'changed';\n",
+    )
+    .expect("modify tracked source");
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    let review_request_ref = task_result["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef");
+
+    let change_context = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        group_id: "change_context".to_string(),
+    })
+    .expect("read change context");
+    assert_eq!(
+        change_context.fields["changeContext.mode"].value,
+        json!("git_diff_ref")
+    );
+    let changed_files = change_context.fields["changeContext.changedFiles"]
+        .value
+        .as_array()
+        .expect("changed files");
+    let diff_ref = changed_files[0]["diffRef"].as_str().expect("diffRef");
+    assert!(fixture.root.join(diff_ref).exists());
+    let request_root = read_request_root_value(fixture.root_str(), review_request_ref);
+    assert!(
+        request_root.get("changeContext").is_none(),
+        "diff refs must stay in private request storage"
+    );
+    assert!(
+        request_root.get("changeSet").is_none(),
+        "changeSet must stay in private request storage"
+    );
+    assert!(!serde_json::to_string(&request_root)
+        .expect("serialize request root")
+        .contains("export const app = 'changed'"));
 }
 
 #[test]
@@ -4192,6 +4379,9 @@ fn write_review_result_candidate(
             "source.taskPlanId".to_string(),
             "source.taskPlanRunId".to_string(),
             "outputContract.resultFile".to_string(),
+            "outputContract.allowedRefs.taskIds".to_string(),
+            "outputContract.allowedRefs.acceptanceRefs".to_string(),
+            "outputContract.allowedRefs.taskResultIds".to_string(),
         ],
     })
     .expect("read review fields")
@@ -4200,6 +4390,68 @@ fn write_review_result_candidate(
         .value
         .as_str()
         .expect("review result file");
+    let first_task_id = fields["outputContract.allowedRefs.taskIds"]
+        .value
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let findings = findings
+        .into_iter()
+        .map(|mut finding| {
+            if matches!(
+                finding.get("severity").and_then(Value::as_str),
+                Some("critical" | "major")
+            ) {
+                finding["taskRelevance"] = json!("direct");
+                finding["scopeRelation"] = json!("within_task_changed_files");
+                let route = finding
+                    .get("recommendedNextAction")
+                    .and_then(Value::as_str)
+                    .unwrap_or("done");
+                let has_refs = finding
+                    .get("taskRefs")
+                    .and_then(Value::as_array)
+                    .map(|items| !items.is_empty())
+                    .unwrap_or(false);
+                if !has_refs && !matches!(route, "manual_review" | "needs_user_decision") {
+                    if let Some(task_id) = &first_task_id {
+                        finding["taskRefs"] = json!([task_id]);
+                    }
+                }
+            }
+            finding
+        })
+        .collect::<Vec<_>>();
+    let acceptance_refs = fields["outputContract.allowedRefs.acceptanceRefs"]
+        .value
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let task_result_ids = fields["outputContract.allowedRefs.taskResultIds"]
+        .value
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let supporting_task_results = task_result_ids
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let must_acceptance = acceptance_refs
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|acceptance_ref| {
+            json!({
+                "acceptanceRef": acceptance_ref,
+                "status": "satisfied",
+                "supportingTaskResults": supporting_task_results,
+                "evidenceStatus": "sufficient",
+                "notes": []
+            })
+        })
+        .collect::<Vec<_>>();
+    let total_must = must_acceptance.len();
     write_json_atomic(
         &fixture.root.join(result_file),
         &json!({
@@ -4214,10 +4466,10 @@ fn write_review_result_candidate(
             "decision": decision,
             "findings": findings,
             "coverageAssessment": {
-                "mustAcceptance": [],
+                "mustAcceptance": must_acceptance,
                 "summary": {
-                    "totalMust": 0,
-                    "satisfied": 0,
+                    "totalMust": total_must,
+                    "satisfied": total_must,
                     "insufficientEvidence": 0,
                     "notSatisfied": 0,
                     "notReviewed": 0
@@ -4236,6 +4488,49 @@ fn write_review_result_candidate(
         }),
     )
     .expect("write review result");
+}
+
+fn review_result_candidate_path(fixture: &Fixture, request_ref: &str) -> PathBuf {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["outputContract.resultFile".to_string()],
+    })
+    .expect("read review result file")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("review result file");
+    fixture.root.join(result_file)
+}
+
+fn mutate_review_result_candidate<F>(fixture: &Fixture, request_ref: &str, mutate: F)
+where
+    F: FnOnce(&mut Value),
+{
+    let path = review_result_candidate_path(fixture, request_ref);
+    let mut candidate: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read review result"))
+            .expect("parse review result");
+    mutate(&mut candidate);
+    write_json_atomic(&path, &candidate).expect("write mutated review result");
+}
+
+fn run_git(fixture: &Fixture, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&fixture.root)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn write_manual_review_resolution_candidate(fixture: &Fixture, request_ref: &str) {

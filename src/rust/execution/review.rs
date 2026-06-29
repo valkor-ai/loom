@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    process::Command,
+};
 
 use contracts::{
     ManualReviewResolution, ReviewFinding, ReviewResult, TaskDefinition, TaskPlan, TaskPlanGroup,
@@ -15,7 +19,7 @@ use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
-    paths::{from_project_relative, to_project_relative, DeliveryPhaseLocator},
+    paths::{delivery_dir, from_project_relative, to_project_relative, DeliveryPhaseLocator},
     write_targets::AuthorizedWriteSet,
 };
 
@@ -31,14 +35,6 @@ use crate::{
 const REVIEW_ACTIONS: &[&str] = &[
     "done",
     "continue_to_next_phase",
-    "execution_repair",
-    "taskplan_repair",
-    "architecture_artifact_repair",
-    "manual_review",
-    "needs_user_decision",
-];
-
-const REPAIR_ACTIONS: &[&str] = &[
     "execution_repair",
     "taskplan_repair",
     "architecture_artifact_repair",
@@ -119,6 +115,7 @@ fn materialize_review_request_inner(
     let next_phase_handoff =
         brainstorm::next_phase_handoff_from_preview(project_root, delivery_id, phase_id, None)?;
     let request_root = build_review_request(
+        root,
         &review_id,
         delivery_id,
         phase_id,
@@ -172,6 +169,7 @@ fn materialize_review_request_inner(
 }
 
 fn build_review_request(
+    project_root: &Path,
     review_id: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -183,8 +181,16 @@ fn build_review_request(
 ) -> Result<Value, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let allowed_refs = allowed_refs(task_plan, run, task_results);
     let review_signals = build_review_signals(task_plan, task_results);
+    let next_phase_preview = review_next_phase_preview(next_phase_handoff);
+    let (change_set, change_context) =
+        build_change_set(project_root, delivery_id, phase_id, review_id, task_results)?;
+    let allowed_refs = allowed_refs(task_plan, run, task_results, &change_context, &change_set);
+    let change_context_mode = change_context
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("current_file_content")
+        .to_string();
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "review_gate",
@@ -205,8 +211,11 @@ fn build_review_request(
         },
         "reviewScope": {
             "type": "phase_run",
+            "taskIds": run.task_states.iter().map(|state| state.task_id.clone()).collect::<Vec<_>>(),
             "groupIds": run.group_states.iter().map(|state| state.group_id.clone()).collect::<Vec<_>>(),
             "acceptanceRefs": task_plan.scope_snapshot.acceptance_refs,
+            "nextPhaseId": next_phase_preview.get("suggestedPhaseId").cloned().unwrap_or(Value::Null),
+            "nextPhasePreview": next_phase_preview,
             "runStatus": run.status,
             "runSummary": run.summary
         },
@@ -217,15 +226,8 @@ fn build_review_request(
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
             "taskResultSummaries": compact_task_result_summaries(task_results)
         },
-        "changeContext": {
-            "mode": "current_file_content",
-            "changedFiles": task_results.iter()
-                .flat_map(|result| result.changed_files.iter().map(|file| json!({
-                    "path": file,
-                    "source": result.task_result_id
-                })))
-                .collect::<Vec<_>>()
-        },
+        "changeSet": change_set,
+        "changeContext": change_context,
         "conceptReviewMatrix": build_concept_review_matrix(task_plan, task_results),
         "detailReviewMatrix": build_detail_review_matrix(task_plan, task_results),
         "enumRefs": {
@@ -248,8 +250,8 @@ fn build_review_request(
                 "review_limitation"
             ],
             "nextAction": REVIEW_ACTIONS,
-            "readRefType": ["review_packet", "change_context", "changed_file", "task_result", "verification_evidence"],
-            "evidenceRefType": ["task_result", "verification_result", "changed_file", "manual_note"]
+            "readRefType": ["review_packet", "change_context", "diff_ref", "changed_file", "task_result", "verification_evidence"],
+            "evidenceRefType": ["task_result", "verification_result", "diff_ref", "changed_file", "manual_note"]
         },
         "reviewRules": {
             "commonRules": [
@@ -259,8 +261,10 @@ fn build_review_request(
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure."
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure.",
+                "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
             ],
+            "changeSetRules": change_set_rules(&change_context_mode),
             "routingRules": {
                 "actionPriority": [
                     "needs_user_decision",
@@ -289,6 +293,8 @@ fn build_review_request(
             "allowedRefs": allowed_refs,
             "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
             "reviewSignals": review_signals,
+            "changeContextMode": change_context_mode.clone(),
+            "severityPolicy": review_severity_policy(),
             "routingRules": {
                 "topLevelNextActionPriority": [
                     "needs_user_decision",
@@ -298,8 +304,10 @@ fn build_review_request(
                     "execution_repair",
                     "continue_to_next_phase",
                     "done"
-                ]
-            }
+                ],
+                "manualReviewPriorityRule": "manual_review outranks automatic repair only for blocking review limitations or environment blockers that prevent reliable review."
+            },
+            "validatorRules": review_validator_rules(&change_context_mode)
         },
         "requestReadPlan": {
             "groups": [
@@ -317,8 +325,13 @@ fn build_review_request(
                         "sourceRefs.taskPlanRef",
                         "sourceRefs.taskPlanRunRef",
                         "reviewScope.type",
+                        "reviewScope.taskIds",
                         "reviewScope.groupIds",
                         "reviewScope.acceptanceRefs",
+                        "reviewScope.nextPhaseId",
+                        "reviewScope.nextPhasePreview.kind",
+                        "reviewScope.nextPhasePreview.suggestedPhaseId",
+                        "reviewScope.nextPhasePreview.reason",
                         "reviewScope.runStatus",
                         "reviewScope.runSummary"
                     ]
@@ -343,7 +356,8 @@ fn build_review_request(
                     "whenToRead": "Read before judging implementation quality.",
                     "fields": [
                         "changeContext.mode",
-                        "changeContext.changedFiles"
+                        "changeContext.changedFiles",
+                        "outputContract.changeContextMode"
                     ]
                 },
                 {
@@ -374,8 +388,11 @@ fn build_review_request(
                         "enumRefs.readRefType",
                         "enumRefs.evidenceRefType",
                         "reviewRules.commonRules",
+                        "reviewRules.changeSetRules",
                         "reviewRules.routingRules",
-                        "outputContract.routingRules"
+                        "outputContract.routingRules",
+                        "outputContract.severityPolicy",
+                        "outputContract.validatorRules"
                     ]
                 },
                 {
@@ -391,6 +408,7 @@ fn build_review_request(
                         "outputContract.allowedRefs.acceptanceRefs",
                         "outputContract.allowedRefs.taskResultIds",
                         "outputContract.allowedRefs.changedFilePaths",
+                        "outputContract.allowedRefs.diffRefs",
                         "outputContract.allowedRefs.verificationEvidenceRefs",
                         "outputContract.allowedRefs.readRefs",
                         "outputContract.requiredFields",
@@ -506,6 +524,197 @@ fn review_result_template(
         "nextAction": next_action,
         "createdAt": "ISO-8601 datetime",
         "updatedAt": "ISO-8601 datetime"
+    })
+}
+
+fn review_next_phase_preview(handoff: Option<&brainstorm::NextPhaseHandoff>) -> Value {
+    if let Some(handoff) = handoff {
+        json!({
+            "kind": "candidate",
+            "suggestedPhaseId": handoff.phase_id.clone(),
+            "title": handoff.title.clone(),
+            "goal": handoff.goal.clone(),
+            "scopePreview": handoff.scope_preview.clone(),
+            "reason": handoff.reason.clone()
+        })
+    } else {
+        json!({
+            "kind": "none",
+            "suggestedPhaseId": Value::Null,
+            "title": Value::Null,
+            "goal": Value::Null,
+            "scopePreview": [],
+            "reason": Value::Null
+        })
+    }
+}
+
+fn review_artifacts_dir(
+    project_root: &Path,
+    delivery_id: &str,
+    phase_id: &str,
+    review_id: &str,
+) -> std::path::PathBuf {
+    delivery_dir(project_root, delivery_id)
+        .join("reviews")
+        .join(phase_id)
+        .join("artifacts")
+        .join(review_id)
+}
+
+fn build_change_set(
+    project_root: &Path,
+    delivery_id: &str,
+    phase_id: &str,
+    review_id: &str,
+    task_results: &[TaskResult],
+) -> Result<(Value, Value), state::store::StateError> {
+    let mut source_by_path = BTreeMap::<String, String>::new();
+    for result in task_results {
+        for file in &result.changed_files {
+            source_by_path
+                .entry(file.clone())
+                .or_insert_with(|| result.task_result_id.clone());
+        }
+    }
+    let changed_files = source_by_path.keys().cloned().collect::<Vec<_>>();
+    if git_diff_available(project_root) {
+        let diffs_dir =
+            review_artifacts_dir(project_root, delivery_id, phase_id, review_id).join("diffs");
+        state::store::ensure_dir(&diffs_dir)?;
+        let mut files = Vec::new();
+        let mut diff_texts = Vec::new();
+        for file in &changed_files {
+            let diff_path = diffs_dir.join(format!("{}.diff", safe_id(file)));
+            let diff = git_output(project_root, &["diff", "HEAD", "--", file]).unwrap_or_default();
+            state::store::write_text_atomic(&diff_path, &diff)?;
+            let has_diff = !diff.trim().is_empty();
+            if has_diff {
+                diff_texts.push(diff);
+            }
+            let diff_ref = to_project_relative(project_root, &diff_path)?;
+            let (insertions, deletions) = git_numstat(project_root, file).unwrap_or((0, 0));
+            files.push(json!({
+                "path": file,
+                "source": source_by_path.get(file),
+                "changeType": if has_diff { "modified" } else { "declared_changed" },
+                "insertions": insertions,
+                "deletions": deletions,
+                "diffRef": diff_ref
+            }));
+        }
+        let full_diff_path = diffs_dir.join("full.diff");
+        state::store::write_text_atomic(&full_diff_path, &diff_texts.join("\n"))?;
+        let full_diff_ref = to_project_relative(project_root, &full_diff_path)?;
+        let change_set = json!({
+            "mode": "git_diff_ref",
+            "gitAvailable": true,
+            "diffAvailable": true,
+            "diffInline": false,
+            "summary": {
+                "changedFileCount": files.len()
+            },
+            "files": files,
+            "fullDiffRef": full_diff_ref
+        });
+        let change_context = json!({
+            "mode": "git_diff_ref",
+            "changedFiles": change_set["files"],
+            "fullDiffRef": full_diff_ref
+        });
+        Ok((change_set, change_context))
+    } else {
+        let files = changed_files
+            .iter()
+            .map(|file| {
+                json!({
+                    "path": file,
+                    "source": source_by_path.get(file),
+                    "changeType": "declared_changed"
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok((
+            json!({
+                "mode": "current_file_content",
+                "gitAvailable": false,
+                "diffAvailable": false,
+                "diffInline": false,
+                "summary": {
+                    "changedFileCount": files.len()
+                },
+                "files": files
+            }),
+            json!({
+                "mode": "current_file_content",
+                "changedFiles": files
+            }),
+        ))
+    }
+}
+
+fn git_diff_available(project_root: &Path) -> bool {
+    git_output(project_root, &["rev-parse", "--is-inside-work-tree"]).is_some()
+        && git_output(project_root, &["rev-parse", "--verify", "HEAD"]).is_some()
+}
+
+fn git_output(project_root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn git_numstat(project_root: &Path, file: &str) -> Option<(u32, u32)> {
+    let output = git_output(project_root, &["diff", "HEAD", "--numstat", "--", file])?;
+    let line = output.lines().next()?;
+    let mut parts = line.split_whitespace();
+    let insertions = parts.next()?.parse::<u32>().ok()?;
+    let deletions = parts.next()?.parse::<u32>().ok()?;
+    Some((insertions, deletions))
+}
+
+fn change_set_rules(mode: &str) -> Vec<&'static str> {
+    if mode == "git_diff_ref" {
+        vec![
+            "Diff content is not inlined.",
+            "Read changeContext first and read only per-file diffRefs needed for findings.",
+            "Use fullDiffRef only when a cross-file finding cannot be supported by per-file diffRefs.",
+            "Line-level findings must be based on a read diffRef or fullDiffRef.",
+        ]
+    } else {
+        vec![
+            "Only changed file paths are provided.",
+            "Read changed files only when needed.",
+            "Critical or major findings must be direct and within task changed files.",
+            "Use notes for issues outside the current task change set.",
+        ]
+    }
+}
+
+fn review_severity_policy() -> Value {
+    json!({
+        "critical": "Blocks accepted behavior, data integrity, security, or runtime viability.",
+        "major": "Breaks a must acceptance item, integration contract, or required workflow.",
+        "minor": "Important but non-blocking correctness, maintainability, or evidence gap.",
+        "note": "Observation that should not change routing."
+    })
+}
+
+fn review_validator_rules(mode: &str) -> Value {
+    json!({
+        "blockingFindingsNeedActionableRefs": true,
+        "coverageMustListEveryAcceptanceRef": true,
+        "pendingActionFindingRefsMustMatchRecommendedNextAction": true,
+        "warningOnlyFindingsCannotRouteRepair": true,
+        "changeContextMode": mode,
+        "currentFileContentMajorFindingRule": "When changeContextMode is current_file_content, critical/major findings must have taskRelevance=direct and scopeRelation=within_task_changed_files."
     })
 }
 
@@ -642,13 +851,25 @@ where
             "outputContract.allowedRefs.acceptanceRefs".to_string(),
             "outputContract.allowedRefs.taskResultIds".to_string(),
             "outputContract.allowedRefs.changedFilePaths".to_string(),
+            "outputContract.allowedRefs.diffRefs".to_string(),
             "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
             "outputContract.allowedRefs.readRefs".to_string(),
+            "enumRefs.readRefType".to_string(),
+            "enumRefs.evidenceRefType".to_string(),
+            "outputContract.changeContextMode".to_string(),
             "outputContract.reviewSignals.requirementDetailEvidence".to_string(),
             "outputContract.reviewSignals.frontendWorkflowClosure".to_string(),
+            "reviewScope.nextPhasePreview.kind".to_string(),
         ],
     })?
     .fields;
+    if let Some(handoff) =
+        normalize_approved_next_phase(&input.project_root, &delivery_id, &phase_id, &result)?
+    {
+        result.next_action.r#type = "continue_to_next_phase".to_string();
+        result.next_action.target_phase_id = Some(handoff.phase_id);
+        result.next_action.reason = handoff.reason;
+    }
     let issues = validate_review_result(&result, &authorized.request_id, &fields);
     if !issues.is_empty() {
         return repairable_or_fallback_manual_review(
@@ -657,13 +878,6 @@ where
             target.path.clone(),
             issues,
         );
-    }
-    if let Some(handoff) =
-        normalize_approved_next_phase(&input.project_root, &delivery_id, &phase_id, &result)?
-    {
-        result.next_action.r#type = "continue_to_next_phase".to_string();
-        result.next_action.target_phase_id = Some(handoff.phase_id);
-        result.next_action.reason = handoff.reason;
     }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
@@ -732,11 +946,13 @@ fn validate_review_result(
         "acceptanceRefs": array_field(fields, "outputContract.allowedRefs.acceptanceRefs"),
         "taskResultIds": array_field(fields, "outputContract.allowedRefs.taskResultIds"),
         "changedFilePaths": array_field(fields, "outputContract.allowedRefs.changedFilePaths"),
+        "diffRefs": array_field(fields, "outputContract.allowedRefs.diffRefs"),
         "verificationEvidenceRefs": array_field(fields, "outputContract.allowedRefs.verificationEvidenceRefs"),
         "readRefs": array_field(fields, "outputContract.allowedRefs.readRefs")
     });
-    validate_review_refs(result, &allowed, &mut issues);
-    validate_review_decision(result, &mut issues);
+    validate_review_refs(result, &allowed, fields, &mut issues);
+    validate_review_coverage(result, &allowed, &mut issues);
+    validate_review_decision(result, fields, &mut issues);
     validate_review_signals(result, fields, &mut issues);
     issues
 }
@@ -795,6 +1011,7 @@ fn validate_review_enums(result: &ReviewResult, issues: &mut Vec<delivery_core::
 fn validate_review_refs(
     result: &ReviewResult,
     allowed: &Value,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
     let task_ids = allowed_set(allowed, "taskIds");
@@ -802,6 +1019,14 @@ fn validate_review_refs(
     let acceptance_refs = allowed_set(allowed, "acceptanceRefs");
     let task_result_ids = allowed_set(allowed, "taskResultIds");
     let read_refs = allowed_set(allowed, "readRefs");
+    let changed_file_refs = normalized_allowed_set(allowed, "changedFilePaths");
+    let verification_refs = allowed_set(allowed, "verificationEvidenceRefs");
+    let read_ref_types = string_set_field(fields, "enumRefs.readRefType");
+    let evidence_ref_types = string_set_field(fields, "enumRefs.evidenceRefType");
+    let change_context_mode = fields
+        .get("outputContract.changeContextMode")
+        .and_then(|field| field.value.as_str())
+        .unwrap_or("current_file_content");
     let finding_ids = result
         .findings
         .iter()
@@ -813,6 +1038,17 @@ fn validate_review_refs(
                 "REVIEW_RESULT_REF_INVALID",
                 "findings[].readRefs",
                 "Every finding must include readRefs.",
+            ));
+        }
+        if is_blocking_finding(finding)
+            && !blocking_finding_has_actionable_ref(finding)
+            && !["manual_review", "needs_user_decision"]
+                .contains(&finding.recommended_next_action.as_str())
+        {
+            issues.push(issue(
+                "REVIEW_RESULT_REF_INVALID",
+                "findings[].refs",
+                "Blocking review findings must cite a task, group, artifact, or file location unless routed to manual/user decision.",
             ));
         }
         for task_ref in &finding.task_refs {
@@ -843,13 +1079,59 @@ fn validate_review_refs(
             }
         }
         for read_ref in &finding.read_refs {
-            if !read_refs.contains(&read_ref.r#ref) && !task_result_ids.contains(&read_ref.r#ref) {
+            if !read_ref_types.contains(&read_ref.r#type) {
+                issues.push(issue(
+                    "REVIEW_RESULT_REF_INVALID",
+                    "findings[].readRefs",
+                    "Review finding readRefs must use allowed readRef types.",
+                ));
+            } else if !is_allowed_review_read_ref(
+                &read_ref.r#type,
+                &read_ref.r#ref,
+                &read_refs,
+                &task_result_ids,
+                &changed_file_refs,
+                &verification_refs,
+            ) {
                 issues.push(issue(
                     "REVIEW_RESULT_REF_INVALID",
                     "findings[].readRefs",
                     "Review finding readRefs must use allowed request refs, task result ids, changed file refs, or verification refs.",
                 ));
             }
+        }
+        for evidence_ref in &finding.evidence_refs {
+            if !evidence_ref_types.contains(&evidence_ref.r#type) {
+                issues.push(issue(
+                    "REVIEW_RESULT_REF_INVALID",
+                    "findings[].evidenceRefs",
+                    "Review finding evidenceRefs must use allowed evidenceRef types.",
+                ));
+            } else if !is_allowed_review_evidence_ref(
+                &evidence_ref.r#type,
+                &evidence_ref.r#ref,
+                &read_refs,
+                &task_result_ids,
+                &changed_file_refs,
+                &verification_refs,
+            ) {
+                issues.push(issue(
+                    "REVIEW_RESULT_REF_INVALID",
+                    "findings[].evidenceRefs",
+                    "Review finding evidenceRefs must use allowed task result, verification, diff, changed file, or manual refs.",
+                ));
+            }
+        }
+        if change_context_mode == "current_file_content"
+            && matches!(finding.severity.as_str(), "critical" | "major")
+            && !(finding.task_relevance == "direct"
+                && finding.scope_relation == "within_task_changed_files")
+        {
+            issues.push(issue(
+                "REVIEW_RESULT_STATUS_INCONSISTENT",
+                "findings[].severity",
+                "In current_file_content mode, critical or major findings must be direct and within task changed files.",
+            ));
         }
         if finding.failure_class.as_deref() == Some("environment_blocker")
             && finding.recommended_next_action == "execution_repair"
@@ -873,6 +1155,18 @@ fn validate_review_refs(
                     "pendingActions[].findingRefs",
                     "pendingActions findingRefs must reference current findings.",
                 ));
+            } else if result
+                .findings
+                .iter()
+                .find(|finding| finding.finding_id == *finding_ref)
+                .map(|finding| finding.recommended_next_action.as_str())
+                != Some(action.r#type.as_str())
+            {
+                issues.push(issue(
+                    "REVIEW_RESULT_STATUS_INCONSISTENT",
+                    "pendingActions[].findingRefs",
+                    "pendingActions findingRefs must match each finding recommendedNextAction.",
+                ));
             }
         }
         if action.r#type == result.next_action.r#type {
@@ -894,7 +1188,65 @@ fn validate_review_refs(
     }
 }
 
-fn validate_review_decision(result: &ReviewResult, issues: &mut Vec<delivery_core::RepairIssue>) {
+fn validate_review_coverage(
+    result: &ReviewResult,
+    allowed: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let acceptance_refs = allowed_set(allowed, "acceptanceRefs");
+    let task_result_ids = allowed_set(allowed, "taskResultIds");
+    let covered = result
+        .coverage_assessment
+        .must_acceptance
+        .iter()
+        .map(|assessment| assessment.acceptance_ref.clone())
+        .collect::<BTreeSet<_>>();
+    for assessment in &result.coverage_assessment.must_acceptance {
+        if !acceptance_refs.contains(&assessment.acceptance_ref) {
+            issues.push(issue(
+                "REVIEW_RESULT_REF_INVALID",
+                "coverageAssessment.mustAcceptance[].acceptanceRef",
+                "Review coverageAssessment must use current phase acceptance refs.",
+            ));
+        }
+        for task_result_ref in &assessment.supporting_task_results {
+            if !task_result_ids.contains(task_result_ref) {
+                issues.push(issue(
+                    "REVIEW_RESULT_REF_INVALID",
+                    "coverageAssessment.mustAcceptance[].supportingTaskResults",
+                    "Review coverage supportingTaskResults must use allowed task result ids.",
+                ));
+            }
+        }
+        if assessment.status != "satisfied"
+            && !result
+                .findings
+                .iter()
+                .any(|finding| finding.acceptance_refs.contains(&assessment.acceptance_ref))
+        {
+            issues.push(issue(
+                "REVIEW_RESULT_STATUS_INCONSISTENT",
+                "coverageAssessment.mustAcceptance[]",
+                "Unsatisfied acceptance coverage requires a finding that cites that acceptanceRef.",
+            ));
+        }
+    }
+    for acceptance_ref in acceptance_refs {
+        if !covered.contains(&acceptance_ref) {
+            issues.push(issue(
+                "REVIEW_RESULT_REF_INVALID",
+                "coverageAssessment.mustAcceptance",
+                "Review coverageAssessment.mustAcceptance must include every current phase acceptanceRef.",
+            ));
+        }
+    }
+}
+
+fn validate_review_decision(
+    result: &ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
     let has_blocking = result.findings.iter().any(is_blocking_finding);
     let has_execution = result.findings.iter().any(|finding| {
         finding.recommended_next_action == "execution_repair" && is_blocking_finding(finding)
@@ -938,7 +1290,7 @@ fn validate_review_decision(result: &ReviewResult, issues: &mut Vec<delivery_cor
         )),
         _ => {}
     }
-    let expected = expected_top_action(result);
+    let expected = expected_top_action(result, fields);
     if result.next_action.r#type != expected {
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
@@ -958,6 +1310,26 @@ fn validate_review_decision(result: &ReviewResult, issues: &mut Vec<delivery_cor
             "REVIEW_RESULT_REF_INVALID",
             "nextAction.targetPhaseId",
             "continue_to_next_phase requires nextAction.targetPhaseId.",
+        ));
+    }
+    if !result.findings.is_empty()
+        && result
+            .findings
+            .iter()
+            .all(|finding| finding.severity_class.as_deref() == Some("warning"))
+        && [
+            "execution_repair",
+            "taskplan_repair",
+            "architecture_artifact_repair",
+            "manual_review",
+            "needs_user_decision",
+        ]
+        .contains(&result.next_action.r#type.as_str())
+    {
+        issues.push(issue(
+            "REVIEW_RESULT_STATUS_INCONSISTENT",
+            "nextAction.type",
+            "Warning-only review findings cannot route repair, manual review, or user decision.",
         ));
     }
 }
@@ -1905,10 +2277,41 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
         .collect()
 }
 
-fn allowed_refs(task_plan: &TaskPlan, run: &TaskPlanRun, task_results: &[TaskResult]) -> Value {
+fn allowed_refs(
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+    task_results: &[TaskResult],
+    change_context: &Value,
+    change_set: &Value,
+) -> Value {
     let changed_files = task_results
         .iter()
         .flat_map(|result| result.changed_files.clone())
+        .collect::<BTreeSet<_>>();
+    let changed_files = change_context
+        .get("changedFiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("path").and_then(Value::as_str).map(str::to_string))
+        .chain(changed_files)
+        .collect::<BTreeSet<_>>();
+    let diff_refs = change_context
+        .get("changedFiles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            file.get("diffRef")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .chain(
+            change_set
+                .get("fullDiffRef")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        )
         .collect::<BTreeSet<_>>();
     let verification_refs = task_results
         .iter()
@@ -1929,6 +2332,7 @@ fn allowed_refs(task_plan: &TaskPlan, run: &TaskPlanRun, task_results: &[TaskRes
             .map(|result| result.task_result_id.clone()),
     );
     read_refs.extend(changed_files.iter().cloned());
+    read_refs.extend(diff_refs.iter().cloned());
     read_refs.extend(verification_refs.iter().cloned());
     json!({
         "taskIds": run.task_states.iter().map(|state| state.task_id.clone()).collect::<Vec<_>>(),
@@ -1936,22 +2340,47 @@ fn allowed_refs(task_plan: &TaskPlan, run: &TaskPlanRun, task_results: &[TaskRes
         "acceptanceRefs": task_plan.scope_snapshot.acceptance_refs,
         "taskResultIds": task_results.iter().map(|result| result.task_result_id.clone()).collect::<Vec<_>>(),
         "changedFilePaths": changed_files.iter().cloned().collect::<Vec<_>>(),
+        "diffRefs": diff_refs.iter().cloned().collect::<Vec<_>>(),
         "verificationEvidenceRefs": verification_refs.iter().cloned().collect::<Vec<_>>(),
         "readRefs": read_refs
     })
 }
 
-fn expected_top_action(result: &ReviewResult) -> String {
-    for action in REPAIR_ACTIONS {
+fn expected_top_action(
+    result: &ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> String {
+    if result.findings.iter().any(|finding| {
+        finding.recommended_next_action == "needs_user_decision" && is_blocking_finding(finding)
+    }) {
+        return "needs_user_decision".to_string();
+    }
+    if result.findings.iter().any(|finding| {
+        finding.recommended_next_action == "manual_review"
+            && is_blocking_finding(finding)
+            && (finding.category == "review_limitation"
+                || finding.category == "environment_or_dependency"
+                || finding.failure_class.as_deref() == Some("environment_blocker")
+                || finding.severity_class.as_deref() == Some("manual_review"))
+    }) {
+        return "manual_review".to_string();
+    }
+    for action in [
+        "architecture_artifact_repair",
+        "taskplan_repair",
+        "execution_repair",
+    ] {
         if result.findings.iter().any(|finding| {
-            finding.recommended_next_action == *action && is_blocking_finding(finding)
+            finding.recommended_next_action == action && is_blocking_finding(finding)
         }) {
-            return (*action).to_string();
+            return action.to_string();
         }
     }
-    if (result.decision == "approved" || result.decision == "approved_with_notes")
-        && result.next_action.r#type == "continue_to_next_phase"
-    {
+    let has_next_phase = fields
+        .get("reviewScope.nextPhasePreview.kind")
+        .and_then(|field| field.value.as_str())
+        == Some("candidate");
+    if matches!(result.decision.as_str(), "approved" | "approved_with_notes") && has_next_phase {
         "continue_to_next_phase".to_string()
     } else if result.decision == "approved" || result.decision == "approved_with_notes" {
         "done".to_string()
@@ -1962,7 +2391,35 @@ fn expected_top_action(result: &ReviewResult) -> String {
 
 fn is_blocking_finding(finding: &ReviewFinding) -> bool {
     finding.severity_class.as_deref() == Some("blocking")
+        || finding.severity_class.as_deref() == Some("manual_review")
         || matches!(finding.severity.as_str(), "critical" | "major")
+}
+
+fn blocking_finding_has_actionable_ref(finding: &ReviewFinding) -> bool {
+    if !finding.task_refs.is_empty() || !finding.group_refs.is_empty() {
+        return true;
+    }
+    if finding
+        .artifact_refs
+        .as_object()
+        .map(|refs| {
+            refs.values().any(|value| {
+                value
+                    .as_array()
+                    .map(|items| !items.is_empty())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    finding
+        .location
+        .get("file")
+        .and_then(Value::as_str)
+        .map(|file| !file.trim().is_empty())
+        .unwrap_or(false)
 }
 
 fn route_kind_for_review_action(action: &str) -> RouteActionKind {
@@ -2015,6 +2472,79 @@ fn allowed_set(value: &Value, key: &str) -> BTreeSet<String> {
         .flatten()
         .filter_map(|item| item.as_str().map(str::to_string))
         .collect()
+}
+
+fn normalized_allowed_set(value: &Value, key: &str) -> BTreeSet<String> {
+    allowed_set(value, key)
+        .into_iter()
+        .map(|item| normalize_review_file_ref(&item))
+        .collect()
+}
+
+fn string_set_field(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> BTreeSet<String> {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .filter(Value::is_array)
+        .and_then(|value| {
+            value.as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect::<BTreeSet<_>>()
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_review_file_ref(value: &str) -> String {
+    value
+        .trim_start_matches("changed_file:")
+        .trim_start_matches("file:")
+        .trim_start_matches("./")
+        .replace('\\', "/")
+}
+
+fn is_allowed_review_read_ref(
+    ref_type: &str,
+    ref_value: &str,
+    allowed_read_refs: &BTreeSet<String>,
+    task_result_ids: &BTreeSet<String>,
+    changed_file_refs: &BTreeSet<String>,
+    verification_refs: &BTreeSet<String>,
+) -> bool {
+    if allowed_read_refs.contains(ref_value) || task_result_ids.contains(ref_value) {
+        return true;
+    }
+    match ref_type {
+        "changed_file" => changed_file_refs.contains(&normalize_review_file_ref(ref_value)),
+        "verification_evidence" => verification_refs.contains(ref_value),
+        _ => false,
+    }
+}
+
+fn is_allowed_review_evidence_ref(
+    ref_type: &str,
+    ref_value: &str,
+    allowed_read_refs: &BTreeSet<String>,
+    task_result_ids: &BTreeSet<String>,
+    changed_file_refs: &BTreeSet<String>,
+    verification_refs: &BTreeSet<String>,
+) -> bool {
+    if ref_type == "manual_note" {
+        return true;
+    }
+    if allowed_read_refs.contains(ref_value) || task_result_ids.contains(ref_value) {
+        return true;
+    }
+    match ref_type {
+        "changed_file" => changed_file_refs.contains(&normalize_review_file_ref(ref_value)),
+        "verification_result" => verification_refs.contains(ref_value),
+        _ => false,
+    }
 }
 
 fn value_to_write_target(value: &Value) -> Result<WriteTarget, state::store::StateError> {
