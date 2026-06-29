@@ -25,18 +25,28 @@ jobs:
           - platform: darwin-arm64
             os: macos-14
             setup: src/rust/target/release/loom-setup
+            rust_target: ""
+            binary_dir: src/rust/target/release
           - platform: darwin-x64
-            os: macos-13
+            os: macos-14
             setup: src/rust/target/release/loom-setup
+            rust_target: x86_64-apple-darwin
+            binary_dir: src/rust/target/x86_64-apple-darwin/release
           - platform: linux-x64
             os: ubuntu-22.04
             setup: src/rust/target/release/loom-setup
+            rust_target: ""
+            binary_dir: src/rust/target/release
           - platform: linux-arm64
             os: ubuntu-24.04-arm
             setup: src/rust/target/release/loom-setup
+            rust_target: ""
+            binary_dir: src/rust/target/release
           - platform: windows-x64
             os: windows-latest
             setup: src/rust/target/release/loom-setup.exe
+            rust_target: ""
+            binary_dir: src/rust/target/release
 
     steps:
       - name: Checkout
@@ -45,14 +55,26 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Rust target
+        if: matrix.rust_target != ''
+        run: rustup target add ${{ matrix.rust_target }}
+
       - name: Build release binaries
+        if: matrix.rust_target == ''
         run: cargo build --release -p mcp-server -p setup --manifest-path src/rust/Cargo.toml
+
+      - name: Build cross-target release binaries
+        if: matrix.rust_target != ''
+        run: |
+          cargo build --release -p setup --manifest-path src/rust/Cargo.toml
+          cargo build --release -p mcp-server -p setup --manifest-path src/rust/Cargo.toml --target ${{ matrix.rust_target }}
 
       - name: Create package layout
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/packages dist/release
+          export LOOM_SETUP_BINARY_DIR="$PWD/${{ matrix.binary_dir }}"
           "${{ matrix.setup }}" package-layout \
             --output-dir dist/packages \
             --platform "${{ matrix.platform }}"
