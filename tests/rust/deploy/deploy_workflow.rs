@@ -337,6 +337,78 @@ fn deploy_status_does_not_echo_project_root_inside_state_details() {
 }
 
 #[test]
+fn deploy_active_operation_returns_structured_observation_policy() {
+    let fixture = Fixture::new("deploy-active-operation");
+    let state_dir = fixture.root.join(".loom/deployment/state");
+    ensure_dir(&state_dir).expect("state dir");
+    ensure_dir(&fixture.root.join(".loom/deployment/logs")).expect("logs dir");
+    write_json_atomic(
+        &state_dir.join("active-operation.json"),
+        &json!({
+            "schemaVersion": 1,
+            "operationId": "deploy-op-live",
+            "command": "deploy.run",
+            "phase": "building",
+            "pid": 999999,
+            "projectRoot": fixture.root_str(),
+            "startedAt": now_string(),
+            "updatedAt": now_string(),
+            "logRef": ".loom/deployment/logs/local.log",
+            "specRef": ".loom/deployment/specs/local.json",
+            "status": "running"
+        }),
+    )
+    .expect("write active operation");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("active operation json");
+
+    assert_eq!(value["state"], "active_operation", "{value:#}");
+    assert_eq!(
+        value["allowedObservationTools"],
+        json!(["loom.deployStatus", "loom.deployInspect", "loom.deployLogs"]),
+        "{value:#}"
+    );
+    assert_eq!(value["observationPolicy"]["quietMode"], true, "{value:#}");
+    assert_eq!(
+        value["observationPolicy"]["initialQuietWindowMs"], 120_000,
+        "{value:#}"
+    );
+    assert_eq!(
+        value["observationPolicy"]["minNextObservationIntervalMs"], 60_000,
+        "{value:#}"
+    );
+    assert_eq!(
+        value["observationPolicy"]["finalResponsePolicy"], "forbidden_while_operation_active",
+        "{value:#}"
+    );
+    let forbidden_actions = value["forbiddenActions"]
+        .as_array()
+        .expect("forbidden actions")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("another deploy command")));
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("raw Docker")));
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("kill")));
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("unchanged logs")));
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
 fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
     let fixture = Fixture::new("deploy-repair-assets");
     fixture.write_runtime_delivery(runtime_delivery());

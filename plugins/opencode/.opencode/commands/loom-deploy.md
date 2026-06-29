@@ -20,7 +20,7 @@ Call the matching Loom MCP deploy tool for the current project directory.
 
 Follow the returned action result. Do not invent deployment assets, topology, repair scope, preview URLs, or ports outside that MCP result.
 
-During `active_operation`, call only the observation tools named by the result. Do not run raw Docker or Compose commands as a substitute for Loom deploy observation.
+During `active_operation`, call only the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it.
 
 For `DeployRepairAssetsNext`, edit only the returned generated deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
 

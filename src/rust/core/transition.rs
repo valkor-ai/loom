@@ -155,6 +155,8 @@ where
                             "loom.readFieldGroup".to_string(),
                             "loom.readRequestFields".to_string(),
                         ],
+                        observation_policy: None,
+                        forbidden_actions: vec![],
                         progress_summary: Some(json!({
                             "status": existing.status,
                             "refs": existing.refs,

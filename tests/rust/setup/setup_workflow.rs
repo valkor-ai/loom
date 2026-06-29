@@ -534,6 +534,29 @@ fn plugin_templates_do_not_expose_legacy_protocol_terms() {
 }
 
 #[test]
+fn deploy_plugin_templates_obey_active_operation_policy_fields() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    for file in [
+        "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/skills/loom-deploy/SKILL.md",
+        "opencode/.opencode/commands/loom-deploy.md",
+    ] {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        for required in [
+            "observationPolicy",
+            "forbiddenActions",
+            "finalResponsePolicy",
+        ] {
+            assert!(
+                content.contains(required),
+                "{file} must require deploy active_operation policy field {required}"
+            );
+        }
+    }
+}
+
+#[test]
 fn opencode_commands_expose_mcp_result_discipline() {
     let repo = repo_root();
     let command_root = repo.join("plugins/opencode/.opencode/commands");

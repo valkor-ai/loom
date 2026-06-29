@@ -169,6 +169,8 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
                 expires_at: "2026-06-23T00:10:00Z".to_string(),
             },
             allowed_observation_tools: vec!["loom.status".to_string()],
+            observation_policy: None,
+            forbidden_actions: vec![],
             progress_summary: None,
         }),
         LoomMcpActionResult::Done(LoomMcpDoneResult {

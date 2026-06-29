@@ -111,7 +111,22 @@ pub struct LoomMcpActiveOperationResult {
     pub operation: ActiveOperationRef,
     pub allowed_observation_tools: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation_policy: Option<ActiveOperationObservationPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forbidden_actions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_summary: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveOperationObservationPolicy {
+    pub quiet_mode: bool,
+    pub initial_quiet_window_ms: u32,
+    pub min_next_observation_interval_ms: u32,
+    pub logs_policy: String,
+    pub user_visible_update_policy: String,
+    pub final_response_policy: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
