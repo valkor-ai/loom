@@ -122,12 +122,18 @@ pub fn validate_generated_assets(
     spec: &DeploymentSpec,
 ) -> StateResult<Vec<String>> {
     let mut issues = Vec::new();
-    let compose = read_text(&from_project_relative(
-        project_root,
-        &spec.files.compose_path,
-    )?)?;
+    let compose_file = from_project_relative(project_root, &spec.files.compose_path)?;
+    let compose = read_text(&compose_file)?;
     if !compose.contains("services:") {
         issues.push("compose file must include services.".to_string());
+    }
+    let compose_dir = compose_file.parent().unwrap_or(project_root);
+    for dockerfile in compose_dockerfile_paths(&compose) {
+        if !compose_dir.join(&dockerfile).exists() {
+            issues.push(format!(
+                "compose dockerfile path {dockerfile} does not resolve from compose directory."
+            ));
+        }
     }
     for service in &spec.source_model.services {
         if !compose.contains(&format!("  {}:", service.service_id)) {
@@ -181,6 +187,18 @@ pub fn validate_generated_assets(
         issues.push("topology has apiPaths but no http-proxy route.".to_string());
     }
     Ok(issues)
+}
+
+fn compose_dockerfile_paths(compose: &str) -> Vec<String> {
+    compose
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let value = trimmed.strip_prefix("dockerfile:")?.trim();
+            Some(value.trim_matches('"').trim_matches('\'').to_string())
+        })
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn probe_http(port: u16, path: &str, reject_html_fallback: bool) -> HttpProbeResult {

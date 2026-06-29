@@ -89,6 +89,8 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     )
     .expect("compose");
     assert!(compose.contains("  frontend:"));
+    assert!(compose.contains("      dockerfile: Dockerfile.frontend"));
+    assert!(compose.contains("      dockerfile: Dockerfile.backend"));
     assert!(compose.contains("  backend:"));
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
@@ -159,6 +161,11 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
     )
     .expect("compose");
     assert!(compose.contains("context: ../../../.."), "{compose}");
+    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
+    assert!(
+        !compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
+        "{compose}"
+    );
 
     let dockerfile = read_text(
         &fixture
@@ -241,6 +248,61 @@ fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
         .root
         .join(".loom/deployment/state/repair-action.json")
         .exists());
+}
+
+#[test]
+fn deploy_validate_flags_compose_dockerfile_paths_that_do_not_resolve() {
+    let fixture = Fixture::new("deploy-validate-dockerfile-path");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "httpProbes": { "previewPath": "/" },
+        "start": { "port": 8080 }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","preview":"vite preview"}}"#,
+    );
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    let compose_path = fixture
+        .root
+        .join(".loom/deployment/specs/generated/compose.yaml");
+    let compose = read_text(&compose_path).expect("compose");
+    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
+    std::fs::write(
+        &compose_path,
+        compose.replace(
+            "dockerfile: Dockerfile.app",
+            "dockerfile: .loom/deployment/specs/generated/Dockerfile.app",
+        ),
+    )
+    .expect("write bad compose");
+
+    let result = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("validate json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["valid"], false, "{value:#}");
+    assert!(value["details"]["assetIssues"]
+        .as_array()
+        .expect("asset issues")
+        .iter()
+        .any(|issue| issue
+            .as_str()
+            .is_some_and(|text| text.contains("compose dockerfile path"))));
 }
 
 #[test]

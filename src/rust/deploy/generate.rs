@@ -398,7 +398,7 @@ fn generate_compose(spec: &DeploymentSpec) -> String {
 }
 
 fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService) -> Vec<String> {
-    let dockerfile = spec
+    let dockerfile_project_path = spec
         .files
         .dockerfile_paths
         .get(&service.service_id)
@@ -409,6 +409,11 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
                 service.service_id
             )
         });
+    let compose_dir = Path::new(&spec.files.compose_path)
+        .parent()
+        .and_then(Path::to_str)
+        .unwrap_or(".");
+    let dockerfile = project_path_relative_to_directory(compose_dir, &dockerfile_project_path);
     let mut env = runtime_env(service);
     if service.role != SourceServiceRole::Frontend {
         for dependency in &spec.source_model.dependencies {
@@ -692,6 +697,34 @@ fn service_root_workdir(service: &DeploymentSourceService) -> String {
 
 fn relative_from_context(path: &str) -> String {
     path.to_string()
+}
+
+fn project_path_relative_to_directory(
+    from_project_relative_directory: &str,
+    to_project_relative_path: &str,
+) -> String {
+    let from_parts = normalized_relative_parts(from_project_relative_directory);
+    let to_parts = normalized_relative_parts(to_project_relative_path);
+    let common_len = from_parts
+        .iter()
+        .zip(&to_parts)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = Vec::new();
+    relative.extend(std::iter::repeat("..").take(from_parts.len().saturating_sub(common_len)));
+    relative.extend(to_parts.iter().skip(common_len).copied());
+    if relative.is_empty() {
+        ".".to_string()
+    } else {
+        relative.join("/")
+    }
+}
+
+fn normalized_relative_parts(value: &str) -> Vec<&str> {
+    value
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect()
 }
 
 fn normalize_nginx_public_path(value: &str) -> String {
