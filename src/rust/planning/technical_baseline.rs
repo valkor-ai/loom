@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
     BrainstormContract, ProjectKind, TechnicalBaselineApprovalType,
@@ -7,7 +7,8 @@ use contracts::{
 use delivery_core::{
     ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
     LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
-    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    ReadRequestFieldsInput, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
+    TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -120,6 +121,7 @@ fn materialize_request_inner(
         None
     };
     let request_root = build_request_root(
+        root,
         &brainstorm,
         delivery_id,
         phase_id,
@@ -164,6 +166,7 @@ fn materialize_request_inner(
 }
 
 fn build_request_root(
+    project_root: &Path,
     brainstorm: &BrainstormContract,
     delivery_id: &str,
     phase_id: &str,
@@ -189,13 +192,11 @@ fn build_request_root(
         })
     });
     let selection_guidance = technical_baseline_selection_guidance(project_kind, baseline_exists);
-    let repo_evidence = json!({
-        "detectedProjectKind": project_kind,
-        "baselineExists": baseline_exists,
-        "repositoryContextExists": false
-    });
+    let repo_evidence =
+        technical_baseline_repo_evidence(project_root, project_kind, baseline_exists);
     let baseline_context_fields =
         technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
+    let repo_evidence_fields = technical_baseline_repo_evidence_fields(project_kind);
     json!({
         "schemaVersion": "1.0",
         "requestType": "technical_baseline_request",
@@ -324,12 +325,7 @@ fn build_request_root(
                     "required": false,
                     "purpose": "Read repository evidence before inferring an existing-project baseline or deciding whether reuse applies.",
                     "whenToRead": "Read for existing_project or when repository continuity matters.",
-                    "fields": [
-                        "projectKind",
-                        "repoEvidence.detectedProjectKind",
-                        "repoEvidence.baselineExists",
-                        "repoEvidence.repositoryContextExists"
-                    ]
+                    "fields": repo_evidence_fields
                 },
                 {
                     "groupId": "technical_baseline_selection_guidance",
@@ -423,6 +419,209 @@ fn technical_baseline_context_fields(
         ]);
     }
     fields
+}
+
+fn technical_baseline_repo_evidence(
+    project_root: &Path,
+    project_kind: ProjectKind,
+    baseline_exists: bool,
+) -> Value {
+    let mut evidence = json!({
+        "detectedProjectKind": project_kind,
+        "baselineExists": baseline_exists,
+        "repositoryContextExists": false
+    });
+    if matches!(project_kind, ProjectKind::ExistingProject) {
+        evidence["signals"] = compact_repo_signals(project_root);
+    }
+    evidence
+}
+
+fn technical_baseline_repo_evidence_fields(project_kind: ProjectKind) -> Vec<&'static str> {
+    let mut fields = vec![
+        "projectKind",
+        "repoEvidence.detectedProjectKind",
+        "repoEvidence.baselineExists",
+        "repoEvidence.repositoryContextExists",
+    ];
+    if matches!(project_kind, ProjectKind::ExistingProject) {
+        fields.extend([
+            "repoEvidence.signals.manifests",
+            "repoEvidence.signals.packageManagers",
+            "repoEvidence.signals.languages",
+            "repoEvidence.signals.frameworks",
+            "repoEvidence.signals.sourceRoots",
+        ]);
+    }
+    fields
+}
+
+fn compact_repo_signals(project_root: &Path) -> Value {
+    let mut signals = RepoSignalSummary::default();
+    collect_node_signals(project_root, &mut signals);
+    collect_java_signals(project_root, &mut signals);
+    collect_python_signals(project_root, &mut signals);
+    collect_rust_signals(project_root, &mut signals);
+    collect_go_signals(project_root, &mut signals);
+    for path in [
+        "src", "app", "web", "service", "backend", "frontend", "tests",
+    ] {
+        if project_root.join(path).exists() {
+            signals.source_roots.insert(path.to_string());
+        }
+    }
+    signals.to_json()
+}
+
+#[derive(Default)]
+struct RepoSignalSummary {
+    manifests: BTreeSet<String>,
+    package_managers: BTreeSet<String>,
+    languages: BTreeSet<String>,
+    frameworks: BTreeSet<String>,
+    source_roots: BTreeSet<String>,
+}
+
+impl RepoSignalSummary {
+    fn to_json(&self) -> Value {
+        json!({
+            "manifests": sorted_values(&self.manifests),
+            "packageManagers": sorted_values(&self.package_managers),
+            "languages": sorted_values(&self.languages),
+            "frameworks": sorted_values(&self.frameworks),
+            "sourceRoots": sorted_values(&self.source_roots)
+        })
+    }
+}
+
+fn sorted_values(values: &BTreeSet<String>) -> Vec<String> {
+    values.iter().cloned().collect()
+}
+
+fn collect_node_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    let package_file = project_root.join("package.json");
+    if !package_file.exists() {
+        return;
+    }
+    signals.manifests.insert("package.json".to_string());
+    if project_root.join("package-lock.json").exists() {
+        signals.package_managers.insert("npm".to_string());
+    }
+    if project_root.join("pnpm-lock.yaml").exists() {
+        signals.package_managers.insert("pnpm".to_string());
+    }
+    if project_root.join("yarn.lock").exists() {
+        signals.package_managers.insert("yarn".to_string());
+    }
+    if signals.package_managers.is_empty() {
+        signals.package_managers.insert("npm".to_string());
+    }
+    signals.languages.insert("JavaScript".to_string());
+    if project_root.join("tsconfig.json").exists() {
+        signals.languages.insert("TypeScript".to_string());
+        signals.manifests.insert("tsconfig.json".to_string());
+    }
+    let Ok(package) = state::store::read_json_value(&package_file) else {
+        return;
+    };
+    let dependencies = package_dependencies(&package);
+    if dependencies.contains("typescript") {
+        signals.languages.insert("TypeScript".to_string());
+    }
+    for (dependency, framework) in [
+        ("next", "Next.js"),
+        ("react", "React"),
+        ("vue", "Vue"),
+        ("svelte", "Svelte"),
+        ("vite", "Vite"),
+        ("express", "Express"),
+        ("fastify", "Fastify"),
+        ("@nestjs/core", "NestJS"),
+    ] {
+        if dependencies.contains(dependency) {
+            signals.frameworks.insert(framework.to_string());
+        }
+    }
+}
+
+fn package_dependencies(package: &Value) -> BTreeSet<String> {
+    let mut dependencies = BTreeSet::new();
+    for key in ["dependencies", "devDependencies", "peerDependencies"] {
+        if let Some(values) = package.get(key).and_then(Value::as_object) {
+            dependencies.extend(values.keys().cloned());
+        }
+    }
+    dependencies
+}
+
+fn collect_java_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    let pom_file = project_root.join("pom.xml");
+    if pom_file.exists() {
+        signals.manifests.insert("pom.xml".to_string());
+        signals.languages.insert("Java".to_string());
+        signals.package_managers.insert("Maven".to_string());
+        if fs::read_to_string(&pom_file)
+            .map(|content| content.contains("spring-boot"))
+            .unwrap_or(false)
+        {
+            signals.frameworks.insert("Spring Boot".to_string());
+        }
+    }
+    if project_root.join("build.gradle").exists() || project_root.join("build.gradle.kts").exists()
+    {
+        signals.manifests.insert("build.gradle".to_string());
+        signals.languages.insert("Java".to_string());
+        signals.package_managers.insert("Gradle".to_string());
+    }
+}
+
+fn collect_python_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    let has_pyproject = project_root.join("pyproject.toml").exists();
+    let has_requirements = project_root.join("requirements.txt").exists();
+    if !has_pyproject && !has_requirements {
+        return;
+    }
+    signals.languages.insert("Python".to_string());
+    signals.package_managers.insert("pip".to_string());
+    if has_pyproject {
+        signals.manifests.insert("pyproject.toml".to_string());
+    }
+    if has_requirements {
+        signals.manifests.insert("requirements.txt".to_string());
+    }
+    let combined = ["pyproject.toml", "requirements.txt"]
+        .iter()
+        .filter_map(|path| fs::read_to_string(project_root.join(path)).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    for (needle, framework) in [
+        ("fastapi", "FastAPI"),
+        ("django", "Django"),
+        ("flask", "Flask"),
+    ] {
+        if combined.contains(needle) {
+            signals.frameworks.insert(framework.to_string());
+        }
+    }
+}
+
+fn collect_rust_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    if !project_root.join("Cargo.toml").exists() {
+        return;
+    }
+    signals.manifests.insert("Cargo.toml".to_string());
+    signals.languages.insert("Rust".to_string());
+    signals.package_managers.insert("Cargo".to_string());
+}
+
+fn collect_go_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    if !project_root.join("go.mod").exists() {
+        return;
+    }
+    signals.manifests.insert("go.mod".to_string());
+    signals.languages.insert("Go".to_string());
+    signals.package_managers.insert("go".to_string());
 }
 
 fn technical_baseline_selection_guidance(
@@ -683,7 +882,10 @@ where
     let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
     if previous_baseline_file.exists() {
         let previous: TechnicalBaselineContract = state::store::read_json(&previous_baseline_file)?;
-        if technical_baseline_conflicts(&previous, &candidate)
+        let stack_or_baseline_changed = technical_baseline_conflicts(&previous, &candidate);
+        let repo_signal_conflicts =
+            repo_signals_conflict_with_previous(project_root, &input.request_ref, &previous)?;
+        if (stack_or_baseline_changed || !repo_signal_conflicts.is_empty())
             && !matches!(
                 candidate.approval.r#type,
                 TechnicalBaselineApprovalType::UserConfirmed
@@ -905,17 +1107,35 @@ fn technical_baseline_decision_needs(
     project_kind: ProjectKind,
     baseline_exists: bool,
 ) -> Vec<String> {
-    let mut needs = Vec::new();
     if matches!(project_kind, ProjectKind::Greenfield) {
-        needs.push("confirm_greenfield_stack".to_string());
+        return vec![
+            "web client technology track when applicable".to_string(),
+            "app client technology track when applicable".to_string(),
+            "backend/service technology track".to_string(),
+            "database or persistence technology track".to_string(),
+            "ORM or data access technology track".to_string(),
+            "external services only when required by the confirmed requirement".to_string(),
+        ];
     }
     if baseline_exists {
-        needs.push("check_previous_baseline_reuse".to_string());
+        return vec![
+            "whether the current confirmed scope explicitly adds a new technology surface"
+                .to_string(),
+            "whether the current confirmed scope explicitly replaces a previous technology baseline element"
+                .to_string(),
+            "otherwise reuse the previous TechnicalBaseline unchanged for normal bugfix, repair, optimization, or feature work inside the existing stack"
+                .to_string(),
+        ];
     }
     if matches!(project_kind, ProjectKind::Unknown) {
-        needs.push("confirm_project_kind".to_string());
+        return vec!["confirm_project_kind".to_string()];
     }
-    needs
+    vec![
+        "current repository runtime, language, framework, and package-manager evidence".to_string(),
+        "current repository persistence or data-access evidence when present".to_string(),
+        "confirmed requirement technology preferences, if the user explicitly provided any"
+            .to_string(),
+    ]
 }
 
 fn technical_baseline_conflicts(
@@ -924,8 +1144,194 @@ fn technical_baseline_conflicts(
 ) -> bool {
     previous.project_kind != candidate.project_kind
         || previous.scope != candidate.scope
-        || previous.stack != candidate.stack
+        || !stable_stack_equivalent(&previous.stack, &candidate.stack)
         || previous.constraints != candidate.constraints
+}
+
+fn stable_stack_equivalent(left: &Value, right: &Value) -> bool {
+    normalize_stack_for_comparison(left) == normalize_stack_for_comparison(right)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StableStack {
+    runtimes: BTreeSet<String>,
+    languages: BTreeSet<String>,
+    frameworks: BTreeSet<String>,
+    package_managers: BTreeSet<String>,
+    databases: BTreeSet<String>,
+    tracks: BTreeSet<String>,
+}
+
+fn normalize_stack_for_comparison(stack: &Value) -> StableStack {
+    StableStack {
+        runtimes: values_for_keys(stack, &["runtime", "runtimes", "runtimeKind"]),
+        languages: values_for_keys(stack, &["language", "languages"]),
+        frameworks: values_for_keys(
+            stack,
+            &[
+                "framework",
+                "frameworks",
+                "frontendFramework",
+                "backendFramework",
+            ],
+        ),
+        package_managers: values_for_keys(stack, &["packageManager", "packageManagers"]),
+        databases: values_for_keys(stack, &["database", "databases", "databaseProvider"]),
+        tracks: stack_track_selections_for_comparison(stack),
+    }
+}
+
+fn values_for_keys(value: &Value, keys: &[&str]) -> BTreeSet<String> {
+    let mut values = BTreeSet::new();
+    for key in keys {
+        collect_stack_value(value.get(*key).unwrap_or(&Value::Null), &mut values);
+    }
+    values
+}
+
+fn collect_stack_value(value: &Value, output: &mut BTreeSet<String>) {
+    if let Some(text) = value.as_str() {
+        let normalized = normalize_stack_token(text);
+        if !normalized.is_empty() {
+            output.insert(normalized);
+        }
+        return;
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            collect_stack_value(item, output);
+        }
+    }
+}
+
+fn stack_track_selections_for_comparison(stack: &Value) -> BTreeSet<String> {
+    let Some(tracks) = stack.get("tracks").and_then(Value::as_object) else {
+        return BTreeSet::new();
+    };
+    tracks
+        .iter()
+        .filter_map(|(track_name, track)| {
+            let status = track
+                .get("status")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .unwrap_or_default();
+            let selection = track
+                .get("selection")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .unwrap_or_default();
+            if status.is_empty() && selection.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{}:{}:{}",
+                    normalize_stack_token(track_name),
+                    status,
+                    selection
+                ))
+            }
+        })
+        .collect()
+}
+
+fn repo_signals_conflict_with_previous(
+    project_root: &Path,
+    request_ref: &str,
+    previous: &TechnicalBaselineContract,
+) -> Result<Vec<String>, state::store::StateError> {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: project_root.to_string_lossy().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "repoEvidence.signals.packageManagers".to_string(),
+            "repoEvidence.signals.frameworks".to_string(),
+            "repoEvidence.signals.languages".to_string(),
+        ],
+    })?;
+    let stack = normalize_stack_for_comparison(&previous.stack);
+    let mut conflicts = Vec::new();
+    push_signal_conflict(
+        &mut conflicts,
+        "packageManagers",
+        &stack.package_managers,
+        field_string_set(&fields.fields, "repoEvidence.signals.packageManagers"),
+    );
+    push_signal_conflict(
+        &mut conflicts,
+        "frameworks",
+        &stack.frameworks,
+        field_string_set(&fields.fields, "repoEvidence.signals.frameworks"),
+    );
+    push_signal_conflict(
+        &mut conflicts,
+        "languages",
+        &stack.languages,
+        field_string_set(&fields.fields, "repoEvidence.signals.languages"),
+    );
+    if stack.runtimes.contains("node") {
+        let mut repo_tokens =
+            field_string_set(&fields.fields, "repoEvidence.signals.packageManagers");
+        repo_tokens.extend(field_string_set(
+            &fields.fields,
+            "repoEvidence.signals.languages",
+        ));
+        let has_node_signal = ["npm", "pnpm", "yarn", "bun", "typescript", "javascript"]
+            .iter()
+            .any(|token| repo_tokens.contains(*token));
+        let has_other_runtime_signal = ["maven", "gradle", "java", "python", "go", "rust"]
+            .iter()
+            .any(|token| repo_tokens.contains(*token));
+        if !has_node_signal && has_other_runtime_signal {
+            conflicts.push("runtime".to_string());
+        }
+    }
+    Ok(conflicts)
+}
+
+fn field_string_set(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    field: &str,
+) -> BTreeSet<String> {
+    fields
+        .get(field)
+        .and_then(|result| result.value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(normalize_stack_token)
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn push_signal_conflict(
+    conflicts: &mut Vec<String>,
+    label: &str,
+    baseline_values: &BTreeSet<String>,
+    signal_values: BTreeSet<String>,
+) {
+    if baseline_values.is_empty() || signal_values.is_empty() {
+        return;
+    }
+    if !baseline_values
+        .iter()
+        .any(|value| signal_values.contains(value))
+    {
+        conflicts.push(label.to_string());
+    }
+}
+
+fn normalize_stack_token(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .trim_end_matches(".js")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 fn infer_project_kind(project_root: &Path) -> ProjectKind {

@@ -322,9 +322,28 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
     let fixture = Fixture::new("technical-baseline-existing-project");
     write_json_atomic(
         &fixture.root.join("package.json"),
-        &json!({ "name": "loom-fixture", "private": true }),
+        &json!({
+            "name": "loom-fixture",
+            "private": true,
+            "scripts": {
+                "build": "vite build",
+                "test": "vitest run"
+            },
+            "dependencies": {
+                "react": "^19.0.0",
+                "vite": "^6.0.0"
+            },
+            "devDependencies": {
+                "typescript": "^5.0.0"
+            }
+        }),
     )
     .expect("write package.json");
+    write_json_atomic(
+        &fixture.root.join("tsconfig.json"),
+        &json!({ "compilerOptions": { "strict": true } }),
+    )
+    .expect("write tsconfig.json");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
@@ -337,6 +356,50 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         .as_str()
         .expect("baseline requestRef")
         .to_string();
+    let inspected_baseline = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: baseline_request_ref.clone(),
+    })
+    .expect("inspect technical baseline request");
+    let repo_evidence_group = inspected_baseline
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "technical_baseline_repo_evidence")
+        .expect("technical baseline repo evidence group");
+    assert!(!repo_evidence_group
+        .fields
+        .contains(&"repoEvidence".to_string()));
+    for field in [
+        "repoEvidence.signals.manifests",
+        "repoEvidence.signals.packageManagers",
+        "repoEvidence.signals.languages",
+        "repoEvidence.signals.frameworks",
+    ] {
+        assert!(
+            repo_evidence_group.fields.contains(&field.to_string()),
+            "missing compact repo signal field {field}"
+        );
+    }
+    let repo_evidence = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: baseline_request_ref.clone(),
+        group_id: "technical_baseline_repo_evidence".to_string(),
+    })
+    .expect("read technical baseline repo evidence");
+    assert_eq!(
+        repo_evidence.fields["repoEvidence.signals.packageManagers"].value,
+        json!(["npm"])
+    );
+    assert!(repo_evidence.fields["repoEvidence.signals.languages"]
+        .value
+        .as_array()
+        .expect("languages")
+        .contains(&json!("TypeScript")));
+    assert!(repo_evidence.fields["repoEvidence.signals.frameworks"]
+        .value
+        .as_array()
+        .expect("frameworks")
+        .contains(&json!("React")));
     write_candidate_target(
         &fixture,
         &baseline_request_ref,
@@ -554,6 +617,136 @@ fn technical_baseline_conflict_with_previous_baseline_requires_user_gate() {
     assert_eq!(
         confirmed["next"]["artifactKind"],
         "repository_context_candidate"
+    );
+}
+
+#[test]
+fn technical_baseline_ignores_derived_command_changes_for_previous_stack() {
+    let fixture = Fixture::new("technical-baseline-derived-commands");
+    write_json_atomic(
+        &fixture.root.join("package.json"),
+        &json!({ "name": "loom-fixture", "private": true }),
+    )
+    .expect("write package.json");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    write_previous_technical_baseline(&fixture, &delivery_id);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = technical_baseline_candidate_json("existing_project", "policy_auto_accept");
+    candidate["stack"] = json!({
+        "frontend": "plain-html",
+        "backend": "none",
+        "build": "npm run build --workspace app",
+        "test": "npm run test --workspace account-service",
+        "start": "npm run start --workspace app"
+    });
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(
+        result["next"]["artifactKind"],
+        "repository_context_candidate"
+    );
+}
+
+#[test]
+fn technical_baseline_repo_signal_conflict_with_previous_stack_requires_user_gate() {
+    let fixture = Fixture::new("technical-baseline-repo-signal-conflict");
+    std::fs::write(
+        fixture.root.join("pom.xml"),
+        "<project><modelVersion>4.0.0</modelVersion></project>\n",
+    )
+    .expect("write pom.xml");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let baseline_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("contracts/technical-baseline.json");
+    std::fs::create_dir_all(baseline_path.parent().expect("baseline parent"))
+        .expect("create baseline parent");
+    write_json_atomic(
+        &baseline_path,
+        &json!({
+            "schemaVersion": "1.0",
+            "technicalBaselineId": "tb_previous_node",
+            "deliveryId": delivery_id,
+            "phaseId": "phase-1",
+            "status": "confirmed",
+            "source": "user_confirmed",
+            "projectKind": "existing_project",
+            "scope": "project",
+            "stack": {
+                "runtime": "node",
+                "language": "typescript",
+                "framework": "react",
+                "packageManager": "npm"
+            },
+            "constraints": [],
+            "evidence": [{
+                "path": "package.json",
+                "reason": "Previous Node baseline was confirmed earlier."
+            }],
+            "approval": {
+                "type": "user_confirmed",
+                "reason": "Existing baseline fixture."
+            },
+            "confidence": "high",
+            "requiresUserConfirmation": false,
+            "reasoningSummary": ["Previous Node baseline fixture."],
+            "alternatives": [],
+            "createdAt": "2026-06-24T09:00:00+08:00",
+            "updatedAt": "2026-06-24T09:00:00+08:00"
+        }),
+    )
+    .expect("write previous node baseline");
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = technical_baseline_candidate_json("existing_project", "policy_auto_accept");
+    candidate["stack"] = json!({
+        "runtime": "node",
+        "language": "typescript",
+        "framework": "react",
+        "packageManager": "npm"
+    });
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "user_gate", "{result:#}");
+    assert_eq!(
+        result["gate"]["gateId"],
+        "previous_baseline_change_confirmation"
     );
 }
 
