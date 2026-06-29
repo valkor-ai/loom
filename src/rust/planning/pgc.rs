@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     BrainstormContract, ConceptPhaseRelevance, ConceptPriority, PlanningContractContextRefs,
@@ -288,60 +291,60 @@ fn build_requirement_details_index(
     current_acceptance_ids: &[String],
 ) -> RequirementDetailsIndex {
     let mut items = Vec::new();
+    let mut extraction_warnings = Vec::new();
     let fallback_source_refs = fallback_source_refs(brainstorm, brainstorm_contract_ref);
     let current_scope_ids = phase_scope
         .included
         .iter()
         .map(|scope| scope.id.clone())
         .collect::<Vec<_>>();
+    let deferred_scope_ids = phase_scope
+        .deferred
+        .iter()
+        .map(|scope| scope.id.clone())
+        .collect::<Vec<_>>();
+    let excluded_scope_ids = phase_scope
+        .excluded
+        .iter()
+        .map(|scope| scope.id.clone())
+        .collect::<Vec<_>>();
 
-    for scope in &phase_scope.included {
-        let details = if scope.items.is_empty() {
-            vec![scope.label.clone()]
-        } else {
-            scope.items.clone()
-        };
-        for (index, detail) in details.iter().enumerate() {
-            push_detail(
-                &mut items,
-                RequirementDetailItem {
-                    detail_id: format!("detail.scope.{}.{}", scope.id, index + 1),
-                    kind: infer_requirement_detail_kind(detail, "scope_boundary"),
-                    title: format!("{}: {}", scope.label, detail),
-                    summary: detail.clone(),
-                    required_for_current_phase: true,
-                    priority: "must".to_string(),
-                    source_field_refs: vec![format!(
-                        "brainstorm.scope.included[{scope_id}].{}",
-                        if scope.items.is_empty() {
-                            "label"
-                        } else {
-                            "items"
-                        },
-                        scope_id = scope.id
-                    )],
-                    source_refs: fallback_source_refs.clone(),
-                    scope_refs: vec![scope.id.clone()],
-                    acceptance_refs: vec![],
-                    concept_refs: vec![],
-                    frontend_refs: vec![],
-                    impact_tags: infer_impact_tags(detail),
-                    lifecycle_stage: infer_lifecycle_stage(detail),
-                    quality: "confirmed".to_string(),
-                    unresolved_note: if scope.items.is_empty() {
-                        Some("Scope item has no detailed items array; label was used as the detail source.".to_string())
-                    } else {
-                        None
-                    },
-                },
-            );
-        }
-    }
+    add_scope_details(
+        &mut items,
+        &mut extraction_warnings,
+        &brainstorm.scope.included,
+        &current_scope_ids,
+        "included",
+        true,
+        "scope_boundary",
+        &fallback_source_refs,
+    );
+    add_scope_details(
+        &mut items,
+        &mut extraction_warnings,
+        &brainstorm.scope.deferred,
+        &deferred_scope_ids,
+        "deferred",
+        false,
+        "deferred_or_excluded_boundary",
+        &fallback_source_refs,
+    );
+    add_scope_details(
+        &mut items,
+        &mut extraction_warnings,
+        &brainstorm.scope.excluded,
+        &excluded_scope_ids,
+        "excluded",
+        false,
+        "deferred_or_excluded_boundary",
+        &fallback_source_refs,
+    );
 
-    for acceptance in brainstorm
+    for (index, acceptance) in brainstorm
         .acceptance
         .iter()
-        .filter(|item| current_acceptance_ids.iter().any(|id| id == &item.id))
+        .enumerate()
+        .filter(|(_, acceptance)| current_acceptance_ids.iter().any(|id| id == &acceptance.id))
     {
         push_detail(
             &mut items,
@@ -352,10 +355,7 @@ fn build_requirement_details_index(
                 summary: acceptance.statement.clone(),
                 required_for_current_phase: true,
                 priority: format!("{:?}", acceptance.priority).to_lowercase(),
-                source_field_refs: vec![format!(
-                    "brainstorm.acceptance[{}].statement",
-                    acceptance.id
-                )],
+                source_field_refs: vec![format!("brainstorm.acceptance[{index}].statement")],
                 source_refs: if acceptance.source_refs.is_empty() {
                     fallback_source_refs.clone()
                 } else {
@@ -374,7 +374,7 @@ fn build_requirement_details_index(
     }
 
     if let Some(model) = &brainstorm.domain_model {
-        for flow in &model.business_flows {
+        for (index, flow) in model.business_flows.iter().enumerate() {
             let acceptance_refs = brainstorm
                 .acceptance
                 .iter()
@@ -397,8 +397,7 @@ fn build_requirement_details_index(
                     required_for_current_phase: true,
                     priority: "must".to_string(),
                     source_field_refs: vec![format!(
-                        "brainstorm.domainModel.businessFlows[{}].summary",
-                        flow.id
+                        "brainstorm.domainModel.businessFlows[{index}].summary"
                     )],
                     source_refs: fallback_source_refs.clone(),
                     scope_refs: current_scope_ids.clone(),
@@ -418,9 +417,13 @@ fn build_requirement_details_index(
         let concept_sets = concept_grounding
             .delivery_concept_glossary
             .iter()
-            .chain(std::iter::once(&concept_grounding.phase_concept_grounding));
-        for concept_set in concept_sets {
-            for concept in &concept_set.concepts {
+            .map(|set| ("deliveryConceptGlossary", set))
+            .chain(std::iter::once((
+                "phaseConceptGrounding",
+                &concept_grounding.phase_concept_grounding,
+            )));
+        for (set_path, concept_set) in concept_sets {
+            for (index, concept) in concept_set.concepts.iter().enumerate() {
                 let concept_scope_refs = concept
                     .scope_refs
                     .iter()
@@ -466,8 +469,7 @@ fn build_requirement_details_index(
                         }
                         .to_string(),
                         source_field_refs: vec![format!(
-                            "brainstorm.conceptGrounding.concepts[{}].explanation",
-                            concept.concept_id
+                            "brainstorm.conceptGrounding.{set_path}.concepts[{index}].explanation"
                         )],
                         source_refs: fallback_source_refs.clone(),
                         scope_refs: concept_scope_refs,
@@ -485,7 +487,7 @@ fn build_requirement_details_index(
     }
 
     if let Some(frontend) = &brainstorm.frontend_experience {
-        for view in &frontend.data_views {
+        for (index, view) in frontend.data_views.iter().enumerate() {
             let summary = format!(
                 "{} Selection: {:?}. Pagination required: {}.",
                 view.purpose, view.selection_mode, view.pagination_required
@@ -500,8 +502,7 @@ fn build_requirement_details_index(
                     required_for_current_phase: frontend.required,
                     priority: if frontend.required { "must" } else { "could" }.to_string(),
                     source_field_refs: vec![format!(
-                        "brainstorm.frontendExperience.dataViews[{}]",
-                        view.view_id
+                        "brainstorm.frontendExperience.dataViews[{index}]"
                     )],
                     source_refs: if view.source_refs.is_empty() {
                         fallback_source_refs.clone()
@@ -519,7 +520,7 @@ fn build_requirement_details_index(
                 },
             );
         }
-        for action in &frontend.actions {
+        for (index, action) in frontend.actions.iter().enumerate() {
             let summary = format!(
                 "{}. Entry: {:?}. Refresh: {}. Success feedback: {}. Blocking or error feedback: {}.",
                 action.label,
@@ -538,8 +539,7 @@ fn build_requirement_details_index(
                     required_for_current_phase: frontend.required,
                     priority: if frontend.required { "must" } else { "could" }.to_string(),
                     source_field_refs: vec![format!(
-                        "brainstorm.frontendExperience.actions[{}]",
-                        action.action_id
+                        "brainstorm.frontendExperience.actions[{index}]"
                     )],
                     source_refs: if action.source_refs.is_empty() {
                         fallback_source_refs.clone()
@@ -557,7 +557,7 @@ fn build_requirement_details_index(
                 },
             );
         }
-        for path in &frontend.operation_paths {
+        for (index, path) in frontend.operation_paths.iter().enumerate() {
             push_detail(
                 &mut items,
                 RequirementDetailItem {
@@ -568,8 +568,7 @@ fn build_requirement_details_index(
                     required_for_current_phase: frontend.required,
                     priority: if frontend.required { "must" } else { "could" }.to_string(),
                     source_field_refs: vec![format!(
-                        "brainstorm.frontendExperience.operationPaths[{}]",
-                        path.path_id
+                        "brainstorm.frontendExperience.operationPaths[{index}]"
                     )],
                     source_refs: if path.source_refs.is_empty() {
                         fallback_source_refs.clone()
@@ -592,7 +591,7 @@ fn build_requirement_details_index(
         }
     }
 
-    for assumption in &brainstorm.scope.assumptions {
+    for (index, assumption) in brainstorm.scope.assumptions.iter().enumerate() {
         push_detail(
             &mut items,
             RequirementDetailItem {
@@ -607,10 +606,7 @@ fn build_requirement_details_index(
                     "could"
                 }
                 .to_string(),
-                source_field_refs: vec![format!(
-                    "brainstorm.scope.assumptions[{}].text",
-                    assumption.id
-                )],
+                source_field_refs: vec![format!("brainstorm.scope.assumptions[{index}].text")],
                 source_refs: fallback_source_refs.clone(),
                 scope_refs: vec![],
                 acceptance_refs: vec![],
@@ -627,13 +623,97 @@ fn build_requirement_details_index(
             },
         );
     }
+    for item in &items {
+        if item.quality == "thin" {
+            extraction_warnings.push(contracts::ContextWarning {
+                code: "REQUIREMENT_DETAIL_THIN".to_string(),
+                message: format!(
+                    "Requirement detail {} is thin; downstream stages must not invent missing business rules.",
+                    item.detail_id
+                ),
+            });
+        }
+    }
 
     RequirementDetailsIndex {
         schema_version: "1.0".to_string(),
         authority: "brainstorm_contract".to_string(),
         source_brainstorm_contract_ref: brainstorm_contract_ref.to_string(),
         items,
-        extraction_warnings: vec![],
+        extraction_warnings,
+    }
+}
+
+fn add_scope_details(
+    items: &mut Vec<RequirementDetailItem>,
+    extraction_warnings: &mut Vec<contracts::ContextWarning>,
+    source_items: &[ScopeItem],
+    active_scope_ids: &[String],
+    bucket: &str,
+    required_for_current_phase: bool,
+    kind: &str,
+    fallback_source_refs: &[String],
+) {
+    for (scope_index, scope) in source_items.iter().enumerate() {
+        if !active_scope_ids.iter().any(|id| id == &scope.id) {
+            continue;
+        }
+        let values = if scope.items.is_empty() {
+            vec![scope.label.clone()]
+        } else {
+            scope.items.clone()
+        };
+        for (item_index, detail) in values.iter().enumerate() {
+            let detail_bucket = if bucket == "included" {
+                "scope"
+            } else {
+                bucket
+            };
+            let source_field_ref = if scope.items.is_empty() {
+                format!("brainstorm.scope.{bucket}[{scope_index}].label")
+            } else {
+                format!("brainstorm.scope.{bucket}[{scope_index}].items[{item_index}]")
+            };
+            push_detail(
+                items,
+                RequirementDetailItem {
+                    detail_id: format!("detail.{detail_bucket}.{}.{}", scope.id, item_index + 1),
+                    kind: kind.to_string(),
+                    title: truncate_detail_title(&format!("{}: {}", scope.label, detail)),
+                    summary: detail.clone(),
+                    required_for_current_phase,
+                    priority: if required_for_current_phase {
+                        "must"
+                    } else {
+                        "could"
+                    }
+                    .to_string(),
+                    source_field_refs: vec![source_field_ref],
+                    source_refs: fallback_source_refs.to_vec(),
+                    scope_refs: vec![scope.id.clone()],
+                    acceptance_refs: vec![],
+                    concept_refs: vec![],
+                    frontend_refs: vec![],
+                    impact_tags: vec![],
+                    lifecycle_stage: String::new(),
+                    quality: String::new(),
+                    unresolved_note: if scope.items.is_empty() {
+                        Some("Scope item has no detailed items array; label was used as the detail source.".to_string())
+                    } else {
+                        None
+                    },
+                },
+            );
+        }
+        if scope.items.is_empty() {
+            extraction_warnings.push(contracts::ContextWarning {
+                code: "SCOPE_ITEMS_EMPTY".to_string(),
+                message: format!(
+                    "Scope {} has no items array, so PGC could only index the scope label.",
+                    scope.id
+                ),
+            });
+        }
     }
 }
 
@@ -661,13 +741,24 @@ fn fallback_source_refs(
     }
 }
 
-fn push_detail(items: &mut Vec<RequirementDetailItem>, detail: RequirementDetailItem) {
+fn push_detail(items: &mut Vec<RequirementDetailItem>, mut detail: RequirementDetailItem) {
     if detail.summary.trim().is_empty()
-        || items
-            .iter()
-            .any(|item| item.detail_id == detail.detail_id || item.summary == detail.summary)
+        || items.iter().any(|item| item.detail_id == detail.detail_id)
     {
         return;
+    }
+    detail.title = truncate_detail_title(&detail.title);
+    detail.source_field_refs = unique_strings(detail.source_field_refs);
+    detail.source_refs = unique_strings(detail.source_refs);
+    detail.scope_refs = unique_strings(detail.scope_refs);
+    detail.acceptance_refs = unique_strings(detail.acceptance_refs);
+    detail.concept_refs = unique_strings(detail.concept_refs);
+    detail.frontend_refs = unique_strings(detail.frontend_refs);
+    detail.impact_tags = infer_requirement_detail_impact_tags(&detail.summary, &detail.kind);
+    detail.lifecycle_stage = infer_lifecycle_stage(&detail.summary);
+    detail.quality = infer_requirement_detail_quality(&detail.summary);
+    if detail.unresolved_note.is_none() {
+        detail.unresolved_note = infer_requirement_detail_unresolved_note(&detail.summary);
     }
     items.push(detail);
 }
@@ -757,61 +848,229 @@ fn infer_requirement_detail_kind(value: &str, fallback: &str) -> String {
 }
 
 fn infer_impact_tags(value: &str) -> Vec<String> {
+    let kind = infer_requirement_detail_kind(value, "business_scenario");
+    infer_requirement_detail_impact_tags(value, &kind)
+}
+
+fn infer_requirement_detail_impact_tags(value: &str, kind: &str) -> Vec<String> {
     let text = value.to_lowercase();
-    let mut tags = Vec::new();
+    let mut tags = BTreeSet::new();
+    if kind == "scope_boundary"
+        || kind == "deferred_or_excluded_boundary"
+        || matches_any(&text, &["scope", "phase", "范围", "阶段", "边界"])
+    {
+        tags.insert("scope".to_string());
+    }
+    if kind == "object_field_set"
+        || matches_any(
+            &text,
+            &[
+                "field", "data", "entity", "model", "字段", "数据", "模型", "关系",
+            ],
+        )
+    {
+        tags.insert("data_model".to_string());
+    }
     if matches_any(
         &text,
         &[
+            "flow",
+            "workflow",
+            "process",
+            "operation",
             "state",
             "status",
             "transition",
+            "流程",
+            "操作",
             "状态",
-            "流转",
-            "冻结",
-            "销户",
         ],
+    ) || matches!(
+        kind,
+        "business_flow" | "object_operation" | "state_transition"
     ) {
-        tags.push("state".to_string());
+        tags.insert("business_flow".to_string());
+    }
+    if kind == "frontend_operation_path"
+        || matches_any(
+            &text,
+            &[
+                "frontend", "ui", "page", "list", "query", "页面", "列表", "查询", "反馈",
+            ],
+        )
+    {
+        tags.insert("frontend".to_string());
     }
     if matches_any(
         &text,
         &[
-            "validate",
-            "validation",
-            "校验",
-            "阻断",
-            "拒绝",
-            "禁",
-            "未成年人",
-            "授权",
+            "api",
+            "interface",
+            "request",
+            "response",
+            "http",
+            "接口",
+            "请求",
+            "响应",
         ],
     ) {
-        tags.push("validation".to_string());
+        tags.insert("interface".to_string());
     }
-    if matches_any(&text, &["frontend", "ui", "页面", "列表", "按钮", "反馈"]) {
-        tags.push("frontend".to_string());
+    if matches_any(
+        &text,
+        &["acceptance", "verify", "success", "验收", "验证", "成功"],
+    ) || kind == "acceptance_outcome"
+    {
+        tags.insert("acceptance".to_string());
+    }
+    if matches_any(
+        &text,
+        &[
+            "runtime", "build", "start", "deploy", "运行", "构建", "启动", "部署",
+        ],
+    ) {
+        tags.insert("runtime".to_string());
     }
     if tags.is_empty() {
-        tags.push("scope".to_string());
+        tags.insert("scope".to_string());
     }
-    tags
+    tags.into_iter().collect()
 }
 
 fn infer_lifecycle_stage(value: &str) -> String {
     let text = value.to_lowercase();
-    if matches_any(&text, &["frontend", "ui", "页面", "列表", "按钮", "反馈"]) {
-        "frontend".to_string()
+    if matches_any(
+        &text,
+        &[
+            "create", "open", "apply", "submit", "创建", "开户", "申请", "提交", "新增",
+        ],
+    ) {
+        "create".to_string()
+    } else if matches_any(
+        &text,
+        &[
+            "query", "search", "select", "list", "lookup", "查询", "搜索", "选择", "列表",
+        ],
+    ) {
+        "query_select".to_string()
+    } else if matches_any(
+        &text,
+        &["view", "detail", "display", "查看", "详情", "展示"],
+    ) {
+        "view".to_string()
+    } else if matches_any(&text, &["update", "edit", "change", "修改", "更新", "变更"]) {
+        "update".to_string()
+    } else if matches_any(
+        &text,
+        &["approve", "review", "process", "审批", "审核", "处理"],
+    ) {
+        "approve_or_process".to_string()
     } else if matches_any(&text, &["state", "status", "transition", "状态", "流转"]) {
-        "state_transition".to_string()
-    } else if matches_any(&text, &["validate", "validation", "校验", "阻断", "拒绝"]) {
-        "validation".to_string()
+        "state_change".to_string()
+    } else if matches_any(
+        &text,
+        &[
+            "terminate",
+            "cancel",
+            "close",
+            "delete",
+            "撤销",
+            "取消",
+            "销户",
+            "删除",
+            "终止",
+        ],
+    ) {
+        "terminate_or_cancel".to_string()
+    } else if matches_any(
+        &text,
+        &[
+            "block", "reject", "invalid", "error", "阻断", "拒绝", "失败", "异常",
+        ],
+    ) {
+        "blocking_or_exception".to_string()
     } else {
-        "current_phase".to_string()
+        "not_applicable".to_string()
     }
 }
 
 fn matches_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
+}
+
+fn infer_requirement_detail_quality(value: &str) -> String {
+    let text = value.trim();
+    if text.chars().count() < 36 {
+        return "thin".to_string();
+    }
+    let lower = text.to_lowercase();
+    let detail_markers = [
+        "field",
+        "input",
+        "precondition",
+        "validation",
+        "blocking",
+        "reason",
+        "state",
+        "feedback",
+        "refresh",
+        "字段",
+        "录入",
+        "前置",
+        "校验",
+        "阻断",
+        "原因",
+        "状态",
+        "反馈",
+        "刷新",
+    ]
+    .iter()
+    .filter(|marker| lower.contains(**marker))
+    .count();
+    if text.chars().count() >= 160 || detail_markers >= 3 {
+        "rich".to_string()
+    } else {
+        "usable".to_string()
+    }
+}
+
+fn infer_requirement_detail_unresolved_note(value: &str) -> Option<String> {
+    let text = value.to_lowercase();
+    matches_any(
+        &text,
+        &[
+            "unclear",
+            "unknown",
+            "tbd",
+            "to be confirmed",
+            "未确认",
+            "不明确",
+            "待确认",
+        ],
+    )
+    .then(|| "Detail source contains unresolved wording.".to_string())
+}
+
+fn unique_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut unique = Vec::new();
+    for value in values {
+        if value.trim().is_empty() || !seen.insert(value.clone()) {
+            continue;
+        }
+        unique.push(value);
+    }
+    unique
+}
+
+fn truncate_detail_title(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= 96 {
+        return trimmed.to_string();
+    }
+    let mut output = trimmed.chars().take(93).collect::<String>();
+    output.push_str("...");
+    output
 }
 
 fn build_context_notes(repository_context_ref: &Option<String>) -> Vec<String> {

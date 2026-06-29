@@ -516,7 +516,7 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
         "phaseScope": planning_contract.phase_scope,
         "technicalBaseline": planning_contract.technical_baseline,
         "requirementDetailTransfer": {
-            "requirementDetails": planning_contract.requirement_details,
+            "requirementDetails": compact_requirement_details_index(planning_contract),
             "acceptanceDetails": planning_contract.phase_scope.acceptance_candidates,
             "actors": planning_contract.planning_inputs.actors,
             "capabilityGroups": planning_contract.planning_inputs.capability_groups,
@@ -524,6 +524,40 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
             "userFacingLanguage": planning_contract.planning_inputs.user_facing_language,
             "businessFlows": planning_contract.planning_inputs.business_flows
         }
+    })
+}
+
+fn compact_requirement_details_index(planning_contract: &PlanningGenerationContract) -> Value {
+    json!({
+        "schemaVersion": planning_contract.requirement_details.schema_version,
+        "authority": planning_contract.requirement_details.authority,
+        "sourceBrainstormContractRef": planning_contract.requirement_details.source_brainstorm_contract_ref,
+        "items": planning_contract
+            .requirement_details
+            .items
+            .iter()
+            .map(|item| {
+                json!({
+                    "detailId": item.detail_id,
+                    "kind": item.kind,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "requiredForCurrentPhase": item.required_for_current_phase,
+                    "priority": item.priority,
+                    "sourceRefs": item.source_refs,
+                    "scopeRefs": item.scope_refs,
+                    "acceptanceRefs": item.acceptance_refs,
+                    "conceptRefs": item.concept_refs,
+                    "frontendRefs": item.frontend_refs,
+                    "impactTags": item.impact_tags,
+                    "lifecycleStage": item.lifecycle_stage,
+                    "quality": item.quality,
+                    "unresolvedNote": item.unresolved_note,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "extractionWarningCount": planning_contract.requirement_details.extraction_warnings.len(),
+        "fullDetailSource": "sourceRefs.planningContractRef#/requirementDetails"
     })
 }
 

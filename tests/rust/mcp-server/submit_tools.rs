@@ -969,6 +969,8 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
     for expected_detail_id in [
         "detail.scope.scope_1.1",
         "detail.scope.scope_1.2",
+        "detail.deferred.deferred_1.1",
+        "detail.excluded.excluded_1.1",
         "detail.acceptance.acc_1",
         "detail.businessFlow.flow_account_opening",
         "detail.concept.concept_security_account",
@@ -984,10 +986,56 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
             "missing PGC requirement detail {expected_detail_id}"
         );
     }
+    let allowed_impact_tags = [
+        "scope",
+        "data_model",
+        "business_flow",
+        "frontend",
+        "interface",
+        "acceptance",
+        "runtime",
+    ];
+    let allowed_lifecycle_stages = [
+        "create",
+        "query_select",
+        "view",
+        "update",
+        "approve_or_process",
+        "state_change",
+        "terminate_or_cancel",
+        "blocking_or_exception",
+        "not_applicable",
+    ];
+    let allowed_qualities = ["thin", "usable", "rich"];
+    for detail in details {
+        assert!(
+            allowed_qualities.contains(&detail["quality"].as_str().expect("quality")),
+            "invalid PGC detail quality: {detail:#}"
+        );
+        assert!(
+            allowed_lifecycle_stages
+                .contains(&detail["lifecycleStage"].as_str().expect("lifecycleStage")),
+            "invalid PGC detail lifecycleStage: {detail:#}"
+        );
+        for tag in detail["impactTags"].as_array().expect("impactTags") {
+            assert!(
+                allowed_impact_tags.contains(&tag.as_str().expect("impact tag")),
+                "invalid PGC detail impactTag: {detail:#}"
+            );
+        }
+    }
     assert!(details.iter().any(|detail| {
         detail["detailId"] == json!("detail.concept.concept_security_account")
             && detail["conceptRefs"] == json!(["concept_security_account"])
     }));
+    let first_scope_detail = details
+        .iter()
+        .find(|detail| detail["detailId"] == json!("detail.scope.scope_1.1"))
+        .expect("first scope detail");
+    assert_eq!(
+        first_scope_detail["sourceFieldRefs"],
+        json!(["brainstorm.scope.included[0].items[0]"])
+    );
 
     let core_group = architecture_root["requestReadPlan"]["groups"]
         .as_array()
@@ -1019,6 +1067,27 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
             "contextProjection.requirementDetailTransfer.actors",
             "contextProjection.requirementDetailTransfer.capabilityGroups"
         ])
+    );
+    let projected_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref.clone(),
+        fields: vec!["contextProjection.requirementDetailTransfer.requirementDetails".to_string()],
+    })
+    .expect("read projected requirement details")
+    .fields;
+    let projected_details =
+        &projected_fields["contextProjection.requirementDetailTransfer.requirementDetails"].value;
+    assert!(projected_details["items"][0]
+        .get("sourceFieldRefs")
+        .is_none());
+    assert!(projected_details.get("extractionWarnings").is_none());
+    assert!(
+        projected_details["extractionWarningCount"].is_number(),
+        "projected details did not expose extractionWarningCount: {projected_details:#}"
+    );
+    assert_eq!(
+        projected_details["fullDetailSource"],
+        "sourceRefs.planningContractRef#/requirementDetails"
     );
 }
 
@@ -5586,6 +5655,28 @@ fn valid_candidate_with_frontend_json() -> Value {
 
 fn candidate_with_planning_details_json() -> Value {
     let mut candidate = valid_candidate_with_frontend_json();
+    candidate["scope"]["deferred"] = json!([{
+        "id": "deferred_1",
+        "label": "资金账户",
+        "items": ["资金账户开户留到后续阶段"],
+        "reason": "当前阶段只做证券账户闭环",
+        "source": "user_confirmed"
+    }]);
+    candidate["scope"]["excluded"] = json!([{
+        "id": "excluded_1",
+        "label": "中央撮合",
+        "items": ["撮合成交不在当前阶段实现"],
+        "reason": "避免把交易核心提前塞入账户阶段",
+        "source": "user_confirmed"
+    }]);
+    candidate["phasePlan"]["nextPhasePreview"] = json!({
+        "kind": "candidate",
+        "suggestedPhaseId": "phase-next",
+        "title": "资金账户基础能力",
+        "goal": "在证券账户基础上实现资金账户开户、密码、存取款与账户关联。",
+        "scopePreview": ["资金账户开户", "密码管理", "存款与取款", "账户关联"],
+        "reason": "资金账户是交易客户端和撮合前的下一层依赖。"
+    });
     candidate["acceptance"][0]["capabilityRefs"] = json!(["cap_account_opening"]);
     candidate["scope"]["assumptions"] = json!([{
         "id": "assumption_1",
