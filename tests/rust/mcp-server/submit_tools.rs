@@ -2877,6 +2877,25 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
     let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
     assert!(repair_root.get("taskConceptGrounding").is_none());
     assert!(repair_root.get("blockedOutput").is_none());
+    assert!(repair_root["repairContext"].get("attemptCount").is_some());
+    assert!(repair_root["repairContext"].get("sourceRef").is_some());
+    assert!(repair_root["repairContext"].get("findingRefs").is_none());
+    let inspected_repair = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+    })
+    .expect("inspect task failure repair request");
+    let repair_core = inspected_repair
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "repair_execution_core")
+        .expect("repair execution core group");
+    assert!(repair_core
+        .fields
+        .contains(&"repairContext.attemptCount".to_string()));
+    assert!(!repair_core
+        .fields
+        .contains(&"repairContext.findingRefs".to_string()));
     remove_task_result_optional_validation_fields(&fixture, repair_request_ref);
     write_task_result_candidate(&fixture, repair_request_ref);
     let repaired_result = call_submit(
@@ -3681,6 +3700,29 @@ fn review_execution_repair_materializes_repair_task() {
         result["next"]["repairContext"]["findingRefs"],
         json!(["finding-product"])
     );
+    let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
+    let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
+    assert!(repair_root["repairContext"].get("attemptCount").is_none());
+    assert_eq!(
+        repair_root["repairContext"]["findingRefs"],
+        json!(["finding-product"])
+    );
+    let inspected_repair = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+    })
+    .expect("inspect review repair request");
+    let repair_core = inspected_repair
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "repair_execution_core")
+        .expect("repair execution core group");
+    assert!(!repair_core
+        .fields
+        .contains(&"repairContext.attemptCount".to_string()));
+    assert!(repair_core
+        .fields
+        .contains(&"repairContext.findingRefs".to_string()));
 }
 
 #[test]

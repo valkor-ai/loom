@@ -601,15 +601,21 @@ fn build_repair_execution_request(
         "task.verificationIntents",
         "repairContext.sourceTaskId",
         "repairContext.repairOrigin",
-        "repairContext.attemptCount",
-        "repairContext.sourceRef",
-        "repairContext.findingRefs",
         "executionRules.completionBarrier",
         "executionRules.finalResponseGuard",
         "executionRules.completionContinuityRequirement",
         "executionRules.verificationCommandSchedulingRules",
         "executionRules.boundaryRules",
     ];
+    if matches!(repair_origin, RepairOrigin::TaskFailure) {
+        repair_core_fields.push("repairContext.attemptCount");
+    }
+    if source_ref.is_some() {
+        repair_core_fields.push("repairContext.sourceRef");
+    }
+    if !finding_refs.is_empty() {
+        repair_core_fields.push("repairContext.findingRefs");
+    }
     if !task.concept_refs.is_empty() {
         repair_core_fields.push("task.conceptRefs");
     }
@@ -699,6 +705,19 @@ fn build_repair_execution_request(
     if !task.concept_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
+    let mut repair_context = json!({
+        "sourceTaskId": task.task_id,
+        "repairOrigin": repair_origin,
+    });
+    if matches!(repair_origin, RepairOrigin::TaskFailure) {
+        repair_context["attemptCount"] = json!(attempt_count);
+    }
+    if let Some(source_ref) = source_ref {
+        repair_context["sourceRef"] = json!(source_ref);
+    }
+    if !finding_refs.is_empty() {
+        repair_context["findingRefs"] = json!(finding_refs);
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "delivery_execution_repair",
@@ -714,13 +733,7 @@ fn build_repair_execution_request(
             "groupId": task.group_id
         },
         "task": task,
-        "repairContext": {
-            "sourceTaskId": task.task_id,
-            "repairOrigin": repair_origin,
-            "attemptCount": attempt_count,
-            "sourceRef": source_ref,
-            "findingRefs": finding_refs
-        },
+        "repairContext": repair_context,
         "executionRules": execution_rules,
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
