@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     ArchitectureArtifactContract, TaskDefinition, TaskPlan, TaskPlanRun, TaskPlanRunNextAction,
@@ -238,8 +241,15 @@ fn build_execution_request(
         &task_plan_file(root, locator, &task_plan.task_plan_id),
     )?;
     let run_ref = to_project_relative(root, &task_plan_run_file(root, locator, &run.run_id))?;
+    let request_task = task_with_execution_guidance(
+        task.clone(),
+        &aac,
+        &pgc.planning_inputs.user_facing_language,
+    );
+    let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    let read_groups = task_execution_read_groups(&request_task);
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "execute_task",
@@ -261,27 +271,20 @@ fn build_execution_request(
             "taskPlanRunRef": run_ref,
             "phaseConceptGroundingRef": pgc.context_refs.phase_concept_grounding_ref
         },
-        "task": task,
+        "task": &request_task,
         "sourceContext": {
             "technicalBaseline": {
                 "projectKind": baseline.project_kind,
                 "stack": baseline.stack
             },
-            "architectureArtifactProjection": {
-                "modules": aac.modules,
-                "interfaces": aac.interfaces,
-                "userFlows": aac.user_flows,
-                "stateMachines": aac.state_machines,
-                "frontendExperience": aac.frontend_experience,
-                "runtimeDelivery": aac.runtime_delivery
-            },
+            "architectureArtifactProjection": architecture_projection,
             "acceptanceSnapshot": pgc.phase_scope.acceptance_candidates.iter()
-                .filter(|acceptance| task.acceptance_refs.iter().any(|id| id == &acceptance.id))
+                .filter(|acceptance| request_task.acceptance_refs.iter().any(|id| id == &acceptance.id))
                 .collect::<Vec<_>>(),
             "requirementDetailSnapshot": pgc.requirement_details.items.iter()
-                .filter(|detail| task.requirement_detail_refs.iter().any(|id| id == &detail.detail_id))
+                .filter(|detail| request_task.requirement_detail_refs.iter().any(|id| id == &detail.detail_id))
                 .collect::<Vec<_>>(),
-            "userFacingLanguage": pgc.planning_inputs.user_facing_language,
+            "userFacingLanguage": &pgc.planning_inputs.user_facing_language,
             "dependencyResults": dependency_results(run, task)
         },
         "executionRules": {
@@ -355,114 +358,690 @@ fn build_execution_request(
                 "blockedReasons", "createdAt", "updatedAt"
             ],
             "schemaShape": schema_shape,
-            "resultTemplate": task_result_template(&task_plan.task_plan_id, task),
+            "resultTemplate": task_result_template(&task_plan.task_plan_id, &request_task),
             "resultRules": [
                 "TaskResult must include every requiredTopLevelFields entry.",
                 "If status is completed, every verification intent should have passed evidence.",
                 "If status is failed, failure is required."
             ]
         },
-        "requestReadPlan": {
-            "groups": [
-                {
-                    "groupId": "task_execution_core",
-                    "required": true,
-                    "purpose": "Read task identity, task contract, source context, and execution rules before editing.",
-                    "whenToRead": "Read before any source edit.",
-                    "fields": [
-                        "source.taskPlanId",
-                        "source.taskId",
-                        "source.groupId",
-                        "source.technicalBaselineId",
-                        "source.architectureArtifactContractId",
-                        "source.taskPlanRunId",
-                        "task.taskId",
-                        "task.groupId",
-                        "task.title",
-                        "task.taskKind",
-                        "task.implementationActions",
-                        "task.objective",
-                        "task.dependsOn",
-                        "task.scopeRefs",
-                        "task.acceptanceRefs",
-                        "task.requirementDetailRefs",
-                        "task.writeBoundary.forbiddenPaths",
-                        "task.writeBoundary.artifactRefs",
-                        "task.verificationIntents",
-                        "task.frontendExperienceRequirement",
-                        "task.runtimeDeliveryRequirement",
-                        "sourceContext.technicalBaseline.projectKind",
-                        "sourceContext.technicalBaseline.stack",
-                        "sourceContext.architectureArtifactProjection.modules",
-                        "sourceContext.architectureArtifactProjection.interfaces",
-                        "sourceContext.architectureArtifactProjection.userFlows",
-                        "sourceContext.architectureArtifactProjection.stateMachines",
-                        "sourceContext.architectureArtifactProjection.frontendExperience",
-                        "sourceContext.architectureArtifactProjection.runtimeDelivery",
-                        "sourceContext.acceptanceSnapshot",
-                        "sourceContext.requirementDetailSnapshot",
-                        "sourceContext.userFacingLanguage",
-                        "executionRules.sourceEditPreparationContract",
-                        "executionRules.verificationCommandSchedulingRules",
-                        "executionRules.userFacingLanguage",
-                        "executionRules.boundaryRules"
-                    ]
-                },
-                {
-                    "groupId": "task_execution_result_contract",
-                    "required": true,
-                    "purpose": "Read TaskResult output file, schema, enum values, and completion barrier.",
-                    "whenToRead": "Read before writing TaskResult.",
-                    "fields": [
-                        "enumRefs.taskResultStatus",
-                        "enumRefs.verificationStatus",
-                        "enumRefs.verificationEvidence",
-                        "enumRefs.selfRepairStopReason",
-                        "outputContract.resultFile",
-                        "outputContract.requiredTopLevelFields",
-                        "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.status",
-                        "outputContract.schemaShape.properties.changedFiles",
-                        "outputContract.schemaShape.properties.noChangeReason",
-                        "outputContract.schemaShape.properties.verificationResults",
-                        "outputContract.schemaShape.properties.selfRepairSummary",
-                        "outputContract.schemaShape.properties.failure",
-                        "outputContract.schemaShape.properties.executionContinuity",
-                        "outputContract.schemaShape.properties.notes",
-                        "outputContract.schemaShape.properties.frontendExperienceSelfCheck",
-                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
-                        "outputContract.schemaShape.properties.requirementDetailEvidence",
-                        "outputContract.schemaShape.properties.conceptEvidence",
-                        "outputContract.schemaShape.properties.blockedReasons",
-                        "outputContract.resultRules",
-                        "blockedOutput.blockedReasons",
-                        "executionRules.completionBarrier",
-                        "executionRules.finalResponseGuard",
-                        "executionRules.completionContinuityRequirement",
-                        "executionRules.verificationCommandSchedulingRules"
-                    ]
-                },
-                {
-                    "groupId": "task_execution_optional_refs",
-                    "required": false,
-                    "purpose": "Read source refs and concept grounding only when implementation needs more source detail.",
-                    "whenToRead": "Read on demand.",
-                    "fields": [
-                        "sourceRefs.technicalBaselineRef",
-                        "sourceRefs.planningGenerationContractRef",
-                        "sourceRefs.architectureArtifactContractRef",
-                        "sourceRefs.taskPlanRef",
-                        "sourceRefs.taskPlanRunRef",
-                        "sourceRefs.phaseConceptGroundingRef",
-                        "taskConceptGrounding.conceptRefs",
-                        "taskConceptGrounding.conceptResponsibilities",
-                        "taskConceptGrounding.conceptVerificationIntents",
-                        "sourceContext.dependencyResults"
-                    ]
-                }
-            ]
-        }
+        "requestReadPlan": { "groups": read_groups }
     }))
+}
+
+fn task_execution_read_groups(task: &TaskDefinition) -> Value {
+    let mut core_fields = vec![
+        "source.taskPlanId",
+        "source.taskId",
+        "source.groupId",
+        "source.technicalBaselineId",
+        "source.architectureArtifactContractId",
+        "source.taskPlanRunId",
+        "task.taskId",
+        "task.groupId",
+        "task.title",
+        "task.taskKind",
+        "task.implementationActions",
+        "task.objective",
+        "task.dependsOn",
+        "task.scopeRefs",
+        "task.acceptanceRefs",
+        "task.requirementDetailRefs",
+        "task.writeBoundary.forbiddenPaths",
+        "task.writeBoundary.artifactRefs",
+        "task.verificationIntents",
+        "sourceContext.technicalBaseline.projectKind",
+        "sourceContext.technicalBaseline.stack",
+        "sourceContext.architectureArtifactProjection.modules",
+        "sourceContext.architectureArtifactProjection.entities",
+        "sourceContext.architectureArtifactProjection.interfaces",
+        "sourceContext.architectureArtifactProjection.userFlows",
+        "sourceContext.architectureArtifactProjection.stateMachines",
+        "sourceContext.acceptanceSnapshot",
+        "sourceContext.requirementDetailSnapshot",
+        "sourceContext.userFacingLanguage",
+        "executionRules.sourceEditPreparationContract",
+        "executionRules.verificationCommandSchedulingRules",
+        "executionRules.userFacingLanguage",
+        "executionRules.boundaryRules",
+    ];
+    if task.frontend_experience_requirement.is_some() {
+        core_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
+            "task.frontendExperienceRequirement.executionGuidance.purpose",
+            "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
+            "task.frontendExperienceRequirement.executionGuidance.responsibility",
+            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+            "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
+            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+            "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
+            "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+        ]);
+    }
+    if task.runtime_delivery_requirement.is_some() {
+        core_fields.push("task.runtimeDeliveryRequirement");
+        core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
+    }
+
+    let mut result_fields = vec![
+        "enumRefs.taskResultStatus",
+        "enumRefs.verificationStatus",
+        "enumRefs.verificationEvidence",
+        "enumRefs.selfRepairStopReason",
+        "outputContract.resultFile",
+        "outputContract.requiredTopLevelFields",
+        "outputContract.resultTemplate",
+        "outputContract.schemaShape.properties.status",
+        "outputContract.schemaShape.properties.changedFiles",
+        "outputContract.schemaShape.properties.noChangeReason",
+        "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.selfRepairSummary",
+        "outputContract.schemaShape.properties.failure",
+        "outputContract.schemaShape.properties.executionContinuity",
+        "outputContract.schemaShape.properties.notes",
+        "outputContract.schemaShape.properties.requirementDetailEvidence",
+        "outputContract.schemaShape.properties.conceptEvidence",
+        "outputContract.schemaShape.properties.blockedReasons",
+        "outputContract.resultRules",
+        "blockedOutput.blockedReasons",
+        "executionRules.completionBarrier",
+        "executionRules.finalResponseGuard",
+        "executionRules.completionContinuityRequirement",
+        "executionRules.verificationCommandSchedulingRules",
+    ];
+    if task.frontend_experience_requirement.is_some() {
+        result_fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if task.runtime_delivery_requirement.is_some() {
+        result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+
+    Value::Array(vec![
+        json!({
+            "groupId": "task_execution_core",
+            "required": true,
+            "purpose": "Read task identity, task-scoped architecture context, and execution rules before editing.",
+            "whenToRead": "Read before any source edit.",
+            "fields": core_fields
+        }),
+        json!({
+            "groupId": "task_execution_result_contract",
+            "required": true,
+            "purpose": "Read TaskResult output file, schema fields, enum values, and completion barrier.",
+            "whenToRead": "Read before writing TaskResult.",
+            "fields": result_fields
+        }),
+        json!({
+            "groupId": "task_execution_optional_refs",
+            "required": false,
+            "purpose": "Read source refs and dependency results only when task-scoped projection is insufficient.",
+            "whenToRead": "Read on demand.",
+            "fields": [
+                "sourceRefs.technicalBaselineRef",
+                "sourceRefs.planningGenerationContractRef",
+                "sourceRefs.architectureArtifactContractRef",
+                "sourceRefs.taskPlanRef",
+                "sourceRefs.taskPlanRunRef",
+                "sourceRefs.phaseConceptGroundingRef",
+                "taskConceptGrounding.conceptRefs",
+                "taskConceptGrounding.conceptResponsibilities",
+                "taskConceptGrounding.conceptVerificationIntents",
+                "sourceContext.dependencyResults"
+            ]
+        }),
+    ])
+}
+
+fn task_with_execution_guidance(
+    mut task: TaskDefinition,
+    aac: &ArchitectureArtifactContract,
+    user_facing_language: &Option<contracts::UserFacingLanguageConstraint>,
+) -> TaskDefinition {
+    if task.frontend_experience_requirement.is_none() {
+        return task;
+    }
+    let guidance = build_frontend_execution_guidance(&task, aac, user_facing_language);
+    let Some(requirement) = task.frontend_experience_requirement.as_mut() else {
+        return task;
+    };
+    let Some(requirement_object) = requirement.as_object_mut() else {
+        *requirement = json!({ "executionGuidance": guidance });
+        return task;
+    };
+    requirement_object.insert("executionGuidance".to_string(), guidance);
+    task
+}
+
+fn task_scoped_architecture_projection(
+    aac: &ArchitectureArtifactContract,
+    task: &TaskDefinition,
+) -> Value {
+    let refs = &task.write_boundary.artifact_refs;
+    let selected_user_flows =
+        selected_values(&aac.user_flows, "flowId", &refs.user_flows, task, true);
+    let interface_refs_from_flows = selected_user_flows
+        .iter()
+        .flat_map(|flow| string_array_at(flow, "interfaceRefs"))
+        .collect::<Vec<_>>();
+    let state_machine_refs_from_flows = selected_user_flows
+        .iter()
+        .flat_map(|flow| {
+            array_at(flow, "steps")
+                .into_iter()
+                .flat_map(|step| string_array_at(step, "stateMachineRefs"))
+        })
+        .collect::<Vec<_>>();
+    let interface_refs = unique_strings(
+        refs.interfaces
+            .iter()
+            .cloned()
+            .chain(interface_refs_from_flows)
+            .collect(),
+    );
+    let state_machine_refs = unique_strings(
+        refs.state_machines
+            .iter()
+            .cloned()
+            .chain(state_machine_refs_from_flows)
+            .collect(),
+    );
+    let mut projection = json!({
+        "compaction": {
+            "mode": "task_scoped_artifact_projection",
+            "rule": "This projection includes only artifacts selected by task.writeBoundary.artifactRefs, directly linked workflow refs, or task scope/acceptance refs."
+        },
+        "modules": selected_values(&aac.modules, "moduleId", &refs.modules, task, true),
+        "entities": selected_entities(&aac.data_model, &refs.entities, task),
+        "interfaces": selected_values(&aac.interfaces, "interfaceId", &interface_refs, task, true),
+        "userFlows": selected_user_flows,
+        "stateMachines": selected_values(&aac.state_machines, "machineId", &state_machine_refs, task, true)
+    });
+    if task.runtime_delivery_requirement.is_some() {
+        projection["runtimeDelivery"] = aac.runtime_delivery.clone().unwrap_or(Value::Null);
+    }
+    projection
+}
+
+fn build_frontend_execution_guidance(
+    task: &TaskDefinition,
+    aac: &ArchitectureArtifactContract,
+    user_facing_language: &Option<contracts::UserFacingLanguageConstraint>,
+) -> Value {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return json!({
+            "schemaVersion": "1.0",
+            "purpose": "No AAC frontendExperience is present for this task.",
+            "userFacingLanguage": user_facing_language,
+            "responsibility": task.objective,
+            "surfacesInScope": [],
+            "dataViewsInScope": [],
+            "actionsInScope": [],
+            "operationPathsInScope": [],
+            "frontendBackendBindings": [],
+            "dataBindingExpectation": {
+                "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"]
+            },
+            "closureRequirementRefs": [],
+            "workflowClosureDetailSource": {
+                "closureRequirementIds": [],
+                "readWhen": "No closure refs were derived for this task."
+            },
+            "guidanceWarnings": ["AAC frontendExperience is absent."]
+        });
+    };
+    let closure_requirements = workflow_closure_requirements_for_task(task, aac);
+    let closure_workflow_refs = closure_requirements
+        .iter()
+        .filter_map(|item| string_at(item, "workflowRef"))
+        .collect::<Vec<_>>();
+    let workflow_refs = unique_strings(
+        task.write_boundary
+            .artifact_refs
+            .user_flows
+            .iter()
+            .cloned()
+            .chain(closure_workflow_refs)
+            .collect(),
+    );
+    let surface_refs = unique_strings(
+        closure_requirements
+            .iter()
+            .flat_map(|item| string_array_at(item, "surfaceRefs"))
+            .collect(),
+    );
+    let operation_path_refs = unique_strings(
+        closure_requirements
+            .iter()
+            .flat_map(|item| string_array_at(item, "operationPathRefs"))
+            .collect(),
+    );
+    let data_view_refs = unique_strings(
+        closure_requirements
+            .iter()
+            .flat_map(|item| string_array_at(item, "dataViewRefs"))
+            .collect(),
+    );
+    let action_refs = unique_strings(
+        closure_requirements
+            .iter()
+            .flat_map(|item| string_array_at(item, "actionRefs"))
+            .collect(),
+    );
+    let surfaces = array_at(frontend, "surfaces")
+        .into_iter()
+        .filter(|surface| {
+            string_at(surface, "surfaceId")
+                .map(|id| surface_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+                || string_array_at(surface, "workflowRefs")
+                    .iter()
+                    .any(|workflow_ref| workflow_refs.iter().any(|item| item == workflow_ref))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let operation_paths = array_at(frontend, "operationPaths")
+        .into_iter()
+        .filter(|path| {
+            string_at(path, "pathId")
+                .map(|id| operation_path_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+                || string_at(path, "workflowRef")
+                    .map(|id| workflow_refs.iter().any(|item| item == &id))
+                    .unwrap_or(false)
+                || string_at(path, "surfaceRef")
+                    .map(|id| surface_refs.iter().any(|item| item == &id))
+                    .unwrap_or(false)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let data_views = array_at(frontend, "dataViews")
+        .into_iter()
+        .filter(|view| {
+            string_at(view, "viewId")
+                .map(|id| data_view_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let actions = array_at(frontend, "actions")
+        .into_iter()
+        .filter(|action| {
+            string_at(action, "actionId")
+                .map(|id| action_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let closure_ids = closure_requirements
+        .iter()
+        .filter_map(|item| string_at(item, "closureId"))
+        .collect::<Vec<_>>();
+    let mut warnings = Vec::new();
+    if closure_requirements.is_empty() {
+        warnings.push("No workflow closure requirement matched this task; use task refs and source context to decide whether frontend work is static, mocked, or wired.".to_string());
+    }
+    json!({
+        "schemaVersion": "1.0",
+        "purpose": "Task-scoped frontend execution guidance derived from AAC and TaskPlan refs.",
+        "userFacingLanguage": user_facing_language,
+        "responsibility": task.objective,
+        "surfacesInScope": surfaces,
+        "dataViewsInScope": data_views,
+        "actionsInScope": actions,
+        "operationPathsInScope": operation_paths,
+        "frontendBackendBindings": frontend_backend_bindings(&closure_requirements),
+        "dataBindingExpectation": {
+            "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"],
+            "requiredModeForSatisfaction": if closure_requirements.is_empty() { Value::Null } else { json!("wired") },
+            "closureRequirementIds": closure_ids,
+            "staticModePolicy": if closure_requirements.is_empty() { Value::Null } else { json!("not_satisfied") },
+            "knownGapPolicy": if closure_requirements.is_empty() { Value::Null } else { json!("not_satisfied_when_required_closure") }
+        },
+        "closureRequirementRefs": workflow_closure_requirement_execution_view(&closure_requirements),
+        "workflowClosureDetailSource": {
+            "sourcePaths": [
+                "sourceRefs.architectureArtifactContractRef#/frontendExperience",
+                "sourceRefs.architectureArtifactContractRef#/userFlows",
+                "sourceRefs.architectureArtifactContractRef#/interfaces"
+            ],
+            "closureRequirementIds": closure_requirements.iter().filter_map(|item| string_at(item, "closureId")).collect::<Vec<_>>(),
+            "readWhen": "Read these source paths only when closureRequirementRefs and frontendBackendBindings are insufficient.",
+            "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, userFlow steps, and executable interfaces."
+        },
+        "guidanceWarnings": warnings
+    })
+}
+
+fn workflow_closure_requirements_for_task(
+    task: &TaskDefinition,
+    aac: &ArchitectureArtifactContract,
+) -> Vec<Value> {
+    workflow_closure_requirements(aac)
+        .into_iter()
+        .filter(|requirement| task_matches_workflow_closure(task, requirement))
+        .collect()
+}
+
+fn task_matches_workflow_closure(task: &TaskDefinition, requirement: &Value) -> bool {
+    let refs = &task.write_boundary.artifact_refs;
+    let workflow_ref = string_at(requirement, "workflowRef");
+    let workflow_matches = workflow_ref
+        .as_ref()
+        .map(|workflow_ref| refs.user_flows.iter().any(|item| item == workflow_ref))
+        .unwrap_or(false);
+    let interface_refs = string_array_at(requirement, "interfaceRefs");
+    let interface_matches = !interface_refs.is_empty()
+        && interface_refs
+            .iter()
+            .any(|interface_ref| refs.interfaces.iter().any(|item| item == interface_ref));
+    let acceptance_refs = string_array_at(requirement, "acceptanceRefs");
+    let acceptance_matches = acceptance_refs.is_empty()
+        || acceptance_refs.iter().any(|acceptance_ref| {
+            task.acceptance_refs
+                .iter()
+                .any(|item| item == acceptance_ref)
+        });
+    task.frontend_experience_requirement.is_some()
+        && acceptance_matches
+        && (workflow_matches || interface_matches)
+}
+
+fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return vec![];
+    };
+    if frontend
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        != true
+    {
+        return vec![];
+    }
+    let flow_by_id = aac
+        .user_flows
+        .iter()
+        .filter_map(|flow| string_at(flow, "flowId").map(|id| (id, flow)))
+        .collect::<BTreeMap<_, _>>();
+    let interface_by_id = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| string_at(interface, "interfaceId").map(|id| (id, interface)))
+        .collect::<BTreeMap<_, _>>();
+    let mut surface_refs_by_flow: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for surface in array_at(frontend, "surfaces") {
+        let Some(surface_id) = string_at(surface, "surfaceId") else {
+            continue;
+        };
+        for workflow_ref in string_array_at(surface, "workflowRefs") {
+            surface_refs_by_flow
+                .entry(workflow_ref)
+                .or_default()
+                .push(surface_id.clone());
+        }
+    }
+    for operation_path in array_at(frontend, "operationPaths") {
+        let Some(workflow_ref) = string_at(operation_path, "workflowRef") else {
+            continue;
+        };
+        if let Some(surface_ref) = string_at(operation_path, "surfaceRef") {
+            surface_refs_by_flow
+                .entry(workflow_ref)
+                .or_default()
+                .push(surface_ref);
+        }
+    }
+    let mut requirements = Vec::new();
+    for (workflow_ref, surface_refs) in surface_refs_by_flow {
+        let Some(flow) = flow_by_id.get(workflow_ref.as_str()) else {
+            continue;
+        };
+        if string_at(flow, "kind").as_deref() != Some("user_interaction") {
+            continue;
+        }
+        let operation_paths = array_at(frontend, "operationPaths")
+            .into_iter()
+            .filter(|path| {
+                string_at(path, "workflowRef").as_deref() == Some(workflow_ref.as_str())
+                    || string_at(path, "surfaceRef")
+                        .map(|surface_ref| surface_refs.iter().any(|item| item == &surface_ref))
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        let operation_path_refs = unique_strings(
+            operation_paths
+                .iter()
+                .filter_map(|path| string_at(path, "pathId"))
+                .collect(),
+        );
+        let data_view_refs = unique_strings(
+            operation_paths
+                .iter()
+                .flat_map(|path| string_array_at(path, "dataViewRefs"))
+                .collect(),
+        );
+        let action_refs = unique_strings(
+            operation_paths
+                .iter()
+                .flat_map(|path| string_array_at(path, "actionRefs"))
+                .collect(),
+        );
+        for step in array_at(flow, "steps") {
+            let step_id = string_at(step, "stepId").unwrap_or_else(|| "step".to_string());
+            let mut candidate_interface_refs = string_array_at(step, "interfaceRefs");
+            if candidate_interface_refs.is_empty() {
+                candidate_interface_refs = string_array_at(flow, "interfaceRefs");
+            }
+            let executable_interfaces = candidate_interface_refs
+                .iter()
+                .filter_map(|interface_ref| interface_by_id.get(interface_ref.as_str()).copied())
+                .filter(|interface| {
+                    is_executable_interface(interface) && has_interface_shape(interface)
+                })
+                .collect::<Vec<_>>();
+            if executable_interfaces.is_empty() {
+                continue;
+            }
+            requirements.push(json!({
+                "closureId": format!("closure:{workflow_ref}:{step_id}"),
+                "workflowRef": workflow_ref.clone(),
+                "workflowName": string_at(flow, "name").unwrap_or_else(|| workflow_ref.clone()),
+                "surfaceRefs": unique_strings(surface_refs.clone()),
+                "operationPathRefs": operation_path_refs.clone(),
+                "dataViewRefs": data_view_refs.clone(),
+                "actionRefs": action_refs.clone(),
+                "moduleRefs": string_array_at(flow, "moduleRefs"),
+                "acceptanceRefs": string_array_at(flow, "acceptanceRefs"),
+                "interfaceRefs": unique_strings(executable_interfaces.iter().filter_map(|interface| string_at(interface, "interfaceId")).collect()),
+                "stateMachineRefs": unique_strings(string_array_at(step, "stateMachineRefs")),
+                "stepRefs": [step_id.clone()],
+                "requiredDataBindingMode": "wired",
+                "requiredEvidence": [
+                    "user_action",
+                    "declared_interface_invocation",
+                    "state_or_persistence_change",
+                    "success_or_blocking_feedback"
+                ],
+                "interfaces": executable_interfaces.iter().map(|interface| compact_interface_binding(interface)).collect::<Vec<_>>()
+            }));
+        }
+    }
+    requirements
+}
+
+fn workflow_closure_requirement_execution_view(requirements: &[Value]) -> Vec<Value> {
+    requirements
+        .iter()
+        .map(|requirement| {
+            json!({
+                "closureId": string_at(requirement, "closureId").unwrap_or_default(),
+                "workflowRef": string_at(requirement, "workflowRef").unwrap_or_default(),
+                "workflowName": string_at(requirement, "workflowName").unwrap_or_default(),
+                "surfaceRefs": string_array_at(requirement, "surfaceRefs"),
+                "operationPathRefs": string_array_at(requirement, "operationPathRefs"),
+                "dataViewRefs": string_array_at(requirement, "dataViewRefs"),
+                "actionRefs": string_array_at(requirement, "actionRefs"),
+                "acceptanceRefs": string_array_at(requirement, "acceptanceRefs"),
+                "interfaceRefs": string_array_at(requirement, "interfaceRefs"),
+                "stateMachineRefs": string_array_at(requirement, "stateMachineRefs"),
+                "requiredDataBindingMode": "wired",
+                "requiredEvidence": requirement.get("requiredEvidence").cloned().unwrap_or(Value::Array(vec![])),
+                "evidenceRule": "Evidence must cover user action, declared interface invocation, state or persistence change, and success or blocking feedback."
+            })
+        })
+        .collect()
+}
+
+fn frontend_backend_bindings(requirements: &[Value]) -> Vec<Value> {
+    requirements
+        .iter()
+        .flat_map(|requirement| {
+            let workflow_ref = string_at(requirement, "workflowRef").unwrap_or_default();
+            let workflow_name = string_at(requirement, "workflowName").unwrap_or_default();
+            let step_ref = string_array_at(requirement, "stepRefs")
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            array_at(requirement, "interfaces")
+                .into_iter()
+                .map(move |interface| {
+                    json!({
+                        "bindingId": format!("{workflow_ref}:{step_ref}"),
+                        "workflowRef": workflow_ref,
+                        "workflowName": workflow_name,
+                        "stepRef": step_ref,
+                        "interfaces": [interface.clone()],
+                        "completionRule": "Wire the user action to this AAC-declared interface and verify readback or feedback."
+                    })
+                })
+        })
+        .collect()
+}
+
+fn compact_interface_binding(interface: &Value) -> Value {
+    json!({
+        "interfaceId": string_at(interface, "interfaceId").unwrap_or_default(),
+        "name": string_at(interface, "name").unwrap_or_default(),
+        "type": string_at(interface, "type").unwrap_or_default(),
+        "role": string_at(interface, "role"),
+        "method": string_at(interface, "method"),
+        "path": string_at(interface, "path"),
+        "requestSchema": interface.get("requestSchema").cloned().unwrap_or(Value::Array(vec![])),
+        "responseSchema": interface.get("responseSchema").cloned().unwrap_or(Value::Array(vec![])),
+        "errorSchema": interface.get("errorSchema").cloned().unwrap_or(Value::Array(vec![]))
+    })
+}
+
+fn selected_values(
+    values: &[Value],
+    id_key: &str,
+    explicit_refs: &[String],
+    task: &TaskDefinition,
+    include_scope_acceptance_match: bool,
+) -> Vec<Value> {
+    values
+        .iter()
+        .filter(|value| {
+            string_at(value, id_key)
+                .map(|id| explicit_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+                || (include_scope_acceptance_match && artifact_matches_task_scope(value, task))
+        })
+        .cloned()
+        .collect()
+}
+
+fn selected_entities(
+    data_model: &Value,
+    explicit_refs: &[String],
+    task: &TaskDefinition,
+) -> Vec<Value> {
+    data_model
+        .pointer("/entities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entity| {
+            string_at(entity, "entityId")
+                .map(|id| explicit_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+                || artifact_matches_task_scope(entity, task)
+        })
+        .cloned()
+        .collect()
+}
+
+fn artifact_matches_task_scope(value: &Value, task: &TaskDefinition) -> bool {
+    let scope_match = string_array_at(value, "scopeRefs")
+        .iter()
+        .any(|scope_ref| task.scope_refs.iter().any(|item| item == scope_ref));
+    let acceptance_match = string_array_at(value, "acceptanceRefs")
+        .iter()
+        .any(|acceptance_ref| {
+            task.acceptance_refs
+                .iter()
+                .any(|item| item == acceptance_ref)
+        });
+    scope_match || acceptance_match
+}
+
+fn array_at<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default()
+}
+
+fn string_at(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn string_array_at(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unique_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn is_executable_interface(interface: &Value) -> bool {
+    matches!(
+        string_at(interface, "type").as_deref(),
+        Some("http_api" | "service_method" | "cli_command" | "event" | "job" | "external_adapter")
+    )
+}
+
+fn has_interface_shape(interface: &Value) -> bool {
+    interface
+        .get("requestSchema")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false)
+        && interface
+            .get("responseSchema")
+            .and_then(Value::as_array)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false)
 }
 
 fn running_or_ready_task_id(run: &TaskPlanRun) -> Option<String> {

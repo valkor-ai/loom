@@ -228,9 +228,28 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
     if task.frontend_experience_requirement.is_none() {
         return Value::Null;
     }
+    let closure_requirement_ids = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("executionGuidance"))
+        .and_then(|guidance| guidance.get("closureRequirementRefs"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_string).or_else(|| {
+                        item.get("closureId")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     json!({
         "status": "satisfied",
-        "closureRequirementIds": [],
+        "closureRequirementIds": closure_requirement_ids,
         "dataBinding": {
             "mode": "wired",
             "knownGaps": []

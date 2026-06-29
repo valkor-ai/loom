@@ -150,14 +150,14 @@ where
         "task.acceptanceRefs".to_string(),
         "task.requirementDetailRefs".to_string(),
         "task.verificationIntents".to_string(),
-        "task.frontendExperienceRequirement".to_string(),
-        "task.runtimeDeliveryRequirement".to_string(),
         "outputContract.resultFile".to_string(),
         "outputContract.requiredTopLevelFields".to_string(),
     ];
     for optional_field in [
         "taskConceptGrounding.conceptRefs",
         "blockedOutput.blockedReasons",
+        "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        "task.runtimeDeliveryRequirement",
     ] {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
@@ -173,6 +173,16 @@ where
     let task_id = string_field(&fields, "source.taskId")?;
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
+    let frontend_experience_requirement = fields
+        .get("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs")
+        .map(|field| {
+            json!({
+                "executionGuidance": {
+                    "closureRequirementRefs": field.value
+                }
+            })
+        })
+        .unwrap_or(Value::Null);
     let task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
@@ -192,7 +202,7 @@ where
         "conceptRefs": array_field(&fields, "taskConceptGrounding.conceptRefs"),
         "conceptResponsibilities": [],
         "conceptVerificationIntents": [],
-        "frontendExperienceRequirement": value_field(&fields, "task.frontendExperienceRequirement"),
+        "frontendExperienceRequirement": frontend_experience_requirement,
         "runtimeDeliveryRequirement": value_field(&fields, "task.runtimeDeliveryRequirement")
     }))
     .map_err(state::store::StateError::Json)?;

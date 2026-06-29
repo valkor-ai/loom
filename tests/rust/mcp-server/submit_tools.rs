@@ -1260,6 +1260,99 @@ fn taskplan_request_derives_frontend_workflow_closure_requirements() {
 }
 
 #[test]
+fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
+    let fixture = Fixture::new("task-exec-frontend-guidance");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, taskplan_request_ref);
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_eq!(accepted["next"]["kind"], "execute_task");
+    assert_eq!(accepted["next"]["submitTool"], "loom.recordTaskResultFile");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef");
+
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+    })
+    .expect("inspect execution request");
+    let core_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_core")
+        .expect("core group");
+    assert!(core_group.fields.contains(
+        &"task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs".to_string()
+    ));
+    assert!(!core_group
+        .fields
+        .contains(&"sourceContext.architectureArtifactProjection.frontendExperience".to_string()));
+
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+        fields: vec![
+            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"
+                .to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"
+                .to_string(),
+            "sourceContext.architectureArtifactProjection.interfaces".to_string(),
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution fields")
+    .fields;
+    assert_eq!(
+        fields["task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"].value
+            [0]["closureId"],
+        json!("closure:flow.account-lifecycle:step.submit-open-account")
+    );
+    assert_eq!(
+        fields["task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"]
+            .value[0]["interfaces"][0]["interfaceId"],
+        json!("api.account.open")
+    );
+    let interfaces = &fields["sourceContext.architectureArtifactProjection.interfaces"].value;
+    assert_eq!(interfaces.as_array().expect("interfaces").len(), 1);
+    assert_eq!(interfaces[0]["interfaceId"], json!("api.account.open"));
+    assert_eq!(
+        fields["outputContract.resultTemplate"].value["frontendExperienceSelfCheck"]
+            ["closureRequirementIds"],
+        json!(["closure:flow.account-lifecycle:step.submit-open-account"])
+    );
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
+    let record_result = call_submit(
+        "loom.recordTaskResultFile",
+        execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(record_result["state"], "auto_runnable", "{record_result:#}");
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -3382,6 +3475,134 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
                     "preferredEvidence": ["static_check"],
                     "acceptableEvidence": ["static_check", "manual_command_output"]
                 }],
+                "conceptRefs": [],
+                "conceptResponsibilities": [],
+                "conceptVerificationIntents": []
+            }],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write taskplan group");
+}
+
+fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, request_ref: &str) {
+    let request_root = read_request_root_value(fixture.root_str(), request_ref);
+    let request_id = request_root["requestId"].as_str().expect("requestId");
+    let delivery_id = request_root["deliveryId"].as_str().expect("deliveryId");
+    let phase_id = request_root["phaseId"].as_str().expect("phaseId");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "allowedRefs.scopeRefs".to_string(),
+            "allowedRefs.acceptanceRefs".to_string(),
+            "allowedRefs.requirementDetailIds".to_string(),
+            "allowedRefs.moduleRefs".to_string(),
+            "allowedRefs.entityRefs".to_string(),
+            "allowedRefs.interfaceRefs".to_string(),
+            "allowedRefs.userFlowRefs".to_string(),
+            "allowedRefs.stateMachineRefs".to_string(),
+            "outputContract.outlineFile".to_string(),
+            "outputContract.groupFilePattern".to_string(),
+        ],
+    })
+    .expect("read taskplan fields")
+    .fields;
+    let scope_id = fields["allowedRefs.scopeRefs"].value[0]
+        .as_str()
+        .expect("scope ref");
+    let acceptance_id = fields["allowedRefs.acceptanceRefs"].value[0]
+        .as_str()
+        .expect("acceptance ref");
+    let detail_id = fields["allowedRefs.requirementDetailIds"].value[0]
+        .as_str()
+        .expect("detail id");
+    let outline_file = fields["outputContract.outlineFile"]
+        .value
+        .as_str()
+        .expect("outline file");
+    let group_pattern = fields["outputContract.groupFilePattern"]
+        .value
+        .as_str()
+        .expect("group file pattern");
+    let group_id = "group-account-ui";
+    let task_id = "task-account-ui-001";
+    write_json_atomic(
+        &fixture.root.join(outline_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "taskPlanId": "taskplan-phase-1",
+            "groups": [{
+                "groupId": group_id,
+                "title": "Account UI workflow",
+                "objective": "Wire the account UI workflow to the declared backend interface.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [task_id]
+            }],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write taskplan outline");
+    let group_file = group_pattern.replace("{groupId}", group_id);
+    write_json_atomic(
+        &fixture.root.join(group_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "group": {
+                "groupId": group_id,
+                "title": "Account UI workflow",
+                "objective": "Wire the account UI workflow to the declared backend interface.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [task_id]
+            },
+            "tasks": [{
+                "taskId": task_id,
+                "groupId": group_id,
+                "title": "Wire account opening UI",
+                "taskKind": "ui_flow_increment",
+                "implementationActions": ["wire_reference_in_api_or_ui", "add_or_update_tests"],
+                "objective": "Wire the account opening UI action to the declared open-account API and verify success feedback.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "requirementDetailRefs": [detail_id],
+                "writeBoundary": {
+                    "forbiddenPaths": [".loom"],
+                    "artifactRefs": {
+                        "modules": ["module.account-service"],
+                        "entities": ["entity.account"],
+                        "interfaces": ["api.account.open"],
+                        "userFlows": ["flow.account-lifecycle"],
+                        "stateMachines": ["machine.account-status"],
+                        "decisions": [],
+                        "risks": []
+                    }
+                },
+                "verificationIntents": [{
+                    "verificationId": "verify-account-ui-001",
+                    "acceptanceRefs": [acceptance_id],
+                    "requirementDetailRefs": [detail_id],
+                    "behavior": "Verify the UI action invokes the declared API and shows success feedback.",
+                    "preferredEvidence": ["runtime_api_check"],
+                    "acceptableEvidence": ["automated_test", "runtime_api_check", "manual_command_output"]
+                }],
+                "frontendExperienceRequirement": {
+                    "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
+                    "experienceLevel": "usable_internal_product",
+                    "mustSatisfy": true
+                },
                 "conceptRefs": [],
                 "conceptResponsibilities": [],
                 "conceptVerificationIntents": []
