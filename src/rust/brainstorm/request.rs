@@ -620,6 +620,7 @@ fn knowledge_query_plan() -> Value {
             "If loom.knowledgeBrainstormContext returns status available, inspect every chunk listed in readPlan before using it in the clarification block.",
             "If loom.knowledgeBrainstormContext returns status empty, continue with source requirements and mention no knowledge match only when it affects confidence.",
             "If any knowledge tool returns state failed or an error object, stop the clarification block and report the failure; do not silently fall back to a knowledge-free answer.",
+            "Do not ask the user to choose, name, enable, or manage a knowledge source inside Brainstorm clarification. Loom selects enabled request-relevant knowledge automatically, and an empty knowledge result is allowed after the required knowledge calls have run.",
             "Use knowledge only to improve clarification quality. Do not write knowledge source ids, chunk ids, inspect output, or knowledge paths into the Brainstorm candidate."
         ],
         "toolContract": {

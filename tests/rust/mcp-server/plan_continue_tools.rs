@@ -167,6 +167,14 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .value
         .to_string()
         .contains("do not silently fall back"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("Do not ask the user to choose, name, enable, or manage a knowledge source"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("empty knowledge result is allowed"));
     assert!(
         knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"]
             .value
