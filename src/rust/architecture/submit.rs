@@ -219,46 +219,31 @@ where
     }
 
     let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
-    let request_fields = read_request_fields(
-        &input.project_root,
-        &input.request_ref,
-        &[
+    let source_refs = read_source_refs(&input.project_root, &input.request_ref, &request_root)?;
+    let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
+    let section_outputs =
+        parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
+    let allowed_ref_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: input.project_root.clone(),
+        request_ref: input.request_ref.clone(),
+        fields: [
             "allowedRefs.scopeRefs",
             "allowedRefs.acceptanceRefs",
             "allowedRefs.deferredScopeRefs",
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
-            "sourceRefs.planningContractRef",
-            "sourceRefs.technicalBaselineRef",
-            "sourceRefs.brainstormContractRef",
-            "sourceRefs.repositoryContextRef",
-            "sourceRefs.deliveryConceptGlossaryRef",
-            "sourceRefs.phaseConceptGroundingRef",
-            "sourceRefs.confirmedFrontendExperienceRef",
-            "sourceRefs.currentFrontendExperienceRef",
-            "sourceRefs.previousRuntimeDeliveryRef",
-        ],
-    )?;
-    let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
-    let section_outputs =
-        parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
+        ]
+        .iter()
+        .map(|field| field.to_string())
+        .collect(),
+    })?
+    .fields;
     let allowed_refs = json!({
-        "scopeRefs": value_field(&request_fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": value_field(&request_fields, "allowedRefs.acceptanceRefs"),
-        "deferredScopeRefs": value_field(&request_fields, "allowedRefs.deferredScopeRefs"),
-        "excludedScopeRefs": value_field(&request_fields, "allowedRefs.excludedScopeRefs"),
-        "requirementDetailIds": value_field(&request_fields, "allowedRefs.requirementDetailIds")
-    });
-    let source_refs = json!({
-        "planningContractRef": value_field(&request_fields, "sourceRefs.planningContractRef"),
-        "technicalBaselineRef": value_field(&request_fields, "sourceRefs.technicalBaselineRef"),
-        "brainstormContractRef": value_field(&request_fields, "sourceRefs.brainstormContractRef"),
-        "repositoryContextRef": value_field(&request_fields, "sourceRefs.repositoryContextRef"),
-        "deliveryConceptGlossaryRef": value_field(&request_fields, "sourceRefs.deliveryConceptGlossaryRef"),
-        "phaseConceptGroundingRef": value_field(&request_fields, "sourceRefs.phaseConceptGroundingRef"),
-        "confirmedFrontendExperienceRef": value_field(&request_fields, "sourceRefs.confirmedFrontendExperienceRef"),
-        "currentFrontendExperienceRef": value_field(&request_fields, "sourceRefs.currentFrontendExperienceRef"),
-        "previousRuntimeDeliveryRef": value_field(&request_fields, "sourceRefs.previousRuntimeDeliveryRef")
+        "scopeRefs": field_value(&allowed_ref_fields, "allowedRefs.scopeRefs"),
+        "acceptanceRefs": field_value(&allowed_ref_fields, "allowedRefs.acceptanceRefs"),
+        "deferredScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.deferredScopeRefs"),
+        "excludedScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.excludedScopeRefs"),
+        "requirementDetailIds": field_value(&allowed_ref_fields, "allowedRefs.requirementDetailIds")
     });
     let expected_request_id = request_root
         .get("requestId")
@@ -330,6 +315,7 @@ where
             next_section,
             &next_output,
             matches!(mode, ArchitectureSubmitMode::Repair),
+            &source_refs,
         )?;
         update_output_contract_ref(
             &input.project_root,
@@ -1010,6 +996,58 @@ fn validate_coverage_handoff(value: Option<&Value>, issues: &mut Vec<delivery_co
     }
 }
 
+fn read_source_refs(
+    project_root: &str,
+    request_ref: &str,
+    request_root: &Value,
+) -> Result<Value, state::store::StateError> {
+    let fields = read_plan_fields(request_root)
+        .into_iter()
+        .filter(|field| field.starts_with("sourceRefs."))
+        .collect::<Vec<_>>();
+    if fields.is_empty() {
+        return Ok(request_root
+            .get("sourceRefs")
+            .cloned()
+            .unwrap_or_else(|| json!({})));
+    }
+    let resolved = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields,
+    })?;
+    let mut source_refs = serde_json::Map::new();
+    for (field, result) in resolved.fields {
+        if let Some(key) = field.strip_prefix("sourceRefs.") {
+            if !result.value.is_null() {
+                source_refs.insert(key.to_string(), result.value);
+            }
+        }
+    }
+    Ok(Value::Object(source_refs))
+}
+
+fn read_plan_fields(request_root: &Value) -> Vec<String> {
+    request_root
+        .pointer("/requestReadPlan/groups")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .get("fields")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn load_request_root(
     project_root: &str,
     request_id: &str,
@@ -1089,6 +1127,7 @@ fn update_request_for_next_section(
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
     include_repair_context: bool,
+    source_refs: &Value,
 ) -> Result<Value, state::store::StateError> {
     let completed_section = parse_section(&root, "/sectionState/currentSection")?;
     root["sectionState"]["currentSection"] =
@@ -1110,8 +1149,16 @@ fn update_request_for_next_section(
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
-    root["requestReadPlan"]["groups"] =
-        architecture_read_groups(next_section, include_repair_context);
+    let frontend_experience_source = root
+        .get("frontendExperienceSource")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    root["requestReadPlan"]["groups"] = architecture_read_groups(
+        next_section,
+        include_repair_context,
+        source_refs,
+        &frontend_experience_source,
+    );
     Ok(root)
 }
 
@@ -1513,23 +1560,12 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
     state::store::StateError::StateCorrupted(error.to_string())
 }
 
-fn read_request_fields(
-    project_root: &str,
-    request_ref: &str,
-    fields: &[&str],
-) -> Result<std::collections::BTreeMap<String, Value>, state::store::StateError> {
-    let resolved = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: project_root.to_string(),
-        request_ref: request_ref.to_string(),
-        fields: fields.iter().map(|field| field.to_string()).collect(),
-    })?;
-    Ok(resolved
-        .fields
-        .into_iter()
-        .map(|(field, result)| (field, result.value))
-        .collect())
-}
-
-fn value_field(fields: &std::collections::BTreeMap<String, Value>, field: &str) -> Value {
-    fields.get(field).cloned().unwrap_or(Value::Null)
+fn field_value(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    field: &str,
+) -> Value {
+    fields
+        .get(field)
+        .map(|result| result.value.clone())
+        .unwrap_or(Value::Null)
 }

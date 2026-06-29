@@ -708,15 +708,10 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
     let fixture = Fixture::new("architecture-runtime-no-previous");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let request_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
-    let source_fields = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: architecture_request_ref.clone(),
-        fields: vec!["sourceRefs.previousRuntimeDeliveryRef".to_string()],
-    })
-    .expect("read source refs")
-    .fields;
 
-    assert!(!source_fields.contains_key("sourceRefs.previousRuntimeDeliveryRef"));
+    assert!(request_root
+        .pointer("/sourceRefs/previousRuntimeDeliveryRef")
+        .is_none());
     assert!(
         request_root.get("sectionOutputs").is_none(),
         "architecture request root must not expose all section contracts"
@@ -760,13 +755,26 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
     );
     let core_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: architecture_request_ref,
+        request_ref: architecture_request_ref.clone(),
         group_id: "architecture_core_context".to_string(),
     })
     .expect("read architecture core group");
     assert!(!core_group
         .fields
         .contains_key("sourceRefs.previousRuntimeDeliveryRef"));
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref,
+    })
+    .expect("inspect architecture request");
+    let inspect_core_fields = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "architecture_core_context")
+        .expect("architecture core read group")
+        .fields
+        .clone();
+    assert!(!inspect_core_fields.contains(&"sourceRefs.previousRuntimeDeliveryRef".to_string()));
 }
 
 #[test]
@@ -865,7 +873,7 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
     );
     let core_group = state::read_field_group(delivery_core::ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: refreshed_ref,
+        request_ref: refreshed_ref.clone(),
         group_id: "architecture_core_context".to_string(),
     })
     .expect("read architecture core group");
@@ -873,6 +881,19 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
         core_group.fields["sourceRefs.previousRuntimeDeliveryRef"].value,
         json!(previous_runtime_ref)
     );
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: refreshed_ref,
+    })
+    .expect("inspect architecture request");
+    let inspect_core_fields = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "architecture_core_context")
+        .expect("architecture core read group")
+        .fields
+        .clone();
+    assert!(inspect_core_fields.contains(&"sourceRefs.previousRuntimeDeliveryRef".to_string()));
 }
 
 #[test]
@@ -5077,31 +5098,33 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     let section = request_root["sectionState"]["currentSection"]
         .as_str()
         .expect("currentSection");
-    let mut requested_fields = vec![
-        "sourceRefs.planningContractRef".to_string(),
-        "sourceRefs.technicalBaselineRef".to_string(),
-        "sourceRefs.brainstormContractRef".to_string(),
-        "sourceRefs.repositoryContextRef".to_string(),
-        "sourceRefs.deliveryConceptGlossaryRef".to_string(),
-        "sourceRefs.phaseConceptGroundingRef".to_string(),
-        "sourceRefs.confirmedFrontendExperienceRef".to_string(),
-        "sourceRefs.currentFrontendExperienceRef".to_string(),
-        "sourceRefs.previousRuntimeDeliveryRef".to_string(),
-        "allowedRefs.scopeRefs".to_string(),
-        "allowedRefs.acceptanceRefs".to_string(),
-        "allowedRefs.deferredScopeRefs".to_string(),
-        "allowedRefs.excludedScopeRefs".to_string(),
-        "allowedRefs.requirementDetailIds".to_string(),
-        "contextProjection.planningContractId".to_string(),
-        "contextProjection.technicalBaseline.technicalBaselineId".to_string(),
-        "contextProjection.requirementDetailTransfer.acceptanceDetails".to_string(),
-        "contextProjection.requirementDetailTransfer.requirementDetails".to_string(),
-    ];
-    if section == "frontend_experience" {
-        requested_fields
-            .push("frontendExperienceSource.confirmedFrontendExperienceRef".to_string());
-        requested_fields.push("frontendExperienceSource.currentFrontendExperienceRef".to_string());
-    }
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect architecture request");
+    let readable_fields = inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter().cloned())
+        .collect::<Vec<_>>();
+    let requested_fields = [
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.deferredScopeRefs",
+        "allowedRefs.excludedScopeRefs",
+        "allowedRefs.requirementDetailIds",
+        "contextProjection.planningContractId",
+        "contextProjection.technicalBaseline.technicalBaselineId",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.requirementDetails",
+        "frontendExperienceSource.confirmedFrontendExperienceRef",
+        "frontendExperienceSource.currentFrontendExperienceRef",
+    ]
+    .iter()
+    .filter(|field| readable_fields.contains(&field.to_string()))
+    .map(|field| field.to_string())
+    .collect::<Vec<_>>();
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
@@ -5109,17 +5132,10 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     })
     .expect("read architecture request fields")
     .fields;
-    let source_refs = json!({
-        "planningContractRef": field_value(&fields, "sourceRefs.planningContractRef"),
-        "technicalBaselineRef": field_value(&fields, "sourceRefs.technicalBaselineRef"),
-        "brainstormContractRef": field_value(&fields, "sourceRefs.brainstormContractRef"),
-        "repositoryContextRef": field_value(&fields, "sourceRefs.repositoryContextRef"),
-        "deliveryConceptGlossaryRef": field_value(&fields, "sourceRefs.deliveryConceptGlossaryRef"),
-        "phaseConceptGroundingRef": field_value(&fields, "sourceRefs.phaseConceptGroundingRef"),
-        "confirmedFrontendExperienceRef": field_value(&fields, "sourceRefs.confirmedFrontendExperienceRef"),
-        "currentFrontendExperienceRef": field_value(&fields, "sourceRefs.currentFrontendExperienceRef"),
-        "previousRuntimeDeliveryRef": field_value(&fields, "sourceRefs.previousRuntimeDeliveryRef")
-    });
+    let source_refs = request_root
+        .get("sourceRefs")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let allowed_refs = json!({
         "scopeRefs": field_value(&fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": field_value(&fields, "allowedRefs.acceptanceRefs"),
@@ -5157,13 +5173,13 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .and_then(|item| item.get("statement"))
         .and_then(Value::as_str)
         .unwrap_or("Current phase acceptance is covered by the architecture.");
-    let frontend_authority_ref = fields
-        .get("frontendExperienceSource.confirmedFrontendExperienceRef")
-        .and_then(|field| field.value.as_str())
+    let frontend_authority_ref = request_root
+        .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
+        .and_then(Value::as_str)
         .or_else(|| {
-            fields
-                .get("frontendExperienceSource.currentFrontendExperienceRef")
-                .and_then(|field| field.value.as_str())
+            request_root
+                .pointer("/frontendExperienceSource/currentFrontendExperienceRef")
+                .and_then(Value::as_str)
         });
     let technical_baseline_ref = source_refs
         .get("technicalBaselineRef")
