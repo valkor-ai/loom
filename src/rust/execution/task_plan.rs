@@ -1449,7 +1449,7 @@ fn requirement_detail_transfer(
             "stateMachines": aac.state_machines,
             "frontendOperationPathDetails": aac.frontend_experience
         },
-        "workflowClosureRequirements": [],
+        "workflowClosureRequirements": workflow_closure_requirements(aac),
         "conceptRefs": {
             "deliveryConceptGlossaryRef": pgc.context_refs.delivery_concept_glossary_ref,
             "phaseConceptGroundingRef": pgc.context_refs.phase_concept_grounding_ref
@@ -1461,6 +1461,169 @@ fn requirement_detail_transfer(
             "runtimeDeliveryRequirement": "Use when the task touches build, start, runtime entry, static serving, generated artifacts, or runtime surface."
         }
     })
+}
+
+fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return vec![];
+    };
+    if frontend
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        != true
+    {
+        return vec![];
+    }
+
+    let flow_by_id = aac
+        .user_flows
+        .iter()
+        .filter_map(|flow| string_at(flow, "flowId").map(|id| (id, flow)))
+        .collect::<BTreeMap<_, _>>();
+    let interface_by_id = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| string_at(interface, "interfaceId").map(|id| (id, interface)))
+        .collect::<BTreeMap<_, _>>();
+    let mut surface_refs_by_flow: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for surface in array_at(frontend, "surfaces") {
+        let Some(surface_id) = string_at(surface, "surfaceId") else {
+            continue;
+        };
+        for workflow_ref in string_array_at(surface, "workflowRefs") {
+            surface_refs_by_flow
+                .entry(workflow_ref)
+                .or_default()
+                .push(surface_id.clone());
+        }
+    }
+
+    for operation_path in array_at(frontend, "operationPaths") {
+        let Some(workflow_ref) = string_at(operation_path, "workflowRef") else {
+            continue;
+        };
+        let surface_ref = string_at(operation_path, "surfaceRef");
+        let refs = surface_refs_by_flow.entry(workflow_ref).or_default();
+        if let Some(surface_ref) = surface_ref {
+            refs.push(surface_ref);
+        }
+    }
+
+    let mut requirements = Vec::new();
+    for (workflow_ref, surface_refs) in surface_refs_by_flow {
+        let Some(flow) = flow_by_id.get(workflow_ref.as_str()) else {
+            continue;
+        };
+        if let Some(kind) = string_at(flow, "kind") {
+            if kind != "user_interaction" {
+                continue;
+            }
+        }
+        let steps = array_at(flow, "steps");
+        if steps.is_empty() {
+            continue;
+        }
+
+        let operation_paths = array_at(frontend, "operationPaths")
+            .into_iter()
+            .filter(|operation_path| {
+                string_at(operation_path, "workflowRef").as_deref() == Some(workflow_ref.as_str())
+                    || string_at(operation_path, "surfaceRef")
+                        .map(|surface_ref| surface_refs.iter().any(|id| id == &surface_ref))
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        let operation_path_refs = unique_strings(
+            operation_paths
+                .iter()
+                .filter_map(|operation_path| string_at(operation_path, "pathId"))
+                .collect(),
+        );
+        let data_view_refs = unique_strings(
+            operation_paths
+                .iter()
+                .flat_map(|operation_path| string_array_at(operation_path, "dataViewRefs"))
+                .collect(),
+        );
+        let action_refs = unique_strings(
+            operation_paths
+                .iter()
+                .flat_map(|operation_path| string_array_at(operation_path, "actionRefs"))
+                .collect(),
+        );
+
+        for step in steps {
+            let mut candidate_interface_refs = string_array_at(step, "interfaceRefs");
+            if candidate_interface_refs.is_empty() {
+                candidate_interface_refs = string_array_at(flow, "interfaceRefs");
+            }
+            let executable_interfaces = candidate_interface_refs
+                .iter()
+                .filter_map(|interface_ref| interface_by_id.get(interface_ref.as_str()).copied())
+                .filter(|interface| {
+                    is_executable_interface(interface) && has_interface_shape(interface)
+                })
+                .collect::<Vec<_>>();
+            if executable_interfaces.is_empty() {
+                continue;
+            }
+            let interface_refs = unique_strings(
+                executable_interfaces
+                    .iter()
+                    .filter_map(|interface| string_at(interface, "interfaceId"))
+                    .collect(),
+            );
+            let step_id = string_at(step, "stepId").unwrap_or_else(|| "step".to_string());
+            requirements.push(json!({
+                "closureId": format!("closure:{workflow_ref}:{step_id}"),
+                "workflowRef": workflow_ref.clone(),
+                "workflowName": string_at(flow, "name").unwrap_or_else(|| workflow_ref.clone()),
+                "surfaceRefs": unique_strings(surface_refs.clone()),
+                "operationPathRefs": operation_path_refs.clone(),
+                "dataViewRefs": data_view_refs.clone(),
+                "actionRefs": action_refs.clone(),
+                "moduleRefs": string_array_at(flow, "moduleRefs"),
+                "acceptanceRefs": string_array_at(flow, "acceptanceRefs"),
+                "interfaceRefs": interface_refs,
+                "stateMachineRefs": unique_strings(string_array_at(step, "stateMachineRefs")),
+                "stepRefs": [step_id.clone()],
+                "entry": flow.get("entry").cloned().unwrap_or(Value::Null),
+                "derivation": {
+                    "source": "aac_frontend_surface_userflow_interface",
+                    "rule": "Generated from AAC frontendExperience surfaces or operationPaths, user interaction flow steps, and executable interfaces with request/response shape."
+                },
+                "requiredDataBindingMode": "wired",
+                "satisfiedDataBindingModes": ["wired"],
+                "staticModePolicy": "not_satisfied",
+                "knownGapPolicy": "not_satisfied_when_required_closure",
+                "requiredEvidence": [
+                    "user_action",
+                    "declared_interface_invocation",
+                    "state_or_persistence_change",
+                    "success_or_blocking_feedback"
+                ],
+                "interfaces": executable_interfaces
+                    .iter()
+                    .map(|interface| {
+                        json!({
+                            "interfaceId": string_at(interface, "interfaceId").unwrap_or_default(),
+                            "name": string_at(interface, "name").unwrap_or_default(),
+                            "type": string_at(interface, "type").unwrap_or_default(),
+                            "role": string_at(interface, "role"),
+                            "method": string_at(interface, "method"),
+                            "path": string_at(interface, "path"),
+                            "requestSchema": interface.get("requestSchema").cloned().unwrap_or(Value::Array(vec![])),
+                            "responseSchema": interface.get("responseSchema").cloned().unwrap_or(Value::Array(vec![])),
+                            "errorSchema": interface.get("errorSchema").cloned().unwrap_or(Value::Array(vec![]))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+    }
+    requirements
 }
 
 fn allowed_refs(
@@ -1485,6 +1648,61 @@ fn allowed_refs(
         "decisionRefs": [],
         "riskRefs": []
     })
+}
+
+fn array_at<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default()
+}
+
+fn string_at(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn string_array_at(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unique_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn is_executable_interface(interface: &Value) -> bool {
+    matches!(
+        string_at(interface, "type").as_deref(),
+        Some("http_api" | "service_method" | "cli_command" | "event" | "job" | "external_adapter")
+    )
+}
+
+fn has_interface_shape(interface: &Value) -> bool {
+    interface
+        .get("requestSchema")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false)
+        && interface
+            .get("responseSchema")
+            .and_then(Value::as_array)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false)
 }
 
 fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
@@ -1518,7 +1736,18 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement."
         },
         "workflowClosureRules": {
-            "rule": "When workflow closure requirements exist, assign each to an executable task that owns user action, interface invocation, state/readback, and feedback evidence."
+            "derivationAuthority": "AAC frontendExperience + userFlows + executable interfaces",
+            "requirementSource": "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+            "appliesWhen": "Only when workflowClosureRequirements is non-empty.",
+            "taskAssignmentRule": "Assign each closure requirement to at least one executable task whose artifact refs include workflowRef and every interfaceRef.",
+            "taskCoverageShape": "The task must own the user action, declared interface invocation, state or persistence change, and success or blocking feedback evidence.",
+            "resultExpectation": "TaskResult frontendExperienceSelfCheck must reference closureRequirementIds and cannot mark static or unwired UI as satisfied.",
+            "repairRule": "If a closure requirement is unassigned, repair TaskPlan assignment rather than routing back to AAC when AAC already declares the workflow and interfaces.",
+            "rules": [
+                "Use contextProjection.requirementDetailTransfer.workflowClosureRequirements as the exact workflow closure requirement list.",
+                "Task implementationActions should include wire_reference_in_api_or_ui when the task closes a frontend workflow.",
+                "Verification intents for closure tasks should accept automated_test or runtime_api_check evidence."
+            ]
         },
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),

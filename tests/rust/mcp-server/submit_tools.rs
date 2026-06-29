@@ -1201,6 +1201,65 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
 }
 
 #[test]
+fn taskplan_request_derives_frontend_workflow_closure_requirements() {
+    let fixture = Fixture::new("taskplan-workflow-closure");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_json,
+    );
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let taskplan_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    let closure_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec![
+            "contextProjection.requirementDetailTransfer.workflowClosureRequirements".to_string(),
+            "generationRules.workflowClosureRules".to_string(),
+        ],
+    })
+    .expect("read workflow closure fields")
+    .fields;
+    let requirements = closure_fields
+        ["contextProjection.requirementDetailTransfer.workflowClosureRequirements"]
+        .value
+        .as_array()
+        .expect("workflow closure requirements");
+    assert_eq!(requirements.len(), 1, "{requirements:#?}");
+    assert_eq!(
+        requirements[0]["closureId"],
+        json!("closure:flow.account-lifecycle:step.submit-open-account")
+    );
+    assert_eq!(
+        requirements[0]["interfaceRefs"],
+        json!(["api.account.open"])
+    );
+    assert_eq!(
+        requirements[0]["operationPathRefs"],
+        json!(["path_account_lifecycle"])
+    );
+    assert_eq!(
+        requirements[0]["requiredEvidence"],
+        json!([
+            "user_action",
+            "declared_interface_invocation",
+            "state_or_persistence_change",
+            "success_or_blocking_feedback"
+        ])
+    );
+    assert_eq!(
+        closure_fields["generationRules.workflowClosureRules"].value["requirementSource"],
+        json!("contextProjection.requirementDetailTransfer.workflowClosureRequirements")
+    );
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -3093,6 +3152,18 @@ fn start_existing_project_architecture_flow_with_candidate(
 }
 
 fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &str) -> Value {
+    complete_architecture_sections_with(
+        fixture,
+        architecture_request_ref,
+        architecture_section_candidate_json,
+    )
+}
+
+fn complete_architecture_sections_with(
+    fixture: &Fixture,
+    architecture_request_ref: &str,
+    candidate_fn: fn(&Fixture, &str) -> Value,
+) -> Value {
     let current_request_ref = architecture_request_ref.to_string();
     let mut last = json!(null);
     let section_order = [
@@ -3129,7 +3200,7 @@ fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &
         write_candidate_target(
             fixture,
             &current_request_ref,
-            &architecture_section_candidate_json(fixture, &current_request_ref),
+            &candidate_fn(fixture, &current_request_ref),
         );
 
         let submit_tool = inspected.submit_tool.as_deref().expect("submit tool");
@@ -4059,6 +4130,134 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         "content": content,
         "createdAt": "2026-06-24T10:00:00+08:00"
     })
+}
+
+fn architecture_section_candidate_with_workflow_closure_json(
+    fixture: &Fixture,
+    request_ref: &str,
+) -> Value {
+    let mut candidate = architecture_section_candidate_json(fixture, request_ref);
+    match candidate["section"].as_str().unwrap_or_default() {
+        "domain_contract" => {
+            candidate["content"]["dataModel"]["entities"] = json!([{
+                "entityId": "entity.account",
+                "name": "Account",
+                "type": "aggregate",
+                "moduleRefs": ["module.account-service"],
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "fields": [{
+                    "fieldId": "field.account.id",
+                    "name": "accountId",
+                    "type": "string",
+                    "required": true
+                }],
+                "constraints": []
+            }]);
+            candidate["content"]["interfaces"] = json!([{
+                "interfaceId": "api.account.open",
+                "name": "Open account API",
+                "type": "http_api",
+                "role": "command",
+                "method": "POST",
+                "path": "/api/accounts",
+                "moduleRefs": ["module.account-service"],
+                "entityRefs": ["entity.account"],
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "requestSchema": [{
+                    "fieldId": "field.request.investorName",
+                    "name": "investorName",
+                    "type": "string",
+                    "required": true
+                }],
+                "responseSchema": [{
+                    "fieldId": "field.response.accountId",
+                    "name": "accountId",
+                    "type": "string",
+                    "required": true
+                }],
+                "errorSchema": [{
+                    "fieldId": "field.error.message",
+                    "name": "message",
+                    "type": "string",
+                    "required": true
+                }]
+            }]);
+        }
+        "behavior" => {
+            candidate["content"]["userFlows"] = json!([{
+                "flowId": "flow.account-lifecycle",
+                "name": "Account lifecycle",
+                "kind": "user_interaction",
+                "moduleRefs": ["module.account-service"],
+                "interfaceRefs": ["api.account.open"],
+                "entityRefs": ["entity.account"],
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "entry": {
+                    "type": "frontend_action",
+                    "ref": "action_open_account"
+                },
+                "steps": [{
+                    "stepId": "step.submit-open-account",
+                    "actor": "工作人员",
+                    "action": "提交开户表单",
+                    "interfaceRefs": ["api.account.open"],
+                    "stateMachineRefs": ["machine.account-status"]
+                }],
+                "outcomes": [{
+                    "type": "success",
+                    "description": "返回开户成功反馈并刷新账户列表。"
+                }]
+            }]);
+            candidate["content"]["stateMachines"] = json!([{
+                "machineId": "machine.account-status",
+                "name": "Account status",
+                "entityRef": "entity.account",
+                "entityRefs": ["entity.account"],
+                "moduleRefs": ["module.account-service"],
+                "scopeRefs": ["scope_1"],
+                "acceptanceRefs": ["acc_1"],
+                "states": [{"stateId": "active", "name": "正常", "terminal": false}],
+                "transitions": [],
+                "rules": []
+            }]);
+        }
+        "frontend_experience" => {
+            let refs = candidate["content"]["frontendExperience"]["sourceRefs"].clone();
+            candidate["content"]["frontendExperience"] = json!({
+                "required": true,
+                "kind": "staff_console",
+                "experienceLevel": "usable_internal_product",
+                "surfaces": [{
+                    "surfaceId": "surface_account_admin",
+                    "name": "证券账户管理",
+                    "workflowRefs": ["flow.account-lifecycle"],
+                    "audienceRefs": ["audience_staff"]
+                }],
+                "dataViews": [{
+                    "viewId": "view_account_list",
+                    "name": "证券账户列表"
+                }],
+                "actions": [{
+                    "actionId": "action_open_account",
+                    "label": "新建证券账户"
+                }],
+                "operationPaths": [{
+                    "pathId": "path_account_lifecycle",
+                    "name": "证券账户生命周期办理",
+                    "surfaceRef": "surface_account_admin",
+                    "workflowRef": "flow.account-lifecycle",
+                    "dataViewRefs": ["view_account_list"],
+                    "actionRefs": ["action_open_account"]
+                }],
+                "sourceRefs": refs
+            });
+        }
+        _ => {}
+    }
+    candidate
 }
 
 fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
