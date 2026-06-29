@@ -11,11 +11,10 @@ use crate::{
         select_compact_keyword_hints, select_compact_requirement_semantic_rules,
         select_source_ref_registry, select_value, selector_parts as projection_selector_parts,
     },
-    legacy_ts_reader::hydrate_legacy_request_value,
     paths::{from_project_relative, project_paths},
     project::read_project_config,
     read_audit::{now_for_audit, record_field_read_audit, FieldReadAudit},
-    request_index::{get_request_index_entry, RequestSourceProtocol},
+    request_index::get_request_index_entry,
     request_manifest::{read_group_refs_from_root, request_storage_ref},
     store::{read_json_value, read_text, StateError, StateResult},
 };
@@ -32,7 +31,6 @@ struct LoadedRequest {
     request_id: String,
     project_id: String,
     request_kind: String,
-    source_protocol: RequestSourceProtocol,
     root: Value,
     read_groups: Vec<ReadGroupRef>,
 }
@@ -161,17 +159,13 @@ fn load_request(project_root: &str, request_ref: &str) -> StateResult<LoadedRequ
     let index_entry = get_request_index_entry(project_root, &parsed.request_id)?;
     let paths = project_paths(project_root)?;
     let request_file = from_project_relative(&paths.root, &index_entry.request_file)?;
-    let mut root = read_json_value(&request_file)?;
-    if index_entry.source_protocol == RequestSourceProtocol::LegacyTypeScript {
-        root = hydrate_legacy_request_value(root, &parsed.project_id, &parsed.request_id)?;
-    }
+    let root = read_json_value(&request_file)?;
     let read_groups = read_group_refs_from_root(&root, &parsed.project_id, &parsed.request_id)?;
     Ok(LoadedRequest {
         request_ref: request_ref.to_string(),
         request_id: parsed.request_id,
         project_id: parsed.project_id,
         request_kind: index_entry.request_kind,
-        source_protocol: index_entry.source_protocol,
         root,
         read_groups,
     })
@@ -316,20 +310,8 @@ fn request_storage_manifest_ref(
     request: &LoadedRequest,
     key: &str,
 ) -> StateResult<Option<String>> {
-    if request.source_protocol == RequestSourceProtocol::RustMcpNative {
-        let paths = project_paths(project_root)?;
-        return request_storage_ref(&paths.root, &request.request_id, key);
-    }
-    Ok(legacy_request_manifest_ref(&request.root, key))
-}
-
-fn legacy_request_manifest_ref(root: &Value, key: &str) -> Option<String> {
-    root.get("requestManifest")
-        .and_then(|manifest| manifest.get("refs"))
-        .and_then(|refs| refs.get(key))
-        .and_then(|entry| entry.get("ref"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let paths = project_paths(project_root)?;
+    request_storage_ref(&paths.root, &request.request_id, key)
 }
 
 fn selector_parts(field: &str) -> StateResult<Vec<String>> {
@@ -476,9 +458,6 @@ fn extract_submit_tool(root: &Value, output_contract: Option<&Value>) -> Option<
 fn read_output_contract(project_root: &str, request: &LoadedRequest) -> StateResult<Option<Value>> {
     if let Some(value) = request.root.get("outputContract") {
         return Ok(Some(value.clone()));
-    }
-    if request.source_protocol != RequestSourceProtocol::RustMcpNative {
-        return Ok(None);
     }
     let Some(relative) = request_storage_manifest_ref(project_root, request, "outputContract")?
     else {

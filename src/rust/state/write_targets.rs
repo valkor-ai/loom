@@ -10,7 +10,7 @@ use crate::{
     boundary::ensure_project_contained,
     paths::{from_project_relative, project_paths},
     project::read_project_config,
-    request_index::{get_request_index_entry, RequestSourceProtocol},
+    request_index::get_request_index_entry,
     request_manifest::{read_group_refs_from_root, request_storage_ref},
     store::{path_exists, read_json_value, StateError},
 };
@@ -62,12 +62,6 @@ pub fn authorize_write_targets(
 
     let index_entry =
         get_request_index_entry(&input.project_root, &parsed.request_id).map_err(fatal_state)?;
-    if index_entry.source_protocol != RequestSourceProtocol::RustMcpNative {
-        return Err(fatal(
-            "LEGACY_REQUEST_NOT_ALLOWED",
-            "MCP native submit only accepts Rust MCP native requestRef. Legacy TS requests are migration inputs, not submit targets.",
-        ));
-    }
 
     let paths = project_paths(&input.project_root).map_err(fatal_state)?;
     let request_file =

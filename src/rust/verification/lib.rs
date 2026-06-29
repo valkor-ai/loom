@@ -419,7 +419,7 @@ fn build_protocol_report(project_root: &str) -> Result<ProtocolSnapshotReport> {
         if request.source_protocol != state::request_index::RequestSourceProtocol::RustMcpNative {
             issues.push(issue(
                 "NON_NATIVE_REQUEST_IN_PRODUCT_INDEX",
-                "Final MCP-only regression must not rely on legacy TypeScript requests.",
+                "Final MCP-only regression must rely only on native MCP requests.",
                 [("requestId", json!(request.request_id))],
             ));
         }
@@ -800,7 +800,7 @@ fn build_token_summary(
     {
         issues.push(issue(
             "PAYLOAD_BYTES_REGRESSED",
-            "MCP agent-facing payload bytes exceed TypeScript reference canonical payload bytes.",
+            "MCP agent-facing payload bytes exceed the configured baseline payload bytes.",
             [
                 ("mcpPayloadBytes", json!(total_payload_bytes)),
                 (
@@ -813,7 +813,7 @@ fn build_token_summary(
     if benchmark.mcp_completion_rate + f64::EPSILON < benchmark.reference_completion_rate {
         issues.push(issue(
             "BENCHMARK_COMPLETION_REGRESSED",
-            "MCP completion rate is lower than TypeScript reference completion rate.",
+            "MCP completion rate is lower than the configured baseline completion rate.",
             [
                 ("mcpCompletionRate", json!(benchmark.mcp_completion_rate)),
                 (
@@ -1048,7 +1048,7 @@ fn regression_report_markdown(
     setup: &SetupPackagingReport,
 ) -> String {
     format!(
-        "# Loom MCP-only Regression Report\n\nOverall: {}\n\n| Gate | Status | Issues |\n| --- | --- | ---: |\n| Canonical projection | {} | {} |\n| Protocol snapshot | {} | {} |\n| Agent transcript audit | {} | {} |\n| Token/read-plan | {} | {} |\n| Setup packaging | {} | {} |\n\n## Batch Coverage\n\nBatches 0-12 are covered by the MCP-only runtime tests, request protocol snapshot, setup packaging audit, TypeScript reference lane, and this final verification report. Batch 13 owns this report and has release blockers below.\n\nRelease blockers: {}\n",
+        "# Loom MCP-only Regression Report\n\nOverall: {}\n\n| Gate | Status | Issues |\n| --- | --- | ---: |\n| Canonical projection | {} | {} |\n| Protocol snapshot | {} | {} |\n| Agent transcript audit | {} | {} |\n| Token/read-plan | {} | {} |\n| Setup packaging | {} | {} |\n\n## Batch Coverage\n\nBatches 0-12 are covered by the MCP-only runtime tests, request protocol snapshot, setup packaging audit, and this final verification report. Batch 13 owns this report and has release blockers below.\n\nRelease blockers: {}\n",
         if passed { "passed" } else { "failed" },
         projection.status,
         projection.issue_count,

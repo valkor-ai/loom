@@ -33,5 +33,3 @@ After a local runtime or plugin fix, refresh the local agent through the Quick S
 ```
 
 This validates the Rust release build, package layout, `loom-setup install`, MCP registration, and plugin refresh as one path.
-
-TypeScript CLI and legacy adapter refresh scripts are archived under `src/ts/reference/` for migration comparison only. They are not product install paths, not release packaging inputs, and not fallback runtimes.

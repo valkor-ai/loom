@@ -243,60 +243,60 @@ fn confirm_all_brainstorm_blocks(
     request_ref: &str,
 ) -> String {
     let mut request_ref = request_ref.to_string();
-    request_ref = confirm_block(
-        server,
-        fixture,
-        &request_ref,
-        "phase_scope",
-        "确认第一阶段为证券账户模块闭环。",
-        json!({
-            "scope": {
-                "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
-                "deferred": ["资金账户", "交易客户端"],
-                "excluded": []
-            },
-            "recommendation": {
-                "label": "证券账户模块闭环",
-                "reason": "证券账户是交易身份基础。"
-            }
-        }),
-    )["requestRef"]
-        .as_str()
-        .expect("concept requestRef")
-        .to_string();
-    request_ref = confirm_block(
-        server,
-        fixture,
-        &request_ref,
-        "concept_grounding",
-        "确认证券账户生命周期规则。",
-        json!({
-            "objects": ["证券账户"],
-            "operations": ["开户", "挂失补办", "销户"],
-            "rules": ["销户前必须清空持仓"],
-            "boundaries": ["资金账户递延"]
-        }),
-    )["requestRef"]
-        .as_str()
-        .expect("frontend requestRef")
-        .to_string();
-    request_ref = confirm_block(
-        server,
-        fixture,
-        &request_ref,
-        "frontend_experience",
-        "确认工作人员后台证券账户管理页面路径。",
-        json!({
-            "required": true,
-            "surfaces": ["证券账户管理页面"],
-            "targetDiscovery": ["分页查询列表"],
-            "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
-            "mustNot": ["不能只靠内部主键触发办理动作"]
-        }),
-    )["requestRef"]
-        .as_str()
-        .expect("final requestRef")
-        .to_string();
+    request_ref = result_request_ref(
+        &confirm_block(
+            server,
+            fixture,
+            &request_ref,
+            "phase_scope",
+            "确认第一阶段为证券账户模块闭环。",
+            json!({
+                "scope": {
+                    "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
+                    "deferred": ["资金账户", "交易客户端"],
+                    "excluded": []
+                },
+                "recommendation": {
+                    "label": "证券账户模块闭环",
+                    "reason": "证券账户是交易身份基础。"
+                }
+            }),
+        ),
+        "concept requestRef",
+    );
+    request_ref = result_request_ref(
+        &confirm_block(
+            server,
+            fixture,
+            &request_ref,
+            "concept_grounding",
+            "确认证券账户生命周期规则。",
+            json!({
+                "objects": ["证券账户"],
+                "operations": ["开户", "挂失补办", "销户"],
+                "rules": ["销户前必须清空持仓"],
+                "boundaries": ["资金账户递延"]
+            }),
+        ),
+        "frontend requestRef",
+    );
+    request_ref = result_request_ref(
+        &confirm_block(
+            server,
+            fixture,
+            &request_ref,
+            "frontend_experience",
+            "确认工作人员后台证券账户管理页面路径。",
+            json!({
+                "required": true,
+                "surfaces": ["证券账户管理页面"],
+                "targetDiscovery": ["分页查询列表"],
+                "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
+                "mustNot": ["不能只靠内部主键触发办理动作"]
+            }),
+        ),
+        "final requestRef",
+    );
     let write_action = confirm_block(
         server,
         fixture,
@@ -312,6 +312,15 @@ fn confirm_all_brainstorm_blocks(
     write_action["next"]["requestRef"]
         .as_str()
         .expect("candidate write requestRef")
+        .to_string()
+}
+
+fn result_request_ref(result: &Value, label: &str) -> String {
+    result
+        .get("requestRef")
+        .or_else(|| result.pointer("/next/requestRef"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("{label}: {result:#}"))
         .to_string()
 }
 
@@ -366,6 +375,28 @@ fn run_knowledge_context(
         .expect("knowledge executionOrder");
     for step in steps {
         let step_id = step["stepId"].as_str().expect("stepId");
+        if step["repeatMode"].as_str() == Some("per_candidate_phase_cut") {
+            for query_id in ["capability_closure_A", "capability_closure_B"] {
+                structured(
+                    server
+                        .invoke_tool(
+                            "loom.knowledgeBrainstormContext",
+                            Some(args(json!({
+                                "projectRoot": fixture.root_str(),
+                                "requestRef": request_ref,
+                                "block": block,
+                                "stepId": step_id,
+                                "queryId": query_id,
+                                "querySubject": format!("{block} {step_id} {query_id}"),
+                                "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                                "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户"]
+                            }))),
+                        )
+                        .expect("knowledge brainstorm context"),
+                );
+            }
+            continue;
+        }
         structured(
             server
                 .invoke_tool(

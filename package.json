@@ -6,7 +6,6 @@
   "private": true,
   "scripts": {
     "rust:test": "cargo test --manifest-path src/rust/Cargo.toml",
-    "python:test": "python -m pytest tests/python",
-    "reference:typescript": "npm --prefix src/ts/reference test"
+    "python:test": "python3 -m pytest tests/python"
   }
 }

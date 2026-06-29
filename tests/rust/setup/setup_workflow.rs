@@ -280,7 +280,7 @@ fn archive_package_layout_rejects_legacy_typescript_runtime_entries() {
     let fixture = Fixture::new("archive_rejects_legacy_runtime");
     fixture.write_package();
     write_file(
-        &fixture.package_root.join("src/ts/reference/cli.ts"),
+        &fixture.package_root.join("src/ts/cli.ts"),
         "console.log('legacy cli');\n",
     );
     fixture.write_checksums();
@@ -294,7 +294,7 @@ fn archive_package_layout_rejects_legacy_typescript_runtime_entries() {
     match error {
         SetupError::InvalidArgument(message) => {
             assert!(message.contains("release package must not include"));
-            assert!(message.contains("src/ts/reference/cli.ts"));
+            assert!(message.contains("src/ts/cli.ts"));
         }
         other => panic!("expected InvalidArgument, got {other:?}"),
     }

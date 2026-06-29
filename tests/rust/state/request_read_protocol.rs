@@ -1,13 +1,12 @@
 use serde_json::json;
 use state::{
-    legacy_ts_reader::register_legacy_ts_request,
     paths::{
         delivery_dir, delivery_index_file, operation_lease_file, phase_tmp_dir, project_paths,
         task_run_file, workspace_dir, DeliveryPhaseLocator, DeliveryPhaseRunLocator,
     },
     request_resolver::{read_field_by_resource_uri, read_field_group_by_resource_uri},
     store::{read_json_value, write_json_atomic, write_text_atomic},
-    write_native_request, NativeRequestInput, WriteTargetAuthorizationError,
+    write_native_request, NativeRequestInput,
 };
 use std::fs::read_to_string;
 use std::path::PathBuf;
@@ -24,7 +23,7 @@ fn project_paths_include_delivery_and_status_roots() {
 }
 
 #[test]
-fn delivery_phase_and_run_locators_match_ts_layout() {
+fn delivery_phase_and_run_locators_match_mcp_layout() {
     let root = PathBuf::from("/tmp/loom-state-paths");
     let phase = DeliveryPhaseLocator {
         delivery_id: "delivery_1".to_string(),
@@ -621,8 +620,8 @@ fn native_request_protocol_snapshot_covers_delivery_request_kinds() {
 }
 
 #[test]
-fn legacy_ts_problem_fixture_reports_repeated_authorities() {
-    let legacy = json!({
+fn duplicated_protocol_authority_fixture_reports_repeated_authorities() {
+    let duplicated = json!({
         "contextRefs": {
             "requestTextRef": ".loom/requirements/normalized.txt",
             "normalizedRequirementTextRef": ".loom/requirements/normalized.txt"
@@ -630,13 +629,13 @@ fn legacy_ts_problem_fixture_reports_repeated_authorities() {
         "agentAction": {
             "read": {
                 "fieldGroups": [{
-                    "groupId": "legacy",
+                    "groupId": "duplicated",
                     "fields": ["rules", "outputContract.schemaShape"],
-                    "readCommand": { "argv": ["loom-cli", "inspect"] },
+                    "readCommand": { "argv": ["old-runner", "inspect"] },
                     "fallbackRule": "Read requestManifest refs."
                 }]
             },
-            "submit": { "command": { "argv": ["loom-cli", "accept"] } }
+            "submit": { "command": { "argv": ["old-runner", "accept"] } }
         },
         "requestReadPlan": {
             "groups": [{
@@ -650,12 +649,12 @@ fn legacy_ts_problem_fixture_reports_repeated_authorities() {
                 "rules": { "ref": ".loom/requests/old.refs/rules.json" }
             }
         },
-        "submitCommand": { "argv": ["loom-cli", "accept"] },
+        "submitCommand": { "argv": ["old-runner", "accept"] },
         "rules": { "long": true },
         "outputContract": { "schemaShape": { "candidateRules": [] } }
     });
 
-    let findings = audit_legacy_request_authorities(&legacy);
+    let findings = audit_legacy_request_authorities(&duplicated);
     assert_eq!(
         findings,
         vec![
@@ -668,54 +667,6 @@ fn legacy_ts_problem_fixture_reports_repeated_authorities() {
             "duplicate context ref paths",
         ]
     );
-}
-
-#[test]
-fn legacy_ts_request_is_converted_without_rewriting_file() {
-    let fixture = Fixture::new("legacy");
-    let legacy_file = fixture.root.join(".loom/legacy/request.json");
-    write_json_atomic(
-        &legacy_file,
-        &json!({
-            "requestKind": "legacy_request",
-            "agentAction": {
-                "read": {
-                    "fieldGroups": [{
-                        "groupId": "legacy_core",
-                        "required": true,
-                        "fields": ["task.title"],
-                        "readCommand": { "argv": ["inspect"] },
-                        "fallbackRule": "old fallback"
-                    }]
-                }
-            },
-            "task": { "title": "旧请求标题" }
-        }),
-    )
-    .expect("write legacy request");
-
-    let request_ref = register_legacy_ts_request(fixture.root_str(), ".loom/legacy/request.json")
-        .expect("register legacy request");
-    let legacy_after = read_json_value(&legacy_file).expect("read legacy request");
-    assert!(legacy_after.get("requestReadPlan").is_none());
-
-    let inspected = state::inspect_request(delivery_core::InspectRequestInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: request_ref.clone(),
-    })
-    .expect("inspect legacy");
-    assert_eq!(inspected.read_groups[0].group_id, "legacy_core");
-    assert!(!serde_json::to_string(&inspected)
-        .unwrap()
-        .contains("readCommand"));
-
-    let group = state::read_field_group(delivery_core::ReadFieldGroupInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref,
-        group_id: "legacy_core".to_string(),
-    })
-    .expect("read legacy group");
-    assert_eq!(group.fields["task.title"].value, "旧请求标题");
 }
 
 #[test]
@@ -786,63 +737,6 @@ fn native_submit_authorizes_declared_write_targets() {
     );
     assert_eq!(authorized.targets[0].target_id, "candidate");
     assert_eq!(authorized.submit_tool, "loom.brainstormAcceptFile");
-}
-
-#[test]
-fn native_submit_rejects_legacy_ts_request_ref() {
-    let fixture = Fixture::new("submit-legacy");
-    let legacy_file = fixture.root.join(".loom/legacy/request.json");
-    write_json_atomic(
-        &legacy_file,
-        &json!({
-            "requestKind": "legacy_request",
-            "requestReadPlan": {
-                "groups": [{
-                    "groupId": "legacy_core",
-                    "fields": ["task.title"]
-                }]
-            },
-            "task": { "title": "旧请求标题" }
-        }),
-    )
-    .expect("write legacy request");
-    let request_ref = register_legacy_ts_request(fixture.root_str(), ".loom/legacy/request.json")
-        .expect("register legacy request");
-
-    let error = state::authorize_write_targets(
-        &delivery_core::FileSubmitInput {
-            project_root: fixture.root_str().to_string(),
-            request_ref,
-            written_target_ids: None,
-        },
-        "loom.brainstormAcceptFile",
-    )
-    .expect_err("legacy request cannot be submitted");
-
-    let WriteTargetAuthorizationError::Fatal { code, message } = error else {
-        panic!("expected fatal legacy submit rejection");
-    };
-    assert_eq!(code, "LEGACY_REQUEST_NOT_ALLOWED");
-    assert!(message.contains("migration inputs"));
-}
-
-#[test]
-fn legacy_artifact_reader_is_read_only_migration_input() {
-    let fixture = Fixture::new("legacy-artifact");
-    write_json_atomic(
-        &fixture.root.join(".loom/legacy/artifact.json"),
-        &json!({ "summary": "old artifact" }),
-    )
-    .expect("write legacy artifact");
-
-    let artifact = state::read_legacy_ts_artifact(fixture.root_str(), ".loom/legacy/artifact.json")
-        .expect("read legacy artifact");
-
-    assert_eq!(artifact.artifact_file, ".loom/legacy/artifact.json");
-    assert_eq!(artifact.value["summary"], "old artifact");
-    let index =
-        state::request_index::load_request_index(fixture.root_str()).expect("request index loads");
-    assert!(index.requests.is_empty());
 }
 
 struct Fixture {
