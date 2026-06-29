@@ -251,7 +251,6 @@ Codex:
 
 ```text
 @loom build a visitor registration system
-@loom plan this feature first
 @loom continue
 @loom review
 @loom deploy
@@ -261,7 +260,6 @@ Claude Code and OpenCode:
 
 ```text
 /loom build a visitor registration system
-/loom plan this feature first
 /loom continue
 /loom review
 /loom deploy
