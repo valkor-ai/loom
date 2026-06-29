@@ -22,6 +22,13 @@ const DEFAULT_CONTEXT_SOURCE_LIMIT: usize = 2;
 const DEFAULT_CONTEXT_CHUNK_LIMIT_PER_SOURCE: usize = 5;
 const MAX_CONTEXT_CHUNKS_PER_BLOCK: usize = 5;
 
+const PHASE_SCOPE_RETRIEVAL_INTENT: &str =
+    "phase scope boundary include exclude defer dependency ordering next phase 阶段范围 边界 纳入 排除 延后 递延 依赖 顺序 下一阶段";
+const CONCEPT_GROUNDING_RETRIEVAL_INTENT: &str =
+    "business object operation field state rule invariant precondition validation blocking outcome feedback 业务对象 操作 字段 状态 规则 不变量 前置条件 校验 阻断 成功结果 反馈";
+const FRONTEND_EXPERIENCE_RETRIEVAL_INTENT: &str =
+    "page operation path workspace entry target discovery query filter pagination selection list detail action entry form input success feedback failure feedback business blocking loading empty state refresh readback 页面办理路径 页面操作路径 工作台 入口 目标定位 查询 筛选 分页 选择 列表 详情 操作入口 表单 输入 成功反馈 失败提示 业务阻断 加载中 空状态 刷新 回读";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BrainstormKnowledgeStepRequirement {
     repeat_mode: Option<String>,
@@ -72,8 +79,10 @@ pub fn brainstorm_context(
     )?;
     validate_brainstorm_query_id(&input, &step_requirement)?;
     let request_scope = resolve_brainstorm_request_scope(&input.project_root, &input.request_ref)?;
+    let natural_query = format!("{} {}", input.query_subject, input.natural_language_query);
+    let contextual_query = with_block_retrieval_intent(&natural_query, &input.block);
     let cards = search_cards(
-        &format!("{} {}", input.query_subject, input.natural_language_query),
+        &contextual_query,
         &input.semantic_focus,
         &[],
         Some(&input.block),
@@ -126,6 +135,29 @@ fn context_source_summaries(
             chunk_count: source.top_chunks.len(),
         })
         .collect()
+}
+
+fn with_block_retrieval_intent(query: &str, block: &str) -> String {
+    let Some(intent) = block_retrieval_intent(block) else {
+        return query.to_string();
+    };
+    if query.contains(intent) {
+        return query.to_string();
+    }
+    [query.trim(), intent]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn block_retrieval_intent(block: &str) -> Option<&'static str> {
+    match block {
+        "phase_scope" => Some(PHASE_SCOPE_RETRIEVAL_INTENT),
+        "concept_grounding" => Some(CONCEPT_GROUNDING_RETRIEVAL_INTENT),
+        "frontend_experience" => Some(FRONTEND_EXPERIENCE_RETRIEVAL_INTENT),
+        _ => None,
+    }
 }
 
 fn search_cards(

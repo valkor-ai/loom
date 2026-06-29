@@ -825,6 +825,152 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     assert!(wrong_step.to_string().contains("does not belong"));
 }
 
+#[test]
+fn brainstorm_context_adds_block_retrieval_intent_without_agent_facing_bloat() {
+    let fixture = Fixture::new("block-retrieval-intent");
+    let source_id = "ksrc_block_intent";
+    let build_id = "kbld_block_intent";
+    let loom_home = fixture.root.join(".loom-home");
+    let build_dir = loom_home
+        .join("knowledge/sources")
+        .join(source_id)
+        .join("build-runs")
+        .join(build_id);
+    std::fs::create_dir_all(build_dir.join("chunks")).expect("intent chunks dir");
+    std::fs::write(
+        loom_home.join("knowledge/registry.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sources": [{
+                "sourceId": source_id,
+                "name": "block-intent-rules",
+                "enabled": true,
+                "documentPaths": ["/fixture/block-intent.md"],
+                "currentBuildId": build_id,
+                "createdAt": "2026-06-26T00:00:00Z",
+                "updatedAt": "2026-06-26T00:00:00Z",
+                "lastBuiltAt": "2026-06-26T00:00:00Z"
+            }]
+        }))
+        .expect("registry json"),
+    )
+    .expect("write registry");
+    std::fs::write(
+        build_dir.join("chunks.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": source_id,
+            "sourceName": "block-intent-rules",
+            "buildId": build_id,
+            "chunks": [
+                {
+                    "chunkId": "kchunk_000001",
+                    "documentId": "kdoc_000001",
+                    "documentTitle": "irrelevant frontend-affinity note",
+                    "sourcePath": "/fixture/block-intent.md",
+                    "headingPath": ["fixture", "runtime"],
+                    "tokenEstimate": 80,
+                    "contextPrefix": "运行容器端口健康检查。",
+                    "neighborChunkIds": [],
+                    "splitReason": "section",
+                    "bodyRef": "chunks/kchunk_000001.txt",
+                    "summary": "运行容器端口健康检查。",
+                    "semanticLabels": [],
+                    "semanticAliases": [],
+                    "blockAffinity": {
+                        "phaseScope": 0.0,
+                        "conceptGrounding": 0.0,
+                        "frontendExperience": 1.0
+                    }
+                },
+                {
+                    "chunkId": "kchunk_000002",
+                    "documentId": "kdoc_000001",
+                    "documentTitle": "frontend operation path",
+                    "sourcePath": "/fixture/block-intent.md",
+                    "headingPath": ["fixture", "frontend"],
+                    "tokenEstimate": 80,
+                    "contextPrefix": "页面操作路径包含查询、筛选、分页、列表、详情、操作入口、表单输入、成功反馈、业务阻断、刷新回读。",
+                    "neighborChunkIds": [],
+                    "splitReason": "section",
+                    "bodyRef": "chunks/kchunk_000002.txt",
+                    "summary": "页面操作路径包含查询、筛选、分页、列表、详情、操作入口、表单输入、成功反馈、业务阻断、刷新回读。",
+                    "semanticLabels": [],
+                    "semanticAliases": [],
+                    "blockAffinity": {
+                        "phaseScope": 0.0,
+                        "conceptGrounding": 0.0,
+                        "frontendExperience": 1.0
+                    }
+                }
+            ]
+        }))
+        .expect("chunks json"),
+    )
+    .expect("write chunks");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_000001.txt"),
+        "运行 容器 端口 健康检查。",
+    )
+    .expect("write irrelevant chunk");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_000002.txt"),
+        "页面 操作 路径 查询 筛选 分页 列表 详情 操作 入口 表单 输入 成功 反馈 失败 提示 业务 阻断 加载 空状态 刷新 回读。",
+    )
+    .expect("write frontend chunk");
+
+    let stored = state::write_native_request(
+        fixture.root_str(),
+        state::NativeRequestInput {
+            request_id: "brainstorm_session_req_intent".to_string(),
+            request_kind: "brainstorm_session".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase-1".to_string()),
+            root: json!({
+                "knowledgeQueryPlan": {
+                    "blocks": {
+                        "frontend_experience": {
+                            "executionOrder": [{
+                                "stepId": "frontend_paths",
+                                "queryKind": "page_operation_path"
+                            }]
+                        }
+                    }
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "knowledge_context_protocol",
+                        "fields": ["knowledgeQueryPlan.blocks.frontend_experience.executionOrder"]
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write brainstorm request");
+
+    let context = brainstorm_context(KnowledgeBrainstormContextInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref,
+        block: "frontend_experience".to_string(),
+        step_id: "frontend_paths".to_string(),
+        query_id: None,
+        atomic_scope_reason: None,
+        query_subject: "当前办理体验".to_string(),
+        natural_language_query: "".to_string(),
+        semantic_focus: vec![],
+    })
+    .expect("frontend context");
+
+    assert_eq!(context.status, "available");
+    assert_eq!(context.read_plan.chunks[0].chunk_id, "kchunk_000002");
+    let context_json = serde_json::to_value(&context).expect("context json");
+    assert!(context_json.get("requestRef").is_none());
+    assert!(context_json.get("querySubject").is_none());
+    assert!(context_json.get("naturalLanguageQuery").is_none());
+    assert!(context_json.get("semanticFocus").is_none());
+}
+
 fn focus_chunk(
     chunk_id: &str,
     semantic_label: &str,
