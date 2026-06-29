@@ -534,6 +534,46 @@ fn plugin_templates_do_not_expose_legacy_protocol_terms() {
 }
 
 #[test]
+fn opencode_commands_expose_mcp_result_discipline() {
+    let repo = repo_root();
+    let command_root = repo.join("plugins/opencode/.opencode/commands");
+    let loom = fs::read_to_string(command_root.join("loom.md")).unwrap();
+    let deploy = fs::read_to_string(command_root.join("loom-deploy.md")).unwrap();
+
+    for required in [
+        "loom.inspectRequest",
+        "loom.readFieldGroup",
+        "requestReadPlan.groups",
+        "loom.readRequestFields",
+        "GenerateKnowledgeSemanticsNext",
+        "loom.knowledgeInspectChunk",
+        "ExecuteTaskNext",
+        "DeployRepairAssetsNext",
+        "Do not copy field-level contracts",
+    ] {
+        assert!(
+            loom.contains(required),
+            "opencode loom.md missing {required}"
+        );
+    }
+
+    for required in [
+        "active_operation",
+        "DeployRepairAssetsNext",
+        "deploy execution repair",
+        "loom.inspectRequest",
+        "loom.readFieldGroup",
+        "requestReadPlan.groups",
+        "Do not copy deployment stack rules",
+    ] {
+        assert!(
+            deploy.contains(required),
+            "opencode loom-deploy.md missing {required}"
+        );
+    }
+}
+
+#[test]
 fn product_docs_do_not_expose_legacy_install_or_protocol_paths() {
     let repo = repo_root();
     let files = [
