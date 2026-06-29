@@ -1,9 +1,9 @@
 use std::{fs, path::Path};
 
 use contracts::{
-    DeployExecutionRepairTaskResult, DeploymentErrorWindow, DeploymentFailureKind,
-    DeploymentFailureOwner, DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute,
-    DeploymentSpec,
+    DeployExecutionRepairTaskResult, DeploymentErrorWindow, DeploymentFailedContract,
+    DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport, DeploymentRepairAction,
+    DeploymentRepairRoute, DeploymentSpec,
 };
 use delivery_core::{
     ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
@@ -161,6 +161,8 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                             ];
                             refs.extend(spec.files.dockerfile_paths.values().cloned());
                             refs.extend(spec.files.nginx_config_paths.values().cloned());
+                            refs.sort();
+                            refs.dedup();
                             refs
                         })
                         .unwrap_or_default(),
@@ -419,21 +421,71 @@ fn materialize_deploy_execution_repair(
     let protected_paths = failure.must_not_edit.clone();
     let schema_shape = serde_json::to_value(schema_for!(DeployExecutionRepairTaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    let mut repair_context = json!({
+        "repairOrigin": "deploy_failure",
+        "deploymentFailureRef": failure_ref,
+        "failureKind": failure.failure_kind,
+        "failureOwner": failure.failure_owner,
+        "failedContractFields": failure.failed_contract_fields,
+        "requiredCodeLevelChecks": failure.required_code_level_checks,
+        "errorWindow": failure.error_window
+    });
+    if let Some(failed_at) = &failure.failed_at {
+        repair_context["failedAt"] = json!(failed_at);
+    }
+    if let Some(failed_contract) = &failure.failed_contract {
+        repair_context["failedContract"] = json!(failed_contract);
+    }
+    if !failure.deploy_command.is_empty() {
+        repair_context["deployCommand"] = json!(failure.deploy_command);
+    }
+    if let Some(exit_code) = failure.exit_code {
+        repair_context["exitCode"] = json!(exit_code);
+    }
+    if let Some(full_log_ref) = &failure.full_log_ref {
+        repair_context["fullLogRef"] = json!(full_log_ref);
+    }
+    let mut deploy_failure_fields = vec![
+        "repairContext.repairOrigin",
+        "repairContext.deploymentFailureRef",
+        "repairContext.failureKind",
+        "repairContext.failureOwner",
+        "repairContext.failedContractFields",
+        "repairContext.requiredCodeLevelChecks",
+        "repairContext.errorWindow",
+        "editBoundary.allowedPaths",
+        "editBoundary.protectedPaths",
+        "executionRules.scope",
+        "executionRules.mustNotEditGeneratedAssets",
+        "executionRules.mustNotClaimDeploymentSuccess",
+    ];
+    for (key, field) in [
+        ("failedAt", "repairContext.failedAt"),
+        ("deployCommand", "repairContext.deployCommand"),
+        ("exitCode", "repairContext.exitCode"),
+        ("fullLogRef", "repairContext.fullLogRef"),
+    ] {
+        if repair_context.get(key).is_some() {
+            deploy_failure_fields.push(field);
+        }
+    }
+    if let Some(failed_contract) = repair_context
+        .get("failedContract")
+        .and_then(Value::as_object)
+    {
+        deploy_failure_fields.push("repairContext.failedContract.field");
+        if failed_contract.get("command").is_some() {
+            deploy_failure_fields.push("repairContext.failedContract.command");
+        }
+        deploy_failure_fields.push("repairContext.failedContract.workingDirectory");
+    }
     let request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "deploy_execution_repair",
         "requestId": request_id,
         "artifactKind": ArtifactKind::DeployExecutionRepairResult,
         "executionKind": "deploy_execution_repair",
-        "repairContext": {
-            "repairOrigin": "deploy_failure",
-            "deploymentFailureRef": failure_ref,
-            "failureKind": failure.failure_kind,
-            "failureOwner": failure.failure_owner,
-            "failedContractFields": failure.failed_contract_fields,
-            "requiredCodeLevelChecks": failure.required_code_level_checks,
-            "errorWindow": failure.error_window
-        },
+        "repairContext": repair_context,
             "editBoundary": {
                 "allowedPaths": ["."],
                 "protectedPaths": protected_paths
@@ -476,20 +528,7 @@ fn materialize_deploy_execution_repair(
                     "required": true,
                     "purpose": "Read deploy failure report and edit boundary before editing application code.",
                     "whenToRead": "Read before source edits.",
-                    "fields": [
-                        "repairContext.repairOrigin",
-                        "repairContext.deploymentFailureRef",
-                        "repairContext.failureKind",
-                        "repairContext.failureOwner",
-                        "repairContext.failedContractFields",
-                        "repairContext.requiredCodeLevelChecks",
-                        "repairContext.errorWindow",
-                        "editBoundary.allowedPaths",
-                        "editBoundary.protectedPaths",
-                        "executionRules.scope",
-                        "executionRules.mustNotEditGeneratedAssets",
-                        "executionRules.mustNotClaimDeploymentSuccess"
-                    ]
+                    "fields": deploy_failure_fields
                 },
                 {
                     "groupId": "deploy_repair_result_contract",
@@ -890,6 +929,7 @@ fn create_failure_report(
     max_attempts: u32,
 ) -> StateResult<DeploymentFailureReport> {
     let fields = failed_contract_fields(failure_kind);
+    let failed_contract = failed_contract_for(spec, failure_kind);
     let required_checks = fields
         .iter()
         .map(|field| format!("check_{field}").replace('.', "_"))
@@ -902,7 +942,6 @@ fn create_failure_report(
     must_not_edit.push(spec.files.dockerignore_path.clone());
     must_not_edit.sort();
     must_not_edit.dedup();
-    let _ = (command, exit_code);
     Ok(DeploymentFailureReport {
         schema_version: "1.0".to_string(),
         failure_id: format!("deploy_failure_{}", now_millis()),
@@ -917,6 +956,14 @@ fn create_failure_report(
             project_root,
             &deployment_paths(project_root).spec_file,
         )?,
+        failed_at: Some(failed_at_for(failure_kind).to_string()),
+        failed_contract: Some(failed_contract),
+        deploy_command: command,
+        exit_code: Some(exit_code),
+        full_log_ref: Some(to_project_relative(
+            project_root,
+            &deployment_paths(project_root).log_file,
+        )?),
         failed_contract_fields: fields,
         required_code_level_checks: required_checks,
         error_window: window,
@@ -939,6 +986,77 @@ fn failed_contract_fields(failure_kind: DeploymentFailureKind) -> Vec<String> {
         }
         DeploymentFailureKind::Healthcheck => vec!["httpProbes.healthPath".to_string()],
         _ => vec!["runtime.delivery".to_string()],
+    }
+}
+
+fn failed_contract_for(
+    spec: &DeploymentSpec,
+    failure_kind: DeploymentFailureKind,
+) -> DeploymentFailedContract {
+    let primary = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == spec.source_model.primary_service_id)
+        .or_else(|| spec.source_model.services.first());
+    let working_directory = primary
+        .and_then(|service| service.working_directory.clone())
+        .unwrap_or_else(|| ".".to_string());
+    match failure_kind {
+        DeploymentFailureKind::BuildCommandFailed => DeploymentFailedContract {
+            field: "build.command".to_string(),
+            command: spec.runtime_contract.build_command.clone(),
+            working_directory,
+        },
+        DeploymentFailureKind::StartCommandFailed => DeploymentFailedContract {
+            field: "start.command".to_string(),
+            command: spec.runtime_contract.start_command.clone(),
+            working_directory,
+        },
+        DeploymentFailureKind::ApplicationStartupFailed => DeploymentFailedContract {
+            field: "runtime.startup".to_string(),
+            command: spec
+                .runtime_contract
+                .start_command
+                .clone()
+                .or_else(|| primary.and_then(|service| service.start_command.clone())),
+            working_directory,
+        },
+        DeploymentFailureKind::HttpProbeFailed | DeploymentFailureKind::PreviewNotVerified => {
+            DeploymentFailedContract {
+                field: "httpProbes.previewPath".to_string(),
+                command: None,
+                working_directory,
+            }
+        }
+        DeploymentFailureKind::ApiRouteNotVerified => DeploymentFailedContract {
+            field: "deploymentTopology.apiRoutes".to_string(),
+            command: None,
+            working_directory,
+        },
+        DeploymentFailureKind::Healthcheck => DeploymentFailedContract {
+            field: "httpProbes.healthPath".to_string(),
+            command: None,
+            working_directory,
+        },
+        _ => DeploymentFailedContract {
+            field: "runtime.delivery".to_string(),
+            command: None,
+            working_directory,
+        },
+    }
+}
+
+fn failed_at_for(failure_kind: DeploymentFailureKind) -> &'static str {
+    match failure_kind {
+        DeploymentFailureKind::BuildCommandFailed => "runtime_build_command",
+        DeploymentFailureKind::StartCommandFailed => "runtime_start_command",
+        DeploymentFailureKind::ApplicationStartupFailed => "runtime_application_startup",
+        DeploymentFailureKind::HttpProbeFailed => "runtime_http_probe",
+        DeploymentFailureKind::PreviewNotVerified => "runtime_preview_probe",
+        DeploymentFailureKind::ApiRouteNotVerified => "runtime_api_route_probe",
+        DeploymentFailureKind::Healthcheck => "runtime_healthcheck",
+        _ => "deployment_runtime_validation",
     }
 }
 

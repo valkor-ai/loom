@@ -420,6 +420,15 @@ pub struct DeploymentErrorWindow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct DeploymentFailedContract {
+    pub field: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    pub working_directory: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentRepairAction {
     pub schema_version: u32,
     pub repair_id: String,
@@ -466,6 +475,16 @@ pub struct DeploymentFailureReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_ref: Option<String>,
     pub deployment_spec_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_contract: Option<DeploymentFailedContract>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deploy_command: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_log_ref: Option<String>,
     pub failed_contract_fields: Vec<String>,
     pub required_code_level_checks: Vec<String>,
     pub error_window: DeploymentErrorWindow,

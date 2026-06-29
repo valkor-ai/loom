@@ -10,13 +10,14 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 use contracts::{
-    DeploymentErrorWindow, DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec, PackageManager,
-    SourceModelSource,
+    DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureKind, DeploymentFailureOwner,
+    DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape,
+    DeploymentSpec, PackageManager, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
-    FileSubmitInput, InspectRequestInput, ProjectStatus, ReadRequestFieldsInput,
+    FileSubmitInput, InspectRequestInput, ProjectStatus, ReadFieldGroupInput,
+    ReadRequestFieldsInput,
 };
 use deploy::{
     accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status, deploy_up,
@@ -444,6 +445,18 @@ fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
         .as_str()
         .unwrap()
         .ends_with("topology.json"));
+    let generated_refs = value["next"]["generatedFileRefs"]
+        .as_array()
+        .expect("generated file refs");
+    let unique_refs = generated_refs
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        generated_refs.len(),
+        unique_refs.len(),
+        "deploy repair asset refs must not include duplicates: {value:#}"
+    );
     assert_forbidden_cli_fields_absent(&value);
 }
 
@@ -488,6 +501,45 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
         request_ref: request_ref.clone(),
     })
     .expect("inspect deploy repair request");
+    let failure_group = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str(),
+        request_ref: request_ref.clone(),
+        group_id: "deploy_failure_context".to_string(),
+    })
+    .expect("read deploy failure context");
+    assert_eq!(
+        failure_group.fields["repairContext.failedAt"].value,
+        json!("runtime_application_startup")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.failedContract.field"].value,
+        json!("runtime.startup")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.failedContract.command"].value,
+        json!("java -jar app.jar")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.failedContract.workingDirectory"].value,
+        json!("service")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.deployCommand"].value,
+        json!(["docker", "compose", "up"])
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.exitCode"].value,
+        json!(1)
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.fullLogRef"].value,
+        json!(".loom/deployment/logs/local.log")
+    );
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .any(|field| field == "repairContext"));
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str(),
         request_ref: request_ref.clone(),
@@ -671,6 +723,33 @@ exit 0
         "build_command_failed"
     );
     assert_eq!(fixture.repair_action_value()["attempts"], 0);
+    let failure_report: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/state/latest-failure.json"),
+    )
+    .expect("latest failure report");
+    assert_eq!(failure_report["failedAt"], json!("runtime_build_command"));
+    assert_eq!(
+        failure_report["failedContract"]["field"],
+        json!("build.command")
+    );
+    assert!(
+        failure_report["failedContract"]["command"]
+            .as_str()
+            .map(|command| command.contains("npm run build"))
+            .unwrap_or(false),
+        "{failure_report:#}"
+    );
+    assert_eq!(
+        failure_report["deployCommand"],
+        json!(["docker", "compose", "up"])
+    );
+    assert_eq!(failure_report["exitCode"], json!(1));
+    assert!(failure_report["fullLogRef"]
+        .as_str()
+        .unwrap()
+        .ends_with("local.log"));
     assert_forbidden_cli_fields_absent(&value);
 
     let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
@@ -1008,6 +1087,19 @@ impl Fixture {
                 repair_route: DeploymentRepairRoute::ExecutionRepair,
                 runtime_delivery_ref: Some(".loom/deliveries/delivery-1/contracts/architecture/phase-1/aac.json#/runtimeDelivery".to_string()),
                 deployment_spec_ref: ".loom/deployment/specs/local.json".to_string(),
+                failed_at: Some("runtime_application_startup".to_string()),
+                failed_contract: Some(DeploymentFailedContract {
+                    field: "runtime.startup".to_string(),
+                    command: Some("java -jar app.jar".to_string()),
+                    working_directory: "service".to_string(),
+                }),
+                deploy_command: vec![
+                    "docker".to_string(),
+                    "compose".to_string(),
+                    "up".to_string(),
+                ],
+                exit_code: Some(1),
+                full_log_ref: Some(".loom/deployment/logs/local.log".to_string()),
                 failed_contract_fields: vec!["runtime.startup".to_string()],
                 required_code_level_checks: vec!["check_runtime_startup".to_string()],
                 error_window: DeploymentErrorWindow {
