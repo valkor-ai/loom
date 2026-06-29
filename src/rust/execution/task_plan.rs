@@ -295,8 +295,6 @@ fn build_request_root(
                 "projectKind": baseline.project_kind,
                 "stack": baseline.stack
             },
-            "frontendExperienceProjection": aac.frontend_experience,
-            "runtimeDeliveryProjection": aac.runtime_delivery,
             "requirementDetailTransfer": requirement_transfer
         },
         "allowedRefs": allowed_refs(pgc, aac),
@@ -306,7 +304,6 @@ fn build_request_root(
         "requestReadPlan": {
             "groups": taskplan_read_groups(
                 &source_refs,
-                aac,
                 &runtime_requirement_template,
                 &runtime_closure_template
             )
@@ -343,7 +340,6 @@ fn has_non_null_key(value: &Value, key: &str) -> bool {
 
 fn taskplan_read_groups(
     source_refs: &Value,
-    aac: &ArchitectureArtifactContract,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
 ) -> Value {
@@ -387,7 +383,7 @@ fn taskplan_read_groups(
         "allowedRefs.decisionRefs",
         "allowedRefs.riskRefs",
     ]);
-    let mut groups = vec![
+    let groups = vec![
         json!({
             "groupId": "taskplan_core_context",
             "required": true,
@@ -422,16 +418,6 @@ fn taskplan_read_groups(
             )
         }),
     ];
-    let optional_fields = taskplan_optional_projection_fields(aac);
-    if !optional_fields.is_empty() {
-        groups.push(json!({
-            "groupId": "taskplan_optional_projection",
-            "required": false,
-            "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
-            "whenToRead": "Read on demand.",
-            "fields": optional_fields
-        }));
-    }
     Value::Array(groups)
 }
 
@@ -454,17 +440,6 @@ fn taskplan_candidate_contract_fields(
     }
     if !runtime_closure_template.is_null() {
         fields.push("outputContract.runtimeDeliveryClosureTaskTemplate");
-    }
-    fields
-}
-
-fn taskplan_optional_projection_fields(aac: &ArchitectureArtifactContract) -> Vec<&'static str> {
-    let mut fields = Vec::new();
-    if aac.frontend_experience.is_some() {
-        fields.push("contextProjection.frontendExperienceProjection");
-    }
-    if aac.runtime_delivery.is_some() {
-        fields.push("contextProjection.runtimeDeliveryProjection");
     }
     fields
 }

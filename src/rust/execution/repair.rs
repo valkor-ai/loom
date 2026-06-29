@@ -890,14 +890,6 @@ fn materialize_taskplan_repair_action(
         group_id: "taskplan_candidate_contract".to_string(),
     })?
     .fields;
-    let optional_fields = state::read_field_group(ReadFieldGroupInput {
-        project_root: project_root.to_string(),
-        request_ref: original_request_ref.clone(),
-        group_id: "taskplan_optional_projection".to_string(),
-    })
-    .map(|result| result.fields)
-    .unwrap_or_default();
-
     let source_refs = repair_source_refs_from_fields(
         &core_fields,
         &[
@@ -947,7 +939,7 @@ fn materialize_taskplan_repair_action(
         "decisionRefs": value_field(&core_fields, "allowedRefs.decisionRefs"),
         "riskRefs": value_field(&core_fields, "allowedRefs.riskRefs")
     });
-    let mut context_projection = json!({
+    let context_projection = json!({
         "phaseId": field_value(&core_fields, "contextProjection.phaseId")?,
         "planningContractId": field_value(&core_fields, "contextProjection.planningContractId")?,
         "architectureArtifactContractId": field_value(&core_fields, "contextProjection.architectureArtifactContractId")?,
@@ -978,33 +970,24 @@ fn materialize_taskplan_repair_action(
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
         "verificationEvidence": value_field(&contract_fields, "enumRefs.verificationEvidence")
     });
-    let frontend_projection = optional_field_value(
-        &optional_fields,
-        "contextProjection.frontendExperienceProjection",
-        "outputContract.frontendExperienceProjection",
-    );
-    let runtime_projection = optional_field_value(
-        &optional_fields,
-        "contextProjection.runtimeDeliveryProjection",
-        "outputContract.runtimeDeliveryProjection",
-    );
     let mut runtime_requirement_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryRequirementTemplate",
     );
     if runtime_requirement_template.is_null() {
-        runtime_requirement_template = runtime_delivery_requirement_template(
-            (!runtime_projection.is_null()).then_some(&runtime_projection),
-        );
+        let runtime_status = value_field(&rule_fields, "generationRules.runtimeDeliveryRules.status");
+        if runtime_status
+            .as_str()
+            .is_some_and(|status| status != "not_applicable")
+        {
+            runtime_requirement_template =
+                runtime_delivery_requirement_template(Some(&json!({ "status": runtime_status })));
+        }
     }
     let runtime_closure_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryClosureTaskTemplate",
     );
-    context_projection["frontendExperienceProjection"] = frontend_projection.clone();
-    context_projection["runtimeDeliveryProjection"] = runtime_projection.clone();
-    let optional_projection_fields =
-        taskplan_repair_optional_projection_fields(&frontend_projection, &runtime_projection);
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let group_schema = serde_json::to_value(schema_for!(TaskPlanGroupCandidateAgentWritable))
@@ -1183,19 +1166,6 @@ fn materialize_taskplan_repair_action(
             .and_then(Value::as_array_mut)
             .expect("taskplan repair write contract fields")
             .push(json!("outputContract.runtimeDeliveryClosureTaskTemplate"));
-    }
-    if !optional_projection_fields.is_empty() {
-        request_root
-            .pointer_mut("/requestReadPlan/groups")
-            .and_then(Value::as_array_mut)
-            .expect("taskplan repair action requestReadPlan groups")
-            .push(json!({
-                "groupId": "taskplan_optional_projection",
-                "required": false,
-                "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
-                "whenToRead": "Read on demand.",
-                "fields": optional_projection_fields
-            }));
     }
     let stored = state::write_native_request(
         project_root,
@@ -1702,32 +1672,6 @@ fn read_project_json_value(
     relative: &str,
 ) -> Result<Value, state::store::StateError> {
     state::store::read_json_value(&from_project_relative(project_root, relative)?)
-}
-
-fn optional_field_value(
-    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
-    primary: &str,
-    migration_fallback: &str,
-) -> Value {
-    fields
-        .get(primary)
-        .or_else(|| fields.get(migration_fallback))
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null)
-}
-
-fn taskplan_repair_optional_projection_fields(
-    frontend_projection: &Value,
-    runtime_projection: &Value,
-) -> Vec<&'static str> {
-    let mut fields = Vec::new();
-    if !frontend_projection.is_null() {
-        fields.push("contextProjection.frontendExperienceProjection");
-    }
-    if !runtime_projection.is_null() {
-        fields.push("contextProjection.runtimeDeliveryProjection");
-    }
-    fields
 }
 
 fn architecture_repair_read_groups(

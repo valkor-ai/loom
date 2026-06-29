@@ -1938,6 +1938,24 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert!(compact_taskplan_root
         .get("latestRepositoryContext")
         .is_none());
+    assert!(compact_taskplan_root
+        .pointer("/contextProjection/frontendExperienceProjection")
+        .is_none());
+    assert!(compact_taskplan_root
+        .pointer("/contextProjection/runtimeDeliveryProjection")
+        .is_none());
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "taskplan_optional_projection"));
+    assert!(inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .all(
+            |field| field != "contextProjection.frontendExperienceProjection"
+                && field != "contextProjection.runtimeDeliveryProjection"
+        ));
     let taskplan_contract_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: taskplan_request_ref.to_string(),
@@ -4853,6 +4871,18 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         .iter()
         .flat_map(|group| group.fields.iter())
         .any(|field| field == "outputContract.runtimeDeliveryRequirementTemplate"));
+    assert!(!repair_inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "taskplan_optional_projection"));
+    assert!(repair_inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .all(
+            |field| field != "contextProjection.frontendExperienceProjection"
+                && field != "contextProjection.runtimeDeliveryProjection"
+        ));
     write_taskplan_grouped_candidates(&fixture, &repair_action_ref);
 
     let result = call_submit(
