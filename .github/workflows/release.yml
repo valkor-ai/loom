@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            os: macos-14
+            setup: src/rust/target/release/loom-setup
+          - platform: darwin-x64
+            os: macos-13
+            setup: src/rust/target/release/loom-setup
+          - platform: linux-x64
+            os: ubuntu-22.04
+            setup: src/rust/target/release/loom-setup
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            setup: src/rust/target/release/loom-setup
+          - platform: windows-x64
+            os: windows-latest
+            setup: src/rust/target/release/loom-setup.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        run: cargo build --release -p mcp-server -p setup --manifest-path src/rust/Cargo.toml
+
+      - name: Create package layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/packages dist/release
+          "${{ matrix.setup }}" package-layout \
+            --output-dir dist/packages \
+            --platform "${{ matrix.platform }}"
+
+      - name: Create release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root="$(find dist/packages -mindepth 1 -maxdepth 1 -type d -name 'loom-*' | sort | head -n 1)"
+          if [ -z "$package_root" ]; then
+            echo "No package root produced for ${{ matrix.platform }}" >&2
+            exit 1
+          fi
+          "${{ matrix.setup }}" package-archive \
+            --package-root "$package_root" \
+            --output-dir dist/release \
+            --platform "${{ matrix.platform }}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release
+          merge-multiple: true
+
+      - name: Add installer assets
+        run: |
+          set -euo pipefail
+          cp install.sh install.ps1 dist/release/
+          (cd dist/release && sha256sum install.sh > install.sh.sha256)
+          (cd dist/release && sha256sum install.ps1 > install.ps1.sha256)
+
+      - name: Verify release asset set
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          expected=(
+            install.sh
+            install.sh.sha256
+            install.ps1
+            install.ps1.sha256
+            "loom-${version}-darwin-arm64.tar.gz"
+            "loom-${version}-darwin-arm64.tar.gz.sha256"
+            "loom-${version}-darwin-x64.tar.gz"
+            "loom-${version}-darwin-x64.tar.gz.sha256"
+            "loom-${version}-linux-x64.tar.gz"
+            "loom-${version}-linux-x64.tar.gz.sha256"
+            "loom-${version}-linux-arm64.tar.gz"
+            "loom-${version}-linux-arm64.tar.gz.sha256"
+            "loom-${version}-windows-x64.zip"
+            "loom-${version}-windows-x64.zip.sha256"
+          )
+          for file in "${expected[@]}"; do
+            test -f "dist/release/$file" || {
+              echo "Missing release asset: $file" >&2
+              find dist/release -maxdepth 1 -type f -print | sort >&2
+              exit 1
+            }
+          done
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Loom ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/release/*
+          fail_on_unmatched_files: true
+          make_latest: true

@@ -382,6 +382,32 @@ fn install_ps1_release_contract_uses_windows_zip_checksum_and_doctor() {
 }
 
 #[test]
+fn release_workflow_uploads_installers_packages_and_checksums() {
+    let workflow = fs::read_to_string(repo_root().join(".github/workflows/release.yml")).unwrap();
+    assert!(workflow.contains("tags:"));
+    assert!(workflow.contains("- \"v*\""));
+    assert!(workflow.contains("contents: write"));
+    for platform in [
+        "darwin-arm64",
+        "darwin-x64",
+        "linux-x64",
+        "linux-arm64",
+        "windows-x64",
+    ] {
+        assert!(workflow.contains(platform), "missing platform {platform}");
+    }
+    assert!(workflow.contains("loom-setup.exe"));
+    assert!(workflow.contains("install.sh"));
+    assert!(workflow.contains("install.ps1"));
+    assert!(workflow.contains("install.sh.sha256"));
+    assert!(workflow.contains("install.ps1.sha256"));
+    assert!(workflow.contains(".tar.gz.sha256"));
+    assert!(workflow.contains(".zip.sha256"));
+    assert!(workflow.contains("softprops/action-gh-release@v2"));
+    assert!(workflow.contains("make_latest: true"));
+}
+
+#[test]
 fn archive_package_layout_rejects_legacy_typescript_runtime_entries() {
     let fixture = Fixture::new("archive_rejects_legacy_runtime");
     fixture.write_package();
