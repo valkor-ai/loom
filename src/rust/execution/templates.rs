@@ -151,19 +151,7 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             })
         })
         .collect::<Vec<_>>();
-    let concept_evidence = task
-        .concept_refs
-        .iter()
-        .map(|concept_ref| {
-            json!({
-                "conceptRef": concept_ref,
-                "evidenceType": "code",
-                "refs": [],
-                "summary": ""
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
+    let mut template = json!({
         "schemaVersion": "1.0",
         "taskResultId": format!("result-{}", task.task_id),
         "taskId": task.task_id,
@@ -185,14 +173,83 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             "notes": []
         },
         "notes": [],
-        "frontendExperienceSelfCheck": frontend_experience_self_check_template(task),
-        "runtimeDeliveryEvidence": runtime_delivery_evidence_template(task),
         "requirementDetailEvidence": requirement_detail_evidence,
-        "conceptEvidence": concept_evidence,
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime",
         "updatedAt": "ISO-8601 datetime"
-    })
+    });
+    let Some(object) = template.as_object_mut() else {
+        return template;
+    };
+    if task.frontend_experience_requirement.is_some() {
+        object.insert(
+            "frontendExperienceSelfCheck".to_string(),
+            frontend_experience_self_check_template(task),
+        );
+    }
+    if runtime_delivery_evidence_applies(task) {
+        object.insert(
+            "runtimeDeliveryEvidence".to_string(),
+            runtime_delivery_evidence_template(task),
+        );
+    }
+    if !task.concept_refs.is_empty() {
+        object.insert(
+            "conceptEvidence".to_string(),
+            Value::Array(
+                task.concept_refs
+                    .iter()
+                    .map(|concept_ref| {
+                        json!({
+                            "conceptRef": concept_ref,
+                            "evidenceType": "code",
+                            "refs": [],
+                            "summary": ""
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    template
+}
+
+pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Vec<&'static str> {
+    let mut fields = vec![
+        "schemaVersion",
+        "taskResultId",
+        "taskId",
+        "taskPlanId",
+        "status",
+        "changedFiles",
+        "noChangeReason",
+        "verificationResults",
+        "selfRepairSummary",
+        "failure",
+        "executionContinuity",
+        "notes",
+        "requirementDetailEvidence",
+        "blockedReasons",
+        "createdAt",
+        "updatedAt",
+    ];
+    if task.frontend_experience_requirement.is_some() {
+        fields.push("frontendExperienceSelfCheck");
+    }
+    if runtime_delivery_evidence_applies(task) {
+        fields.push("runtimeDeliveryEvidence");
+    }
+    if !task.concept_refs.is_empty() {
+        fields.push("conceptEvidence");
+    }
+    fields
+}
+
+pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
+    task.runtime_delivery_requirement
+        .as_ref()
+        .map(|requirement| requirement.applies_to_this_task)
+        .unwrap_or(false)
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {

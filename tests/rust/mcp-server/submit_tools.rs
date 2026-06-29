@@ -1455,6 +1455,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "executionRules.interactiveVerificationProbePolicy".to_string(),
             "executionRules.controlledRuntimeProbeRules".to_string(),
             "outputContract.resultFile".to_string(),
+            "outputContract.requiredTopLevelFields".to_string(),
             "outputContract.resultTemplate".to_string(),
         ],
     })
@@ -1493,6 +1494,21 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["closureRequirementIds"],
         json!(["closure:flow.account-lifecycle:step.submit-open-account"])
     );
+    assert!(fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("frontendExperienceSelfCheck")));
+    assert!(!fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("runtimeDeliveryEvidence")));
+    assert!(!fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("conceptEvidence")));
     let result_file = fields["outputContract.resultFile"]
         .value
         .as_str()
@@ -1574,6 +1590,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
             "source.taskId".to_string(),
             "executionRules.verificationCommandSchedulingRules".to_string(),
             "executionRules.boundaryRules".to_string(),
+            "outputContract.requiredTopLevelFields".to_string(),
             "outputContract.resultTemplate".to_string(),
         ],
     })
@@ -1590,6 +1607,33 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(
         execution_fields["outputContract.resultTemplate"].value["executionContinuity"].is_object()
     );
+    assert!(!execution_fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("frontendExperienceSelfCheck")));
+    assert!(!execution_fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("runtimeDeliveryEvidence")));
+    assert!(!execution_fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("conceptEvidence")));
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendExperienceSelfCheck")
+        .is_none());
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("runtimeDeliveryEvidence")
+        .is_none());
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("conceptEvidence")
+        .is_none());
     let execution_rules_text =
         serde_json::to_string(&execution_fields).expect("serialize execution rules");
     assert!(execution_rules_text.contains("write-producing verification commands"));
@@ -1613,6 +1657,9 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
                 && field != "executionRules.controlledRuntimeProbeRules"
                 && field != "executionRules.runtimeDeliveryExecutionRules"
                 && field != "task.runtimeDeliveryRequirement"
+                && field != "outputContract.schemaShape.properties.frontendExperienceSelfCheck"
+                && field != "outputContract.schemaShape.properties.runtimeDeliveryEvidence"
+                && field != "outputContract.schemaShape.properties.conceptEvidence"
         ));
 
     write_task_result_candidate_without_requirement_detail_evidence(
@@ -1984,6 +2031,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
             "task.runtimeDeliveryRequirement.requiredCodeLevelChecks".to_string(),
             "executionRules.controlledRuntimeProbeRules".to_string(),
             "executionRules.runtimeDeliveryExecutionRules".to_string(),
+            "outputContract.requiredTopLevelFields".to_string(),
             "outputContract.resultTemplate".to_string(),
         ],
     })
@@ -2003,6 +2051,21 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
             [0]["checkId"],
         json!("check-runtime-wiring")
     );
+    assert!(fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("runtimeDeliveryEvidence")));
+    assert!(!fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("frontendExperienceSelfCheck")));
+    assert!(!fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("conceptEvidence")));
 }
 
 #[test]
@@ -4377,6 +4440,18 @@ fn task_result_repair_template_preserves_previous_changed_files_for_replacement(
         repair_fields["outputContract.resultTemplate"].value["changedFiles"],
         json!(["src/main.tsx"])
     );
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendExperienceSelfCheck")
+        .is_none());
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("runtimeDeliveryEvidence")
+        .is_none());
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("conceptEvidence")
+        .is_none());
 }
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {

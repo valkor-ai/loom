@@ -24,7 +24,10 @@ use crate::{
         task_plan_latest_file, task_plan_run_file, task_plan_run_latest_file,
     },
     task_plan::{execute_task_next_from_request, update_run_summary},
-    templates::task_result_template,
+    templates::{
+        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
+        task_result_template,
+    },
 };
 
 pub fn continue_execution(
@@ -309,13 +312,7 @@ fn build_execution_request(
                 "required": true,
                 "description": "Write the TaskResult JSON for this planned task."
             }],
-            "requiredTopLevelFields": [
-                "schemaVersion", "taskResultId", "taskId", "taskPlanId", "status",
-                "changedFiles", "noChangeReason", "verificationResults", "selfRepairSummary",
-                "failure", "executionContinuity", "notes", "frontendExperienceSelfCheck",
-                "runtimeDeliveryEvidence", "requirementDetailEvidence", "conceptEvidence",
-                "blockedReasons", "createdAt", "updatedAt"
-            ],
+            "requiredTopLevelFields": task_result_required_top_level_fields(&request_task),
             "blockedReasonOptions": [
                 {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
                 {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
@@ -384,7 +381,7 @@ pub(crate) fn task_execution_rules(
             controlled_runtime_probe_rules(),
         );
     }
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         object.insert(
             "runtimeDeliveryExecutionRules".to_string(),
             runtime_delivery_execution_rules(),
@@ -523,7 +520,7 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present.".to_string());
         rules.push("For browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy and record evidence through existing TaskResult fields.".to_string());
     }
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
         rules.push("For runtimeDeliveryEvidence.codeLevelChecks, use only the exact checkId values listed in task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId.".to_string());
         rules.push("If a temporary runtime/probe/server/container was started, include runtimeDeliveryEvidence.runtimeProbeCleanup; cleanup failure alone should be completed_with_notes, not failed or blocked.".to_string());
@@ -596,7 +593,7 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
     if needs_runtime_probe_rules {
         core_fields.push("executionRules.controlledRuntimeProbeRules");
     }
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         core_fields.extend(runtime_delivery_requirement_read_fields(task));
         core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
         core_fields.push("executionRules.runtimeDeliveryExecutionRules");
@@ -628,7 +625,6 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
         "outputContract.schemaShape.properties.executionContinuity",
         "outputContract.schemaShape.properties.notes",
         "outputContract.schemaShape.properties.requirementDetailEvidence",
-        "outputContract.schemaShape.properties.conceptEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
         "outputContract.blockedReasonOptions",
@@ -640,8 +636,11 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
     if task.frontend_experience_requirement.is_some() {
         result_fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
     }
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+    if !task.concept_refs.is_empty() {
+        result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
 
     Value::Array(vec![
@@ -694,7 +693,7 @@ fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
 }
 
 fn task_needs_controlled_runtime_probe_rules(task: &TaskDefinition) -> bool {
-    task.runtime_delivery_requirement.is_some()
+    runtime_delivery_evidence_applies(task)
         || task_has_frontend_execution(task)
         || task.verification_intents.iter().any(|intent| {
             intent
@@ -801,7 +800,7 @@ fn task_scoped_architecture_projection(
         "userFlows": selected_user_flows,
         "stateMachines": selected_values(&aac.state_machines, "machineId", &state_machine_refs, task, true)
     });
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         projection["runtimeDelivery"] = aac.runtime_delivery.clone().unwrap_or(Value::Null);
     }
     projection

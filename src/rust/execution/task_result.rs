@@ -25,7 +25,7 @@ use crate::{
         load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
     },
     task_plan::update_run_summary,
-    templates::task_result_template,
+    templates::{runtime_delivery_evidence_applies, task_result_template},
 };
 
 pub fn accept_task_result_file<D>(
@@ -1254,7 +1254,7 @@ fn materialize_task_result_repair(
         context_fields
             .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
     }
-    if context.task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(&context.task) {
         context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
     }
     let mut write_contract_fields = vec![
@@ -1271,7 +1271,6 @@ fn materialize_task_result_repair(
         "outputContract.schemaShape.properties.executionContinuity",
         "outputContract.schemaShape.properties.notes",
         "outputContract.schemaShape.properties.requirementDetailEvidence",
-        "outputContract.schemaShape.properties.conceptEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
     ];
@@ -1279,8 +1278,11 @@ fn materialize_task_result_repair(
         write_contract_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
     }
-    if context.task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(&context.task) {
         write_contract_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+    if !context.task.concept_refs.is_empty() {
+        write_contract_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
     let root_value = json!({
         "schemaVersion": "1.0",
@@ -1540,6 +1542,9 @@ fn merge_submitted_task_result_fields(template: &mut Value, submitted: &Value) {
         return;
     };
     for (key, submitted_value) in submitted_object {
+        if !template_object.contains_key(key) {
+            continue;
+        }
         if keeps_template_array_shape(template_object.get(key), submitted_value) {
             continue;
         }

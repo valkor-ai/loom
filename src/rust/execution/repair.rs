@@ -35,7 +35,8 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        runtime_delivery_requirement_template, task_result_template,
+        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
+        task_result_required_top_level_fields, task_result_template,
         taskplan_group_result_template, taskplan_outline_result_template,
     },
 };
@@ -638,7 +639,7 @@ fn build_repair_execution_request(
             "executionRules.controlledRuntimeProbeRules",
         ]);
     }
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
         repair_core_fields.extend([
             "executionRules.controlledRuntimeProbeRules",
@@ -683,7 +684,6 @@ fn build_repair_execution_request(
         "outputContract.schemaShape.properties.executionContinuity",
         "outputContract.schemaShape.properties.notes",
         "outputContract.schemaShape.properties.requirementDetailEvidence",
-        "outputContract.schemaShape.properties.conceptEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
         "outputContract.blockedReasonOptions",
@@ -693,8 +693,11 @@ fn build_repair_execution_request(
         repair_result_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
     }
-    if task.runtime_delivery_requirement.is_some() {
+    if runtime_delivery_evidence_applies(task) {
         repair_result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+    if !task.concept_refs.is_empty() {
+        repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
     json!({
         "schemaVersion": "1.0",
@@ -734,13 +737,7 @@ fn build_repair_execution_request(
                 "required": true,
                 "description": "Write the TaskResult JSON for this delivery execution repair."
             }],
-            "requiredTopLevelFields": [
-                "schemaVersion", "taskResultId", "taskId", "taskPlanId", "status",
-                "changedFiles", "noChangeReason", "verificationResults", "selfRepairSummary",
-                "failure", "executionContinuity", "notes", "frontendExperienceSelfCheck",
-                "runtimeDeliveryEvidence", "requirementDetailEvidence", "conceptEvidence",
-                "blockedReasons", "createdAt", "updatedAt"
-            ],
+            "requiredTopLevelFields": task_result_required_top_level_fields(task),
             "blockedReasonOptions": [
                 {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
                 {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
