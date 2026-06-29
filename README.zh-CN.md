@@ -156,6 +156,9 @@ Windows PowerShell：
 ```powershell
 Invoke-WebRequest https://github.com/valkor-ai/loom/releases/latest/download/install.ps1 -OutFile install.ps1
 .\install.ps1 -Agent codex
+.\install.ps1 -Agent claude-code
+.\install.ps1 -Agent opencode
+.\install.ps1 -Agent all
 ```
 
 重复执行同一条安装命令就是升级。安装器会在安装 MCP runtime 前清理确认属于 Loom 的旧 CLI 插件产物；如果发现无法确认归属的文件，会停止并提示人工处理路径，而不是覆盖用户文件。

@@ -154,6 +154,9 @@ Windows PowerShell:
 ```powershell
 Invoke-WebRequest https://github.com/valkor-ai/loom/releases/latest/download/install.ps1 -OutFile install.ps1
 .\install.ps1 -Agent codex
+.\install.ps1 -Agent claude-code
+.\install.ps1 -Agent opencode
+.\install.ps1 -Agent all
 ```
 
 Run the same install command again to upgrade. The installer removes Loom-owned legacy CLI plugin artifacts before installing the MCP runtime. If it finds files it cannot prove are Loom-owned, it stops and tells you what to remove manually instead of overwriting user files.
