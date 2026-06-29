@@ -6,7 +6,7 @@ use std::{
 use contracts::{
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, TaskDefinition, TaskPlan,
     TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus,
+    TaskRunStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     ArtifactKind, DomainDispatcher, ExecuteEditBoundary, ExecuteTaskNext,
@@ -1418,7 +1418,8 @@ fn materialize_architecture_repair_action(
             "section": ARCHITECTURE_SECTION_ORDER,
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-            "acceptancePriority": ["must", "should", "could"]
+            "acceptancePriority": ["must", "should", "could"],
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -1876,7 +1877,8 @@ fn build_architecture_repair_section_outputs(
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
                     "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-                    "acceptancePriority": ["must", "should", "could"]
+                    "acceptancePriority": ["must", "should", "could"],
+                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
                 },
                 "generationRules": [
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
@@ -2022,16 +2024,21 @@ fn architecture_repair_section_content_template(
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDelivery": {
                 "status": "modified",
+                "runtimeKind": "",
+                "deploymentShape": "single-service",
                 "basis": {
                     "technicalBaselineRef": ""
                 },
                 "build": {
                     "command": "",
-                    "output": ""
+                    "workingDirectory": ".",
+                    "outputs": [],
+                    "codeLevelExpectations": [""]
                 },
                 "start": {
                     "command": "",
-                    "port": null
+                    "workingDirectory": ".",
+                    "codeLevelExpectations": [""]
                 },
                 "runtimeSurfaces": [{
                     "surfaceId": "runtime_surface_1",
@@ -2039,9 +2046,30 @@ fn architecture_repair_section_content_template(
                     "urlPath": "",
                     "purpose": ""
                 }],
+                "httpProbes": {
+                    "previewPath": "/",
+                    "apiPaths": [],
+                    "expectedStatus": "2xx_or_3xx"
+                },
+                "environment": {
+                    "required": [],
+                    "optional": []
+                },
                 "taskPlanningGuidance": {
-                    "runtimeAffectingTasks": [],
-                    "closureRequired": true
+                    "requireRuntimeDeliveryRequirementWhenTaskTouches": [
+                        "build_or_packaging",
+                        "runtime_entry",
+                        "serving_or_routing",
+                        "configuration_or_environment",
+                        "generated_artifacts",
+                        "runtime_surface"
+                    ],
+                    "doNotRequireForTaskKinds": [
+                        "domain_only_validation",
+                        "pure_unit_test_additions"
+                    ],
+                    "verificationBoundary": "code_level_only",
+                    "doNotRequireCleanInstallOrContainerBuild": true
                 }
             }
         }),
@@ -2062,7 +2090,6 @@ fn coverage_content_template(context_projection: &Value) -> Value {
                         "priority": acceptance.get("priority").cloned().unwrap_or_else(|| json!("must")),
                         "statement": acceptance.get("statement").cloned().unwrap_or(Value::Null),
                         "coverageStatus": "covered",
-                        "reason": "",
                         "coverage": [acceptance_coverage_artifact_template()],
                         "verificationHints": [{
                             "kind": "manual",
@@ -2083,8 +2110,7 @@ fn coverage_content_template(context_projection: &Value) -> Value {
                     json!({
                         "detailId": detail.get("detailId").cloned().unwrap_or(Value::Null),
                         "coverageStatus": "covered",
-                        "artifactRefs": detail_coverage_artifact_refs_template(),
-                        "reason": ""
+                        "artifactRefs": detail_coverage_artifact_refs_template()
                     })
                 })
                 .collect::<Vec<_>>()
@@ -2107,7 +2133,7 @@ fn coverage_content_template(context_projection: &Value) -> Value {
 
 fn acceptance_coverage_artifact_template() -> Value {
     json!({
-        "type": "modules",
+        "type": "module",
         "refs": [],
         "description": ""
     })

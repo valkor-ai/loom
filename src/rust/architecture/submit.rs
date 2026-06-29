@@ -4,6 +4,7 @@ use contracts::{
     AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
     ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, ArchitectureSectionStatus,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -666,6 +667,16 @@ fn validate_runtime_rules(
                 "content.runtimeDelivery.start.codeLevelExpectations",
                 &mut issues,
             );
+            if runtime
+                .pointer("/start/port")
+                .is_some_and(|port| !port.is_number())
+            {
+                issues.push(issue(
+                    "RUNTIME_FIELD_INVALID",
+                    "content.runtimeDelivery.start.port",
+                    "runtime_delivery start.port must be a number when present; omit it when unknown.",
+                ));
+            }
         }
         if runtime
             .pointer("/start/command")
@@ -856,6 +867,7 @@ fn validate_coverage_section(
     ]);
     let allowed_acceptance_priorities =
         std::collections::BTreeSet::from(["must", "should", "could"]);
+    let allowed_coverage_types = std::collections::BTreeSet::from(COVERAGE_ARTIFACT_TYPES);
     let Some(detail_coverage) = content.get("detailCoverage").and_then(Value::as_array) else {
         issues.push(issue(
             "DETAIL_COVERAGE_REQUIRED",
@@ -927,7 +939,11 @@ fn validate_coverage_section(
                 )),
             }
         }
-        let has_reason = entry.get("reason").and_then(Value::as_str).is_some();
+        let has_reason = entry
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
         if coverage_status == "covered" && total_refs == 0 {
             issues.push(issue(
                 "DETAIL_COVERAGE_INVALID",
@@ -1021,17 +1037,22 @@ fn validate_coverage_section(
             continue;
         };
         for (coverage_index, coverage_entry) in coverage.iter().enumerate() {
-            if coverage_entry
+            let coverage_type = coverage_entry
                 .get("type")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .unwrap_or_default()
-                .is_empty()
-            {
+                .unwrap_or_default();
+            if coverage_type.is_empty() {
                 issues.push(issue(
                     "ACCEPTANCE_MATRIX_INVALID",
                     &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].type"),
                     "acceptanceMatrix.coverage[].type is required.",
+                ));
+            } else if !allowed_coverage_types.contains(coverage_type) {
+                issues.push(issue(
+                    "ACCEPTANCE_MATRIX_INVALID",
+                    &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].type"),
+                    "acceptanceMatrix.coverage[].type must be one of currentSectionContract.enumRefs.coverageArtifactType.",
                 ));
             }
             if !coverage_entry
@@ -1119,6 +1140,18 @@ fn validate_coverage_section(
                 "acceptanceMatrix.verificationHints must be an array.",
             )),
             None => {}
+        }
+        let has_reason = entry
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if coverage_status != "covered" && !has_reason {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].reason"),
+                "non-covered acceptanceMatrix entries must explain the reason.",
+            ));
         }
         validate_optional_string(
             entry.get("reason"),

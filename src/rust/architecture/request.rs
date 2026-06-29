@@ -2,7 +2,7 @@ use std::path::Path;
 
 use contracts::{
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    PlanningGenerationContract, TechnicalBaselineContract,
+    PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     ArtifactKind, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction,
@@ -1012,7 +1012,6 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
                 "priority": acceptance.priority,
                 "statement": acceptance.statement,
                 "coverageStatus": "covered",
-                "reason": "",
                 "coverage": [acceptance_coverage_artifact_template()],
                 "verificationHints": [{
                     "kind": "manual",
@@ -1029,8 +1028,7 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
             json!({
                 "detailId": detail.detail_id,
                 "coverageStatus": "covered",
-                "artifactRefs": detail_coverage_artifact_refs_template(),
-                "reason": ""
+                "artifactRefs": detail_coverage_artifact_refs_template()
             })
         })
         .collect::<Vec<_>>();
@@ -1051,7 +1049,7 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
 
 fn acceptance_coverage_artifact_template() -> Value {
     json!({
-        "type": "modules",
+        "type": "module",
         "refs": [],
         "description": ""
     })
@@ -1084,7 +1082,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
             "start": {
                 "command": "",
                 "workingDirectory": ".",
-                "port": null,
                 "codeLevelExpectations": [""]
             },
             "runtimeSurfaces": [{
@@ -1161,7 +1158,8 @@ fn section_enum_refs(
     match section {
         ArchitectureSectionGroup::Coverage => json!({
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-            "acceptancePriority": ["must", "should", "could"]
+            "acceptancePriority": ["must", "should", "could"],
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
         }),
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
@@ -1210,6 +1208,8 @@ fn section_generation_rules(
                 .to_string(),
             "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
                 .to_string(),
+            "Omit unknown optional runtime fields instead of writing null; include start.port only when a fixed port is known."
+                .to_string(),
             "Runtime delivery is a code-level contract. Do not require Docker, clean install, registry access, or deploy success here."
                 .to_string(),
         ],
@@ -1221,6 +1221,8 @@ fn section_generation_rules(
             "Use requirementDetailTransfer.requirementDetails.items as the canonical detail index."
                 .to_string(),
             "detailCoverage must store detailId plus artifact refs; do not copy full detail summaries."
+                .to_string(),
+            "Omit reason when coverageStatus=covered; write a non-empty reason when coverageStatus is partial, not_applicable, deferred, or uncovered."
                 .to_string(),
             "Record only architecture trade-offs that affect later implementation, verification, or repair routing."
                 .to_string(),

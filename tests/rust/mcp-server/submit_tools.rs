@@ -1141,6 +1141,9 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .unwrap(),
         json!("2xx_or_3xx")
     );
+    assert!(runtime_contract
+        .pointer("/resultTemplate/content/runtimeDelivery/start/port")
+        .is_none());
     assert_eq!(
         runtime_contract
             .pointer(
@@ -1162,6 +1165,15 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .as_str()
             .unwrap_or_default()
             .contains("do not use unchanged")));
+    assert!(runtime_contract
+        .pointer("/generationRules")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .any(|rule| rule
+            .as_str()
+            .unwrap_or_default()
+            .contains("Omit unknown optional runtime fields")));
     assert_architecture_group_ids(
         &fixture,
         &architecture_request_ref,
@@ -1358,8 +1370,11 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     );
     assert_eq!(
         coverage_template["acceptanceMatrix"][0]["coverage"][0]["type"],
-        json!("modules")
+        json!("module")
     );
+    assert!(coverage_template["acceptanceMatrix"][0]
+        .get("reason")
+        .is_none());
     assert!(coverage_template["acceptanceMatrix"][0]["coverage"][0]["refs"].is_array());
     assert!(coverage_template["acceptanceMatrix"][0]["coverage"][0]["description"].is_string());
     assert_eq!(
@@ -1376,6 +1391,9 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
             .unwrap_or(false),
         "detailCoverage rows must be pre-keyed by detailId"
     );
+    assert!(coverage_template["detailCoverage"][0]
+        .get("reason")
+        .is_none());
     let artifact_refs = &coverage_template["detailCoverage"][0]["artifactRefs"];
     for key in [
         "modules",
@@ -1473,6 +1491,7 @@ fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
         .as_object_mut()
         .expect("frontend object")
         .remove("outputDir");
+    candidate["content"]["runtimeDelivery"]["start"]["port"] = Value::Null;
     candidate["content"]["runtimeDelivery"]["api"]["entry"] = json!("");
     candidate["content"]["runtimeDelivery"]["api"]["probePaths"] = json!([]);
     write_candidate_target(&fixture, &architecture_request_ref, &candidate);
@@ -1491,6 +1510,7 @@ fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
         "content.runtimeDelivery.taskPlanningGuidance.requireRuntimeDeliveryRequirementWhenTaskTouches",
         "content.runtimeDelivery.taskPlanningGuidance.verificationBoundary",
         "content.runtimeDelivery.frontend.outputDir",
+        "content.runtimeDelivery.start.port",
         "content.runtimeDelivery.api",
     ] {
         assert!(
@@ -1745,6 +1765,47 @@ fn architecture_coverage_submit_repairs_schema_shape_before_assembly() {
         issue["code"] == "COVERAGE_HANDOFF_INVALID"
             && issue["fieldPath"] == "content.handoff.readyForTaskPlan"
     }));
+}
+
+#[test]
+fn architecture_coverage_submit_repairs_invalid_type_and_missing_reason() {
+    let fixture = Fixture::new("architecture-coverage-type-reason");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["acceptanceMatrix"][0]["coverage"][0]["type"] = json!("modules");
+    candidate["content"]["acceptanceMatrix"][0]["coverageStatus"] = json!("partial");
+    candidate["content"]["acceptanceMatrix"][0]
+        .as_object_mut()
+        .expect("acceptance row")
+        .remove("reason");
+    candidate["content"]["detailCoverage"][0]["coverageStatus"] = json!("uncovered");
+    candidate["content"]["detailCoverage"][0]
+        .as_object_mut()
+        .expect("detail row")
+        .remove("reason");
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    let issues = result["issues"].as_array().expect("issues");
+    for field_path in [
+        "content.acceptanceMatrix[0].coverage[0].type",
+        "content.acceptanceMatrix[0].reason",
+        "content.detailCoverage[0].reason",
+    ] {
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue["fieldPath"] == json!(field_path)),
+            "missing issue for {field_path}: {issues:#?}"
+        );
+    }
 }
 
 #[test]
@@ -4634,6 +4695,22 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             "runtime_delivery architecture repair must not read non-runtime field {forbidden}"
         );
     }
+    let repair_runtime_template =
+        architecture_section_contract(&fixture, &repair_action_ref, "runtime_delivery")
+            ["resultTemplate"]["content"]
+            .clone();
+    assert!(repair_runtime_template
+        .pointer("/runtimeDelivery/start/port")
+        .is_none());
+    assert!(repair_runtime_template
+        .pointer("/runtimeDelivery/build/codeLevelExpectations")
+        .and_then(Value::as_array)
+        .is_some());
+    assert_eq!(
+        repair_runtime_template
+            .pointer("/runtimeDelivery/taskPlanningGuidance/verificationBoundary"),
+        Some(&json!("code_level_only"))
+    );
     advance_architecture_to_section(&fixture, &repair_action_ref, "coverage");
     let coverage_core_fields =
         architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
@@ -4660,7 +4737,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     );
     assert_eq!(
         repair_coverage_template["acceptanceMatrix"][0]["coverage"][0]["type"],
-        json!("modules")
+        json!("module")
     );
     assert!(repair_coverage_template["acceptanceMatrix"][0]["coverage"][0]["refs"].is_array());
     assert!(
