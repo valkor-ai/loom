@@ -121,23 +121,6 @@ where
     })?;
     let root = Path::new(&input.project_root);
     let raw_result = read_project_json_value(root, &target.path)?;
-    let result: TaskResult = match serde_json::from_value(raw_result.clone()) {
-        Ok(result) => result,
-        Err(error) => {
-            return repair_task_result_or_error(
-                input,
-                authorized,
-                target.path.clone(),
-                vec![issue(
-                    "TASK_RESULT_SCHEMA_INVALID",
-                    "$",
-                    &format!("TaskResult JSON has an invalid schema: {error}"),
-                )],
-                repair_submit,
-                None,
-            )
-        }
-    };
     let allowed_read_fields = authorized
         .read_groups
         .iter()
@@ -232,9 +215,28 @@ where
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
+    let normalized_result =
+        normalize_task_result_machine_fields(raw_result.clone(), &task_plan_id, &task_id, &task);
+    let result: TaskResult = match serde_json::from_value(normalized_result.clone()) {
+        Ok(result) => result,
+        Err(error) => {
+            return repair_task_result_or_error(
+                input,
+                authorized,
+                target.path.clone(),
+                vec![issue(
+                    "TASK_RESULT_SCHEMA_INVALID",
+                    "$",
+                    &format!("TaskResult JSON has an invalid schema: {error}"),
+                )],
+                repair_submit,
+                None,
+            )
+        }
+    };
     let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
     let issues = validate_result(
-        &raw_result,
+        &normalized_result,
         &result,
         &task,
         &required_top_level_fields,
@@ -259,7 +261,7 @@ where
                 result_file,
                 required_top_level_fields,
                 blocked_output,
-                submitted_result: raw_result.clone(),
+                submitted_result: normalized_result.clone(),
                 previous_changed_files,
             }),
         );
@@ -512,6 +514,152 @@ fn validate_result(
     issues
 }
 
+fn normalize_task_result_machine_fields(
+    mut raw_result: Value,
+    task_plan_id: &str,
+    task_id: &str,
+    task: &TaskDefinition,
+) -> Value {
+    let Some(object) = raw_result.as_object_mut() else {
+        return raw_result;
+    };
+
+    object.insert("taskPlanId".to_string(), json!(task_plan_id));
+    object.insert("taskId".to_string(), json!(task_id));
+    if object
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|status| status != "failed")
+        .unwrap_or(false)
+    {
+        object.insert("failure".to_string(), Value::Null);
+    }
+
+    let verification_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.clone())
+        .collect::<Vec<_>>();
+    if let Some(verifications) = object
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    {
+        normalize_indexed_object_string_field(verifications, "verificationId", &verification_ids);
+    }
+
+    let detail_ids = required_requirement_detail_ids(task);
+    if let Some(details) = object
+        .get_mut("requirementDetailEvidence")
+        .and_then(Value::as_array_mut)
+    {
+        for (index, detail) in details.iter_mut().enumerate() {
+            let Some(detail_object) = detail.as_object_mut() else {
+                continue;
+            };
+            if let Some(detail_id) = detail_ids.get(index) {
+                detail_object.insert("detailId".to_string(), json!(detail_id));
+                let detail_verification_ids = verification_ids_for_detail(task, detail_id);
+                if !detail_verification_ids.is_empty() {
+                    detail_object.insert(
+                        "verificationIds".to_string(),
+                        json!(detail_verification_ids),
+                    );
+                }
+            } else if !verification_ids.is_empty() {
+                detail_object.insert("verificationIds".to_string(), json!(verification_ids));
+            }
+        }
+    }
+
+    if let Some(concepts) = object
+        .get_mut("conceptEvidence")
+        .and_then(Value::as_array_mut)
+    {
+        normalize_indexed_object_string_field(concepts, "conceptRef", &task.concept_refs);
+    }
+
+    if let Some(requirement) = &task.runtime_delivery_requirement {
+        if requirement.applies_to_this_task {
+            normalize_runtime_delivery_evidence(object, requirement);
+        }
+    }
+
+    if let Some(requirement) = &task.frontend_experience_requirement {
+        normalize_frontend_experience_self_check(object, requirement);
+    }
+
+    raw_result
+}
+
+fn normalize_indexed_object_string_field(items: &mut [Value], field: &str, values: &[String]) {
+    for (index, item) in items.iter_mut().enumerate() {
+        let Some(value) = values.get(index) else {
+            continue;
+        };
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        object.insert(field.to_string(), json!(value));
+    }
+}
+
+fn normalize_runtime_delivery_evidence(
+    result_object: &mut serde_json::Map<String, Value>,
+    requirement: &contracts::TaskRuntimeDeliveryRequirement,
+) {
+    let Some(evidence) = result_object
+        .get_mut("runtimeDeliveryEvidence")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if let Some(runtime_delivery_ref) = &requirement.runtime_delivery_ref {
+        evidence.insert("requirementRef".to_string(), json!(runtime_delivery_ref));
+    }
+    if !requirement.affected_contract_fields.is_empty() {
+        evidence.insert(
+            "checkedFields".to_string(),
+            json!(requirement.affected_contract_fields),
+        );
+    }
+    let required_checks = &requirement.required_code_level_checks;
+    let Some(checks) = evidence
+        .get_mut("codeLevelChecks")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for (index, check) in checks.iter_mut().enumerate() {
+        let Some(required) = required_checks.get(index) else {
+            continue;
+        };
+        let Some(check_object) = check.as_object_mut() else {
+            continue;
+        };
+        check_object.insert("checkId".to_string(), json!(required.check_id));
+        if let Some(contract_field) = &required.contract_field {
+            check_object.insert("contractField".to_string(), json!(contract_field));
+        }
+    }
+}
+
+fn normalize_frontend_experience_self_check(
+    result_object: &mut serde_json::Map<String, Value>,
+    requirement: &Value,
+) {
+    let Some(self_check) = result_object
+        .get_mut("frontendExperienceSelfCheck")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let closure_ids = workflow_closure_requirement_ids(requirement);
+    if closure_ids.is_empty() {
+        return;
+    }
+    self_check.insert("closureRequirementIds".to_string(), json!(closure_ids));
+}
+
 fn validate_self_repair(result: &TaskResult, issues: &mut Vec<delivery_core::RepairIssue>) {
     if matches!(result.status, TaskResultStatus::Failed) && result.self_repair_summary.is_none() {
         issues.push(issue(
@@ -627,14 +775,7 @@ fn validate_requirement_detail_evidence(
     task: &TaskDefinition,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let mut required_detail_ids = task.requirement_detail_refs.clone();
-    for intent in &task.verification_intents {
-        for detail_id in &intent.requirement_detail_refs {
-            if !required_detail_ids.contains(detail_id) {
-                required_detail_ids.push(detail_id.clone());
-            }
-        }
-    }
+    let required_detail_ids = required_requirement_detail_ids(task);
     if required_detail_ids.is_empty() {
         return;
     }
@@ -695,6 +836,31 @@ fn validate_requirement_detail_evidence(
             ));
         }
     }
+}
+
+fn required_requirement_detail_ids(task: &TaskDefinition) -> Vec<String> {
+    let mut required_detail_ids = task.requirement_detail_refs.clone();
+    for intent in &task.verification_intents {
+        for detail_id in &intent.requirement_detail_refs {
+            if !required_detail_ids.contains(detail_id) {
+                required_detail_ids.push(detail_id.clone());
+            }
+        }
+    }
+    required_detail_ids
+}
+
+fn verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
+    task.verification_intents
+        .iter()
+        .filter(|intent| {
+            intent
+                .requirement_detail_refs
+                .iter()
+                .any(|id| id == detail_id)
+        })
+        .map(|intent| intent.verification_id.clone())
+        .collect()
 }
 
 fn validate_concept_evidence(

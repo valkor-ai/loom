@@ -2069,6 +2069,174 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
 }
 
 #[test]
+fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
+    let fixture = Fixture::new("task-result-machine-ref-normalization");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates(&fixture, taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["taskKind"] = json!("ui_flow_increment");
+    group_value["tasks"][0]["implementationActions"] =
+        json!(["wire_reference_in_api_or_ui", "add_or_update_tests"]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"] =
+        json!(["api.account.open"]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["userFlows"] =
+        json!(["flow.account-lifecycle"]);
+    group_value["tasks"][0]["conceptRefs"] = json!(["concept-account-ui"]);
+    group_value["tasks"][0]["frontendExperienceRequirement"] = json!({
+        "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
+        "experienceLevel": "usable_internal_product",
+        "mustSatisfy": true
+    });
+    write_json_atomic(&group_path, &group_value).expect("write enriched group file");
+
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "source.taskPlanId".to_string(),
+            "source.taskId".to_string(),
+            "task.requirementDetailRefs".to_string(),
+            "task.verificationIntents".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"
+                .to_string(),
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read task execution fields")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("resultFile");
+    let expected_task_plan_id = fields["source.taskPlanId"]
+        .value
+        .as_str()
+        .expect("taskPlanId")
+        .to_string();
+    let expected_task_id = fields["source.taskId"]
+        .value
+        .as_str()
+        .expect("taskId")
+        .to_string();
+    let expected_detail_id = fields["task.requirementDetailRefs"].value[0]
+        .as_str()
+        .expect("detail id")
+        .to_string();
+    let expected_verification_id = fields["task.verificationIntents"].value[0]["verificationId"]
+        .as_str()
+        .expect("verification id")
+        .to_string();
+    let expected_closure_id = fields
+        ["task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"]
+        .value[0]["closureId"]
+        .as_str()
+        .expect("closure id")
+        .to_string();
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["taskPlanId"] = json!("wrong-taskplan");
+    result["taskId"] = json!("wrong-task");
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    result["verificationResults"][0]["verificationId"] = json!("wrong-verification");
+    result["verificationResults"][0]["evidenceType"] = json!("static_check");
+    result["failure"] = json!({
+        "code": "STALE_FAILURE",
+        "summary": "This stale failure must not force a repair for a completed result."
+    });
+    result["requirementDetailEvidence"][0]["detailId"] = json!("wrong-detail");
+    result["requirementDetailEvidence"][0]["verificationIds"] = json!(["wrong-verification"]);
+    result["conceptEvidence"][0]["conceptRef"] = json!("wrong-concept");
+    result["frontendExperienceSelfCheck"]["closureRequirementIds"] = json!(["wrong-closure"]);
+    write_json_atomic(&fixture.root.join(result_file), &result)
+        .expect("write machine-ref-invalid task result");
+
+    let accepted_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        accepted_result["state"], "auto_runnable",
+        "{accepted_result:#}"
+    );
+    assert_ne!(
+        accepted_result["next"]["artifactKind"],
+        json!("task_result_repair"),
+        "{accepted_result:#}"
+    );
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    let persisted_ref = index["phases"][0]["latestRefs"]["latestTaskResult"]
+        .as_str()
+        .expect("latest task result ref");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(persisted_ref)).unwrap())
+            .expect("parse persisted task result");
+    assert_eq!(persisted["taskPlanId"], json!(expected_task_plan_id));
+    assert_eq!(persisted["taskId"], json!(expected_task_id));
+    assert_eq!(
+        persisted["verificationResults"][0]["verificationId"],
+        json!(expected_verification_id)
+    );
+    assert!(persisted.get("failure").is_none());
+    assert_eq!(
+        persisted["requirementDetailEvidence"][0]["detailId"],
+        json!(expected_detail_id)
+    );
+    assert_eq!(
+        persisted["requirementDetailEvidence"][0]["verificationIds"],
+        json!([expected_verification_id])
+    );
+    assert_eq!(
+        persisted["conceptEvidence"][0]["conceptRef"],
+        json!("concept-account-ui")
+    );
+    assert_eq!(
+        persisted["frontendExperienceSelfCheck"]["closureRequirementIds"],
+        json!([expected_closure_id])
+    );
+    assert!(
+        persisted["frontendExperienceSelfCheck"]["dataBinding"]
+            .get("closureRequirementIds")
+            .is_none(),
+        "dataBinding must not duplicate top-level closure ids"
+    );
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -2610,6 +2778,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
             "task.runtimeDeliveryRequirement.requiredCodeLevelChecks".to_string(),
             "executionRules.controlledRuntimeProbeRules".to_string(),
             "executionRules.runtimeDeliveryExecutionRules".to_string(),
+            "outputContract.resultFile".to_string(),
             "outputContract.requiredTopLevelFields".to_string(),
             "outputContract.resultTemplate".to_string(),
         ],
@@ -2645,11 +2814,66 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
         .as_array()
         .expect("required top-level fields")
         .contains(&json!("conceptEvidence")));
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/runtime.ts"]);
+    result["verificationResults"][0]["evidenceType"] = json!("static_check");
+    result["runtimeDeliveryEvidence"]["requirementRef"] = json!("wrong-runtime-ref");
+    result["runtimeDeliveryEvidence"]["checkedFields"] = json!(["wrong-field"]);
+    result["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"] =
+        json!("wrong-runtime-check");
+    write_json_atomic(&fixture.root.join(result_file), &result)
+        .expect("write runtime machine-ref-invalid task result");
+
+    let accepted_result = call_submit(
+        "loom.recordTaskResultFile",
+        execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        accepted_result["state"], "auto_runnable",
+        "{accepted_result:#}"
+    );
+    assert_ne!(
+        accepted_result["next"]["artifactKind"],
+        json!("task_result_repair"),
+        "{accepted_result:#}"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), execution_request_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    let persisted_ref = index["phases"][0]["latestRefs"]["latestTaskResult"]
+        .as_str()
+        .expect("latest task result ref");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(persisted_ref)).unwrap())
+            .expect("parse persisted task result");
+    assert_eq!(
+        persisted["runtimeDeliveryEvidence"]["requirementRef"],
+        json!("sourceRefs.architectureArtifactContractRef#/runtimeDelivery")
+    );
+    assert_eq!(
+        persisted["runtimeDeliveryEvidence"]["checkedFields"],
+        json!(["runtimeSurfaces"])
+    );
+    assert_eq!(
+        persisted["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"],
+        json!("check-runtime-wiring")
+    );
 }
 
 #[test]
-fn task_result_repair_template_resets_conflicting_runtime_evidence() {
-    let fixture = Fixture::new("task-result-repair-runtime-template");
+fn task_result_repair_template_restores_missing_runtime_evidence() {
+    let fixture = Fixture::new("task-result-repair-missing-runtime-template");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
     let taskplan_request_ref = taskplan_result["next"]["requestRef"]
@@ -2705,8 +2929,7 @@ fn task_result_repair_template_resets_conflicting_runtime_evidence() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/runtime.ts"]);
-    result["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"] =
-        json!("wrong-runtime-check");
+    result["runtimeDeliveryEvidence"]["codeLevelChecks"] = json!([]);
     write_json_atomic(&fixture.root.join(result_file), &result).expect("write bad task result");
 
     let invalid = call_submit(
@@ -2739,7 +2962,7 @@ fn task_result_repair_template_resets_conflicting_runtime_evidence() {
     assert!(
         serde_json::to_string(&repair_fields["repairContract.issueConflicts"].value)
             .expect("serialize issue conflicts")
-            .contains("wrong-runtime-check")
+            .contains("check-runtime-wiring")
     );
 }
 
