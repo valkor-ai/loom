@@ -4403,6 +4403,44 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         request_ref: repair_action_ref.clone(),
     })
     .expect("inspect taskplan repair request");
+    let taskplan_repair_core_group = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+        group_id: "taskplan_core_context".to_string(),
+    })
+    .expect("read taskplan repair core group");
+    assert!(
+        taskplan_repair_core_group
+            .fields
+            .iter()
+            .filter(|(field, _)| field.starts_with("sourceRefs."))
+            .all(|(_, field)| !field.value.is_null()),
+        "taskplan repair must not expose null optional source refs: {:#?}",
+        taskplan_repair_core_group.fields
+    );
+    assert!(
+        taskplan_repair_core_group
+            .fields
+            .get("sourceRefs.repositoryContextRef")
+            .is_some(),
+        "taskplan repair must preserve repository context from the original request"
+    );
+    assert!(
+        taskplan_repair_core_group
+            .fields
+            .get("repairContext.sourceRef")
+            .is_none(),
+        "taskplan repair must omit sourceRef when there is no review/manual source"
+    );
+    let taskplan_repair_core_fields = repair_inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "taskplan_core_context")
+        .expect("taskplan repair core group")
+        .fields
+        .clone();
+    assert!(taskplan_repair_core_fields.contains(&"sourceRefs.repositoryContextRef".to_string()));
+    assert!(!taskplan_repair_core_fields.contains(&"repairContext.sourceRef".to_string()));
     assert!(repair_inspected
         .read_groups
         .iter()
@@ -4459,6 +4497,28 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         .as_str()
         .expect("repair action requestRef")
         .to_string();
+    let architecture_core_group = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+        group_id: "architecture_core_context".to_string(),
+    })
+    .expect("read architecture repair core group");
+    assert!(
+        architecture_core_group
+            .fields
+            .iter()
+            .filter(|(field, _)| field.starts_with("sourceRefs."))
+            .all(|(_, field)| !field.value.is_null()),
+        "architecture repair must not expose null optional source refs: {:#?}",
+        architecture_core_group.fields
+    );
+    assert!(
+        architecture_core_group
+            .fields
+            .get("repairContext.sourceRef")
+            .is_none(),
+        "architecture repair must omit sourceRef when there is no review/manual source"
+    );
     assert_architecture_group_ids(
         &fixture,
         &repair_action_ref,
@@ -4501,6 +4561,10 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         "frontend architecture repair must not inherit broad requirement detail reads"
     );
     assert!(
+        !frontend_core_fields.contains(&"repairContext.sourceRef".to_string()),
+        "architecture repair read plan must not expose absent repairContext.sourceRef"
+    );
+    assert!(
         !frontend_core_fields
             .contains(&"contextProjection.phaseScope.acceptanceCandidates".to_string()),
         "frontend architecture repair must rely on focused frontend context"
@@ -4518,11 +4582,6 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             .fields
             .get("frontendExperienceSource.currentFrontendExperienceRef"))
         .is_some());
-    let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
-    assert!(
-        repair_root.get("sectionOutputs").is_none(),
-        "architecture repair request root must not expose all section contracts"
-    );
     advance_architecture_to_section(&fixture, &repair_action_ref, "runtime_delivery");
     assert_architecture_group_ids(
         &fixture,
@@ -4585,16 +4644,19 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         repair_coverage_template["acceptanceMatrix"][0]["verificationHints"][0]["description"]
             .is_string()
     );
-    let frontend_authority_ref = repair_root
-        .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
-        .and_then(Value::as_str)
+    let frontend_authority_ref = frontend_group
+        .fields
+        .get("frontendExperienceSource.confirmedFrontendExperienceRef")
         .or_else(|| {
-            repair_root
-                .pointer("/frontendExperienceSource/currentFrontendExperienceRef")
-                .and_then(Value::as_str)
+            frontend_group
+                .fields
+                .get("frontendExperienceSource.currentFrontendExperienceRef")
         })
+        .and_then(|field| field.value.as_str())
         .expect("repair frontend authority ref");
-    let frontend_template_refs = repair_root["currentSectionContract"]["resultTemplate"]["content"]
+    let frontend_section_contract =
+        architecture_section_contract(&fixture, &repair_action_ref, "frontend_experience");
+    let frontend_template_refs = frontend_section_contract["resultTemplate"]["content"]
         ["frontendExperience"]["sourceRefs"]
         .as_object()
         .expect("repair frontend sourceRefs");
@@ -4602,6 +4664,11 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     assert_eq!(
         frontend_template_refs["brainstormFrontendExperienceRef"],
         json!(frontend_authority_ref)
+    );
+    let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
+    assert!(
+        repair_root.get("sectionOutputs").is_none(),
+        "architecture repair request root must not expose all section contracts"
     );
     let result = complete_architecture_sections(&fixture, &repair_action_ref);
 

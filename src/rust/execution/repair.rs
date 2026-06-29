@@ -855,13 +855,41 @@ fn materialize_taskplan_repair_action(
     .map(|result| result.fields)
     .unwrap_or_default();
 
-    let source_refs = json!({
-        "technicalBaselineRef": value_field(&core_fields, "sourceRefs.technicalBaselineRef"),
-        "planningGenerationContractRef": value_field(&core_fields, "sourceRefs.planningGenerationContractRef"),
-        "architectureArtifactContractRef": value_field(&core_fields, "sourceRefs.architectureArtifactContractRef"),
-        "phaseConceptGroundingRef": value_field(&core_fields, "sourceRefs.phaseConceptGroundingRef"),
-        "deliveryConceptGlossaryRef": value_field(&core_fields, "sourceRefs.deliveryConceptGlossaryRef")
-    });
+    let source_refs = repair_source_refs_from_fields(
+        &core_fields,
+        &[
+            (
+                "technicalBaselineRef",
+                "sourceRefs.technicalBaselineRef",
+                true,
+            ),
+            (
+                "planningGenerationContractRef",
+                "sourceRefs.planningGenerationContractRef",
+                true,
+            ),
+            (
+                "architectureArtifactContractRef",
+                "sourceRefs.architectureArtifactContractRef",
+                true,
+            ),
+            (
+                "phaseConceptGroundingRef",
+                "sourceRefs.phaseConceptGroundingRef",
+                false,
+            ),
+            (
+                "deliveryConceptGlossaryRef",
+                "sourceRefs.deliveryConceptGlossaryRef",
+                false,
+            ),
+            (
+                "repositoryContextRef",
+                "sourceRefs.repositoryContextRef",
+                false,
+            ),
+        ],
+    )?;
     let allowed_refs = json!({
         "scopeRefs": value_field(&core_fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": value_field(&core_fields, "allowedRefs.acceptanceRefs"),
@@ -939,6 +967,63 @@ fn materialize_taskplan_repair_action(
     let group_schema = serde_json::to_value(schema_for!(TaskPlanGroupCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
 
+    let mut repair_context = json!({
+        "sourceTaskPlanRequestRef": original_request_ref
+    });
+    if let Some(source_ref) = source_ref {
+        repair_context["sourceRef"] = json!(source_ref);
+    }
+    let mut taskplan_core_fields = vec![
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.planningGenerationContractRef",
+        "sourceRefs.architectureArtifactContractRef",
+    ];
+    for (ref_key, field) in [
+        (
+            "phaseConceptGroundingRef",
+            "sourceRefs.phaseConceptGroundingRef",
+        ),
+        (
+            "deliveryConceptGlossaryRef",
+            "sourceRefs.deliveryConceptGlossaryRef",
+        ),
+        ("repositoryContextRef", "sourceRefs.repositoryContextRef"),
+    ] {
+        if has_non_null_key(&source_refs, ref_key) {
+            taskplan_core_fields.push(field);
+        }
+    }
+    taskplan_core_fields.push("repairContext.sourceTaskPlanRequestRef");
+    if has_non_null_key(&repair_context, "sourceRef") {
+        taskplan_core_fields.push("repairContext.sourceRef");
+    }
+    taskplan_core_fields.extend([
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.architectureArtifactContractId",
+        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+        "contextProjection.requirementDetailTransfer.currentPhaseScope",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlowDetails",
+        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+        "contextProjection.requirementDetailTransfer.architectureDetails",
+        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+        "contextProjection.requirementDetailTransfer.conceptRefs",
+        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.deferredScopeRefs",
+        "allowedRefs.excludedScopeRefs",
+        "allowedRefs.requirementDetailIds",
+        "allowedRefs.moduleRefs",
+        "allowedRefs.entityRefs",
+        "allowedRefs.interfaceRefs",
+        "allowedRefs.userFlowRefs",
+        "allowedRefs.stateMachineRefs",
+        "allowedRefs.decisionRefs",
+        "allowedRefs.riskRefs",
+    ]);
+
     let mut request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_repair",
@@ -947,10 +1032,7 @@ fn materialize_taskplan_repair_action(
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::TaskplanRepair,
         "sourceRefs": source_refs,
-        "repairContext": {
-            "sourceTaskPlanRequestRef": original_request_ref,
-            "sourceRef": source_ref
-        },
+        "repairContext": repair_context,
         "contextProjection": context_projection,
         "allowedRefs": allowed_refs,
         "generationRules": generation_rules,
@@ -992,39 +1074,7 @@ fn materialize_taskplan_repair_action(
                     "required": true,
                     "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the replacement TaskPlan outline.",
                     "whenToRead": "Read first.",
-                    "fields": [
-                        "sourceRefs.technicalBaselineRef",
-                        "sourceRefs.planningGenerationContractRef",
-                        "sourceRefs.architectureArtifactContractRef",
-                        "sourceRefs.phaseConceptGroundingRef",
-                        "sourceRefs.deliveryConceptGlossaryRef",
-                        "repairContext.sourceTaskPlanRequestRef",
-                        "repairContext.sourceRef",
-                        "contextProjection.phaseId",
-                        "contextProjection.planningContractId",
-                        "contextProjection.architectureArtifactContractId",
-                        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-                        "contextProjection.requirementDetailTransfer.currentPhaseScope",
-                        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                        "contextProjection.requirementDetailTransfer.businessFlowDetails",
-                        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-                        "contextProjection.requirementDetailTransfer.architectureDetails",
-                        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-                        "contextProjection.requirementDetailTransfer.conceptRefs",
-                        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
-                        "allowedRefs.scopeRefs",
-                        "allowedRefs.acceptanceRefs",
-                        "allowedRefs.deferredScopeRefs",
-                        "allowedRefs.excludedScopeRefs",
-                        "allowedRefs.requirementDetailIds",
-                        "allowedRefs.moduleRefs",
-                        "allowedRefs.entityRefs",
-                        "allowedRefs.interfaceRefs",
-                        "allowedRefs.userFlowRefs",
-                        "allowedRefs.stateMachineRefs",
-                        "allowedRefs.decisionRefs",
-                        "allowedRefs.riskRefs"
-                    ]
+                    "fields": taskplan_core_fields
                 },
                 {
                     "groupId": "taskplan_generation_rules",
@@ -1189,17 +1239,56 @@ fn materialize_architecture_repair_action(
     })
     .map(|result| result.fields)
     .unwrap_or_default();
-    let source_refs = json!({
-        "planningContractRef": value_field(&core_fields, "sourceRefs.planningContractRef"),
-        "technicalBaselineRef": value_field(&core_fields, "sourceRefs.technicalBaselineRef"),
-        "brainstormContractRef": value_field(&core_fields, "sourceRefs.brainstormContractRef"),
-        "repositoryContextRef": value_field(&core_fields, "sourceRefs.repositoryContextRef"),
-        "deliveryConceptGlossaryRef": value_field(&core_fields, "sourceRefs.deliveryConceptGlossaryRef"),
-        "phaseConceptGroundingRef": value_field(&core_fields, "sourceRefs.phaseConceptGroundingRef"),
-        "confirmedFrontendExperienceRef": value_field(&core_fields, "sourceRefs.confirmedFrontendExperienceRef"),
-        "currentFrontendExperienceRef": value_field(&core_fields, "sourceRefs.currentFrontendExperienceRef"),
-        "previousRuntimeDeliveryRef": value_field(&core_fields, "sourceRefs.previousRuntimeDeliveryRef")
-    });
+    let source_refs = repair_source_refs_from_fields(
+        &core_fields,
+        &[
+            (
+                "planningContractRef",
+                "sourceRefs.planningContractRef",
+                true,
+            ),
+            (
+                "technicalBaselineRef",
+                "sourceRefs.technicalBaselineRef",
+                true,
+            ),
+            (
+                "brainstormContractRef",
+                "sourceRefs.brainstormContractRef",
+                true,
+            ),
+            (
+                "repositoryContextRef",
+                "sourceRefs.repositoryContextRef",
+                false,
+            ),
+            (
+                "deliveryConceptGlossaryRef",
+                "sourceRefs.deliveryConceptGlossaryRef",
+                false,
+            ),
+            (
+                "phaseConceptGroundingRef",
+                "sourceRefs.phaseConceptGroundingRef",
+                false,
+            ),
+            (
+                "confirmedFrontendExperienceRef",
+                "sourceRefs.confirmedFrontendExperienceRef",
+                false,
+            ),
+            (
+                "currentFrontendExperienceRef",
+                "sourceRefs.currentFrontendExperienceRef",
+                false,
+            ),
+            (
+                "previousRuntimeDeliveryRef",
+                "sourceRefs.previousRuntimeDeliveryRef",
+                false,
+            ),
+        ],
+    )?;
     let allowed_refs = json!({
         "scopeRefs": value_field(&core_fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": value_field(&core_fields, "allowedRefs.acceptanceRefs"),
@@ -1263,12 +1352,7 @@ fn materialize_architecture_repair_action(
     let frontend_experience_source = if frontend_fields.is_empty() {
         frontend_experience_source_from_source_refs(&source_refs)
     } else {
-        json!({
-            "confirmedFrontendExperienceRef": value_field(&frontend_fields, "frontendExperienceSource.confirmedFrontendExperienceRef"),
-            "currentFrontendExperienceRef": value_field(&frontend_fields, "frontendExperienceSource.currentFrontendExperienceRef"),
-            "repositoryContextRef": value_field(&frontend_fields, "frontendExperienceSource.repositoryContextRef"),
-            "authorityRule": value_field(&frontend_fields, "frontendExperienceSource.authorityRule")
-        })
+        frontend_experience_source_from_fields(&frontend_fields)?
     };
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
@@ -1304,6 +1388,13 @@ fn materialize_architecture_repair_action(
     let candidate_schema =
         serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
             .unwrap_or_else(|_| json!({ "type": "object" }));
+    let mut repair_context = json!({
+        "sourceArchitectureRequestRef": original_request_ref
+    });
+    if let Some(source_ref) = source_ref {
+        repair_context["sourceRef"] = json!(source_ref);
+    }
+    let include_repair_source_ref = has_non_null_key(&repair_context, "sourceRef");
     let request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_artifact_repair",
@@ -1312,10 +1403,7 @@ fn materialize_architecture_repair_action(
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::ArchitectureArtifactRepair,
         "sourceRefs": source_refs,
-        "repairContext": {
-            "sourceArchitectureRequestRef": original_request_ref,
-            "sourceRef": source_ref
-        },
+        "repairContext": repair_context,
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
         "allowedRefs": allowed_refs,
@@ -1382,7 +1470,8 @@ fn materialize_architecture_repair_action(
             "groups": architecture_repair_read_groups(
                 ArchitectureSectionGroup::Foundation,
                 &source_refs,
-                &frontend_experience_source
+                &frontend_experience_source,
+                include_repair_source_ref
             )
         }
     });
@@ -1475,6 +1564,24 @@ fn value_field(fields: &BTreeMap<String, delivery_core::FieldReadResult>, field:
         .unwrap_or(Value::Null)
 }
 
+fn repair_source_refs_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+    refs: &[(&str, &str, bool)],
+) -> Result<Value, state::store::StateError> {
+    let mut object = serde_json::Map::new();
+    for (key, field, required) in refs {
+        let value = if *required {
+            field_value(fields, field)?
+        } else {
+            value_field(fields, field)
+        };
+        if !value.is_null() {
+            object.insert((*key).to_string(), value);
+        }
+    }
+    Ok(Value::Object(object))
+}
+
 fn frontend_experience_source_from_source_refs(source_refs: &Value) -> Value {
     let mut object = serde_json::Map::new();
     for key in [
@@ -1491,6 +1598,36 @@ fn frontend_experience_source_from_source_refs(source_refs: &Value) -> Value {
         json!("Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."),
     );
     Value::Object(object)
+}
+
+fn frontend_experience_source_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Result<Value, state::store::StateError> {
+    let mut object = serde_json::Map::new();
+    for (key, field) in [
+        (
+            "confirmedFrontendExperienceRef",
+            "frontendExperienceSource.confirmedFrontendExperienceRef",
+        ),
+        (
+            "currentFrontendExperienceRef",
+            "frontendExperienceSource.currentFrontendExperienceRef",
+        ),
+        (
+            "repositoryContextRef",
+            "frontendExperienceSource.repositoryContextRef",
+        ),
+    ] {
+        let value = value_field(fields, field);
+        if !value.is_null() {
+            object.insert(key.to_string(), value);
+        }
+    }
+    object.insert(
+        "authorityRule".to_string(),
+        field_value(fields, "frontendExperienceSource.authorityRule")?,
+    );
+    Ok(Value::Object(object))
 }
 
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
@@ -1545,6 +1682,7 @@ fn architecture_repair_read_groups(
     section: ArchitectureSectionGroup,
     source_refs: &Value,
     frontend_experience_source: &Value,
+    include_source_ref: bool,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
@@ -1573,7 +1711,6 @@ fn architecture_repair_read_groups(
     }
     core_fields.extend([
         "repairContext.sourceArchitectureRequestRef",
-        "repairContext.sourceRef",
         "contextProjection.phaseScope.phaseName",
         "contextProjection.phaseScope.phaseGoal",
         "contextProjection.phaseScope.included",
@@ -1587,6 +1724,9 @@ fn architecture_repair_read_groups(
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
     ]);
+    if include_source_ref {
+        core_fields.insert(9, "repairContext.sourceRef");
+    }
     if architecture_section_uses_detail_refs(section) {
         core_fields.extend([
             "contextProjection.phaseScope.acceptanceCandidates",
@@ -2063,6 +2203,16 @@ fn update_latest_execution_request(
             "taskExecutionResultFile".to_string(),
             result_file.to_string(),
         );
+        let mut details = json!({
+            "resultFile": result_file,
+            "origin": origin
+        });
+        if let Some(source_ref) = source_ref {
+            details["sourceRef"] = json!(source_ref);
+        }
+        if !finding_refs.is_empty() {
+            details["findingRefs"] = json!(finding_refs);
+        }
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ExecutionRepair,
             source: "delivery_execution_repair".to_string(),
@@ -2070,12 +2220,7 @@ fn update_latest_execution_request(
             prompt: None,
             accepted_responses: vec![],
             request_ref: Some(request_ref.to_string()),
-            details: Some(json!({
-                "resultFile": result_file,
-                "origin": origin,
-                "sourceRef": source_ref,
-                "findingRefs": finding_refs
-            })),
+            details: Some(details),
             target_phase_id: None,
         });
     }

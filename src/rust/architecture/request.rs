@@ -293,6 +293,7 @@ fn build_request_root(
             "groups": architecture_read_groups(
                 current_output.section,
                 false,
+                false,
                 &source_refs,
                 frontend_experience_source
             )
@@ -303,6 +304,7 @@ fn build_request_root(
 pub(crate) fn architecture_read_groups(
     section: ArchitectureSectionGroup,
     include_repair_context: bool,
+    include_repair_source_ref: bool,
     source_refs: &Value,
     frontend_experience_source: &Value,
 ) -> Value {
@@ -329,6 +331,12 @@ pub(crate) fn architecture_read_groups(
                 "previousRuntimeDeliveryRef" => "sourceRefs.previousRuntimeDeliveryRef",
                 _ => unreachable!(),
             });
+        }
+    }
+    if include_repair_context {
+        core_fields.push("repairContext.sourceArchitectureRequestRef");
+        if include_repair_source_ref {
+            core_fields.push("repairContext.sourceRef");
         }
     }
     core_fields.extend([
@@ -363,10 +371,6 @@ pub(crate) fn architecture_read_groups(
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
         ]);
-    }
-    if include_repair_context {
-        core_fields.insert(9, "repairContext.sourceArchitectureRequestRef");
-        core_fields.insert(10, "repairContext.sourceRef");
     }
     let mut groups = vec![
         json!({

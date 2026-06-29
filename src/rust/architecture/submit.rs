@@ -316,11 +316,19 @@ where
                     section_name(next_section)
                 ))
             })?;
+        let include_repair_context = matches!(mode, ArchitectureSubmitMode::Repair);
+        let include_repair_source_ref = include_repair_context
+            && repair_context_has_source_ref(
+                &input.project_root,
+                &input.request_ref,
+                &request_root,
+            )?;
         let updated_root = update_request_for_next_section(
             request_root,
             next_section,
             &next_output,
-            matches!(mode, ArchitectureSubmitMode::Repair),
+            include_repair_context,
+            include_repair_source_ref,
             &source_refs,
         )?;
         update_output_contract_ref(
@@ -1344,6 +1352,7 @@ fn update_request_for_next_section(
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
     include_repair_context: bool,
+    include_repair_source_ref: bool,
     source_refs: &Value,
 ) -> Result<Value, state::store::StateError> {
     let completed_section = parse_section(&root, "/sectionState/currentSection")?;
@@ -1373,10 +1382,33 @@ fn update_request_for_next_section(
     root["requestReadPlan"]["groups"] = architecture_read_groups(
         next_section,
         include_repair_context,
+        include_repair_source_ref,
         source_refs,
         &frontend_experience_source,
     );
     Ok(root)
+}
+
+fn repair_context_has_source_ref(
+    project_root: &str,
+    request_ref: &str,
+    request_root: &Value,
+) -> Result<bool, state::store::StateError> {
+    if !read_plan_fields(request_root)
+        .iter()
+        .any(|field| field == "repairContext.sourceRef")
+    {
+        return Ok(false);
+    }
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["repairContext.sourceRef".to_string()],
+    })?
+    .fields;
+    Ok(fields
+        .get("repairContext.sourceRef")
+        .is_some_and(|field| !field.value.is_null()))
 }
 
 fn update_output_contract_ref(
