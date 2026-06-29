@@ -1,7 +1,6 @@
 ---
 description: Route Loom delivery, knowledge, and deploy commands through MCP.
 argument-hint: "<request> | continue | knowledge [subcommand] | deploy [subcommand] | status"
-allowed-tools: [Read, Glob, Grep, Edit, MultiEdit, Write]
 ---
 
 You are executing `/loom $ARGUMENTS` now.

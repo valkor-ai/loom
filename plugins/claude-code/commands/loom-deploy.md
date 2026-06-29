@@ -1,7 +1,6 @@
 ---
 description: Route Loom deployment commands through MCP.
 argument-hint: "[prepare|up|status|inspect|validate|logs|bootstrap|down|repair]"
-allowed-tools: [Read, Glob, Grep, Edit, MultiEdit, Write]
 ---
 
 You are executing `/loom-deploy $ARGUMENTS` now.

@@ -318,6 +318,14 @@ impl SetupEnvironment {
         self.codex_home.join("config.toml")
     }
 
+    pub fn claude_config_path(&self) -> PathBuf {
+        self.user_home.join(".claude.json")
+    }
+
+    pub fn opencode_config_path(&self) -> PathBuf {
+        self.opencode_home.join("opencode.jsonc")
+    }
+
     pub fn common_registration_path(&self, agent: AgentKind) -> PathBuf {
         self.loom_home
             .join("mcp-registrations")
@@ -1126,9 +1134,8 @@ fn write_mcp_registration(
     write_json(&env.common_registration_path(agent), &registration)?;
     match agent {
         AgentKind::Codex => write_codex_mcp_config(env, &command, agent)?,
-        AgentKind::ClaudeCode | AgentKind::Opencode => {
-            write_json(&env.agent_mcp_registration_path(agent), &registration)?;
-        }
+        AgentKind::ClaudeCode => write_claude_mcp_config(env, &command, agent)?,
+        AgentKind::Opencode => write_opencode_mcp_config(env, &command, agent)?,
     }
     Ok(())
 }
@@ -1136,7 +1143,8 @@ fn write_mcp_registration(
 fn effective_mcp_registration_path(env: &SetupEnvironment, agent: AgentKind) -> PathBuf {
     match agent {
         AgentKind::Codex => env.codex_config_path(),
-        AgentKind::ClaudeCode | AgentKind::Opencode => env.agent_mcp_registration_path(agent),
+        AgentKind::ClaudeCode => env.claude_config_path(),
+        AgentKind::Opencode => env.opencode_config_path(),
     }
 }
 
@@ -1158,6 +1166,62 @@ fn write_codex_mcp_config(
     document["mcp_servers"]["loom"] = snippet_document["mcp_servers"]["loom"].clone();
     write_toml_document(&path, &document)?;
     remove_generated_codex_mcp_json(env)?;
+    Ok(())
+}
+
+fn write_claude_mcp_config(
+    env: &SetupEnvironment,
+    command: &Path,
+    agent: AgentKind,
+) -> Result<(), SetupError> {
+    let path = env.claude_config_path();
+    let mut value = read_json_if_exists(&path)?.unwrap_or_else(|| json!({}));
+    ensure_object_root(&mut value);
+    if !value.get("mcpServers").is_some_and(Value::is_object) {
+        value["mcpServers"] = json!({});
+    }
+    value["mcpServers"]["loom"] = json!({
+        "type": "stdio",
+        "command": path_string(command),
+        "args": [],
+        "env": {
+            "LOOM_RUNTIME_HOME": path_string(env.runtime_current()),
+            "LOOM_HOME": path_string(&env.loom_home),
+            "LOOM_HOST": agent.host_env()
+        }
+    });
+    write_json(&path, &value)?;
+    remove_generated_agent_mcp_json(env, agent)?;
+    Ok(())
+}
+
+fn write_opencode_mcp_config(
+    env: &SetupEnvironment,
+    command: &Path,
+    agent: AgentKind,
+) -> Result<(), SetupError> {
+    let path = env.opencode_config_path();
+    let mut value = read_jsonc_if_exists(&path)?.unwrap_or_else(|| {
+        json!({
+            "$schema": "https://opencode.ai/config.json"
+        })
+    });
+    ensure_object_root(&mut value);
+    if !value.get("mcp").is_some_and(Value::is_object) {
+        value["mcp"] = json!({});
+    }
+    value["mcp"]["loom"] = json!({
+        "type": "local",
+        "enabled": true,
+        "command": [path_string(command)],
+        "environment": {
+            "LOOM_RUNTIME_HOME": path_string(env.runtime_current()),
+            "LOOM_HOME": path_string(&env.loom_home),
+            "LOOM_HOST": agent.host_env()
+        }
+    });
+    write_json(&path, &value)?;
+    remove_generated_agent_mcp_json(env, agent)?;
     Ok(())
 }
 
@@ -1413,6 +1477,12 @@ fn uninstall_agent(env: &SetupEnvironment, agent: AgentKind) -> Result<Vec<Strin
             removed.push(path_string(env.agent_mcp_registration_path(agent)));
         }
     }
+    if matches!(agent, AgentKind::ClaudeCode) && remove_claude_mcp_config(env)? {
+        removed.push(path_string(env.claude_config_path()));
+    }
+    if matches!(agent, AgentKind::Opencode) && remove_opencode_mcp_config(env)? {
+        removed.push(path_string(env.opencode_config_path()));
+    }
     for path in uninstall_files_for_agent(env, agent) {
         if path.exists() && is_confirmed_loom_generated(&path)? {
             remove_path(&path)?;
@@ -1488,8 +1558,49 @@ fn remove_codex_mcp_config(env: &SetupEnvironment) -> Result<bool, SetupError> {
     Ok(removed)
 }
 
+fn remove_claude_mcp_config(env: &SetupEnvironment) -> Result<bool, SetupError> {
+    let path = env.claude_config_path();
+    if !path.exists() {
+        return Ok(false);
+    }
+    let mut value = read_json_value(&path)?;
+    let removed = value
+        .get_mut("mcpServers")
+        .and_then(Value::as_object_mut)
+        .and_then(|servers| servers.remove("loom"))
+        .is_some();
+    if removed {
+        write_json(&path, &value)?;
+    }
+    Ok(removed)
+}
+
+fn remove_opencode_mcp_config(env: &SetupEnvironment) -> Result<bool, SetupError> {
+    let path = env.opencode_config_path();
+    if !path.exists() {
+        return Ok(false);
+    }
+    let mut value = read_jsonc_if_exists(&path)?.unwrap_or_else(|| json!({}));
+    let removed = value
+        .get_mut("mcp")
+        .and_then(Value::as_object_mut)
+        .and_then(|servers| servers.remove("loom"))
+        .is_some();
+    if removed {
+        write_json(&path, &value)?;
+    }
+    Ok(removed)
+}
+
 fn remove_generated_codex_mcp_json(env: &SetupEnvironment) -> Result<bool, SetupError> {
-    let path = env.agent_mcp_registration_path(AgentKind::Codex);
+    remove_generated_agent_mcp_json(env, AgentKind::Codex)
+}
+
+fn remove_generated_agent_mcp_json(
+    env: &SetupEnvironment,
+    agent: AgentKind,
+) -> Result<bool, SetupError> {
+    let path = env.agent_mcp_registration_path(agent);
     if !path.exists() || !is_loom_mcp_registration_json(&path)? {
         return Ok(false);
     }
@@ -1642,11 +1753,8 @@ fn check_agent_mcp_registration(
 ) -> DoctorCheck {
     match agent {
         AgentKind::Codex => check_codex_mcp_config(env, server_binary),
-        AgentKind::ClaudeCode | AgentKind::Opencode => check_path(
-            &format!("{}.mcpRegistration", agent.as_str()),
-            &env.agent_mcp_registration_path(agent),
-            "agent MCP registration",
-        ),
+        AgentKind::ClaudeCode => check_claude_mcp_config(env, server_binary),
+        AgentKind::Opencode => check_opencode_mcp_config(env, server_binary),
     }
 }
 
@@ -1679,6 +1787,84 @@ fn check_codex_mcp_config(env: &SetupEnvironment, server_binary: &Path) -> Docto
             name,
             status: "failed".to_string(),
             detail: format!("missing or stale [mcp_servers.loom] in {}", path.display()),
+        }
+    }
+}
+
+fn check_claude_mcp_config(env: &SetupEnvironment, server_binary: &Path) -> DoctorCheck {
+    let path = env.claude_config_path();
+    let name = "claude-code.mcpRegistration".to_string();
+    let value = match read_json_value(&path) {
+        Ok(value) => value,
+        Err(error) => {
+            return DoctorCheck {
+                name,
+                status: "failed".to_string(),
+                detail: error.to_string(),
+            }
+        }
+    };
+    let loom = &value["mcpServers"]["loom"];
+    let command = loom["command"].as_str();
+    let host = loom["env"]["LOOM_HOST"].as_str();
+    let server_matches = command == Some(path_string(server_binary).as_str());
+    if loom["type"].as_str() == Some("stdio") && server_matches && host == Some("claude-code") {
+        DoctorCheck {
+            name,
+            status: "passed".to_string(),
+            detail: format!("Claude config contains mcpServers.loom: {}", path.display()),
+        }
+    } else {
+        DoctorCheck {
+            name,
+            status: "failed".to_string(),
+            detail: format!("missing or stale mcpServers.loom in {}", path.display()),
+        }
+    }
+}
+
+fn check_opencode_mcp_config(env: &SetupEnvironment, server_binary: &Path) -> DoctorCheck {
+    let path = env.opencode_config_path();
+    let name = "opencode.mcpRegistration".to_string();
+    let value = match read_jsonc_if_exists(&path) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return DoctorCheck {
+                name,
+                status: "failed".to_string(),
+                detail: format!("missing OpenCode config: {}", path.display()),
+            }
+        }
+        Err(error) => {
+            return DoctorCheck {
+                name,
+                status: "failed".to_string(),
+                detail: error.to_string(),
+            }
+        }
+    };
+    let loom = &value["mcp"]["loom"];
+    let command = loom["command"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(Value::as_str);
+    let host = loom["environment"]["LOOM_HOST"].as_str();
+    let server_matches = command == Some(path_string(server_binary).as_str());
+    if loom["type"].as_str() == Some("local")
+        && loom["enabled"].as_bool() == Some(true)
+        && server_matches
+        && host == Some("opencode")
+    {
+        DoctorCheck {
+            name,
+            status: "passed".to_string(),
+            detail: format!("OpenCode config contains mcp.loom: {}", path.display()),
+        }
+    } else {
+        DoctorCheck {
+            name,
+            status: "failed".to_string(),
+            detail: format!("missing or stale mcp.loom in {}", path.display()),
         }
     }
 }
@@ -2016,6 +2202,135 @@ fn read_json_value(path: &Path) -> Result<Value, SetupError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn read_json_if_exists(path: &Path) -> Result<Option<Value>, SetupError> {
+    if path.exists() {
+        read_json_value(path).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn read_jsonc_if_exists(path: &Path) -> Result<Option<Value>, SetupError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path).map_err(|source| SetupError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    match serde_json::from_str(&text) {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => {
+            let stripped = strip_jsonc_trailing_commas(&strip_jsonc_comments(&text));
+            serde_json::from_str(&stripped)
+                .map(Some)
+                .map_err(|source| SetupError::Json {
+                    path: path.to_path_buf(),
+                    source,
+                })
+        }
+    }
+}
+
+fn ensure_object_root(value: &mut Value) {
+    if !value.is_object() {
+        *value = json!({});
+    }
+}
+
+fn strip_jsonc_comments(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'/') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    output.push('\n');
+                    break;
+                }
+            }
+            continue;
+        }
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut previous = '\0';
+            for next in chars.by_ref() {
+                if next == '\n' {
+                    output.push('\n');
+                }
+                if previous == '*' && next == '/' {
+                    break;
+                }
+                previous = next;
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+fn strip_jsonc_trailing_commas(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    while index < chars.len() {
+        let ch = chars[index];
+        if in_string {
+            output.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            output.push(ch);
+            index += 1;
+            continue;
+        }
+        if ch == ',' {
+            let mut lookahead = index + 1;
+            while lookahead < chars.len() && chars[lookahead].is_whitespace() {
+                lookahead += 1;
+            }
+            if lookahead < chars.len() && matches!(chars[lookahead], '}' | ']') {
+                index += 1;
+                continue;
+            }
+        }
+        output.push(ch);
+        index += 1;
+    }
+    output
 }
 
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), SetupError> {

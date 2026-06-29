@@ -87,6 +87,29 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
         assert_no_forbidden_keys(&value);
         assert!(value.get("inputSchema").is_some());
         assert!(value.get("outputSchema").is_some());
+        assert_eq!(
+            value["outputSchema"]["type"].as_str(),
+            Some("object"),
+            "{} outputSchema must be a top-level object schema: {}",
+            tool.name,
+            value["outputSchema"]
+        );
+        assert_no_boolean_schema_nodes(
+            &value["inputSchema"],
+            &format!("{}.inputSchema", tool.name),
+        );
+        assert_no_boolean_schema_nodes(
+            &value["outputSchema"],
+            &format!("{}.outputSchema", tool.name),
+        );
+        assert_no_unsupported_integer_formats(
+            &value["inputSchema"],
+            &format!("{}.inputSchema", tool.name),
+        );
+        assert_no_unsupported_integer_formats(
+            &value["outputSchema"],
+            &format!("{}.outputSchema", tool.name),
+        );
         assert!(value.to_string().contains("projectRoot"));
         assert!(!value.to_string().contains("host"));
     }
@@ -200,6 +223,104 @@ fn assert_no_forbidden_keys(value: &Value) {
         Value::Array(items) => {
             for item in items {
                 assert_no_forbidden_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assert_no_boolean_schema_nodes(value: &Value, path: &str) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                match key.as_str() {
+                    "$defs" | "definitions" | "properties" | "patternProperties"
+                    | "dependentSchemas" => {
+                        if let Value::Object(children) = child {
+                            for (child_key, nested) in children {
+                                assert_schema_node_is_not_boolean(
+                                    nested,
+                                    &format!("{path}.{key}.{child_key}"),
+                                );
+                            }
+                        }
+                    }
+                    "items"
+                    | "additionalProperties"
+                    | "unevaluatedProperties"
+                    | "contains"
+                    | "propertyNames"
+                    | "not"
+                    | "if"
+                    | "then"
+                    | "else" => {
+                        assert_schema_node_is_not_boolean(child, &format!("{path}.{key}"));
+                    }
+                    "oneOf" | "anyOf" | "allOf" | "prefixItems" => {
+                        if let Value::Array(items) = child {
+                            for (index, item) in items.iter().enumerate() {
+                                assert_schema_node_is_not_boolean(
+                                    item,
+                                    &format!("{path}.{key}[{index}]"),
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        if child.is_object() || child.is_array() {
+                            assert_no_boolean_schema_nodes(child, &format!("{path}.{key}"));
+                        }
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                assert_no_boolean_schema_nodes(item, &format!("{path}[{index}]"));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assert_schema_node_is_not_boolean(value: &Value, path: &str) {
+    assert!(
+        !value.is_boolean(),
+        "{path} must be an object schema, got {value}"
+    );
+    assert_no_boolean_schema_nodes(value, path);
+}
+
+fn assert_no_unsupported_integer_formats(value: &Value, path: &str) {
+    match value {
+        Value::Object(object) => {
+            if let Some(format) = object.get("format").and_then(Value::as_str) {
+                assert!(
+                    !matches!(
+                        format,
+                        "int8"
+                            | "int16"
+                            | "int32"
+                            | "int64"
+                            | "int128"
+                            | "uint8"
+                            | "uint16"
+                            | "uint32"
+                            | "uint64"
+                            | "uint128"
+                            | "usize"
+                            | "isize"
+                    ),
+                    "{path} must not expose Rust integer format {format}"
+                );
+            }
+            for (key, child) in object {
+                assert_no_unsupported_integer_formats(child, &format!("{path}.{key}"));
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                assert_no_unsupported_integer_formats(item, &format!("{path}[{index}]"));
             }
         }
         _ => {}

@@ -464,7 +464,7 @@ fn tool_to_mcp(registration: &ToolRegistration) -> Tool {
 }
 
 fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
-    match kind {
+    normalize_schema_arc(match kind {
         ToolInputKind::Project => schema_for_type::<ProjectToolInput>(),
         ToolInputKind::Plan => schema_for_type::<PlanToolInput>(),
         ToolInputKind::FileSubmit => schema_for_type::<FileSubmitInput>(),
@@ -484,7 +484,7 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
         ToolInputKind::InspectRequest => schema_for_type::<InspectRequestInput>(),
         ToolInputKind::ReadFieldGroup => schema_for_type::<ReadFieldGroupInput>(),
         ToolInputKind::ReadRequestFields => schema_for_type::<ReadRequestFieldsInput>(),
-    }
+    })
 }
 
 fn output_schema(kind: ToolOutputKind) -> JsonObject {
@@ -502,9 +502,116 @@ where
 {
     let schema = schemars::schema_for!(T);
     match serde_json::to_value(schema).expect("schema serializes to JSON") {
-        Value::Object(object) => object,
+        Value::Object(mut object) => {
+            normalize_schema_object(&mut object);
+            object
+                .entry("type".to_string())
+                .or_insert_with(|| Value::String("object".to_string()));
+            object
+        }
         _ => JsonObject::new(),
     }
+}
+
+fn normalize_schema_arc(schema: Arc<JsonObject>) -> Arc<JsonObject> {
+    let mut object = (*schema).clone();
+    normalize_schema_object(&mut object);
+    Arc::new(object)
+}
+
+fn normalize_schema_object(object: &mut JsonObject) {
+    let mut value = Value::Object(std::mem::take(object));
+    normalize_schema_keywords(&mut value);
+    if let Value::Object(normalized) = value {
+        *object = normalized;
+    }
+}
+
+fn normalize_schema_node(value: &mut Value) {
+    match value {
+        Value::Bool(true) => {
+            *value = Value::Object(JsonObject::new());
+        }
+        Value::Bool(false) => {
+            let mut object = JsonObject::new();
+            object.insert("not".to_string(), Value::Object(JsonObject::new()));
+            *value = Value::Object(object);
+        }
+        _ => normalize_schema_keywords(value),
+    }
+}
+
+fn normalize_schema_keywords(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if object
+                .get("format")
+                .and_then(Value::as_str)
+                .is_some_and(is_rust_integer_format)
+            {
+                object.remove("format");
+            }
+            for (key, child) in object.iter_mut() {
+                match key.as_str() {
+                    "$defs" | "definitions" | "properties" | "patternProperties"
+                    | "dependentSchemas" => {
+                        if let Value::Object(children) = child {
+                            for nested in children.values_mut() {
+                                normalize_schema_node(nested);
+                            }
+                        }
+                    }
+                    "items"
+                    | "additionalProperties"
+                    | "unevaluatedProperties"
+                    | "contains"
+                    | "propertyNames"
+                    | "not"
+                    | "if"
+                    | "then"
+                    | "else" => {
+                        normalize_schema_node(child);
+                    }
+                    "oneOf" | "anyOf" | "allOf" | "prefixItems" => {
+                        if let Value::Array(items) = child {
+                            for item in items {
+                                normalize_schema_node(item);
+                            }
+                        }
+                    }
+                    _ => {
+                        if child.is_object() || child.is_array() {
+                            normalize_schema_keywords(child);
+                        }
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_schema_keywords(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_rust_integer_format(format: &str) -> bool {
+    matches!(
+        format,
+        "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "int128"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "uint128"
+            | "usize"
+            | "isize"
+    )
 }
 
 fn project_root_from_arguments(

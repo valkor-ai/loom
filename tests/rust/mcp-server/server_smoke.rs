@@ -46,6 +46,14 @@ fn stdio_server_initializes_and_lists_batch_2_surface() {
         .collect();
     assert!(tool_names.contains(&"status"));
     assert!(tool_names.contains(&"readFieldGroup"));
+    for tool in tools["result"]["tools"].as_array().expect("tools array") {
+        assert_eq!(
+            tool["outputSchema"]["type"].as_str(),
+            Some("object"),
+            "{} outputSchema must be a top-level object schema",
+            tool["name"]
+        );
+    }
 
     let templates = client.request(json!({
         "jsonrpc": "2.0",

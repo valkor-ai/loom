@@ -110,8 +110,24 @@ fn install_projects_shared_references_to_agent_read_paths() {
     let fixture = Fixture::new("install_shared_references");
     fixture.write_package();
     let env = fixture.env();
+    write_json(
+        &env.claude_config_path(),
+        &serde_json::json!({
+            "existing": true,
+            "mcpServers": {
+                "existing-server": {
+                    "type": "stdio",
+                    "command": "existing"
+                }
+            }
+        }),
+    );
+    write_file(
+        &env.opencode_config_path(),
+        "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"mcp\": {\n    \"existing-server\": { \"type\": \"local\", \"command\": [\"existing\"], },\n  },\n}\n",
+    );
 
-    install(&env, &AgentKind::all()).unwrap();
+    let report = install(&env, &AgentKind::all()).unwrap();
 
     for agent in [AgentKind::Codex, AgentKind::ClaudeCode] {
         let root = env.agent_plugin_root(agent);
@@ -139,6 +155,52 @@ fn install_projects_shared_references_to_agent_read_paths() {
         .opencode_home
         .join("references/loom-deploy/.loom-mcp-install.json")
         .exists());
+    assert!(!env
+        .agent_mcp_registration_path(AgentKind::ClaudeCode)
+        .exists());
+    assert!(!env
+        .agent_mcp_registration_path(AgentKind::Opencode)
+        .exists());
+
+    let claude_config = read_json(&env.claude_config_path());
+    assert_eq!(claude_config["existing"].as_bool(), Some(true));
+    assert_eq!(
+        claude_config["mcpServers"]["existing-server"]["command"].as_str(),
+        Some("existing")
+    );
+    assert_eq!(
+        claude_config["mcpServers"]["loom"]["command"].as_str(),
+        Some(path_string_for_test(&env.runtime_current().join("bin/loom-mcp-server")).as_str())
+    );
+    assert_eq!(
+        claude_config["mcpServers"]["loom"]["env"]["LOOM_HOST"].as_str(),
+        Some("claude-code")
+    );
+
+    let opencode_config = read_json(&env.opencode_config_path());
+    assert_eq!(
+        opencode_config["mcp"]["existing-server"]["command"][0].as_str(),
+        Some("existing")
+    );
+    assert_eq!(
+        opencode_config["mcp"]["loom"]["command"][0].as_str(),
+        Some(path_string_for_test(&env.runtime_current().join("bin/loom-mcp-server")).as_str())
+    );
+    assert_eq!(
+        opencode_config["mcp"]["loom"]["environment"]["LOOM_HOST"].as_str(),
+        Some("opencode")
+    );
+    for check_name in ["claude-code.mcpRegistration", "opencode.mcpRegistration"] {
+        assert_eq!(
+            report
+                .checks
+                .iter()
+                .find(|check| check.name == check_name)
+                .unwrap()
+                .status,
+            "passed"
+        );
+    }
 }
 
 #[test]
@@ -582,6 +644,10 @@ fn write_json<T: serde::Serialize>(path: &Path, value: &T) {
         path,
         &format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
     );
+}
+
+fn read_json(path: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
 fn path_string_for_test(path: &Path) -> String {
