@@ -4,11 +4,12 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureArtifactContract, TaskDefinition, TaskGroupRunState, TaskPlan, TaskPlanGroup,
+    AcceptancePriority, ArchitectureArtifactContract, CoverageStatus, ImplementationAction,
+    TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
     TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
     TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
     TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
@@ -707,6 +708,10 @@ where
     let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
+    issues.extend(validate_frontend_task_presence(&tasks, &aac));
+    issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
+    issues.extend(validate_workflow_closure_task_assignments(&tasks, &aac));
     issues.extend(validate_runtime_delivery_closure_task(
         &groups,
         &tasks,
@@ -1398,6 +1403,201 @@ fn validate_runtime_delivery_requirements(
         }
     }
     issues
+}
+
+fn validate_must_acceptance_task_coverage(
+    tasks: &[TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    for acceptance in pgc
+        .phase_scope
+        .acceptance_candidates
+        .iter()
+        .filter(|acceptance| matches!(acceptance.priority, AcceptancePriority::Must))
+    {
+        if tasks
+            .iter()
+            .any(|task| task.acceptance_refs.contains(&acceptance.id))
+        {
+            continue;
+        }
+        issues.push(issue(
+            "MUST_ACCEPTANCE_NOT_COVERED",
+            "tasks[].acceptanceRefs",
+            "Every must acceptance candidate must be assigned to at least one TaskPlan task.",
+            Some(&acceptance.id),
+        ));
+    }
+    issues
+}
+
+fn validate_frontend_task_presence(
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    if aac
+        .frontend_experience
+        .as_ref()
+        .and_then(|value| value.get("required"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Vec::new();
+    }
+    if tasks.iter().any(|task| {
+        matches!(
+            task.task_kind,
+            TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+        ) || task.frontend_experience_requirement.is_some()
+    }) {
+        return Vec::new();
+    }
+    vec![issue(
+        "FRONTEND_TASK_REQUIRED",
+        "tasks[].frontendExperienceRequirement",
+        "frontendExperience.required=true requires a UI/frontend task or a task with frontendExperienceRequirement.",
+        None,
+    )]
+}
+
+fn validate_requirement_detail_assignments(
+    tasks: &[TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    let covered_detail_ids = aac
+        .detail_coverage
+        .iter()
+        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
+        .map(|entry| entry.detail_id.clone())
+        .collect::<BTreeSet<_>>();
+    if covered_detail_ids.is_empty() {
+        return Vec::new();
+    }
+    let task_detail_ids = tasks
+        .iter()
+        .flat_map(|task| task.requirement_detail_refs.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let verification_detail_ids = tasks
+        .iter()
+        .flat_map(|task| {
+            task.verification_intents
+                .iter()
+                .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
+        })
+        .collect::<BTreeSet<_>>();
+
+    let mut issues = Vec::new();
+    for detail in pgc
+        .requirement_details
+        .items
+        .iter()
+        .filter(|detail| detail.required_for_current_phase)
+    {
+        if !covered_detail_ids.contains(&detail.detail_id) {
+            continue;
+        }
+        if !task_detail_ids.contains(&detail.detail_id) {
+            issues.push(issue(
+                "DETAIL_TASK_ASSIGNMENT_MISSING",
+                "tasks[].requirementDetailRefs",
+                "Every covered current-phase requirement detail must be assigned to at least one task.",
+                Some(&detail.detail_id),
+            ));
+        }
+        if !verification_detail_ids.contains(&detail.detail_id) {
+            issues.push(issue(
+                "DETAIL_TASK_ASSIGNMENT_MISSING",
+                "tasks[].verificationIntents[].requirementDetailRefs",
+                "Every covered current-phase requirement detail must be assigned to at least one verification intent.",
+                Some(&detail.detail_id),
+            ));
+        }
+    }
+    issues
+}
+
+fn validate_workflow_closure_task_assignments(
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    for requirement in workflow_closure_requirements(aac) {
+        let closure_id = requirement
+            .get("closureId")
+            .and_then(Value::as_str)
+            .unwrap_or("workflow_closure");
+        if tasks
+            .iter()
+            .any(|task| task_covers_workflow_closure(task, &requirement))
+        {
+            continue;
+        }
+        issues.push(issue(
+            "WORKFLOW_CLOSURE_NOT_ASSIGNED",
+            "tasks[].frontendExperienceRequirement",
+            "Every workflow closure requirement must be assigned to a task that wires the user flow to every declared interface and verifies it with automated or runtime API evidence.",
+            Some(closure_id),
+        ));
+    }
+    issues
+}
+
+fn task_covers_workflow_closure(task: &TaskDefinition, requirement: &Value) -> bool {
+    let Some(workflow_ref) = requirement.get("workflowRef").and_then(Value::as_str) else {
+        return false;
+    };
+    if !task
+        .write_boundary
+        .artifact_refs
+        .user_flows
+        .iter()
+        .any(|item| item == workflow_ref)
+    {
+        return false;
+    }
+    let required_interfaces = string_array_at(requirement, "interfaceRefs");
+    if !required_interfaces.iter().all(|interface_ref| {
+        task.write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .any(|item| item == interface_ref)
+    }) {
+        return false;
+    }
+    let required_acceptance = string_array_at(requirement, "acceptanceRefs");
+    if !required_acceptance.iter().all(|acceptance_ref| {
+        task.acceptance_refs
+            .iter()
+            .any(|item| item == acceptance_ref)
+    }) {
+        return false;
+    }
+    if task.frontend_experience_requirement.is_none() {
+        return false;
+    }
+    if !task
+        .implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+    {
+        return false;
+    }
+    task.verification_intents.iter().any(|intent| {
+        required_acceptance.iter().all(|acceptance_ref| {
+            intent
+                .acceptance_refs
+                .iter()
+                .any(|item| item == acceptance_ref)
+        }) && intent.acceptable_evidence.iter().any(|evidence| {
+            matches!(
+                evidence,
+                VerificationEvidence::AutomatedTest | VerificationEvidence::RuntimeApiCheck
+            )
+        })
+    })
 }
 
 fn validate_runtime_delivery_closure_task(
