@@ -467,6 +467,30 @@ fn native_request_omits_missing_read_fields_and_rejects_broad_fields() {
     )
     .expect_err("broad read field is rejected");
     assert!(broad.to_string().contains("too broad"));
+
+    let private_workflow_state = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_private_workflow_state".to_string(),
+            request_kind: "architecture_sections_generation".to_string(),
+            request_file: None,
+            delivery_id: None,
+            phase_id: None,
+            root: json!({
+                "sectionOutputs": [{ "section": "foundation" }],
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "core",
+                        "fields": ["sectionOutputs.0.section"]
+                    }]
+                }
+            }),
+        },
+    )
+    .expect_err("private workflow state is rejected");
+    assert!(private_workflow_state
+        .to_string()
+        .contains("sectionOutputs is private workflow state"));
 }
 
 #[test]

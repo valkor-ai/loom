@@ -240,7 +240,8 @@ where
         ],
     )?;
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
-    let section_outputs = parse_section_outputs(&request_root)?;
+    let section_outputs =
+        parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
     let allowed_refs = json!({
         "scopeRefs": value_field(&request_fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": value_field(&request_fields, "allowedRefs.acceptanceRefs"),
@@ -1041,12 +1042,28 @@ fn parse_section(
 }
 
 fn parse_section_outputs(
+    project_root: &str,
+    request_id: &str,
     root: &Value,
 ) -> Result<Vec<SectionStateOutput>, state::store::StateError> {
-    serde_json::from_value(root.get("sectionOutputs").cloned().ok_or_else(|| {
-        state::store::StateError::StateCorrupted("request is missing sectionOutputs".to_string())
-    })?)
-    .map_err(state::store::StateError::Json)
+    let value = if let Some(value) = root.get("sectionOutputs").cloned() {
+        value
+    } else {
+        let paths = state::paths::project_paths(project_root)?;
+        let relative = state::request_manifest::request_storage_ref(
+            &paths.root,
+            request_id,
+            "sectionOutputs",
+        )?
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "request {request_id} is missing private sectionOutputs storage"
+            ))
+        })?;
+        let ref_file = state::paths::from_project_relative(&paths.root, &relative)?;
+        state::store::read_json_value(&ref_file)?
+    };
+    serde_json::from_value(value).map_err(state::store::StateError::Json)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -639,7 +639,12 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
     .fields;
 
     assert!(!source_fields.contains_key("sourceRefs.previousRuntimeDeliveryRef"));
-    let runtime_contract = runtime_section_contract(&request_root);
+    assert!(
+        request_root.get("sectionOutputs").is_none(),
+        "architecture request root must not expose all section contracts"
+    );
+    let runtime_contract =
+        architecture_section_contract(&fixture, &architecture_request_ref, "runtime_delivery");
     assert_eq!(
         runtime_contract
             .pointer("/enumRefs/runtimeDeliveryStatus")
@@ -662,7 +667,11 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
     assert_architecture_group_ids(
         &fixture,
         &architecture_request_ref,
-        &["architecture_core_context", "architecture_section_contract"],
+        &[
+            "architecture_core_context",
+            "architecture_section_contract",
+            "architecture_domain_model_context",
+        ],
     );
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
@@ -749,7 +758,12 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
         source_fields["sourceRefs.previousRuntimeDeliveryRef"].value,
         json!(previous_runtime_ref)
     );
-    let runtime_contract = runtime_section_contract(&request_root);
+    assert!(
+        request_root.get("sectionOutputs").is_none(),
+        "architecture request root must not expose all section contracts"
+    );
+    let runtime_contract =
+        architecture_section_contract(&fixture, &refreshed_ref, "runtime_delivery");
     assert_eq!(
         runtime_contract
             .pointer("/enumRefs/runtimeDeliveryStatus")
@@ -791,18 +805,19 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         valid_candidate_with_frontend_json(),
     );
     let architecture_root = read_request_root_value(fixture.root_str(), &architecture_request_ref);
+    assert!(
+        architecture_root.get("sectionOutputs").is_none(),
+        "architecture request root must not expose all section contracts"
+    );
     assert!(architecture_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
     let architecture_rules =
         architecture_root["currentSectionContract"]["generationRules"].to_string();
     assert!(architecture_rules.contains("existing project and technical baseline shape"));
     assert!(architecture_rules.contains("avoid pass-through wrappers"));
-    let coverage_template = architecture_root["sectionOutputs"]
-        .as_array()
-        .expect("section outputs")
-        .iter()
-        .find(|section| section["section"].as_str() == Some("coverage"))
-        .expect("coverage section")["resultTemplate"]["content"]
-        .clone();
+    let coverage_template =
+        architecture_section_contract(&fixture, &architecture_request_ref, "coverage")
+            ["resultTemplate"]["content"]
+            .clone();
     assert_eq!(
         coverage_template["acceptanceMatrix"][0]["acceptanceId"],
         json!("acc_1")
@@ -862,13 +877,10 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
                 .and_then(Value::as_str)
         })
         .expect("frontend authority ref");
-    let frontend_template_refs = architecture_root["sectionOutputs"]
-        .as_array()
-        .expect("section outputs")
-        .iter()
-        .find(|section| section["section"].as_str() == Some("frontend_experience"))
-        .expect("frontend section")["resultTemplate"]["content"]["frontendExperience"]
-        ["sourceRefs"]
+    let frontend_template =
+        architecture_section_contract(&fixture, &architecture_request_ref, "frontend_experience");
+    let frontend_template_refs = frontend_template["resultTemplate"]["content"]
+        ["frontendExperience"]["sourceRefs"]
         .as_object()
         .expect("frontend sourceRefs");
     assert_eq!(frontend_template_refs.len(), 1);
@@ -1941,6 +1953,10 @@ fn blocked_task_result_routes_to_architecture_repair() {
     );
     assert_eq!(resumed["next"]["requestRef"], json!(repair_request_ref));
     let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
+    assert!(
+        repair_root.get("sectionOutputs").is_none(),
+        "architecture repair request root must not expose all section contracts"
+    );
     assert!(repair_root["currentSectionContract"]["resultTemplate"]["content"].is_object());
 }
 
@@ -2671,13 +2687,14 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             .get("frontendExperienceSource.currentFrontendExperienceRef"))
         .is_some());
     let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
-    let repair_coverage_template = repair_root["sectionOutputs"]
-        .as_array()
-        .expect("repair section outputs")
-        .iter()
-        .find(|section| section["section"].as_str() == Some("coverage"))
-        .expect("repair coverage section")["resultTemplate"]["content"]
-        .clone();
+    assert!(
+        repair_root.get("sectionOutputs").is_none(),
+        "architecture repair request root must not expose all section contracts"
+    );
+    let repair_coverage_template =
+        architecture_section_contract(&fixture, &repair_action_ref, "coverage")["resultTemplate"]
+            ["content"]
+            .clone();
     assert_eq!(
         repair_coverage_template["acceptanceMatrix"][0]["acceptanceId"],
         json!("acc_1")
@@ -4551,13 +4568,25 @@ fn assert_no_read_plan_size_warnings(fixture: &Fixture) {
     }
 }
 
-fn runtime_section_contract(request_root: &Value) -> &Value {
-    request_root["sectionOutputs"]
-        .as_array()
-        .expect("sectionOutputs")
-        .iter()
-        .find(|section| section["section"] == json!("runtime_delivery"))
-        .expect("runtime_delivery section contract")
+fn architecture_section_contract(fixture: &Fixture, request_ref: &str, section: &str) -> Value {
+    private_architecture_section_outputs(fixture, request_ref)
+        .into_iter()
+        .find(|output| output["section"] == json!(section))
+        .unwrap_or_else(|| panic!("{section} section contract"))
+}
+
+fn private_architecture_section_outputs(fixture: &Fixture, request_ref: &str) -> Vec<Value> {
+    let request_id = request_ref
+        .split("/requests/")
+        .nth(1)
+        .expect("request id in ref");
+    let relative =
+        state::request_manifest::request_storage_ref(&fixture.root, request_id, "sectionOutputs")
+            .expect("read private sectionOutputs ref")
+            .expect("private sectionOutputs ref");
+    let path = fixture.root.join(relative);
+    serde_json::from_str(&std::fs::read_to_string(path).expect("read private sectionOutputs"))
+        .expect("parse private sectionOutputs")
 }
 
 fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {
