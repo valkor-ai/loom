@@ -558,6 +558,26 @@ fn opencode_commands_expose_mcp_result_discipline() {
     }
 
     for required in [
+        "../references/loom/uix/core.md",
+        "../references/loom/uix/interaction.md",
+        "../references/loom/uix/system.md",
+        "../references/loom/uix/mobile.md",
+        "../references/loom/uix/frameworks.md",
+        "../references/loom/uix/content.md",
+        "../references/loom/uix/data.md",
+        "../references/loom/uix/verification.md",
+        "writing or reviewing user-visible frontend artifacts",
+        "forms, flows, search/filter, loading, empty, error, or recovery states",
+        "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
+        "Do not load separate delivery reference files",
+    ] {
+        assert!(
+            loom.contains(required),
+            "opencode loom.md missing optional reference guidance {required}"
+        );
+    }
+
+    for required in [
         "active_operation",
         "DeployRepairAssetsNext",
         "deploy execution repair",

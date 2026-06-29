@@ -41,7 +41,19 @@ For `ExecuteTaskNext`, implement only the returned task request, respect edit bo
 
 For `DeployRepairAssetsNext`, edit only the returned deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
 
-The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`; load none by default. Load `uix/core.md` for user-visible frontend artifacts, then one focused UIX file for interaction, system, mobile, framework, content, data, or verification work. Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result.
+The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`. Load no reference by default; load references only when the current action matches the trigger.
+
+UIX references:
+- `../references/loom/uix/core.md`: writing or reviewing user-visible frontend artifacts.
+- `../references/loom/uix/interaction.md`: forms, flows, search/filter, loading, empty, error, or recovery states.
+- `../references/loom/uix/system.md`: design system, tokens, components, icons, theming, motion, or localization.
+- `../references/loom/uix/mobile.md`: mobile, tablet, responsive, PWA, or touch behavior.
+- `../references/loom/uix/frameworks.md`: framework or component-library-specific frontend work.
+- `../references/loom/uix/content.md`: UX writing, labels, empty states, errors, CTAs, onboarding, or terminology.
+- `../references/loom/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
+- `../references/loom/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
+
+Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 
 ## Boundaries
 
