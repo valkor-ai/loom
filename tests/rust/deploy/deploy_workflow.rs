@@ -805,6 +805,70 @@ exit 0
     assert_forbidden_cli_fields_absent(&submitted_value);
 }
 
+#[cfg(unix)]
+#[test]
+fn deploy_up_classifies_registry_network_without_source_repair() {
+    let fixture = Fixture::new("deploy-registry-network");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","start":"node dist/server.js"},"dependencies":{"vite":"latest"}}"#,
+    );
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "failed to fetch oauth token: Get https://auth.docker.io/token: net/http: TLS handshake timeout" >&2
+  exit 1
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    assert_eq!(value["recommendedTool"], "loom.deployStatus");
+    let repair_action = fixture.repair_action_value();
+    assert_eq!(repair_action["failureKind"], "registry_network");
+    assert_eq!(repair_action["failureOwner"], "external_system");
+    assert_eq!(repair_action["repairRoute"], "none");
+    assert!(repair_action["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "registry_network"));
+    assert!(repair_action["suggestedActions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|action| action.contains("registry_network")));
+    assert_forbidden_cli_fields_absent(&value);
+}
+
 #[test]
 fn deploy_repair_blocks_when_attempt_limit_is_reached() {
     let fixture = Fixture::new("deploy-repair-attempt-limit");

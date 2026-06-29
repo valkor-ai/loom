@@ -23,6 +23,9 @@ use crate::{
     DeployToolInput,
 };
 
+const DEPLOY_STARTUP_VALIDATION_ATTEMPTS: usize = 24;
+const DEPLOY_STARTUP_VALIDATION_INTERVAL: Duration = Duration::from_millis(1500);
+
 pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root_buf = PathBuf::from(&input.project_root);
     let project_root = project_root_buf.as_path();
@@ -228,11 +231,11 @@ fn wait_for_valid_deployment(project_root: &Path) -> StateResult<DeploymentValid
     if last.valid {
         return Ok(last);
     }
-    for _ in 0..11 {
+    for _ in 1..DEPLOY_STARTUP_VALIDATION_ATTEMPTS {
         if !validation_is_retryable_startup(&last) {
             return Ok(last);
         }
-        thread::sleep(Duration::from_millis(1500));
+        thread::sleep(DEPLOY_STARTUP_VALIDATION_INTERVAL);
         last = deploy_validate_inner(project_root)?;
         if last.valid {
             return Ok(last);
@@ -299,7 +302,7 @@ fn classify_compose_up_failure(
     stderr: &str,
 ) -> DeploymentFailureKind {
     let text = format!("{stdout}\n{stderr}").to_ascii_lowercase();
-    if text.contains("network") || text.contains("no such host") || text.contains("tls handshake") {
+    if looks_like_registry_network_failure(&text) {
         DeploymentFailureKind::RegistryNetwork
     } else if is_runtime_build_command_failure(spec, &text) {
         DeploymentFailureKind::BuildCommandFailed
@@ -311,6 +314,24 @@ fn classify_compose_up_failure(
     } else {
         DeploymentFailureKind::ContainerStart
     }
+}
+
+fn looks_like_registry_network_failure(text: &str) -> bool {
+    [
+        "failed to fetch oauth token",
+        "failed to authorize",
+        "deadlineexceeded",
+        "i/o timeout",
+        "tls handshake timeout",
+        "temporary failure in name resolution",
+        "no such host",
+        "connection timed out",
+        "network is unreachable",
+        "registry-1.docker.io",
+        "auth.docker.io",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 fn validation_failure_kind(

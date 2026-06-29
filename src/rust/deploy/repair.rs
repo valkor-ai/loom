@@ -2,8 +2,8 @@ use std::{fs, path::Path};
 
 use contracts::{
     DeployExecutionRepairTaskResult, DeploymentErrorWindow, DeploymentFailedContract,
-    DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport, DeploymentRepairAction,
-    DeploymentRepairRoute, DeploymentSpec,
+    DeploymentFailureDiagnostic, DeploymentFailureKind, DeploymentFailureOwner,
+    DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute, DeploymentSpec,
 };
 use delivery_core::{
     ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
@@ -78,9 +78,10 @@ pub fn write_repair_action(
         log.push('\n');
     }
     state::store::write_text_atomic(&paths.log_file, &log)?;
+    let diagnostics = diagnose_deployment_failure(spec, stdout, stderr);
     let editable_files = editable_files_for(spec, failure_kind);
     let (failure_owner, repair_route) = classify_repair(failure_kind, editable_files.len());
-    let current_error_window = error_window(stdout, stderr);
+    let current_error_window = error_window(stdout, stderr, &diagnostics);
     if let Some(existing) =
         reusable_pending_execution_repair_action(project_root, failure_kind, &current_error_window)?
     {
@@ -99,6 +100,7 @@ pub fn write_repair_action(
             exit_code,
             stdout,
             stderr,
+            &diagnostics,
             attempts.saturating_add(1),
             max_attempts,
         )?;
@@ -121,8 +123,8 @@ pub fn write_repair_action(
         exit_code,
         full_log_ref: Some(to_project_relative(project_root, &paths.log_file)?),
         error_window: Some(current_error_window),
-        diagnostics: vec![],
-        suggested_actions: suggested_actions(failure_kind, failure_owner),
+        diagnostics: diagnostics.clone(),
+        suggested_actions: suggested_actions(failure_kind, failure_owner, &diagnostics),
         editable_files,
         protected_files: protected_files_for(spec),
         instruction: instruction_for(failure_kind, failure_owner),
@@ -925,6 +927,7 @@ fn create_failure_report(
     exit_code: i32,
     stdout: &str,
     stderr: &str,
+    diagnostics: &[DeploymentFailureDiagnostic],
     attempt: u32,
     max_attempts: u32,
 ) -> StateResult<DeploymentFailureReport> {
@@ -934,7 +937,7 @@ fn create_failure_report(
         .iter()
         .map(|field| format!("check_{field}").replace('.', "_"))
         .collect::<Vec<_>>();
-    let window = error_window(stdout, stderr);
+    let window = error_window(stdout, stderr, diagnostics);
     let mut must_not_edit = vec![".loom".to_string(), spec.runtime_contract_ref.clone()];
     must_not_edit.extend(spec.files.dockerfile_paths.values().cloned());
     must_not_edit.extend(spec.files.nginx_config_paths.values().cloned());
@@ -1060,7 +1063,11 @@ fn failed_at_for(failure_kind: DeploymentFailureKind) -> &'static str {
     }
 }
 
-fn error_window(stdout: &str, stderr: &str) -> DeploymentErrorWindow {
+fn error_window(
+    stdout: &str,
+    stderr: &str,
+    diagnostics: &[DeploymentFailureDiagnostic],
+) -> DeploymentErrorWindow {
     let lines = [stdout, stderr]
         .join("\n")
         .lines()
@@ -1076,7 +1083,7 @@ fn error_window(stdout: &str, stderr: &str) -> DeploymentErrorWindow {
         .into_iter()
         .rev()
         .collect::<Vec<_>>();
-    let patterns = selected
+    let mut patterns = selected
         .iter()
         .filter(|line| {
             let lower = line.to_ascii_lowercase();
@@ -1084,6 +1091,9 @@ fn error_window(stdout: &str, stderr: &str) -> DeploymentErrorWindow {
         })
         .map(|_| "error".to_string())
         .collect::<Vec<_>>();
+    patterns.extend(diagnostics.iter().map(|diagnostic| diagnostic.code.clone()));
+    patterns.sort();
+    patterns.dedup();
     DeploymentErrorWindow {
         truncated: total > selected.len() as u32,
         total_line_count: total,
@@ -1095,8 +1105,13 @@ fn error_window(stdout: &str, stderr: &str) -> DeploymentErrorWindow {
 fn suggested_actions(
     failure_kind: DeploymentFailureKind,
     owner: DeploymentFailureOwner,
+    diagnostics: &[DeploymentFailureDiagnostic],
 ) -> Vec<String> {
-    match owner {
+    let diagnostic_actions = diagnostics
+        .iter()
+        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.suggested_action))
+        .collect::<Vec<_>>();
+    let mut actions = match owner {
         DeploymentFailureOwner::Environment => {
             vec!["Start Docker Desktop or Docker daemon, then rerun loom.deployUp.".to_string()]
         }
@@ -1112,7 +1127,9 @@ fn suggested_actions(
             enum_string(&failure_kind)
         )],
         DeploymentFailureOwner::Unknown => vec!["Review deployment failure manually.".to_string()],
-    }
+    };
+    actions.extend(diagnostic_actions);
+    actions
 }
 
 fn instruction_for(failure_kind: DeploymentFailureKind, owner: DeploymentFailureOwner) -> String {
@@ -1129,6 +1146,246 @@ fn instruction_for(failure_kind: DeploymentFailureKind, owner: DeploymentFailure
         }
         _ => "Do not edit files for this deployment failure until the blocker is resolved.".to_string(),
     }
+}
+
+fn diagnose_deployment_failure(
+    spec: &DeploymentSpec,
+    stdout: &str,
+    stderr: &str,
+) -> Vec<DeploymentFailureDiagnostic> {
+    let lines = [stdout, stderr]
+        .join("\n")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let lower = lines
+        .iter()
+        .map(|line| line.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    let mut diagnostics = Vec::new();
+    for rule in DEPLOYMENT_DIAGNOSTIC_RULES {
+        push_diagnostic_if(&mut diagnostics, &lines, &lower, rule);
+    }
+    if !spec.environment.missing.is_empty()
+        && lower
+            .iter()
+            .any(|line| contains_any(line, &["env", "secret", "config", "credential"]))
+    {
+        diagnostics.push(DeploymentFailureDiagnostic {
+            code: "spec_missing_env".to_string(),
+            severity: "warning".to_string(),
+            message: "DeploymentSpec already contains missing environment diagnostics.".to_string(),
+            evidence: spec
+                .environment
+                .missing
+                .iter()
+                .map(|variable| variable.name.clone())
+                .take(12)
+                .collect(),
+            suggested_action:
+                "Review environment.missing before changing Dockerfile or Compose commands."
+                    .to_string(),
+        });
+    }
+    if !spec.bootstrap.tasks.is_empty()
+        && lower.iter().any(|line| {
+            contains_any(
+                line,
+                &["migration", "migrate", "relation", "table", "schema"],
+            )
+        })
+    {
+        diagnostics.push(DeploymentFailureDiagnostic {
+            code: "bootstrap_task_relevant".to_string(),
+            severity: "warning".to_string(),
+            message: "Detected bootstrap tasks may be relevant to this failure.".to_string(),
+            evidence: spec.bootstrap.tasks.iter().take(12).cloned().collect(),
+            suggested_action:
+                "Ask before running bootstrap or migration commands; use them as diagnosis first."
+                    .to_string(),
+        });
+    }
+    dedupe_diagnostics(diagnostics)
+}
+
+struct DiagnosticRule {
+    code: &'static str,
+    severity: &'static str,
+    needles: &'static [&'static str],
+    message: &'static str,
+    suggested_action: &'static str,
+}
+
+const DEPLOYMENT_DIAGNOSTIC_RULES: &[DiagnosticRule] = &[
+    DiagnosticRule {
+        code: "registry_network",
+        severity: "error",
+        needles: &[
+            "failed to fetch oauth token",
+            "failed to authorize",
+            "deadlineexceeded",
+            "i/o timeout",
+            "tls handshake timeout",
+            "temporary failure in name resolution",
+            "no such host",
+            "connection timed out",
+            "network is unreachable",
+            "registry-1.docker.io",
+            "auth.docker.io",
+        ],
+        message: "Docker could not reach or authenticate with the container registry.",
+        suggested_action: "Fix Docker registry or network access, configure a registry mirror, pre-pull the base image, or retry when registry access is healthy.",
+    },
+    DiagnosticRule {
+        code: "missing_module",
+        severity: "error",
+        needles: &["cannot find module", "module_not_found", "no module named"],
+        message: "The app could not load a required runtime module.",
+        suggested_action: "Check dependency installation, package lockfiles, optional native packages, and production/runtime dependency pruning.",
+    },
+    DiagnosticRule {
+        code: "native_optional_dependency",
+        severity: "error",
+        needles: &[
+            "lightningcss",
+            "sharp",
+            "esbuild",
+            "rollup",
+            "@next/swc",
+            "oxide",
+            "linux-arm64",
+            "linux-x64",
+            "gnu.node",
+            "musl.node",
+        ],
+        message: "A platform-specific native optional dependency may be missing in the container image.",
+        suggested_action: "Repair the install step or lockfile so the Linux container receives the required native package.",
+    },
+    DiagnosticRule {
+        code: "port_in_use",
+        severity: "error",
+        needles: &[
+            "eaddrinuse",
+            "address already in use",
+            "port is already allocated",
+            "bind: address already in use",
+        ],
+        message: "A configured deployment port is already in use.",
+        suggested_action: "Change the generated host port or stop the conflicting local/container process before retrying.",
+    },
+    DiagnosticRule {
+        code: "database_schema",
+        severity: "error",
+        needles: &[
+            "relation ",
+            "table ",
+            "no such table",
+            "pending migrations",
+            "pendingmigrationerror",
+            "migration pending",
+        ],
+        message: "The app likely needs a database schema or migration step before serving traffic.",
+        suggested_action: "Use bootstrap or migration commands only as explicit evidence; do not run migrations automatically without user approval.",
+    },
+    DiagnosticRule {
+        code: "framework_startup_failed",
+        severity: "error",
+        needles: &[
+            "application failed to start",
+            "beancreationexception",
+            "unsatisfieddependencyexception",
+            "applicationcontextexception",
+            "webserverexception",
+            "flywayexception",
+            "liquibaseexception",
+            "hibernateexception",
+            "schemamanagementexception",
+            "psqlexception",
+            "communications link failure",
+            "unable to obtain jdbc connection",
+            "django.db.utils",
+            "improperlyconfigured",
+            "sqlstate[",
+        ],
+        message: "The application framework failed during startup.",
+        suggested_action: "Route through deploy execution repair and inspect dependencies, migrations, runtime configuration, and startup code before editing generated deployment assets.",
+    },
+    DiagnosticRule {
+        code: "missing_env",
+        severity: "error",
+        needles: &[
+            "required environment",
+            "environment variable",
+            "secret missing",
+            "secret not set",
+            "database_url",
+            "app_key",
+            "secret_key_base",
+        ],
+        message: "The app reported a missing or invalid environment variable.",
+        suggested_action: "Compare logs with DeploymentSpec.environment.missing and add safe local placeholders only when appropriate.",
+    },
+    DiagnosticRule {
+        code: "permission_denied",
+        severity: "error",
+        needles: &["permission denied", "eacces", "operation not permitted"],
+        message: "The container hit a filesystem or executable permission problem.",
+        suggested_action: "Repair generated Dockerfile ownership, chmod executable scripts, or adjust writable runtime directories.",
+    },
+];
+
+fn push_diagnostic_if(
+    diagnostics: &mut Vec<DeploymentFailureDiagnostic>,
+    lines: &[String],
+    lower_lines: &[String],
+    rule: &DiagnosticRule,
+) {
+    if !lower_lines
+        .iter()
+        .any(|line| contains_any(line, rule.needles))
+    {
+        return;
+    }
+    diagnostics.push(DeploymentFailureDiagnostic {
+        code: rule.code.to_string(),
+        severity: rule.severity.to_string(),
+        message: rule.message.to_string(),
+        evidence: evidence_lines(lines, lower_lines, rule.needles),
+        suggested_action: rule.suggested_action.to_string(),
+    });
+}
+
+fn evidence_lines(lines: &[String], lower_lines: &[String], needles: &[&str]) -> Vec<String> {
+    lines
+        .iter()
+        .zip(lower_lines)
+        .filter(|(_, lower)| contains_any(lower, needles))
+        .map(|(line, _)| line.clone())
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn dedupe_diagnostics(
+    diagnostics: Vec<DeploymentFailureDiagnostic>,
+) -> Vec<DeploymentFailureDiagnostic> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut result = Vec::new();
+    for diagnostic in diagnostics {
+        if seen.insert(diagnostic.code.clone()) {
+            result.push(diagnostic);
+        }
+    }
+    result
 }
 
 fn enum_string<T: serde::Serialize>(value: &T) -> String {
