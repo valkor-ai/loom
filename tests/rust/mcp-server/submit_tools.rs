@@ -2085,6 +2085,102 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
 }
 
 #[test]
+fn task_result_repair_template_resets_conflicting_runtime_evidence() {
+    let fixture = Fixture::new("task-result-repair-runtime-template");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["runtimeDeliveryRequirement"] = json!({
+        "appliesToThisTask": true,
+        "reason": "This task changes runtime delivery wiring.",
+        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
+        "affectedContractFields": ["runtimeSurfaces"],
+        "requiredCodeLevelChecks": [{
+            "checkId": "check-runtime-wiring",
+            "contractField": "runtimeSurfaces",
+            "objective": "Verify runtime surface wiring still works.",
+            "acceptableEvidence": ["runtime_api_check", "static_check"]
+        }],
+        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "forbiddenActions": []
+    });
+    write_json_atomic(&group_path, &group_value).expect("write runtime group file");
+
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read runtime result template")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/runtime.ts"]);
+    result["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"] =
+        json!("wrong-runtime-check");
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write bad task result");
+
+    let invalid = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(invalid["state"], "auto_runnable", "{invalid:#}");
+    assert_eq!(invalid["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = invalid["next"]["requestRef"]
+        .as_str()
+        .expect("repair request ref")
+        .to_string();
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref,
+        fields: vec![
+            "outputContract.resultTemplate".to_string(),
+            "repairContract.issueConflicts".to_string(),
+        ],
+    })
+    .expect("read task result repair template")
+    .fields;
+
+    assert_eq!(
+        repair_fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
+            ["codeLevelChecks"][0]["checkId"],
+        json!("check-runtime-wiring")
+    );
+    assert!(
+        serde_json::to_string(&repair_fields["repairContract.issueConflicts"].value)
+            .expect("serialize issue conflicts")
+            .contains("wrong-runtime-check")
+    );
+}
+
+#[test]
 fn taskplan_request_omits_null_optional_projection_reads() {
     let fixture = Fixture::new("taskplan-no-optional-projections");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);

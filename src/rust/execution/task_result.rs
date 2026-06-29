@@ -1481,6 +1481,14 @@ fn task_result_runtime_conflict(context: &RepairContextInput, mut base: Value) -
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let submitted_check_ids = context
+        .submitted_result
+        .get("runtimeDeliveryEvidence")
+        .map(|evidence| object_array_string_field(evidence, "codeLevelChecks", "checkId"))
+        .unwrap_or_default();
+    base["current"] = json!({
+        "runtimeCheckIds": submitted_check_ids
+    });
     base["expectedRuntimeCheckIds"] = json!(required_check_ids);
     base["validRepairChoices"] = json!([
         "Use exactly the task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId values.",
@@ -1518,7 +1526,7 @@ fn task_result_repair_template(
     issues: &[delivery_core::RepairIssue],
 ) -> Value {
     let mut template = task_result_template(&context.task_plan_id, &context.task);
-    merge_submitted_task_result_fields(&mut template, &context.submitted_result);
+    merge_submitted_task_result_fields(&mut template, &context.submitted_result, issues);
     if changed_files_issue(issues)
         && context
             .previous_changed_files
@@ -1535,13 +1543,21 @@ fn task_result_repair_template(
     template
 }
 
-fn merge_submitted_task_result_fields(template: &mut Value, submitted: &Value) {
+fn merge_submitted_task_result_fields(
+    template: &mut Value,
+    submitted: &Value,
+    issues: &[delivery_core::RepairIssue],
+) {
     let (Some(template_object), Some(submitted_object)) =
         (template.as_object_mut(), submitted.as_object())
     else {
         return;
     };
+    let conflicted_fields = issue_top_level_fields(issues);
     for (key, submitted_value) in submitted_object {
+        if conflicted_fields.contains(key.as_str()) {
+            continue;
+        }
         if !template_object.contains_key(key) {
             continue;
         }
@@ -1550,6 +1566,15 @@ fn merge_submitted_task_result_fields(template: &mut Value, submitted: &Value) {
         }
         template_object.insert(key.clone(), submitted_value.clone());
     }
+}
+
+fn issue_top_level_fields(issues: &[delivery_core::RepairIssue]) -> BTreeSet<&str> {
+    issues
+        .iter()
+        .filter_map(|issue| issue.field_path.as_deref())
+        .filter_map(|path| path.split(['.', '[']).next())
+        .filter(|field| !field.is_empty())
+        .collect()
 }
 
 fn keeps_template_array_shape(template_value: Option<&Value>, submitted_value: &Value) -> bool {
