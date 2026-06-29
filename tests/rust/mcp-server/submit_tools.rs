@@ -558,6 +558,80 @@ fn technical_baseline_conflict_with_previous_baseline_requires_user_gate() {
 }
 
 #[test]
+fn greenfield_technical_baseline_needing_confirmation_uses_user_gate() {
+    let fixture = Fixture::new("technical-baseline-greenfield-user-gate");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = greenfield_technical_baseline_candidate_json();
+    candidate["status"] = json!("needs_user_confirmation");
+    candidate["approval"] = json!({
+        "type": "none",
+        "reason": "The recommended stack still needs user confirmation."
+    });
+    candidate["requiresUserConfirmation"] = json!(true);
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "user_gate", "{result:#}");
+    assert_eq!(result["gate"]["gateId"], "greenfield_baseline_confirmation");
+}
+
+#[test]
+fn greenfield_technical_baseline_requires_complete_track_model() {
+    let fixture = Fixture::new("technical-baseline-greenfield-tracks");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = greenfield_technical_baseline_candidate_json();
+    candidate["stack"] = json!({
+        "frontend": "vite-react",
+        "backend": "spring-boot",
+        "database": "sqlite"
+    });
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .any(
+            |issue| issue["code"] == "GREENFIELD_BASELINE_TRACKS_INCOMPLETE"
+                && issue["fieldPath"] == "stack.tracks"
+        ));
+}
+
+#[test]
 fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
     let fixture = Fixture::new("repository-context-pgc");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -5521,6 +5595,71 @@ fn technical_baseline_candidate_json(project_kind: &str, approval_type: &str) ->
         "requiresUserConfirmation": false,
         "reasoningSummary": [
             "The current phase should preserve a stable application stack."
+        ],
+        "alternatives": []
+    })
+}
+
+fn greenfield_technical_baseline_candidate_json() -> Value {
+    json!({
+        "status": "confirmed",
+        "source": "agent_recommended_for_greenfield",
+        "projectKind": "greenfield",
+        "scope": "project",
+        "stack": {
+            "tracks": {
+                "web": {
+                    "status": "selected",
+                    "selection": "React + Vite + TypeScript",
+                    "source": "user_confirmed",
+                    "rationale": "Matches the confirmed staff-facing web workflow."
+                },
+                "app": {
+                    "status": "not_applicable",
+                    "selection": "No native/mobile app in this phase",
+                    "source": "requirement_scope",
+                    "rationale": "The confirmed phase only needs a staff web surface."
+                },
+                "backend": {
+                    "status": "selected",
+                    "selection": "Java + Spring Boot",
+                    "source": "user_confirmed",
+                    "rationale": "Supports the required account workflow APIs."
+                },
+                "persistence": {
+                    "status": "selected",
+                    "selection": "SQLite",
+                    "source": "user_confirmed",
+                    "rationale": "Enough for local phase verification."
+                },
+                "dataAccess": {
+                    "status": "selected",
+                    "selection": "Spring Data JPA",
+                    "source": "user_confirmed",
+                    "rationale": "Aligns with Spring Boot persistence."
+                },
+                "externalServices": {
+                    "status": "not_needed",
+                    "selection": "No external services in this phase",
+                    "source": "requirement_scope",
+                    "rationale": "The phase can run locally without third-party integration."
+                }
+            }
+        },
+        "constraints": [],
+        "evidence": [{
+            "path": Value::Null,
+            "reason": "Greenfield stack was selected from the confirmed phase scope."
+        }],
+        "approval": {
+            "type": "user_confirmed",
+            "confirmedAt": "2026-06-24T10:30:00+08:00",
+            "reason": "User confirmed the final technology baseline."
+        },
+        "confidence": "high",
+        "requiresUserConfirmation": false,
+        "reasoningSummary": [
+            "The selected stack supports the confirmed greenfield phase without adding extra surfaces."
         ],
         "alternatives": []
     })

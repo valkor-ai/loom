@@ -822,7 +822,83 @@ fn validate_candidate(
             "A confirmed TechnicalBaseline cannot keep approval.type=none.",
         ));
     }
+    if matches!(candidate.project_kind, ProjectKind::Greenfield) {
+        validate_greenfield_candidate(candidate, &mut issues);
+    }
     issues
+}
+
+const GREENFIELD_CORE_TRACKS: [&str; 6] = [
+    "web",
+    "app",
+    "backend",
+    "persistence",
+    "dataAccess",
+    "externalServices",
+];
+const GREENFIELD_TRACK_STATUSES: [&str; 4] =
+    ["selected", "not_needed", "not_applicable", "user_custom"];
+
+fn validate_greenfield_candidate(
+    candidate: &TechnicalBaselineCandidateAgentWritable,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if matches!(
+        candidate.approval.r#type,
+        TechnicalBaselineApprovalType::UserConfirmed
+    ) && candidate
+        .approval
+        .confirmed_at
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        issues.push(issue(
+            "GREENFIELD_BASELINE_CONFIRMATION_REQUIRED",
+            "approval.confirmedAt",
+            "Greenfield TechnicalBaseline with approval.type=user_confirmed must include the actual user confirmation timestamp.",
+        ));
+    }
+    if !matches!(
+        candidate.status,
+        TechnicalBaselineStatus::Confirmed | TechnicalBaselineStatus::NeedsUserConfirmation
+    ) {
+        issues.push(issue(
+            "GREENFIELD_BASELINE_CONFIRMATION_REQUIRED",
+            "status",
+            "Greenfield TechnicalBaseline must be confirmed before planning, or use status=needs_user_confirmation when user confirmation is still pending.",
+        ));
+    }
+    if !greenfield_stack_tracks_complete(&candidate.stack) {
+        issues.push(issue(
+            "GREENFIELD_BASELINE_TRACKS_INCOMPLETE",
+            "stack.tracks",
+            "Greenfield TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
+        ));
+    }
+}
+
+fn greenfield_stack_tracks_complete(stack: &Value) -> bool {
+    let Some(tracks) = stack.get("tracks").and_then(Value::as_object) else {
+        return false;
+    };
+    GREENFIELD_CORE_TRACKS.iter().all(|track| {
+        let Some(value) = tracks.get(*track).and_then(Value::as_object) else {
+            return false;
+        };
+        let status = value
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let selection = value
+            .get("selection")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        GREENFIELD_TRACK_STATUSES.contains(&status) && !selection.is_empty()
+    })
 }
 
 fn technical_baseline_decision_needs(
