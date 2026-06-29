@@ -426,6 +426,20 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
     let repository_context_request_ref = result["next"]["requestRef"]
         .as_str()
         .expect("repository context requestRef");
+    let scan_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repository_context_request_ref.to_string(),
+        group_id: "repository_context_scan_contract".to_string(),
+    })
+    .expect("read repository context scan contract");
+    assert_eq!(
+        scan_contract.fields["repositoryMode"].value,
+        json!("existing_project")
+    );
+    assert_eq!(
+        scan_contract.fields["phaseDevelopmentMode"].value,
+        json!("initial_delivery")
+    );
     let generation_rules = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repository_context_request_ref.to_string(),
@@ -3109,6 +3123,20 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
     let repository_context_request_ref = result["next"]["requestRef"]
         .as_str()
         .expect("repository context request ref");
+    let phase_2_scan_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repository_context_request_ref.to_string(),
+        group_id: "repository_context_scan_contract".to_string(),
+    })
+    .expect("read phase-2 repository context scan contract");
+    assert_eq!(
+        phase_2_scan_contract.fields["repositoryMode"].value,
+        json!("existing_project")
+    );
+    assert_eq!(
+        phase_2_scan_contract.fields["phaseDevelopmentMode"].value,
+        json!("incremental_delivery")
+    );
     let brainstorm_contract_ref = phase_2["latestRefs"]["brainstormContract"]
         .as_str()
         .expect("brainstorm contract ref");

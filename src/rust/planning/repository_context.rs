@@ -1,8 +1,9 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
-    BrainstormContract, BrainstormStatus, ClarificationBlockName,
-    RepositoryContextCandidateAgentWritable, RepositoryContextContract, TechnicalBaselineContract,
+    BrainstormContract, BrainstormStatus, ClarificationBlockName, PhaseDevelopmentMode,
+    ProjectKind, RepositoryContextCandidateAgentWritable, RepositoryContextContract,
+    RepositoryMode, TechnicalBaselineContract,
 };
 use delivery_core::{
     ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
@@ -112,6 +113,7 @@ fn materialize_request_inner(
         root,
         &repository_context_request_file(root, &locator, &request_id),
     )?;
+    let repository_lens = phase_repository_lens(&delivery, phase_id, baseline.project_kind);
     let request_root = build_request_root(
         &request_id,
         delivery_id,
@@ -119,6 +121,7 @@ fn materialize_request_inner(
         &candidate_file,
         &brainstorm_contract_ref,
         &baseline,
+        repository_lens,
     );
     let stored = state::write_native_request(
         project_root,
@@ -162,6 +165,7 @@ fn build_request_root(
     candidate_file: &str,
     brainstorm_contract_ref: &str,
     baseline: &TechnicalBaselineContract,
+    repository_lens: RepositoryLens,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(RepositoryContextCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -172,8 +176,8 @@ fn build_request_root(
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "baselineProjectKind": baseline.project_kind,
-        "repositoryMode": "existing_project",
-        "phaseDevelopmentMode": "initial_delivery",
+        "repositoryMode": repository_lens.repository_mode,
+        "phaseDevelopmentMode": repository_lens.phase_development_mode,
         "source": {
             "brainstormContractRef": brainstorm_contract_ref,
             "technicalBaselineRef": format!(".loom/deliveries/{}/contracts/technical-baseline.json", delivery_id)
@@ -267,8 +271,8 @@ fn build_request_root(
                 "requestLens": {
                     "projectKind": baseline.project_kind,
                     "baselineProjectKind": baseline.project_kind,
-                    "repositoryMode": "existing_project",
-                    "phaseDevelopmentMode": "initial_delivery",
+                    "repositoryMode": repository_lens.repository_mode,
+                    "phaseDevelopmentMode": repository_lens.phase_development_mode,
                     "scanPurpose": "phase_start_repository_snapshot",
                     "primaryConsumer": "phase_brainstorm",
                     "laterConsumers": ["PGC", "AAC", "TaskPlan"]
@@ -396,6 +400,44 @@ fn build_request_root(
             ]
         }
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RepositoryLens {
+    repository_mode: RepositoryMode,
+    phase_development_mode: PhaseDevelopmentMode,
+}
+
+fn phase_repository_lens(
+    delivery: &delivery_core::DeliveryIndex,
+    phase_id: &str,
+    baseline_project_kind: ProjectKind,
+) -> RepositoryLens {
+    let completed_phase_count = delivery
+        .phases
+        .iter()
+        .position(|phase| phase.phase_id == phase_id)
+        .unwrap_or(0);
+    if completed_phase_count > 0 {
+        return RepositoryLens {
+            repository_mode: RepositoryMode::ExistingProject,
+            phase_development_mode: PhaseDevelopmentMode::IncrementalDelivery,
+        };
+    }
+    match baseline_project_kind {
+        ProjectKind::Greenfield => RepositoryLens {
+            repository_mode: RepositoryMode::EmptyProject,
+            phase_development_mode: PhaseDevelopmentMode::InitialDelivery,
+        },
+        ProjectKind::ExistingProject => RepositoryLens {
+            repository_mode: RepositoryMode::ExistingProject,
+            phase_development_mode: PhaseDevelopmentMode::InitialDelivery,
+        },
+        ProjectKind::Unknown => RepositoryLens {
+            repository_mode: RepositoryMode::Unknown,
+            phase_development_mode: PhaseDevelopmentMode::Unknown,
+        },
+    }
 }
 
 pub fn accept_repository_context_file<D>(
