@@ -1061,7 +1061,7 @@ fn route_action_for_task_result(
                 .find(|state| state.task_id == result.task_id)
                 .map(|state| state.attempts.len())
                 .unwrap_or(0);
-            if attempt_count <= 2 {
+            if attempt_count <= 3 {
                 Ok(Some(RouteAction {
                     kind: RouteActionKind::ExecutionRepair,
                     source: "task_result".to_string(),
@@ -1234,7 +1234,6 @@ fn materialize_task_result_repair(
         "source.taskPlanRunId",
         "source.taskExecutionRequestRef",
         "source.originalResultFile",
-        "source.issues",
         "task.taskId",
         "task.groupId",
         "task.title",
@@ -1244,7 +1243,9 @@ fn materialize_task_result_repair(
         "task.requirementDetailRefs",
         "task.verificationIntents",
         "outputContract.blockedReasonOptions",
-        "repairRules.rule",
+        "repairContract.profile",
+        "repairContract.issueConflicts",
+        "repairContract.minimalRepairRules",
     ];
     if !context.task.concept_refs.is_empty() {
         context_fields.push("task.conceptRefs");
@@ -1293,12 +1294,13 @@ fn materialize_task_result_repair(
             "taskPlanId": context.task_plan_id,
             "taskId": context.task_id,
             "taskPlanRunId": context.run_id,
-            "originalResultFile": target_file,
-            "issues": issues
+            "originalResultFile": target_file
         },
         "task": context.task.clone(),
-        "repairRules": {
-            "rule": "Rewrite the TaskResult JSON so it satisfies the original TaskExecutionRequest output contract. Do not edit source files for this repair."
+        "repairContract": {
+            "profile": "minimal_task_result_repair",
+            "issueConflicts": task_result_issue_conflicts(&context, &issues),
+            "minimalRepairRules": task_result_minimal_repair_rules(&issues)
         },
         "outputContract": {
             "artifactKind": ArtifactKind::TaskResultRepair,
@@ -1401,6 +1403,112 @@ fn previous_persisted_changed_files(
     state::store::read_json::<TaskResult>(&path)
         .map(|previous| previous.changed_files)
         .unwrap_or_default()
+}
+
+fn task_result_issue_conflicts(
+    context: &RepairContextInput,
+    issues: &[delivery_core::RepairIssue],
+) -> Vec<Value> {
+    issues
+        .iter()
+        .map(|issue| {
+            let base = json!({
+                "code": issue.code,
+                "fieldPath": issue.field_path,
+                "message": issue.message
+            });
+            if issue.code == "TASK_RESULT_WORKFLOW_CLOSURE_INVALID" {
+                return task_result_workflow_conflict(context, base);
+            }
+            if issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID" {
+                return task_result_runtime_conflict(context, base);
+            }
+            base
+        })
+        .collect()
+}
+
+fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    let self_check = context
+        .submitted_result
+        .get("frontendExperienceSelfCheck")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data_binding = self_check
+        .get("dataBinding")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let known_gaps_count = data_binding
+        .get("knownGaps")
+        .and_then(Value::as_array)
+        .map(|items| items.len());
+    let expected_closure_ids = context
+        .task
+        .frontend_experience_requirement
+        .as_ref()
+        .map(workflow_closure_requirement_ids)
+        .unwrap_or_default();
+    base["current"] = json!({
+        "frontendExperienceSelfCheckStatus": self_check.get("status").and_then(Value::as_str),
+        "dataBindingMode": data_binding.get("mode").and_then(Value::as_str),
+        "knownGapsCount": known_gaps_count
+    });
+    base["expectedForSatisfied"] = json!({
+        "frontendExperienceSelfCheckStatus": "satisfied",
+        "dataBindingMode": "wired",
+        "knownGaps": [],
+        "closureRequirementIds": expected_closure_ids
+    });
+    base["validRepairChoices"] = json!([
+        "If the implementation and evidence are actually wired, repair frontendExperienceSelfCheck.dataBinding.mode to wired, clear knownGaps, and cite evidence.",
+        "If wired evidence is missing, do not claim satisfied; report the remaining gap through frontendExperienceSelfCheck and the normal TaskResult status."
+    ]);
+    base
+}
+
+fn task_result_runtime_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    let required_check_ids = context
+        .task
+        .runtime_delivery_requirement
+        .as_ref()
+        .map(|requirement| {
+            requirement
+                .required_code_level_checks
+                .iter()
+                .map(|check| check.check_id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    base["expectedRuntimeCheckIds"] = json!(required_check_ids);
+    base["validRepairChoices"] = json!([
+        "Use exactly the task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId values.",
+        "If a code-level check does not apply, record it with status not_applicable and a non-empty reason."
+    ]);
+    base
+}
+
+fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Vec<&'static str> {
+    let mut rules = vec![
+        "Repair the same TaskResult JSON file only.",
+        "Do not edit project source files for TaskResult contract repair.",
+        "Use exact verificationResults[].verificationId values from task.verificationIntents.",
+        "Never combine selfRepairSummary.attempted=false with stopReason verification_passed.",
+    ];
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_WORKFLOW_CLOSURE_INVALID")
+    {
+        rules.push("frontendExperienceSelfCheck.status=satisfied is valid only when dataBinding.mode=wired and knownGaps is empty.");
+        rules.push("If wired evidence is missing, do not claim satisfied; report the remaining gap through frontendExperienceSelfCheck and TaskResult status.");
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID")
+    {
+        rules.push("RuntimeDeliveryEvidence codeLevelChecks must use only required check ids from the request.");
+        rules.push("For passed runtime checks, omit reason; use a non-empty reason only for failed, blocked, or not_applicable checks.");
+    }
+    rules
 }
 
 fn task_result_repair_template(

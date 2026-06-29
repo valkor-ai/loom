@@ -1565,12 +1565,31 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     );
     let task_result_repair_root =
         read_request_root_value(fixture.root_str(), &task_result_repair_action_ref);
-    assert!(task_result_repair_root["requestReadPlan"]["groups"]
+    assert!(task_result_repair_root["source"].get("issues").is_none());
+    let task_result_repair_read_plan_fields = task_result_repair_root["requestReadPlan"]["groups"]
         .as_array()
         .expect("repair read groups")
         .iter()
         .flat_map(|group| group["fields"].as_array().into_iter().flatten())
-        .any(|field| field.as_str() == Some("outputContract.resultTemplate")));
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(task_result_repair_read_plan_fields.contains(&"outputContract.resultTemplate"));
+    assert!(task_result_repair_read_plan_fields.contains(&"repairContract.issueConflicts"));
+    assert!(task_result_repair_read_plan_fields.contains(&"repairContract.minimalRepairRules"));
+    assert!(!task_result_repair_read_plan_fields.contains(&"source.issues"));
+    let repair_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: task_result_repair_action_ref.clone(),
+        group_id: "task_result_repair_context".to_string(),
+    })
+    .expect("read task result repair context");
+    assert_eq!(
+        repair_contract.fields["repairContract.profile"].value,
+        json!("minimal_task_result_repair")
+    );
+    assert!(repair_contract.fields["repairContract.issueConflicts"]
+        .value
+        .is_array());
     write_large_task_result_candidate(&fixture, &task_result_repair_action_ref);
     let task_result = call_submit(
         "loom.repairSubmitFile",
@@ -2022,6 +2041,59 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         repaired_result["error"]["code"], "FIELD_NOT_ALLOWED",
         "{repaired_result:#}"
     );
+}
+
+#[test]
+fn failed_task_result_routes_to_review_after_four_failed_attempts() {
+    let fixture = Fixture::new("failed-task-result-retry-budget");
+    let mut request_ref = start_planned_task_execution(&fixture);
+
+    for attempt in 1..=3 {
+        write_failed_task_result_candidate_with_id(
+            &fixture,
+            &request_ref,
+            &format!("result-failed-task-account-{attempt:03}"),
+        );
+        let result = call_submit(
+            "loom.recordTaskResultFile",
+            &request_ref,
+            fixture.root_str(),
+        );
+        assert_eq!(
+            result["state"], "auto_runnable",
+            "attempt {attempt}: {result:#}"
+        );
+        assert_eq!(
+            result["next"]["executionKind"], "delivery_execution_repair",
+            "attempt {attempt}: {result:#}"
+        );
+        assert_eq!(
+            result["next"]["repairContext"]["attemptCount"], attempt,
+            "attempt {attempt}: {result:#}"
+        );
+        request_ref = result["next"]["requestRef"]
+            .as_str()
+            .expect("next repair requestRef")
+            .to_string();
+    }
+
+    write_failed_task_result_candidate_with_id(
+        &fixture,
+        &request_ref,
+        "result-failed-task-account-004",
+    );
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(
+        result["next"]["artifactKind"], "review_result",
+        "{result:#}"
+    );
+    assert_eq!(result["next"]["submitTool"], "loom.reviewAcceptFile");
 }
 
 #[test]
@@ -4223,6 +4295,18 @@ fn start_planned_task_execution_with_candidate(fixture: &Fixture, candidate: Val
 }
 
 fn write_failed_task_result_candidate(fixture: &Fixture, request_ref: &str) {
+    write_failed_task_result_candidate_with_id(
+        fixture,
+        request_ref,
+        "result-failed-task-account-001",
+    );
+}
+
+fn write_failed_task_result_candidate_with_id(
+    fixture: &Fixture,
+    request_ref: &str,
+    task_result_id: &str,
+) {
     let fields = execution_result_fields(fixture, request_ref);
     let result_file = fields["outputContract.resultFile"]
         .value
@@ -4237,7 +4321,7 @@ fn write_failed_task_result_candidate(fixture: &Fixture, request_ref: &str) {
         &fixture.root.join(result_file),
         &json!({
             "schemaVersion": "1.0",
-            "taskResultId": "result-failed-task-account-001",
+            "taskResultId": task_result_id,
             "taskId": task_id,
             "taskPlanId": task_plan_id,
             "status": "failed",
