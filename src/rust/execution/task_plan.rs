@@ -330,6 +330,9 @@ fn taskplan_source_refs(
     if let Some(delivery_concept_glossary_ref) = &pgc.context_refs.delivery_concept_glossary_ref {
         value["deliveryConceptGlossaryRef"] = json!(delivery_concept_glossary_ref);
     }
+    if let Some(repository_context_ref) = &pgc.context_refs.repository_context_ref {
+        value["repositoryContextRef"] = json!(repository_context_ref);
+    }
     value
 }
 
@@ -353,6 +356,9 @@ fn taskplan_read_groups(
     }
     if has_non_null_key(source_refs, "deliveryConceptGlossaryRef") {
         core_fields.push("sourceRefs.deliveryConceptGlossaryRef");
+    }
+    if has_non_null_key(source_refs, "repositoryContextRef") {
+        core_fields.push("sourceRefs.repositoryContextRef");
     }
     core_fields.extend([
         "contextProjection.phaseId",

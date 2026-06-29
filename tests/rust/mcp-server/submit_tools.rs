@@ -1737,6 +1737,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .filter(|(field, _)| field.starts_with("sourceRefs."))
         .all(|(_, field)| !field.value.is_null()));
     for field in [
+        "sourceRefs.repositoryContextRef",
         "sourceRefs.phaseConceptGroundingRef",
         "sourceRefs.deliveryConceptGlossaryRef",
     ] {
@@ -1745,6 +1746,22 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             taskplan_core_fields.contains_key(field)
         );
     }
+    let planning_contract_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "planningContract");
+    let planning_contract: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(&planning_contract_ref))
+            .expect("read planning contract"),
+    )
+    .expect("parse planning contract");
+    assert_eq!(
+        taskplan_core_fields["sourceRefs.repositoryContextRef"].value,
+        planning_contract["contextRefs"]["repositoryContextRef"],
+        "TaskPlan must carry the current phase RepositoryContext ref from PGC"
+    );
+    assert!(compact_taskplan_root.get("repositoryContext").is_none());
+    assert!(compact_taskplan_root
+        .get("latestRepositoryContext")
+        .is_none());
     let taskplan_contract_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: taskplan_request_ref.to_string(),
