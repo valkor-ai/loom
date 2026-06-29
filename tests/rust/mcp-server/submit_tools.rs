@@ -1323,6 +1323,31 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert!(taskplan_rules_text.contains("smallest stable verification signal"));
     let compact_taskplan_root = read_request_root_value(fixture.root_str(), taskplan_request_ref);
     assert_no_root_submit_metadata(&compact_taskplan_root);
+    let taskplan_core_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "taskplan_core_context")
+        .expect("taskplan core group");
+    let taskplan_core_fields = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        group_id: "taskplan_core_context".to_string(),
+    })
+    .expect("read taskplan core group")
+    .fields;
+    assert!(taskplan_core_fields
+        .iter()
+        .filter(|(field, _)| field.starts_with("sourceRefs."))
+        .all(|(_, field)| !field.value.is_null()));
+    for field in [
+        "sourceRefs.phaseConceptGroundingRef",
+        "sourceRefs.deliveryConceptGlossaryRef",
+    ] {
+        assert_eq!(
+            taskplan_core_group.fields.contains(&field.to_string()),
+            taskplan_core_fields.contains_key(field)
+        );
+    }
     let taskplan_contract_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: taskplan_request_ref.to_string(),

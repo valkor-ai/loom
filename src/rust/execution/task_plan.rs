@@ -236,6 +236,7 @@ fn build_request_root(
     let runtime_requirement_template =
         runtime_delivery_requirement_template(aac.runtime_delivery.as_ref());
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
+    let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
     let group_result_template = taskplan_group_result_template(request_id, delivery_id, phase_id);
@@ -283,13 +284,7 @@ fn build_request_root(
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::TaskPlanCandidate,
-        "sourceRefs": {
-            "technicalBaselineRef": baseline_ref,
-            "planningGenerationContractRef": planning_ref,
-            "architectureArtifactContractRef": architecture_ref,
-            "phaseConceptGroundingRef": pgc.context_refs.phase_concept_grounding_ref,
-            "deliveryConceptGlossaryRef": pgc.context_refs.delivery_concept_glossary_ref
-        },
+        "sourceRefs": source_refs,
         "contextProjection": {
             "phaseId": phase_id,
             "planningContractId": pgc.planning_contract_id,
@@ -309,6 +304,7 @@ fn build_request_root(
         "outputContract": output_contract,
         "requestReadPlan": {
             "groups": taskplan_read_groups(
+                &source_refs,
                 aac,
                 &runtime_requirement_template,
                 &runtime_closure_template
@@ -317,48 +313,80 @@ fn build_request_root(
     })
 }
 
+fn taskplan_source_refs(
+    baseline_ref: &str,
+    planning_ref: &str,
+    architecture_ref: &str,
+    pgc: &contracts::PlanningGenerationContract,
+) -> Value {
+    let mut value = json!({
+        "technicalBaselineRef": baseline_ref,
+        "planningGenerationContractRef": planning_ref,
+        "architectureArtifactContractRef": architecture_ref,
+    });
+    if let Some(phase_concept_grounding_ref) = &pgc.context_refs.phase_concept_grounding_ref {
+        value["phaseConceptGroundingRef"] = json!(phase_concept_grounding_ref);
+    }
+    if let Some(delivery_concept_glossary_ref) = &pgc.context_refs.delivery_concept_glossary_ref {
+        value["deliveryConceptGlossaryRef"] = json!(delivery_concept_glossary_ref);
+    }
+    value
+}
+
+fn has_non_null_key(value: &Value, key: &str) -> bool {
+    value.get(key).is_some_and(|item| !item.is_null())
+}
+
 fn taskplan_read_groups(
+    source_refs: &Value,
     aac: &ArchitectureArtifactContract,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
 ) -> Value {
+    let mut core_fields = vec![
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.planningGenerationContractRef",
+        "sourceRefs.architectureArtifactContractRef",
+    ];
+    if has_non_null_key(source_refs, "phaseConceptGroundingRef") {
+        core_fields.push("sourceRefs.phaseConceptGroundingRef");
+    }
+    if has_non_null_key(source_refs, "deliveryConceptGlossaryRef") {
+        core_fields.push("sourceRefs.deliveryConceptGlossaryRef");
+    }
+    core_fields.extend([
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.architectureArtifactContractId",
+        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+        "contextProjection.requirementDetailTransfer.currentPhaseScope",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlowDetails",
+        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+        "contextProjection.requirementDetailTransfer.architectureDetails",
+        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+        "contextProjection.requirementDetailTransfer.conceptRefs",
+        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.deferredScopeRefs",
+        "allowedRefs.excludedScopeRefs",
+        "allowedRefs.requirementDetailIds",
+        "allowedRefs.moduleRefs",
+        "allowedRefs.entityRefs",
+        "allowedRefs.interfaceRefs",
+        "allowedRefs.userFlowRefs",
+        "allowedRefs.stateMachineRefs",
+        "allowedRefs.decisionRefs",
+        "allowedRefs.riskRefs",
+    ]);
     let mut groups = vec![
         json!({
             "groupId": "taskplan_core_context",
             "required": true,
             "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
-            "fields": [
-                "sourceRefs.technicalBaselineRef",
-                "sourceRefs.planningGenerationContractRef",
-                "sourceRefs.architectureArtifactContractRef",
-                "sourceRefs.phaseConceptGroundingRef",
-                "sourceRefs.deliveryConceptGlossaryRef",
-                "contextProjection.phaseId",
-                "contextProjection.planningContractId",
-                "contextProjection.architectureArtifactContractId",
-                "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-                "contextProjection.requirementDetailTransfer.currentPhaseScope",
-                "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                "contextProjection.requirementDetailTransfer.businessFlowDetails",
-                "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-                "contextProjection.requirementDetailTransfer.architectureDetails",
-                "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-                "contextProjection.requirementDetailTransfer.conceptRefs",
-                "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
-                "allowedRefs.scopeRefs",
-                "allowedRefs.acceptanceRefs",
-                "allowedRefs.deferredScopeRefs",
-                "allowedRefs.excludedScopeRefs",
-                "allowedRefs.requirementDetailIds",
-                "allowedRefs.moduleRefs",
-                "allowedRefs.entityRefs",
-                "allowedRefs.interfaceRefs",
-                "allowedRefs.userFlowRefs",
-                "allowedRefs.stateMachineRefs",
-                "allowedRefs.decisionRefs",
-                "allowedRefs.riskRefs"
-            ]
+            "fields": core_fields
         }),
         json!({
             "groupId": "taskplan_generation_rules",
