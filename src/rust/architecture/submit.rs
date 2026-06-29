@@ -223,28 +223,32 @@ where
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
     let section_outputs =
         parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
-    let allowed_ref_fields = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: input.project_root.clone(),
-        request_ref: input.request_ref.clone(),
-        fields: [
-            "allowedRefs.scopeRefs",
-            "allowedRefs.acceptanceRefs",
-            "allowedRefs.deferredScopeRefs",
-            "allowedRefs.excludedScopeRefs",
-            "allowedRefs.requirementDetailIds",
-        ]
-        .iter()
-        .map(|field| field.to_string())
-        .collect(),
-    })?
-    .fields;
-    let allowed_refs = json!({
-        "scopeRefs": field_value(&allowed_ref_fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": field_value(&allowed_ref_fields, "allowedRefs.acceptanceRefs"),
-        "deferredScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.deferredScopeRefs"),
-        "excludedScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.excludedScopeRefs"),
-        "requirementDetailIds": field_value(&allowed_ref_fields, "allowedRefs.requirementDetailIds")
-    });
+    let allowed_refs = if section_uses_allowed_refs(current_section) {
+        let allowed_ref_fields = state::read_request_fields(ReadRequestFieldsInput {
+            project_root: input.project_root.clone(),
+            request_ref: input.request_ref.clone(),
+            fields: [
+                "allowedRefs.scopeRefs",
+                "allowedRefs.acceptanceRefs",
+                "allowedRefs.deferredScopeRefs",
+                "allowedRefs.excludedScopeRefs",
+                "allowedRefs.requirementDetailIds",
+            ]
+            .iter()
+            .map(|field| field.to_string())
+            .collect(),
+        })?
+        .fields;
+        json!({
+            "scopeRefs": field_value(&allowed_ref_fields, "allowedRefs.scopeRefs"),
+            "acceptanceRefs": field_value(&allowed_ref_fields, "allowedRefs.acceptanceRefs"),
+            "deferredScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.deferredScopeRefs"),
+            "excludedScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.excludedScopeRefs"),
+            "requirementDetailIds": field_value(&allowed_ref_fields, "allowedRefs.requirementDetailIds")
+        })
+    } else {
+        json!({})
+    };
     let expected_request_id = request_root
         .get("requestId")
         .and_then(Value::as_str)
@@ -269,7 +273,9 @@ where
         current_section,
     );
     issues.extend(validate_section_content(&candidate));
-    issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
+    if section_uses_allowed_refs(current_section) {
+        issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
+    }
     issues.extend(validate_frontend_rules(&candidate, &request_root));
     issues.extend(validate_runtime_rules(&candidate, &source_refs));
     if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
@@ -498,6 +504,16 @@ fn validate_section_content(
         }
     }
     issues
+}
+
+fn section_uses_allowed_refs(section: ArchitectureSectionGroup) -> bool {
+    matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+            | ArchitectureSectionGroup::Coverage
+    )
 }
 
 fn validate_allowed_refs(content: &Value, allowed_refs: &Value) -> Vec<delivery_core::RepairIssue> {

@@ -337,7 +337,6 @@ pub(crate) fn architecture_read_groups(
         "contextProjection.phaseScope.included",
         "contextProjection.phaseScope.deferred",
         "contextProjection.phaseScope.excluded",
-        "contextProjection.phaseScope.acceptanceCandidates",
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
         "contextProjection.technicalBaseline.technicalBaselineId",
@@ -345,15 +344,26 @@ pub(crate) fn architecture_read_groups(
         "contextProjection.technicalBaseline.scope",
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
-        "contextProjection.requirementDetailTransfer.requirementDetails",
-        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-        "contextProjection.requirementDetailTransfer.businessFlows",
-        "allowedRefs.scopeRefs",
-        "allowedRefs.acceptanceRefs",
-        "allowedRefs.deferredScopeRefs",
-        "allowedRefs.excludedScopeRefs",
-        "allowedRefs.requirementDetailIds",
     ]);
+    if matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+            | ArchitectureSectionGroup::Coverage
+    ) {
+        core_fields.extend([
+            "contextProjection.phaseScope.acceptanceCandidates",
+            "contextProjection.requirementDetailTransfer.requirementDetails",
+            "contextProjection.requirementDetailTransfer.acceptanceDetails",
+            "contextProjection.requirementDetailTransfer.businessFlows",
+            "allowedRefs.scopeRefs",
+            "allowedRefs.acceptanceRefs",
+            "allowedRefs.deferredScopeRefs",
+            "allowedRefs.excludedScopeRefs",
+            "allowedRefs.requirementDetailIds",
+        ]);
+    }
     if include_repair_context {
         core_fields.insert(9, "repairContext.sourceArchitectureRequestRef");
         core_fields.insert(10, "repairContext.sourceRef");

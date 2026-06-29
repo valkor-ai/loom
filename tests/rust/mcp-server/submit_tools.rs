@@ -959,6 +959,22 @@ fn architecture_read_groups_follow_current_section() {
             "architecture_frontend_context",
         ],
     );
+    let frontend_core_fields = architecture_group_fields(
+        &fixture,
+        &architecture_request_ref,
+        "architecture_core_context",
+    );
+    assert!(
+        !frontend_core_fields.contains(
+            &"contextProjection.requirementDetailTransfer.requirementDetails".to_string()
+        ),
+        "frontend_experience must not inherit broad requirement detail reads"
+    );
+    assert!(
+        !frontend_core_fields
+            .contains(&"contextProjection.phaseScope.acceptanceCandidates".to_string()),
+        "frontend_experience must rely on its focused frontend context instead of broad acceptance candidates"
+    );
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
     assert_architecture_group_ids(
@@ -966,12 +982,42 @@ fn architecture_read_groups_follow_current_section() {
         &architecture_request_ref,
         &["architecture_core_context", "architecture_section_contract"],
     );
+    let runtime_core_fields = architecture_group_fields(
+        &fixture,
+        &architecture_request_ref,
+        "architecture_core_context",
+    );
+    for forbidden in [
+        "contextProjection.phaseScope.acceptanceCandidates",
+        "contextProjection.requirementDetailTransfer.requirementDetails",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlows",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.requirementDetailIds",
+    ] {
+        assert!(
+            !runtime_core_fields.contains(&forbidden.to_string()),
+            "runtime_delivery must not read non-runtime field {forbidden}"
+        );
+    }
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
     assert_architecture_group_ids(
         &fixture,
         &architecture_request_ref,
         &["architecture_core_context", "architecture_section_contract"],
+    );
+    let coverage_core_fields = architecture_group_fields(
+        &fixture,
+        &architecture_request_ref,
+        "architecture_core_context",
+    );
+    assert!(
+        coverage_core_fields.contains(
+            &"contextProjection.requirementDetailTransfer.requirementDetails".to_string()
+        ),
+        "coverage still needs the detail index for detailCoverage"
     );
 }
 
@@ -4738,6 +4784,21 @@ fn assert_architecture_group_ids(fixture: &Fixture, request_ref: &str, expected:
     assert_eq!(actual, expected, "{actual:#?}");
 }
 
+fn architecture_group_fields(fixture: &Fixture, request_ref: &str, group_id: &str) -> Vec<String> {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect architecture request");
+    inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == group_id)
+        .unwrap_or_else(|| panic!("missing architecture read group {group_id}"))
+        .fields
+        .clone()
+}
+
 fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     let request_root = read_request_root_value(fixture.root_str(), request_ref);
     let request_id = request_root["requestId"].as_str().expect("requestId");
@@ -5884,13 +5945,6 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     })
     .expect("read architecture request fields")
     .fields;
-    let allowed_refs = json!({
-        "scopeRefs": field_value(&fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": field_value(&fields, "allowedRefs.acceptanceRefs"),
-        "deferredScopeRefs": field_value(&fields, "allowedRefs.deferredScopeRefs"),
-        "excludedScopeRefs": field_value(&fields, "allowedRefs.excludedScopeRefs"),
-        "requirementDetailIds": field_value(&fields, "allowedRefs.requirementDetailIds")
-    });
     let planning_contract_id = fields["contextProjection.planningContractId"]
         .value
         .as_str()
@@ -5900,17 +5954,12 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .as_str()
         .expect("technicalBaselineId");
     let acceptance_details = fields
-        ["contextProjection.requirementDetailTransfer.acceptanceDetails"]
-        .value
+        .get("contextProjection.requirementDetailTransfer.acceptanceDetails")
+        .map(|field| &field.value)
+        .unwrap_or(&Value::Null)
         .as_array()
         .cloned()
         .unwrap_or_default();
-    let acceptance_id = allowed_refs["acceptanceRefs"][0]
-        .as_str()
-        .expect("acceptanceRef");
-    let detail_id = allowed_refs["requirementDetailIds"][0]
-        .as_str()
-        .expect("detailId");
     let acceptance_priority = acceptance_details
         .first()
         .and_then(|item| item.get("priority"))
@@ -5921,6 +5970,18 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .and_then(|item| item.get("statement"))
         .and_then(Value::as_str)
         .unwrap_or("Current phase acceptance is covered by the architecture.");
+    let acceptance_refs = field_value(&fields, "allowedRefs.acceptanceRefs");
+    let acceptance_id = acceptance_refs
+        .get(0)
+        .and_then(Value::as_str)
+        .unwrap_or("acc_1")
+        .to_string();
+    let requirement_detail_ids = field_value(&fields, "allowedRefs.requirementDetailIds");
+    let detail_id = requirement_detail_ids
+        .get(0)
+        .and_then(Value::as_str)
+        .unwrap_or("detail.scope.scope_1.1")
+        .to_string();
     let frontend_authority_ref = request_root
         .pointer("/frontendExperienceSource/confirmedFrontendExperienceRef")
         .and_then(Value::as_str)
@@ -6082,7 +6143,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         }),
         "coverage" => json!({
             "acceptanceMatrix": [{
-                "acceptanceId": acceptance_id,
+                "acceptanceId": acceptance_id.clone(),
                 "priority": acceptance_priority,
                 "statement": acceptance_statement,
                 "coverageStatus": "covered",
@@ -6094,7 +6155,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 "verificationHints": []
             }],
             "detailCoverage": [{
-                "detailId": detail_id,
+                "detailId": detail_id.clone(),
                 "coverageStatus": "covered",
                 "artifactRefs": {
                     "modules": ["module.account-service"],
@@ -6107,7 +6168,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                     "frontendDataViews": [],
                     "frontendActions": [],
                     "frontendOperationPaths": [],
-                    "acceptanceMatrix": [acceptance_id]
+                    "acceptanceMatrix": [acceptance_id.clone()]
                 }
             }],
             "risksAndDecisions": {
