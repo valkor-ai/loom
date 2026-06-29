@@ -245,11 +245,13 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     .expect("knowledge search");
     assert_eq!(search.status, "available");
     assert!(!search.cards.is_empty());
-    assert!(!serde_json::to_value(&search.cards[0])
-        .expect("card json")
-        .as_object()
-        .expect("card object")
-        .contains_key("text"));
+    let search_json = serde_json::to_value(&search).expect("search json");
+    assert!(search_json.get("matchedSources").is_none());
+    let card_json = serde_json::to_value(&search.cards[0]).expect("card json");
+    let card_object = card_json.as_object().expect("card object");
+    assert!(!card_object.contains_key("text"));
+    assert!(!card_object.contains_key("sourceId"));
+    assert!(!card_object.contains_key("semanticLabels"));
     assert!(!serde_json::to_value(&search.cards[0])
         .expect("card json")
         .as_object()
@@ -286,6 +288,44 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     })
     .expect("disabled search");
     assert_eq!(disabled_search.status, "empty");
+}
+
+#[test]
+fn knowledge_update_remove_path_does_not_require_existing_file() {
+    let fixture = Fixture::new("remove-missing-path");
+    let document = fixture.write_file("docs/stock.md", "# 证券账户\n\n证券账户开户规则。");
+    add_source(KnowledgeAddInput {
+        project_root: fixture.root_str().to_string(),
+        name: "remove-rules".to_string(),
+        paths: vec![document.to_string_lossy().into_owned()],
+    })
+    .expect("add source");
+
+    let removed_path = fixture
+        .root
+        .join("docs/deleted-before-remove.md")
+        .to_string_lossy()
+        .into_owned();
+    let updated = knowledge::update_source(knowledge::mcp_models::KnowledgeUpdateInput {
+        project_root: fixture.root_str().to_string(),
+        name: "remove-rules".to_string(),
+        add_paths: vec![],
+        remove_paths: vec![removed_path.clone()],
+        replace_paths: vec![],
+    })
+    .expect("remove missing path should be queued");
+
+    let pending = updated.pending.expect("pending remove queue");
+    assert!(pending.operations.iter().any(|operation| {
+        matches!(
+            operation.kind,
+            knowledge::models::PendingOperationKind::RemovePaths
+        ) && operation
+            .paths
+            .iter()
+            .any(|path| path.ends_with("deleted-before-remove.md"))
+    }));
+    assert!(updated.warnings.is_empty());
 }
 
 #[test]

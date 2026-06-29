@@ -35,12 +35,6 @@ pub fn search_knowledge(input: KnowledgeSearchInput) -> KnowledgeResult<Knowledg
         input.block.as_deref(),
         input.limit.unwrap_or(DEFAULT_SEARCH_LIMIT),
     )?;
-    let matched_sources = aggregate_sources(
-        &cards,
-        &input.semantic_focus,
-        DEFAULT_CONTEXT_CHUNK_LIMIT_PER_SOURCE,
-        usize::MAX,
-    );
     Ok(KnowledgeSearchResult {
         status: if cards.is_empty() {
             "empty".to_string()
@@ -48,7 +42,6 @@ pub fn search_knowledge(input: KnowledgeSearchInput) -> KnowledgeResult<Knowledg
             "available".to_string()
         },
         cards,
-        matched_sources,
     })
 }
 
@@ -206,12 +199,6 @@ fn search_cards(
             document_title: candidate.chunk.document_title.clone(),
             heading_path: candidate.chunk.heading_path.clone(),
             summary: candidate.chunk.summary.clone(),
-            semantic_labels: candidate
-                .chunk
-                .semantic_labels
-                .iter()
-                .map(|label| format!("{}: {}", label.kind, label.text))
-                .collect(),
             matched_labels: semantic.matched_labels,
             score: round_score(score),
         });

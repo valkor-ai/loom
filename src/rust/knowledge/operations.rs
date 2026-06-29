@@ -101,8 +101,12 @@ pub fn update_source(input: KnowledgeUpdateInput) -> KnowledgeResult<KnowledgeSu
             "knowledgeUpdate must provide exactly one of addPaths, removePaths, replacePaths",
         )
     })?;
-    let explicit_files_must_be_supported = !matches!(kind, PendingOperationKind::RemovePaths);
-    let warnings = validate_candidate_paths(&paths, explicit_files_must_be_supported)?;
+    let (operation_paths, warnings) = if matches!(kind, PendingOperationKind::RemovePaths) {
+        (normalize_paths_without_fs(&paths)?, vec![])
+    } else {
+        let warnings = validate_candidate_paths(&paths, true)?;
+        (canonicalize_paths(&paths)?, warnings)
+    };
     let mut registry = load_registry()?;
     let source = registry_source_mut(&mut registry, &input.name)?;
     source.updated_at = now_string();
@@ -113,7 +117,7 @@ pub fn update_source(input: KnowledgeUpdateInput) -> KnowledgeResult<KnowledgeSu
     queue.operations.push(PendingOperation {
         operation_id: operation_id("kop_update"),
         kind,
-        paths: canonicalize_paths(&paths)?,
+        paths: operation_paths,
         created_at: now_string(),
     });
     save_pending(&queue)?;
@@ -310,6 +314,47 @@ fn canonicalize_paths(paths: &[String]) -> KnowledgeResult<Vec<String>> {
     result.sort();
     result.dedup();
     Ok(result)
+}
+
+fn normalize_paths_without_fs(paths: &[String]) -> KnowledgeResult<Vec<String>> {
+    let cwd = std::env::current_dir()?;
+    let mut result = Vec::new();
+    for path in paths {
+        let expanded = PathBuf::from(path).expand_tilde();
+        let absolute = if expanded.is_absolute() {
+            expanded
+        } else {
+            cwd.join(expanded)
+        };
+        let normalized = if absolute.exists() {
+            absolute.canonicalize().unwrap_or(absolute)
+        } else {
+            normalize_path_components(absolute)
+        };
+        result.push(normalized.to_string_lossy().to_string());
+    }
+    result.sort();
+    result.dedup();
+    if result.is_empty() {
+        return Err(KnowledgeError::invalid(
+            "knowledgeUpdate removePaths must not be empty",
+        ));
+    }
+    Ok(result)
+}
+
+fn normalize_path_components(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 trait ExpandTilde {

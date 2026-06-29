@@ -116,6 +116,7 @@ pub struct KnowledgeList {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeChunkCard {
+    #[serde(default, skip_serializing)]
     pub source_id: String,
     pub source_name: String,
     pub build_id: String,
@@ -123,7 +124,6 @@ pub struct KnowledgeChunkCard {
     pub document_title: String,
     pub heading_path: Vec<String>,
     pub summary: Option<String>,
-    pub semantic_labels: Vec<String>,
     #[serde(default)]
     pub matched_labels: Vec<KnowledgeMatchedLabel>,
     pub score: f64,
@@ -142,7 +142,6 @@ pub struct KnowledgeMatchedLabel {
 pub struct KnowledgeSearchResult {
     pub status: String,
     pub cards: Vec<KnowledgeChunkCard>,
-    pub matched_sources: Vec<KnowledgeMatchedSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
