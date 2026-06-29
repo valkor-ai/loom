@@ -212,15 +212,18 @@ fn build_request_root(
         },
         "brainstormLens": {
             "summary": brainstorm.summary,
-            "scope": {
-                "included": brainstorm.scope.included,
-                "deferred": brainstorm.scope.deferred,
-                "excluded": brainstorm.scope.excluded,
-                "assumptions": brainstorm.scope.assumptions
+            "scopeIndex": {
+                "includedIds": scope_item_ids(&brainstorm.scope.included),
+                "includedLabels": scope_item_labels(&brainstorm.scope.included),
+                "deferredIds": scope_item_ids(&brainstorm.scope.deferred),
+                "deferredLabels": scope_item_labels(&brainstorm.scope.deferred),
+                "excludedIds": scope_item_ids(&brainstorm.scope.excluded),
+                "excludedLabels": scope_item_labels(&brainstorm.scope.excluded),
+                "assumptionTexts": brainstorm.scope.assumptions.iter().map(|item| item.text.clone()).collect::<Vec<_>>()
             },
             "domainModel": brainstorm.domain_model.as_ref().map(|domain_model| json!({
-                "capabilityGroups": domain_model.capability_groups,
-                "businessFlows": domain_model.business_flows
+                "capabilityNames": domain_model.capability_groups.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "businessFlowNames": domain_model.business_flows.iter().map(|item| item.name.clone()).collect::<Vec<_>>()
             })),
             "acceptanceIndex": brainstorm.acceptance.iter().map(|acceptance| json!({
                 "id": acceptance.id,
@@ -228,28 +231,23 @@ fn build_request_root(
                 "capabilityRefs": acceptance.capability_refs,
                 "sourceRefs": acceptance.source_refs
             })).collect::<Vec<_>>(),
-            "frontendExperience": brainstorm.frontend_experience.as_ref().map(|frontend_experience| json!({
+            "frontendTarget": brainstorm.frontend_experience.as_ref().map(|frontend_experience| json!({
                 "required": frontend_experience.required,
                 "kind": frontend_experience.kind,
                 "experienceLevel": frontend_experience.experience_level,
-                "audiences": frontend_experience.audiences,
-                "surfaces": frontend_experience.surfaces,
-                "operationPaths": frontend_experience.operation_paths
+                "audienceNames": frontend_experience.audiences.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "surfaceNames": frontend_experience.surfaces.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "operationNames": frontend_experience.operation_paths.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "operationGoals": frontend_experience.operation_paths.iter().map(|item| item.user_goal.clone()).collect::<Vec<_>>()
             })),
             "userFacingLanguage": brainstorm.delivery_context.user_facing_language,
-            "roadmap": {
+            "roadmapSignal": {
                 "required": brainstorm.roadmap.required,
-                "currentPhaseId": brainstorm.roadmap.current_phase_id
-            },
-            "roadmapPhaseIndex": brainstorm.roadmap.phases.iter().map(|phase| json!({
-                "phaseId": phase.phase_id,
-                "title": phase.title,
-                "name": phase.name,
-                "status": phase.status,
-                "goal": phase.goal
-            })).collect::<Vec<_>>(),
-            "phasePlan": {
-                "nextPhasePreview": brainstorm.phase_plan.next_phase_preview
+                "currentPhaseId": brainstorm.roadmap.current_phase_id,
+                "phaseIds": brainstorm.roadmap.phases.iter().map(|phase| phase.phase_id.clone()).collect::<Vec<_>>(),
+                "phaseTitles": brainstorm.roadmap.phases.iter().map(|phase| phase.title.clone().or_else(|| phase.name.clone()).unwrap_or_else(|| phase.phase_id.clone())).collect::<Vec<_>>(),
+                "phaseGoals": brainstorm.roadmap.phases.iter().map(|phase| phase.goal.clone().unwrap_or_default()).collect::<Vec<_>>(),
+                "nextPhasePreview": next_phase_preview_summary(&brainstorm.phase_plan.next_phase_preview)
             },
             "sourceRefs": brainstorm.sources.iter().map(|source| source.source_id.clone()).collect::<Vec<_>>()
         },
@@ -359,6 +357,41 @@ fn build_request_root(
     })
 }
 
+fn scope_item_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.id.clone()).collect()
+}
+
+fn scope_item_labels(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.label.clone()).collect()
+}
+
+fn next_phase_preview_summary(preview: &contracts::NextPhasePreview) -> Value {
+    match preview {
+        contracts::NextPhasePreview::Candidate {
+            suggested_phase_id,
+            title,
+            goal,
+            scope_preview,
+            reason,
+        } => json!({
+            "kind": "candidate",
+            "suggestedPhaseId": suggested_phase_id,
+            "title": title,
+            "goal": goal,
+            "scopePreview": scope_preview,
+            "reason": reason
+        }),
+        contracts::NextPhasePreview::None { reason } => json!({
+            "kind": "none",
+            "suggestedPhaseId": Value::Null,
+            "title": Value::Null,
+            "goal": Value::Null,
+            "scopePreview": [],
+            "reason": reason
+        }),
+    }
+}
+
 fn technical_baseline_context_fields(
     brainstorm: &BrainstormContract,
     has_previous_baseline: bool,
@@ -367,16 +400,26 @@ fn technical_baseline_context_fields(
         "brainstormLens.summary.title",
         "brainstormLens.summary.oneLine",
         "brainstormLens.summary.complexity",
-        "brainstormLens.scope.included",
-        "brainstormLens.scope.deferred",
-        "brainstormLens.scope.excluded",
-        "brainstormLens.scope.assumptions",
+        "brainstormLens.scopeIndex.includedIds",
+        "brainstormLens.scopeIndex.includedLabels",
+        "brainstormLens.scopeIndex.deferredIds",
+        "brainstormLens.scopeIndex.deferredLabels",
+        "brainstormLens.scopeIndex.excludedIds",
+        "brainstormLens.scopeIndex.excludedLabels",
+        "brainstormLens.scopeIndex.assumptionTexts",
         "brainstormLens.acceptanceIndex",
         "brainstormLens.userFacingLanguage",
-        "brainstormLens.roadmap.required",
-        "brainstormLens.roadmap.currentPhaseId",
-        "brainstormLens.roadmapPhaseIndex",
-        "brainstormLens.phasePlan.nextPhasePreview",
+        "brainstormLens.roadmapSignal.required",
+        "brainstormLens.roadmapSignal.currentPhaseId",
+        "brainstormLens.roadmapSignal.phaseIds",
+        "brainstormLens.roadmapSignal.phaseTitles",
+        "brainstormLens.roadmapSignal.phaseGoals",
+        "brainstormLens.roadmapSignal.nextPhasePreview.kind",
+        "brainstormLens.roadmapSignal.nextPhasePreview.suggestedPhaseId",
+        "brainstormLens.roadmapSignal.nextPhasePreview.title",
+        "brainstormLens.roadmapSignal.nextPhasePreview.goal",
+        "brainstormLens.roadmapSignal.nextPhasePreview.scopePreview",
+        "brainstormLens.roadmapSignal.nextPhasePreview.reason",
         "currentPhaseLens.phaseId",
         "currentPhaseLens.title",
         "currentPhaseLens.goal",
@@ -393,18 +436,19 @@ fn technical_baseline_context_fields(
     }
     if brainstorm.domain_model.is_some() {
         fields.extend([
-            "brainstormLens.domainModel.capabilityGroups",
-            "brainstormLens.domainModel.businessFlows",
+            "brainstormLens.domainModel.capabilityNames",
+            "brainstormLens.domainModel.businessFlowNames",
         ]);
     }
     if brainstorm.frontend_experience.is_some() {
         fields.extend([
-            "brainstormLens.frontendExperience.required",
-            "brainstormLens.frontendExperience.kind",
-            "brainstormLens.frontendExperience.experienceLevel",
-            "brainstormLens.frontendExperience.audiences",
-            "brainstormLens.frontendExperience.surfaces",
-            "brainstormLens.frontendExperience.operationPaths",
+            "brainstormLens.frontendTarget.required",
+            "brainstormLens.frontendTarget.kind",
+            "brainstormLens.frontendTarget.experienceLevel",
+            "brainstormLens.frontendTarget.audienceNames",
+            "brainstormLens.frontendTarget.surfaceNames",
+            "brainstormLens.frontendTarget.operationNames",
+            "brainstormLens.frontendTarget.operationGoals",
         ]);
     }
     if has_previous_baseline {
@@ -664,11 +708,11 @@ fn technical_baseline_selection_guidance(
         "recommendationBasis": {
             "authority": "Use the complete BrainstormContract as the product-scope authority for the first greenfield TechnicalBaseline recommendation.",
             "mustRead": [
-                "Brainstorm summary and original requirement context",
-                "scope.included, scope.deferred, scope.excluded, and assumptions",
-                "domainModel capability groups and business flows",
-                "frontendExperience when present",
-                "roadmap phases, deferred scope, and known next-phase previews"
+                "brainstormLens.summary",
+                "brainstormLens.scopeIndex included/deferred/excluded labels and assumptions",
+                "brainstormLens.domainModel capabilityNames and businessFlowNames when present",
+                "brainstormLens.frontendTarget when present",
+                "brainstormLens.roadmapSignal phase titles, phase goals, and next-phase preview"
             ],
             "currentPhaseLensRole": "currentPhaseLens identifies the first implementation slice only. Do not choose the initial technology baseline from the current phase scope alone when the full requirement or roadmap implies later product surfaces, persistence scale, app clients, services, integrations, or operational needs.",
             "recommendationRule": "Recommend a stable baseline for the full confirmed delivery/roadmap horizon; explain when the current phase can start small inside that baseline without hiding later known needs."

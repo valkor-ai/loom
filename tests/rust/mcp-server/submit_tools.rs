@@ -193,13 +193,41 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .get("brainstormLens.frontendExperience")
         .is_none());
     for field in [
+        "brainstormLens.scope.included",
+        "brainstormLens.scope.deferred",
+        "brainstormLens.scope.excluded",
+        "brainstormLens.scope.assumptions",
+        "brainstormLens.roadmapPhaseIndex",
+        "brainstormLens.phasePlan.nextPhasePreview",
+        "brainstormLens.domainModel.capabilityGroups",
+        "brainstormLens.domainModel.businessFlows",
+        "brainstormLens.frontendExperience.required",
+        "brainstormLens.frontendExperience.surfaces",
+        "brainstormLens.frontendExperience.operationPaths",
+    ] {
+        assert!(
+            baseline_context.fields.get(field).is_none(),
+            "technical baseline context must not expose broad source field: {field}"
+        );
+    }
+    for field in [
         "brainstormLens.summary.title",
         "brainstormLens.summary.oneLine",
         "brainstormLens.summary.businessGoal",
-        "brainstormLens.scope.included",
-        "brainstormLens.scope.deferred",
-        "brainstormLens.roadmapPhaseIndex",
-        "brainstormLens.phasePlan.nextPhasePreview",
+        "brainstormLens.scopeIndex.includedIds",
+        "brainstormLens.scopeIndex.includedLabels",
+        "brainstormLens.scopeIndex.deferredIds",
+        "brainstormLens.scopeIndex.deferredLabels",
+        "brainstormLens.scopeIndex.excludedIds",
+        "brainstormLens.scopeIndex.excludedLabels",
+        "brainstormLens.scopeIndex.assumptionTexts",
+        "brainstormLens.roadmapSignal.required",
+        "brainstormLens.roadmapSignal.currentPhaseId",
+        "brainstormLens.roadmapSignal.phaseIds",
+        "brainstormLens.roadmapSignal.phaseTitles",
+        "brainstormLens.roadmapSignal.phaseGoals",
+        "brainstormLens.roadmapSignal.nextPhasePreview.kind",
+        "brainstormLens.roadmapSignal.nextPhasePreview.reason",
         "currentPhaseLens.phaseId",
         "currentPhaseLens.goal",
     ] {
@@ -209,10 +237,10 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         );
     }
     for field in [
-        "brainstormLens.domainModel.capabilityGroups",
-        "brainstormLens.domainModel.businessFlows",
-        "brainstormLens.frontendExperience.required",
-        "brainstormLens.frontendExperience.surfaces",
+        "brainstormLens.domainModel.capabilityNames",
+        "brainstormLens.domainModel.businessFlowNames",
+        "brainstormLens.frontendTarget.required",
+        "brainstormLens.frontendTarget.surfaceNames",
     ] {
         assert!(
             baseline_context.fields.get(field).is_none(),
