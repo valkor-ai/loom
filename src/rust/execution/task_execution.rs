@@ -252,11 +252,29 @@ fn build_execution_request(
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let read_groups = task_execution_read_groups(&request_task);
+    let dependency_results = dependency_results(run, task);
+    let read_groups = task_execution_read_groups(&request_task, !dependency_results.is_empty());
     let user_facing_language = pgc.planning_inputs.user_facing_language.clone();
     let execution_rules =
         task_execution_rules(result_file, &request_task, user_facing_language.clone());
     let result_rules = task_result_rules(&request_task);
+    let mut source_context = json!({
+        "technicalBaseline": {
+            "projectKind": baseline.project_kind,
+            "stack": baseline.stack
+        },
+        "architectureArtifactProjection": architecture_projection,
+        "acceptanceSnapshot": pgc.phase_scope.acceptance_candidates.iter()
+            .filter(|acceptance| request_task.acceptance_refs.iter().any(|id| id == &acceptance.id))
+            .collect::<Vec<_>>(),
+        "requirementDetailSnapshot": pgc.requirement_details.items.iter()
+            .filter(|detail| request_task.requirement_detail_refs.iter().any(|id| id == &detail.detail_id))
+            .collect::<Vec<_>>(),
+        "userFacingLanguage": user_facing_language
+    });
+    if !dependency_results.is_empty() {
+        source_context["dependencyResults"] = json!(dependency_results);
+    }
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "execute_task",
@@ -279,21 +297,7 @@ fn build_execution_request(
             "phaseConceptGroundingRef": pgc.context_refs.phase_concept_grounding_ref
         },
         "task": &request_task,
-        "sourceContext": {
-            "technicalBaseline": {
-                "projectKind": baseline.project_kind,
-                "stack": baseline.stack
-            },
-            "architectureArtifactProjection": architecture_projection,
-            "acceptanceSnapshot": pgc.phase_scope.acceptance_candidates.iter()
-                .filter(|acceptance| request_task.acceptance_refs.iter().any(|id| id == &acceptance.id))
-                .collect::<Vec<_>>(),
-            "requirementDetailSnapshot": pgc.requirement_details.items.iter()
-                .filter(|detail| request_task.requirement_detail_refs.iter().any(|id| id == &detail.detail_id))
-                .collect::<Vec<_>>(),
-            "userFacingLanguage": user_facing_language,
-            "dependencyResults": dependency_results(run, task)
-        },
+        "sourceContext": source_context,
         "executionRules": execution_rules,
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
@@ -528,7 +532,7 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
     json!(rules)
 }
 
-fn task_execution_read_groups(task: &TaskDefinition) -> Value {
+fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: bool) -> Value {
     let has_frontend_execution = task_has_frontend_execution(task);
     let has_frontend_requirement = task.frontend_experience_requirement.is_some();
     let needs_runtime_probe_rules = task_needs_controlled_runtime_probe_rules(task);
@@ -598,6 +602,9 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
         core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
         core_fields.push("executionRules.runtimeDeliveryExecutionRules");
     }
+    if has_dependency_results {
+        core_fields.push("sourceContext.dependencyResults");
+    }
     if !task.concept_refs.is_empty() {
         core_fields.push("task.conceptRefs");
     }
@@ -657,21 +664,6 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
             "purpose": "Read TaskResult output file, schema fields, enum values, and completion barrier.",
             "whenToRead": "Read before writing TaskResult.",
             "fields": result_fields
-        }),
-        json!({
-            "groupId": "task_execution_optional_refs",
-            "required": false,
-            "purpose": "Read source refs and dependency results only when task-scoped projection is insufficient.",
-            "whenToRead": "Read on demand.",
-            "fields": [
-                "sourceRefs.technicalBaselineRef",
-                "sourceRefs.planningGenerationContractRef",
-                "sourceRefs.architectureArtifactContractRef",
-                "sourceRefs.taskPlanRef",
-                "sourceRefs.taskPlanRunRef",
-                "sourceRefs.phaseConceptGroundingRef",
-                "sourceContext.dependencyResults"
-            ]
         }),
     ])
 }
@@ -828,7 +820,7 @@ fn build_frontend_execution_guidance(
             "closureRequirementRefs": [],
             "workflowClosureDetailSource": {
                 "closureRequirementIds": [],
-                "readWhen": "No closure refs were derived for this task."
+                "derivationRule": "No AAC frontendExperience is present for this task."
             },
             "guidanceWarnings": ["AAC frontendExperience is absent."]
         });
@@ -943,13 +935,8 @@ fn build_frontend_execution_guidance(
         },
         "closureRequirementRefs": workflow_closure_requirement_execution_view(&closure_requirements),
         "workflowClosureDetailSource": {
-            "sourcePaths": [
-                "sourceRefs.architectureArtifactContractRef#/frontendExperience",
-                "sourceRefs.architectureArtifactContractRef#/userFlows",
-                "sourceRefs.architectureArtifactContractRef#/interfaces"
-            ],
             "closureRequirementIds": closure_requirements.iter().filter_map(|item| string_at(item, "closureId")).collect::<Vec<_>>(),
-            "readWhen": "Read these source paths only when closureRequirementRefs and frontendBackendBindings are insufficient.",
+            "detailAuthority": "Use closureRequirementRefs, frontendBackendBindings, and sourceContext.architectureArtifactProjection from this request.",
             "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, userFlow steps, and executable interfaces."
         },
         "guidanceWarnings": warnings

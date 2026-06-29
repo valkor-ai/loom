@@ -2513,11 +2513,21 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     })
     .expect("inspect execution request");
     assert_eq!(execution_inspected.request_kind, "task_execution_request");
+    let execution_request_root =
+        read_request_root_value(fixture.root_str(), &execution_request_ref);
+    assert!(
+        execution_request_root
+            .pointer("/sourceContext/dependencyResults")
+            .is_none(),
+        "{execution_request_root:#}"
+    );
     let execution_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.clone(),
         fields: vec![
             "source.taskId".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource"
+                .to_string(),
             "executionRules.verificationCommandSchedulingRules".to_string(),
             "executionRules.boundaryRules".to_string(),
             "outputContract.requiredTopLevelFields".to_string(),
@@ -2536,6 +2546,23 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     );
     assert!(
         execution_fields["outputContract.resultTemplate"].value["executionContinuity"].is_object()
+    );
+    let workflow_closure_detail_source = &execution_fields
+        ["task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource"]
+        .value;
+    assert!(
+        workflow_closure_detail_source.get("sourcePaths").is_none(),
+        "{workflow_closure_detail_source:#}"
+    );
+    assert!(
+        workflow_closure_detail_source.get("readWhen").is_none(),
+        "{workflow_closure_detail_source:#}"
+    );
+    assert!(
+        workflow_closure_detail_source
+            .get("detailAuthority")
+            .is_some(),
+        "{workflow_closure_detail_source:#}"
     );
     assert!(execution_fields["outputContract.requiredTopLevelFields"]
         .value
@@ -2572,11 +2599,22 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .read_groups
         .iter()
         .any(|group| group.group_id == "task_execution_result_contract"));
+    assert!(!execution_inspected
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "task_execution_optional_refs"));
     assert!(execution_inspected
         .read_groups
         .iter()
         .flat_map(|group| group.fields.iter())
         .all(|field| field != "outputContract.schemaShape"));
+    assert!(execution_inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .all(
+            |field| !field.starts_with("sourceRefs.") && field != "sourceContext.dependencyResults"
+        ));
     assert!(execution_inspected
         .read_groups
         .iter()
