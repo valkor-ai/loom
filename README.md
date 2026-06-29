@@ -111,7 +111,7 @@ Your coding agent / app
 Agent turn / LLM context
 ```
 
-In the latest 11-case agent-run benchmark, Codex + Loom used 15.8% fewer tokens than Codex alone while preserving 100% completion. See the [latest benchmark results](./benchmarks/agent-run/results/latest.md) and the [run guide](./benchmarks/agent-run/README.md).
+Benchmark cases and results live in [`benchmarks/`](./benchmarks/).
 
 ## Prerequisites
 
