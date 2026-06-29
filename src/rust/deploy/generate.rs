@@ -200,27 +200,33 @@ fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
 }
 
 fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
+    if java_service_has_frontend_overlay(service) {
+        return generate_java_with_frontend_dockerfile(service);
+    }
     let build_command = service
         .build_command
         .clone()
-        .unwrap_or_else(|| "mvn -DskipTests package".to_string());
+        .unwrap_or_else(|| default_java_build_command(service));
     let start_command = service
         .start_command
         .clone()
         .unwrap_or_else(|| "java -jar /app/app.jar".to_string());
+    let builder_image = java_builder_image(service);
     [
-        "FROM maven:3-eclipse-temurin-21 AS builder".to_string(),
+        format!("FROM {builder_image} AS builder"),
         "WORKDIR /workspace".to_string(),
         "COPY . .".to_string(),
         service_root_workdir(service),
         format!("RUN {build_command}"),
         "RUN JAR=\"$(find . -type f -name '*.jar' ! -name '*-plain.jar' | sort | head -n 1)\" && test -n \"$JAR\" && cp \"$JAR\" /workspace/app.jar".to_string(),
+        "RUN mkdir -p /tmp/data && if [ -d data ]; then cp -R data/. /tmp/data/; elif [ -d service/data ]; then cp -R service/data/. /tmp/data/; fi".to_string(),
         "".to_string(),
         "FROM eclipse-temurin:21-jre AS runner".to_string(),
         "WORKDIR /app".to_string(),
         format!("ENV PORT={}", service.port),
         format!("ENV SERVER_PORT={}", service.port),
         "COPY --from=builder /workspace/app.jar /app/app.jar".to_string(),
+        "COPY --from=builder /tmp/data /app/data".to_string(),
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
         "".to_string(),
@@ -229,6 +235,79 @@ fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
     .filter(|line| !line.is_empty() || true)
     .collect::<Vec<_>>()
     .join("\n")
+}
+
+fn generate_java_with_frontend_dockerfile(service: &DeploymentSourceService) -> String {
+    let frontend_root =
+        frontend_root_from_package_refs(service).unwrap_or_else(|| "web".to_string());
+    let frontend_output = service
+        .output_directory
+        .clone()
+        .unwrap_or_else(|| format!("{frontend_root}/dist"));
+    let build_command = service
+        .build_command
+        .clone()
+        .unwrap_or_else(|| default_java_build_command(service));
+    let builder_image = java_builder_image(service);
+    [
+        "FROM node:22-bookworm-slim AS web-builder".to_string(),
+        format!("WORKDIR /workspace/{frontend_root}"),
+        format!("COPY {frontend_root}/ ./"),
+        format!("RUN {}", install_command(PackageManager::Npm, service.has_lockfile)),
+        format!("RUN {}", package_manager_run(PackageManager::Npm, "build")),
+        "".to_string(),
+        format!("FROM {builder_image} AS service-builder"),
+        "WORKDIR /workspace".to_string(),
+        "COPY . .".to_string(),
+        format!("RUN {build_command}"),
+        "RUN mkdir -p /tmp/static-overlay/BOOT-INF/classes/static".to_string(),
+        format!(
+            "COPY --from=web-builder /workspace/{frontend_output}/ /tmp/static-overlay/BOOT-INF/classes/static/"
+        ),
+        "RUN JAR_PATH=\"$(find . -type f -name '*.jar' ! -name '*-plain.jar' | sort | head -n 1)\" && test -n \"$JAR_PATH\" && cp \"$JAR_PATH\" /tmp/app.jar && jar --update --file /tmp/app.jar -C /tmp/static-overlay BOOT-INF/classes/static".to_string(),
+        "RUN mkdir -p /tmp/data && if [ -d service/data ]; then cp -R service/data/. /tmp/data/; elif [ -d data ]; then cp -R data/. /tmp/data/; fi".to_string(),
+        "".to_string(),
+        "FROM eclipse-temurin:21-jre AS runner".to_string(),
+        "WORKDIR /app".to_string(),
+        format!("ENV PORT={}", service.port),
+        format!("ENV SERVER_PORT={}", service.port),
+        "COPY --from=service-builder /tmp/app.jar /app/app.jar".to_string(),
+        "COPY --from=service-builder /tmp/data /app/data".to_string(),
+        format!("EXPOSE {}", service.port),
+        "ENTRYPOINT [\"java\",\"-jar\",\"/app/app.jar\"]".to_string(),
+        "".to_string(),
+    ]
+    .join("\n")
+}
+
+fn java_service_has_frontend_overlay(service: &DeploymentSourceService) -> bool {
+    service.runtime_kind == RuntimeKind::Java
+        && !service.workspace_package_json_paths.is_empty()
+        && service.output_directory.is_some()
+}
+
+fn frontend_root_from_package_refs(service: &DeploymentSourceService) -> Option<String> {
+    service
+        .workspace_package_json_paths
+        .first()
+        .and_then(|path| path.rsplit_once('/').map(|(root, _)| root.to_string()))
+        .filter(|root| !root.is_empty())
+}
+
+fn default_java_build_command(service: &DeploymentSourceService) -> String {
+    match service.package_manager {
+        Some(PackageManager::Gradle) => {
+            "chmod +x ./gradlew && ./gradlew bootJar --no-daemon".to_string()
+        }
+        _ => "mvn -DskipTests package".to_string(),
+    }
+}
+
+fn java_builder_image(service: &DeploymentSourceService) -> &'static str {
+    match service.package_manager {
+        Some(PackageManager::Maven) => "maven:3-eclipse-temurin-21",
+        _ => "eclipse-temurin:21-jdk",
+    }
 }
 
 fn generate_python_dockerfile(service: &DeploymentSourceService) -> String {

@@ -6,7 +6,7 @@ use std::{
 };
 
 use contracts::{DeploymentRoute, DeploymentSpec};
-use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
+use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use state::{
@@ -14,7 +14,7 @@ use state::{
     store::{read_text, StateResult},
 };
 
-use crate::{prepare::read_spec, DeployToolInput};
+use crate::{prepare::read_spec, runtime_state::write_success_state, DeployToolInput};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,16 +39,43 @@ pub struct HttpProbeResult {
 pub fn deploy_validate(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root = Path::new(&input.project_root);
     match deploy_validate_inner(project_root) {
-        Ok(result) => LoomMcpActionResult::Done(LoomMcpDoneResult {
-            project_root: input.project_root,
-            summary: if result.valid {
-                "Deployment validation passed.".to_string()
-            } else {
-                "Deployment validation found issues.".to_string()
-            },
-            details: Some(json!(result)),
-            warnings: vec![],
-        }),
+        Ok(result) => {
+            let mut details = json!(result);
+            if result.valid {
+                match read_spec(project_root)
+                    .and_then(|spec| write_success_state(project_root, &spec, &result))
+                {
+                    Ok(state_ref) => {
+                        if let Some(object) = details.as_object_mut() {
+                            object.insert("stateRef".to_string(), json!(state_ref));
+                        }
+                    }
+                    Err(error) => {
+                        return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                            project_root: input.project_root,
+                            error: LoomMcpFailure {
+                                code: "DEPLOY_VALIDATE_STATE_WRITE_FAILED".to_string(),
+                                message: error.to_string(),
+                                target_batch: Some(10),
+                                domain: Some("deploy".to_string()),
+                                route_action: None,
+                                recovery_tool: Some("loom.deployInspect".to_string()),
+                            },
+                        })
+                    }
+                }
+            }
+            LoomMcpActionResult::Done(LoomMcpDoneResult {
+                project_root: input.project_root,
+                summary: if result.valid {
+                    "Deployment validation passed.".to_string()
+                } else {
+                    "Deployment validation found issues.".to_string()
+                },
+                details: Some(details),
+                warnings: vec![],
+            })
+        }
         Err(error) => LoomMcpActionResult::Done(LoomMcpDoneResult {
             project_root: input.project_root,
             summary: "Deployment validation could not run because deploy is not prepared."

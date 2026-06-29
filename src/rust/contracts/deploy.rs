@@ -165,6 +165,7 @@ pub struct DeploymentRuntimeContract {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceModelSource {
+    CodeProbe,
     RuntimeContract,
 }
 

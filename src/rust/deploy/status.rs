@@ -7,6 +7,9 @@ use state::store::{path_exists, read_json_value};
 use crate::{
     active_operation::{active_operation_result, live_operation},
     paths::deployment_paths,
+    prepare::read_spec,
+    runtime_state::write_success_state,
+    validate::deploy_validate_inner,
     DeployToolInput,
 };
 
@@ -25,12 +28,25 @@ pub fn deploy_status(input: DeployToolInput) -> LoomMcpActionResult {
         }
     }
     let paths = deployment_paths(project_root);
-    let state = if path_exists(&paths.state_file) {
+    let mut state = if path_exists(&paths.state_file) {
         read_json_value(&paths.state_file).ok()
     } else {
         None
     }
     .map(trim_status_state);
+    if state.is_none() && path_exists(&paths.spec_file) {
+        if let (Ok(spec), Ok(validation)) =
+            (read_spec(project_root), deploy_validate_inner(project_root))
+        {
+            if validation.valid {
+                if write_success_state(project_root, &spec, &validation).is_ok() {
+                    state = read_json_value(&paths.state_file)
+                        .ok()
+                        .map(trim_status_state);
+                }
+            }
+        }
+    }
     LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: input.project_root,
         summary: "Deployment status loaded.".to_string(),

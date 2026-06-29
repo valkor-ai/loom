@@ -1,11 +1,15 @@
 use std::{
+    io::{Read, Write},
+    net::TcpListener,
     path::PathBuf,
     sync::{Mutex, MutexGuard, OnceLock},
+    thread,
 };
 
 use contracts::{
     DeploymentErrorWindow, DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec,
+    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec, PackageManager,
+    SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -13,7 +17,7 @@ use delivery_core::{
 };
 use deploy::{
     accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status,
-    DeployToolInput,
+    deploy_validate, DeployToolInput,
 };
 use serde_json::{json, Value};
 use state::store::{ensure_dir, now_millis, now_string, read_json, read_text, write_json_atomic};
@@ -89,6 +93,154 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
     assert!(compose.contains("      - postgres"));
+}
+
+#[test]
+fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
+    let fixture = Fixture::new("deploy-gradle-vite");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "spring boot service with vite web",
+        "deploymentShape": "single-service",
+        "build": { "command": "service: ./mvnw test && ./mvnw package; web: npm run build" },
+        "start": { "command": "service: ./mvnw spring-boot:run; web: npm run dev", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "service/build.gradle",
+        "plugins { id 'org.springframework.boot' version '3.5.6' }\n",
+    );
+    fixture.write_text("service/gradlew", "#!/bin/sh\n");
+    fixture.write_text(
+        "service/src/main/resources/application.properties",
+        "server.port=8080\n",
+    );
+    fixture.write_text(
+        "web/package.json",
+        r#"{"scripts":{"build":"vite"},"dependencies":{"react":"latest"}}"#,
+    );
+    fixture.write_text("web/package-lock.json", "{}\n");
+    fixture.write_text("web/vite.config.ts", "export default {}\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("result json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
+        .expect("deployment spec");
+    let service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(spec.source_model.source, SourceModelSource::RuntimeContract);
+    assert_eq!(service.package_manager, Some(PackageManager::Gradle));
+    assert_eq!(
+        service.build_command.as_deref(),
+        Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon")
+    );
+    assert_eq!(
+        service.workspace_package_json_paths,
+        vec!["web/package.json"]
+    );
+    assert_eq!(service.output_directory.as_deref(), Some("web/dist"));
+    assert_eq!(spec.source_model.build_context_path, "../../../..");
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(compose.contains("context: ../../../.."), "{compose}");
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.app"),
+    )
+    .expect("dockerfile");
+    assert!(
+        dockerfile.contains("FROM node:22-bookworm-slim AS web-builder"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("jar --update --file /tmp/app.jar"),
+        "{dockerfile}"
+    );
+    assert!(!dockerfile.contains("./mvnw"), "{dockerfile}");
+
+    let evidence: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/evidence/latest-code-evidence.json"),
+    )
+    .expect("code evidence");
+    assert_eq!(evidence["source"], "code_probe");
+    assert!(serde_json::to_string(&evidence)
+        .unwrap()
+        .contains("service/build.gradle"));
+}
+
+#[test]
+fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
+    let fixture = Fixture::new("deploy-validate-clears-failure");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "httpProbes": { "previewPath": "/" },
+        "start": { "port": 8080 }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","preview":"vite preview"}}"#,
+    );
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    let spec: DeploymentSpec =
+        read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec");
+    let _server = spawn_one_shot_http_server(spec.runtime.host_port);
+    fixture.write_text(".loom/deployment/state/latest-failure.json", "{}\n");
+    fixture.write_text(".loom/deployment/state/repair-action.json", "{}\n");
+
+    let result = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("validate json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["valid"], true, "{value:#}");
+    assert!(fixture
+        .root
+        .join(".loom/deployment/state/local.json")
+        .exists());
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/state/latest-failure.json")
+        .exists());
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/state/repair-action.json")
+        .exists());
 }
 
 #[test]
@@ -212,6 +364,22 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
         .iter()
         .flat_map(|group| group.fields.iter())
         .any(|field| field == "outputContract.resultTemplate"));
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .any(|field| field.starts_with("outputContract.schemaShape")));
+    let second_result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let second_value = serde_json::to_value(second_result).expect("second repair json");
+    assert_eq!(
+        second_value["next"]["requestRef"].as_str(),
+        Some(request_ref.as_str())
+    );
     let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
     write_json_atomic(
         &fixture.root.join(&result_file),
@@ -395,6 +563,14 @@ impl Fixture {
         self.root.to_string_lossy().into_owned()
     }
 
+    fn write_text(&self, relative: &str, text: &str) {
+        let file = self.root.join(relative);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).expect("create parent");
+        }
+        std::fs::write(file, text).expect("write text fixture");
+    }
+
     fn write_runtime_delivery(&self, runtime_delivery: Value) {
         let delivery_id = "delivery-1";
         let phase_id = "phase-1";
@@ -535,6 +711,23 @@ impl Fixture {
         )
         .expect("write failure report");
     }
+}
+
+fn spawn_one_shot_http_server(port: u16) -> thread::JoinHandle<()> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind test http server");
+    thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buffer = [0_u8; 512];
+            let _ = stream.read(&mut buffer);
+            let body = "<!doctype html><html><body>Loom deploy test</body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    })
 }
 
 fn test_env_lock() -> &'static Mutex<()> {

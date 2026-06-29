@@ -1,6 +1,8 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::Duration,
 };
 
 use contracts::DeploymentFailureKind;
@@ -8,7 +10,7 @@ use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
 use serde_json::json;
 use state::{
     paths::from_project_relative,
-    store::{now_string, path_exists, write_json_atomic},
+    store::{path_exists, StateResult},
 };
 
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
     paths::deployment_paths,
     prepare::{deploy_prepare_inner, read_spec},
     repair::write_repair_action,
+    runtime_state::write_success_state,
     validate::{deploy_validate_inner, DeploymentValidationResult},
     DeployToolInput,
 };
@@ -168,7 +171,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
     }
-    let validation = match deploy_validate_inner(project_root) {
+    let validation = match wait_for_valid_deployment(project_root) {
         Ok(validation) => validation,
         Err(error) => {
             return write_repair_action(
@@ -196,22 +199,10 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         )
         .unwrap_or_else(|error| failed(project_root, error.to_string()));
     }
-    let _ = write_json_atomic(
-        &paths.state_file,
-        &json!({
-            "schemaVersion": 1,
-            "provider": spec.provider,
-            "serviceName": spec.service_name,
-            "projectRoot": spec.project_root,
-            "specRef": state::paths::to_project_relative(project_root, &paths.spec_file).ok(),
-            "composePath": spec.files.compose_path,
-            "running": true,
-            "url": spec.runtime.url,
-            "preview": validation.preview,
-            "apiRoutes": validation.api_routes,
-            "updatedAt": now_string()
-        }),
-    );
+    let state_ref = match write_success_state(project_root, &spec, &validation) {
+        Ok(state_ref) => state_ref,
+        Err(error) => return failed(project_root, error.to_string()),
+    };
     LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: project_root.to_string_lossy().into_owned(),
         summary: "Deployment is running and validation passed.".to_string(),
@@ -219,10 +210,50 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             "url": spec.runtime.url,
             "preview": validation.preview,
             "apiRoutes": validation.api_routes,
-            "stateRef": state::paths::to_project_relative(project_root, &paths.state_file).ok()
+            "stateRef": state_ref
         })),
         warnings: vec![],
     })
+}
+
+fn wait_for_valid_deployment(project_root: &Path) -> StateResult<DeploymentValidationResult> {
+    let mut last = deploy_validate_inner(project_root)?;
+    if last.valid {
+        return Ok(last);
+    }
+    for _ in 0..11 {
+        if !validation_is_retryable_startup(&last) {
+            return Ok(last);
+        }
+        thread::sleep(Duration::from_millis(1500));
+        last = deploy_validate_inner(project_root)?;
+        if last.valid {
+            return Ok(last);
+        }
+    }
+    Ok(last)
+}
+
+fn validation_is_retryable_startup(validation: &DeploymentValidationResult) -> bool {
+    validation.asset_issues.is_empty()
+        && validation
+            .preview
+            .iter()
+            .chain(validation.api_routes.iter())
+            .any(|probe| {
+                probe.status == "unreachable"
+                    || probe
+                        .error
+                        .as_deref()
+                        .map(|error| {
+                            let lower = error.to_ascii_lowercase();
+                            lower.contains("connection reset")
+                                || lower.contains("connection refused")
+                                || lower.contains("timed out")
+                                || lower.contains("eof")
+                        })
+                        .unwrap_or(false)
+            })
 }
 
 fn docker_available(

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
 use contracts::{
     DeployExecutionRepairTaskResult, DeploymentErrorWindow, DeploymentFailureKind,
@@ -16,6 +16,7 @@ use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     paths::{from_project_relative, to_project_relative},
+    request_index::get_request_index_entry,
     store::{
         ensure_dir, now_millis, now_string, path_exists, read_json, read_json_value,
         write_json_atomic, StateError, StateResult,
@@ -77,6 +78,12 @@ pub fn write_repair_action(
     state::store::write_text_atomic(&paths.log_file, &log)?;
     let editable_files = editable_files_for(spec, failure_kind);
     let (failure_owner, repair_route) = classify_repair(failure_kind, editable_files.len());
+    let current_error_window = error_window(stdout, stderr);
+    if let Some(existing) =
+        same_pending_repair_action(project_root, failure_kind, &current_error_window)?
+    {
+        return Ok(repair_next(project_root, &existing));
+    }
     let failure_ref = if repair_route == DeploymentRepairRoute::ExecutionRepair {
         let report = create_failure_report(
             project_root,
@@ -107,7 +114,7 @@ pub fn write_repair_action(
         command,
         exit_code,
         full_log_ref: Some(to_project_relative(project_root, &paths.log_file)?),
-        error_window: Some(error_window(stdout, stderr)),
+        error_window: Some(current_error_window),
         diagnostics: vec![],
         suggested_actions: suggested_actions(failure_kind, failure_owner),
         editable_files,
@@ -374,6 +381,23 @@ fn materialize_deploy_execution_repair(
     })?;
     let failure: DeploymentFailureReport =
         read_json(&from_project_relative(project_root, &failure_ref)?)?;
+    if let Some(request_id) =
+        existing_materialized_execution_repair(project_root, &request.repair_id, &failure_ref)?
+    {
+        let config = state::read_project_config(&project_root.to_string_lossy())?;
+        let request_ref = state::request_manifest::request_ref(&config.project_id, &request_id);
+        let result_file = to_project_relative(
+            project_root,
+            &deploy_execution_repair_result_file(project_root, &request_id),
+        )?;
+        return deploy_execution_repair_next(
+            project_root,
+            &failure,
+            failure_ref,
+            request_ref,
+            result_file,
+        );
+    }
     let request_id = format!("deploy_exec_repair_{}", now_millis());
     let result_file = to_project_relative(
         project_root,
@@ -468,11 +492,6 @@ fn materialize_deploy_execution_repair(
                         "outputContract.deploymentFailureRef",
                         "outputContract.resultFile",
                         "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.status",
-                        "outputContract.schemaShape.properties.changedFiles",
-                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
-                        "outputContract.schemaShape.properties.selfRepairSummary",
-                        "outputContract.schemaShape.properties.notes",
                         "outputContract.resultRules",
                         "executionRules.completionBarrier"
                     ]
@@ -494,9 +513,25 @@ fn materialize_deploy_execution_repair(
     if let Some(parent) = from_project_relative(project_root, &result_file)?.parent() {
         ensure_dir(parent)?;
     }
+    deploy_execution_repair_next(
+        project_root,
+        &failure,
+        failure_ref,
+        stored.request_ref,
+        result_file,
+    )
+}
+
+fn deploy_execution_repair_next(
+    project_root: &Path,
+    failure: &DeploymentFailureReport,
+    failure_ref: String,
+    request_ref: String,
+    result_file: String,
+) -> StateResult<LoomMcpActionResult> {
     let inspected = state::inspect_request(delivery_core::InspectRequestInput {
         project_root: project_root.to_string_lossy().into_owned(),
-        request_ref: stored.request_ref.clone(),
+        request_ref: request_ref.clone(),
     })
     .map_err(|error| StateError::InvalidArgument(error.to_string()))?;
     Ok(LoomMcpActionResult::AutoRunnable(
@@ -505,7 +540,7 @@ fn materialize_deploy_execution_repair(
             LoomMcpNextAction::ExecuteTask(ExecuteTaskNext {
                 execution_kind: ExecutionKind::DeployExecutionRepair,
                 repair_origin: Some(RepairOrigin::DeployFailure),
-                request_ref: stored.request_ref,
+                request_ref,
                 result_file,
                 task_id: "deploy-execution-repair".to_string(),
                 group_id: None,
@@ -530,8 +565,8 @@ fn materialize_deploy_execution_repair(
                     failed_task_result_ref: None,
                     attempt_count: Some(failure.attempt),
                     deployment_failure_ref: Some(failure_ref),
-                    failed_contract_fields: failure.failed_contract_fields,
-                    required_code_level_checks: failure.required_code_level_checks,
+                    failed_contract_fields: failure.failed_contract_fields.clone(),
+                    required_code_level_checks: failure.required_code_level_checks.clone(),
                 }),
                 post_submit: PostSubmitAction::RetryDeploy,
             }),
@@ -578,6 +613,74 @@ fn latest_repair_action(project_root: &Path) -> StateResult<Option<DeploymentRep
         return Ok(None);
     }
     read_json(&path).map(Some)
+}
+
+fn same_pending_repair_action(
+    project_root: &Path,
+    failure_kind: DeploymentFailureKind,
+    window: &DeploymentErrorWindow,
+) -> StateResult<Option<DeploymentRepairAction>> {
+    let path = deployment_paths(project_root).repair_action_file;
+    if !path_exists(&path) {
+        return Ok(None);
+    }
+    let existing: DeploymentRepairAction = read_json(&path)?;
+    if existing.status == "pending"
+        && existing.failure_kind == failure_kind
+        && existing
+            .error_window
+            .as_ref()
+            .map(|existing| existing.lines.as_slice() == window.lines.as_slice())
+            .unwrap_or(false)
+    {
+        return Ok(Some(existing));
+    }
+    Ok(None)
+}
+
+fn existing_materialized_execution_repair(
+    project_root: &Path,
+    repair_id: &str,
+    failure_ref: &str,
+) -> StateResult<Option<String>> {
+    let repairs_dir = deployment_paths(project_root).repairs_dir;
+    if !path_exists(&repairs_dir) {
+        return Ok(None);
+    }
+    let mut matches = vec![];
+    for entry in fs::read_dir(&repairs_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let request_id = entry.file_name().to_string_lossy().into_owned();
+        if !request_id.starts_with("deploy_exec_repair_") {
+            continue;
+        }
+        if path_exists(&entry.path().join("result.json")) {
+            continue;
+        }
+        let output_contract_file = entry.path().join("request.refs/output-contract.json");
+        if !path_exists(&output_contract_file) {
+            continue;
+        }
+        let output_contract = read_json_value(&output_contract_file)?;
+        let same_repair = output_contract
+            .get("repairId")
+            .and_then(serde_json::Value::as_str)
+            == Some(repair_id);
+        let same_failure = output_contract
+            .get("deploymentFailureRef")
+            .and_then(serde_json::Value::as_str)
+            == Some(failure_ref);
+        if same_repair && same_failure {
+            if get_request_index_entry(&project_root.to_string_lossy(), &request_id).is_ok() {
+                matches.push(request_id);
+            }
+        }
+    }
+    matches.sort();
+    Ok(matches.into_iter().last())
 }
 
 fn validate_runtime_delivery_evidence(
@@ -717,6 +820,8 @@ fn create_failure_report(
         .iter()
         .map(|field| format!("check_{field}").replace('.', "_"))
         .collect::<Vec<_>>();
+    let window = error_window(stdout, stderr);
+    let attempt = next_failure_attempt(project_root, failure_kind, &window)?;
     let mut must_not_edit = vec![".loom".to_string(), spec.runtime_contract_ref.clone()];
     must_not_edit.extend(spec.files.dockerfile_paths.values().cloned());
     must_not_edit.extend(spec.files.nginx_config_paths.values().cloned());
@@ -741,11 +846,28 @@ fn create_failure_report(
         )?,
         failed_contract_fields: fields,
         required_code_level_checks: required_checks,
-        error_window: error_window(stdout, stderr),
+        error_window: window,
         must_not_edit,
-        attempt: 1,
+        attempt,
         max_attempts: 2,
     })
+}
+
+fn next_failure_attempt(
+    project_root: &Path,
+    failure_kind: DeploymentFailureKind,
+    window: &DeploymentErrorWindow,
+) -> StateResult<u32> {
+    let path = deployment_paths(project_root).failure_file;
+    if !path_exists(&path) {
+        return Ok(1);
+    }
+    let existing: DeploymentFailureReport = read_json(&path)?;
+    if existing.failure_kind == failure_kind && existing.error_window.lines == window.lines {
+        Ok(existing.attempt.saturating_add(1))
+    } else {
+        Ok(1)
+    }
 }
 
 fn failed_contract_fields(failure_kind: DeploymentFailureKind) -> Vec<String> {

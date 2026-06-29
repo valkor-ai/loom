@@ -23,6 +23,7 @@ use state::{
 
 use crate::{
     active_operation::{acquire_operation, active_operation_result},
+    code_evidence::build_deployment_code_probe,
     generate::{deployment_runtime, generate_deployment_files, generated_file_refs},
     paths::deployment_paths,
     runtime_contract::load_runtime_contract,
@@ -60,7 +61,11 @@ pub fn deploy_prepare_inner(
     ensure_dir(&paths.logs_dir)?;
 
     let runtime_contract = load_runtime_contract(project_root)?;
-    let source_model = source_model_from_runtime_contract(&runtime_contract);
+    let code_probe = build_deployment_code_probe(project_root)?;
+    let build_context_path =
+        relative_context_from_generated_to_project(project_root, &paths.generated_dir);
+    let source_model =
+        source_model_from_runtime_contract(&runtime_contract, &code_probe, build_context_path);
     if source_model.shape == contracts::DeploymentShape::FrontendAndBackend
         && source_model.services.len() < 2
     {
@@ -124,17 +129,22 @@ pub fn deploy_prepare_inner(
         &spec.source_model,
     )?;
     write_json_atomic(&paths.generated_dir.join("topology.json"), &spec.topology)?;
-    write_json_atomic(
-        &paths.code_evidence_file,
-        &json!({
-            "schemaVersion": 1,
-            "source": "runtime_delivery_contract",
-            "generatedAt": now_string(),
-            "runtimeContractRef": runtime_contract_ref,
-            "sourceModelRef": source_model_ref,
-            "topologyRef": topology_ref
-        }),
-    )?;
+    let mut code_evidence = code_probe.evidence.clone();
+    if let Some(object) = code_evidence.as_object_mut() {
+        object.insert(
+            "runtimeContractRef".to_string(),
+            serde_json::Value::String(runtime_contract_ref),
+        );
+        object.insert(
+            "sourceModelRef".to_string(),
+            serde_json::Value::String(source_model_ref),
+        );
+        object.insert(
+            "topologyRef".to_string(),
+            serde_json::Value::String(topology_ref),
+        );
+    }
+    write_json_atomic(&paths.code_evidence_file, &code_evidence)?;
     let generated = generate_deployment_files(&spec);
     for (service_id, content) in &generated.dockerfiles {
         write_text_atomic(
@@ -244,6 +254,21 @@ fn sanitize_name(value: &str) -> String {
         output = output.replace("--", "-");
     }
     output.trim_matches('-').to_string()
+}
+
+fn relative_context_from_generated_to_project(project_root: &Path, generated_dir: &Path) -> String {
+    let Ok(relative) = generated_dir.strip_prefix(project_root) else {
+        return ".".to_string();
+    };
+    let depth = relative.components().count();
+    if depth == 0 {
+        ".".to_string()
+    } else {
+        std::iter::repeat("..")
+            .take(depth)
+            .collect::<Vec<_>>()
+            .join("/")
+    }
 }
 
 fn runtime_contract_blocked(project_root: &Path, error: StateError) -> LoomMcpActionResult {

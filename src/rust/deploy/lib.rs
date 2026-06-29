@@ -1,5 +1,6 @@
 mod active_operation;
 mod bootstrap;
+mod code_evidence;
 mod down;
 mod generate;
 mod inspect;
@@ -9,6 +10,7 @@ mod prepare;
 mod repair;
 mod run;
 mod runtime_contract;
+mod runtime_state;
 mod source_model;
 mod status;
 mod topology;
