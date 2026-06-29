@@ -574,6 +574,39 @@ fn opencode_commands_expose_mcp_result_discipline() {
 }
 
 #[test]
+fn agent_templates_expose_knowledge_direct_route_and_semantic_pack_discipline() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    let files = [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/commands/loom.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+    ];
+
+    for file in files {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            content.contains("knowledge"),
+            "{file} must expose knowledge routing"
+        );
+        assert!(
+            content.contains("loom.knowledge*") || content.contains("loom.knowledgeInspectChunk"),
+            "{file} must route knowledge through MCP tools"
+        );
+        if file.contains("SKILL.md") || file.contains("opencode") {
+            for required in [
+                "GenerateKnowledgeSemanticsNext",
+                "loom.knowledgeInspectChunk",
+                "loom.knowledgeSemanticSubmitFile",
+            ] {
+                assert!(content.contains(required), "{file} missing {required}");
+            }
+        }
+    }
+}
+
+#[test]
 fn product_docs_do_not_expose_legacy_install_or_protocol_paths() {
     let repo = repo_root();
     let files = [
