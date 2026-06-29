@@ -178,9 +178,9 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
                 "summary": "证券账户开户、挂失补办、销户和持仓清空限制。",
                 "semanticLabels": [
                     {"kind": "object", "text": "证券账户", "normalizedText": "证券账户", "aliases": [], "confidence": "high"},
-                    {"kind": "operation", "text": "证券账户开户", "normalizedText": "证券账户开户", "aliases": ["开户"], "confidence": "high"},
-                    {"kind": "operation", "text": "销户", "normalizedText": "销户", "aliases": ["证券账户销户"], "confidence": "high"},
-                    {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "aliases": ["恢复交易能力"], "confidence": "high"}
+                    {"kind": "operation", "text": "证券账户开户", "normalizedText": " 证券账户开户 ", "aliases": ["开户", " 开户 "], "confidence": "high"},
+                    {"kind": "operation", "text": "销户", "normalizedText": "销户", "aliases": ["证券账户销户", " 证券账户销户 "], "confidence": "high"},
+                    {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "aliases": ["恢复交易能力", "RESTORE TRADE"], "confidence": "high"}
                 ],
                 "blockAffinity": {
                     "phaseScope": 0.7,
@@ -208,6 +208,25 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     let build_id = source.current_build_id.as_ref().expect("current build");
     assert_eq!(build_id, &semantic.build_id);
     assert!(source.last_built_at.is_some());
+    let chunks_file: knowledge::models::ChunksFile = knowledge::store::read_json(
+        &knowledge::paths::chunks_file(&source.source_id, build_id).expect("chunks path"),
+    )
+    .expect("chunks file");
+    let stored_aliases = chunks_file
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.semantic_aliases.iter().cloned())
+        .collect::<Vec<_>>();
+    assert!(stored_aliases.contains(&"证券账户开户".to_string()));
+    assert!(stored_aliases.contains(&"开户".to_string()));
+    assert!(stored_aliases.contains(&"restore trade".to_string()));
+    assert_eq!(
+        stored_aliases
+            .iter()
+            .filter(|alias| alias.as_str() == "开户")
+            .count(),
+        1
+    );
     let semantic_state: knowledge::models::SemanticState = knowledge::store::read_json(
         &knowledge::paths::semantic_state_file(&source.source_id, build_id).expect("state path"),
     )

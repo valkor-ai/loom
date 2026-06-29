@@ -520,24 +520,27 @@ fn parse_labels(value: Option<&Value>) -> Vec<SemanticLabel> {
         .into_iter()
         .flatten()
         .filter_map(|item| {
+            let mut aliases = item
+                .get("aliases")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(normalize_semantic_alias)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            aliases.sort();
+            aliases.dedup();
             Some(SemanticLabel {
-                kind: item.get("kind")?.as_str()?.to_string(),
-                text: item.get("text")?.as_str()?.to_string(),
+                kind: item.get("kind")?.as_str()?.trim().to_string(),
+                text: item.get("text")?.as_str()?.trim().to_string(),
                 normalized_text: item
                     .get("normalizedText")
                     .and_then(Value::as_str)
-                    .map(str::to_string),
-                aliases: item
-                    .get("aliases")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                    .and_then(normalize_semantic_alias),
+                aliases,
                 confidence: item
                     .get("confidence")
                     .and_then(Value::as_str)
@@ -566,8 +569,8 @@ fn semantic_aliases_from_result(chunk_result: &Value) -> Vec<String> {
     if let Some(labels) = chunk_result.get("semanticLabels").and_then(Value::as_array) {
         for label in labels {
             if let Some(normalized) = label.get("normalizedText").and_then(Value::as_str) {
-                if !normalized.trim().is_empty() {
-                    aliases.push(normalized.to_string());
+                if let Some(alias) = normalize_semantic_alias(normalized) {
+                    aliases.push(alias);
                 }
             }
             if let Some(items) = label.get("aliases").and_then(Value::as_array) {
@@ -575,7 +578,7 @@ fn semantic_aliases_from_result(chunk_result: &Value) -> Vec<String> {
                     items
                         .iter()
                         .filter_map(Value::as_str)
-                        .map(str::to_string),
+                        .filter_map(normalize_semantic_alias),
                 );
             }
         }
@@ -583,6 +586,12 @@ fn semantic_aliases_from_result(chunk_result: &Value) -> Vec<String> {
     aliases.sort();
     aliases.dedup();
     aliases
+}
+
+fn normalize_semantic_alias(value: &str) -> Option<String> {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = compact.trim().to_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn issue(
