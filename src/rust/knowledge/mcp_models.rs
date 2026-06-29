@@ -115,6 +115,38 @@ pub struct KnowledgeList {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct KnowledgeDiscardSummary {
+    pub name: String,
+    pub discarded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRemoveSummary {
+    pub name: String,
+    pub removed_source: bool,
+    pub removed_pending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeStatusSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<KnowledgeSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PendingQueue>,
+    pub time_zone: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_local: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_local: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_built_at_local: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct KnowledgeChunkCard {
     #[serde(default, skip_serializing)]
     pub source_id: String,

@@ -13,6 +13,12 @@ use crate::{
     paths,
 };
 
+#[derive(Debug, Clone)]
+pub struct PendingQueueRecord {
+    pub file: PathBuf,
+    pub queue: PendingQueue,
+}
+
 pub type KnowledgeResult<T> = Result<T, KnowledgeError>;
 
 #[derive(Debug, Error)]
@@ -111,6 +117,52 @@ pub fn load_pending(source_id: &str, source_name: &str) -> KnowledgeResult<Pendi
 
 pub fn save_pending(queue: &PendingQueue) -> KnowledgeResult<()> {
     write_json(&paths::pending_file(&queue.source_id)?, queue)
+}
+
+pub fn list_pending_records() -> KnowledgeResult<Vec<PendingQueueRecord>> {
+    let pending_dir = paths::pending_dir()?;
+    if !pending_dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut records = Vec::new();
+    for entry in fs::read_dir(pending_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        records.push(PendingQueueRecord {
+            file: entry.path(),
+            queue: read_json(&entry.path())?,
+        });
+    }
+    records.sort_by(|left, right| {
+        left.queue
+            .source_name
+            .cmp(&right.queue.source_name)
+            .then_with(|| left.queue.source_id.cmp(&right.queue.source_id))
+    });
+    Ok(records)
+}
+
+pub fn load_pending_by_name(name: &str) -> KnowledgeResult<Option<PendingQueue>> {
+    Ok(list_pending_records()?
+        .into_iter()
+        .find(|record| record.queue.source_name == name)
+        .map(|record| record.queue))
+}
+
+pub fn remove_pending_by_name(name: &str) -> KnowledgeResult<bool> {
+    let mut removed = false;
+    for record in list_pending_records()? {
+        if record.queue.source_name == name {
+            remove_file_if_exists(&record.file)?;
+            removed = true;
+        }
+    }
+    Ok(removed)
 }
 
 pub fn now_millis() -> u128 {

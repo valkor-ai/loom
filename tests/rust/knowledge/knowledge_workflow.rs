@@ -2,12 +2,13 @@ use std::sync::{Mutex, MutexGuard};
 
 use delivery_core::{LoomMcpActionResult, LoomMcpNextAction};
 use knowledge::{
-    add_source, brainstorm_context, build_source, disable_source, inspect_chunk, list_sources,
+    add_source, brainstorm_context, build_source, disable_source, discard_pending, inspect_chunk,
+    list_sources,
     mcp_models::{
         KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
-        KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput,
+        KnowledgeNameInput, KnowledgePendingInput, KnowledgeProjectInput, KnowledgeSearchInput,
     },
-    search_knowledge, submit_semantic_pack,
+    pending_sources, remove_source, search_knowledge, source_status, submit_semantic_pack,
 };
 use serde_json::json;
 
@@ -294,6 +295,67 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     })
     .expect("disabled search");
     assert_eq!(disabled_search.status, "empty");
+}
+
+#[test]
+fn knowledge_cleanup_tools_are_idempotent_and_include_pending_only_state() {
+    let fixture = Fixture::new("pending-only-cleanup");
+    let pending_dir = fixture.root.join(".loom-home/knowledge/pending");
+    std::fs::create_dir_all(&pending_dir).expect("pending dir");
+    std::fs::write(
+        pending_dir.join("ksrc_orphan.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": "ksrc_orphan",
+            "sourceName": "orphan-rules",
+            "operations": [{
+                "operationId": "kop_orphan",
+                "kind": "add_paths",
+                "paths": [fixture.root.join("docs").to_string_lossy().to_string()],
+                "createdAt": "2026-06-30T00:00:00Z"
+            }]
+        }))
+        .expect("pending json"),
+    )
+    .expect("write pending");
+
+    let listed = list_sources(KnowledgeProjectInput {
+        project_root: fixture.root_str().to_string(),
+    })
+    .expect("list pending-only");
+    assert_eq!(listed.sources.len(), 1);
+    assert_eq!(listed.sources[0].source.name, "orphan-rules");
+    assert!(listed.sources[0].pending.is_some());
+
+    let pending = pending_sources(KnowledgePendingInput {
+        project_root: fixture.root_str().to_string(),
+        name: Some("orphan-rules".to_string()),
+    })
+    .expect("pending by name");
+    assert_eq!(pending.sources.len(), 1);
+
+    let status = source_status(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "orphan-rules".to_string(),
+    })
+    .expect("status pending-only");
+    assert!(status.source.is_none());
+    assert!(status.pending.is_some());
+
+    let discarded = discard_pending(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "orphan-rules".to_string(),
+    })
+    .expect("discard pending-only");
+    assert!(discarded.discarded);
+
+    let removed_missing = remove_source(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "orphan-rules".to_string(),
+    })
+    .expect("remove after discard");
+    assert!(!removed_missing.removed_source);
+    assert!(!removed_missing.removed_pending);
 }
 
 #[test]
