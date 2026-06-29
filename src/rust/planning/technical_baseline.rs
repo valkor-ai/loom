@@ -235,9 +235,18 @@ fn build_request_root(
                 "operationPaths": frontend_experience.operation_paths
             })),
             "userFacingLanguage": brainstorm.delivery_context.user_facing_language,
-            "roadmap": brainstorm.roadmap,
+            "roadmap": {
+                "required": brainstorm.roadmap.required,
+                "currentPhaseId": brainstorm.roadmap.current_phase_id
+            },
+            "roadmapPhaseIndex": brainstorm.roadmap.phases.iter().map(|phase| json!({
+                "phaseId": phase.phase_id,
+                "title": phase.title,
+                "name": phase.name,
+                "status": phase.status,
+                "goal": phase.goal
+            })).collect::<Vec<_>>(),
             "phasePlan": {
-                "current": brainstorm.phase_plan.current,
                 "nextPhasePreview": brainstorm.phase_plan.next_phase_preview
             },
             "sourceRefs": brainstorm.sources.iter().map(|source| source.source_id.clone()).collect::<Vec<_>>()
@@ -369,7 +378,7 @@ fn technical_baseline_context_fields(
         "brainstormLens.userFacingLanguage",
         "brainstormLens.roadmap.required",
         "brainstormLens.roadmap.currentPhaseId",
-        "brainstormLens.roadmap.phases",
+        "brainstormLens.roadmapPhaseIndex",
         "brainstormLens.phasePlan.nextPhasePreview",
         "currentPhaseLens.phaseId",
         "currentPhaseLens.title",

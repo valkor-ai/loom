@@ -173,6 +173,10 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .is_none());
     assert!(baseline_context
         .fields
+        .get("brainstormLens.roadmap.phases")
+        .is_none());
+    assert!(baseline_context
+        .fields
         .get("brainstormLens.phasePlan")
         .is_none());
     assert!(baseline_context
@@ -189,7 +193,7 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         "brainstormLens.summary.businessGoal",
         "brainstormLens.scope.included",
         "brainstormLens.scope.deferred",
-        "brainstormLens.roadmap.phases",
+        "brainstormLens.roadmapPhaseIndex",
         "brainstormLens.phasePlan.nextPhasePreview",
         "currentPhaseLens.phaseId",
         "currentPhaseLens.goal",
