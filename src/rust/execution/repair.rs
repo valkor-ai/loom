@@ -1241,6 +1241,8 @@ fn materialize_architecture_repair_action(
             "requirementDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.requirementDetails")?,
             "acceptanceDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.acceptanceDetails")?,
             "businessFlows": field_value(&core_fields, "contextProjection.requirementDetailTransfer.businessFlows")?,
+            "actors": value_field(&core_fields, "contextProjection.requirementDetailTransfer.actors"),
+            "capabilityGroups": value_field(&core_fields, "contextProjection.requirementDetailTransfer.capabilityGroups"),
             "frontendExperienceDetails": frontend_experience_details,
             "userFacingLanguage": user_facing_language
         }
@@ -1557,6 +1559,8 @@ fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
                 "contextProjection.requirementDetailTransfer.requirementDetails",
                 "contextProjection.requirementDetailTransfer.acceptanceDetails",
                 "contextProjection.requirementDetailTransfer.businessFlows",
+                "contextProjection.requirementDetailTransfer.actors",
+                "contextProjection.requirementDetailTransfer.capabilityGroups",
                 "allowedRefs.scopeRefs",
                 "allowedRefs.acceptanceRefs",
                 "allowedRefs.deferredScopeRefs",
@@ -1600,6 +1604,23 @@ fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
                 "frontendExperienceSource.authorityRule",
                 "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
                 "contextProjection.requirementDetailTransfer.userFacingLanguage"
+            ]
+        }));
+    }
+    if matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+    ) {
+        groups.push(json!({
+            "groupId": "architecture_domain_model_context",
+            "required": true,
+            "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture repair sections.",
+            "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
+            "fields": [
+                "contextProjection.requirementDetailTransfer.actors",
+                "contextProjection.requirementDetailTransfer.capabilityGroups"
             ]
         }));
     }

@@ -3259,8 +3259,26 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     assert_architecture_group_ids(
         &fixture,
         &repair_action_ref,
-        &["architecture_core_context", "architecture_section_contract"],
+        &[
+            "architecture_core_context",
+            "architecture_section_contract",
+            "architecture_domain_model_context",
+        ],
     );
+    let domain_model_group = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_action_ref.clone(),
+        group_id: "architecture_domain_model_context".to_string(),
+    })
+    .expect("read architecture repair domain model group");
+    assert!(domain_model_group
+        .fields
+        .get("contextProjection.requirementDetailTransfer.actors")
+        .is_some());
+    assert!(domain_model_group
+        .fields
+        .get("contextProjection.requirementDetailTransfer.capabilityGroups")
+        .is_some());
     advance_architecture_to_section(&fixture, &repair_action_ref, "frontend_experience");
     assert_architecture_group_ids(
         &fixture,
