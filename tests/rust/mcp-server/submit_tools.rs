@@ -1888,15 +1888,31 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(review_matrices_group
         .fields
         .iter()
-        .any(|field| field == "outputContract.reviewSignals.requirementDetailEvidence"));
-    assert!(review_matrices_group
-        .fields
-        .iter()
-        .any(|field| field == "outputContract.reviewSignals.frontendWorkflowClosure"));
+        .any(|field| field == "outputContract.reviewSignals.items"));
     assert!(!review_matrices_group
         .fields
         .iter()
         .any(|field| field.starts_with("reviewSignals.")));
+    assert!(!review_matrices_group.fields.iter().any(|field| {
+        field == "outputContract.reviewSignals.requirementDetailEvidence"
+            || field == "outputContract.reviewSignals.frontendWorkflowClosure"
+    }));
+    let review_matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read review matrices");
+    let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
+        .value
+        .as_array()
+        .expect("review signals");
+    assert!(review_signals
+        .iter()
+        .any(|signal| signal["kind"] == json!("task_run_summary")));
+    assert!(review_signals
+        .iter()
+        .any(|signal| signal["kind"] == json!("requirement_detail_evidence")));
     let review_packets = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: review_request_ref.to_string(),

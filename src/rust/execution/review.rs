@@ -181,7 +181,7 @@ fn build_review_request(
 ) -> Result<Value, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let review_signals = build_review_signals(task_plan, task_results);
+    let review_signals = build_review_signals(task_plan, run, task_results);
     let next_phase_preview = review_next_phase_preview(next_phase_handoff);
     let (change_set, change_context) =
         build_change_set(project_root, delivery_id, phase_id, review_id, task_results)?;
@@ -292,7 +292,9 @@ fn build_review_request(
             "resultTemplate": review_result_template(review_id, phase_id, task_plan, run, next_phase_handoff),
             "allowedRefs": allowed_refs,
             "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
-            "reviewSignals": review_signals,
+            "reviewSignals": {
+                "items": review_signals
+            },
             "changeContextMode": change_context_mode.clone(),
             "severityPolicy": review_severity_policy(),
             "routingRules": {
@@ -368,8 +370,7 @@ fn build_review_request(
                     "fields": [
                         "conceptReviewMatrix",
                         "detailReviewMatrix",
-                        "outputContract.reviewSignals.requirementDetailEvidence",
-                        "outputContract.reviewSignals.frontendWorkflowClosure"
+                        "outputContract.reviewSignals.items"
                     ]
                 },
                 {
@@ -857,8 +858,7 @@ where
             "enumRefs.readRefType".to_string(),
             "enumRefs.evidenceRefType".to_string(),
             "outputContract.changeContextMode".to_string(),
-            "outputContract.reviewSignals.requirementDetailEvidence".to_string(),
-            "outputContract.reviewSignals.frontendWorkflowClosure".to_string(),
+            "outputContract.reviewSignals.items".to_string(),
             "reviewScope.nextPhasePreview.kind".to_string(),
         ],
     })?
@@ -1339,22 +1339,15 @@ fn validate_review_signals(
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let signals = json!({
-        "requirementDetailEvidence": array_field(fields, "outputContract.reviewSignals.requirementDetailEvidence"),
-        "frontendWorkflowClosure": array_field(fields, "outputContract.reviewSignals.frontendWorkflowClosure")
+    let signals = array_field(fields, "outputContract.reviewSignals.items");
+    let unsatisfied_detail = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("requirement_detail_evidence")
+            && item.get("detailSatisfied").and_then(Value::as_bool) == Some(false)
     });
-    let unsatisfied_detail = signals
-        .get("requirementDetailEvidence")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|item| item.get("detailSatisfied").and_then(Value::as_bool) == Some(false));
-    let unsatisfied_frontend = signals
-        .get("frontendWorkflowClosure")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|item| item.get("closureSatisfied").and_then(Value::as_bool) == Some(false));
+    let unsatisfied_frontend = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
+            && item.get("closureSatisfied").and_then(Value::as_bool) == Some(false)
+    });
     if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
         && (unsatisfied_detail || unsatisfied_frontend)
     {
@@ -2168,22 +2161,163 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
         .collect()
 }
 
-fn build_review_signals(task_plan: &TaskPlan, task_results: &[TaskResult]) -> Value {
-    let detail = build_detail_review_matrix(task_plan, task_results);
-    let frontend = task_results
-        .iter()
-        .filter_map(|result| result.frontend_experience_self_check.as_ref())
-        .map(|check| {
-            json!({
-                "closureSatisfied": check.get("status").and_then(Value::as_str) == Some("satisfied"),
-                "recommendedNextAction": if check.get("status").and_then(Value::as_str) == Some("satisfied") { "none" } else { "execution_repair" }
+fn build_review_signals(
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+    task_results: &[TaskResult],
+) -> Value {
+    let mut signals = vec![json!({
+        "signalId": "sig-task-run-summary",
+        "kind": "task_run_summary",
+        "status": run.status,
+        "totalTasks": run.summary.total,
+        "completedTasks": run.summary.completed,
+        "failedTasks": run.summary.failed,
+        "blockedTasks": run.summary.blocked
+    })];
+    for detail in build_detail_review_matrix(task_plan, task_results) {
+        let detail_id = detail
+            .get("detailId")
+            .and_then(Value::as_str)
+            .unwrap_or("detail");
+        let detail_satisfied = detail
+            .get("detailSatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!("sig-requirement-detail-{}", safe_signal_id(detail_id)),
+            "kind": "requirement_detail_evidence",
+            "detailId": detail_id,
+            "taskRefs": detail.get("taskId").and_then(Value::as_str).map(|task_id| vec![task_id.to_string()]).unwrap_or_default(),
+            "detailSatisfied": detail_satisfied,
+            "actualStatus": if detail_satisfied { "satisfied" } else { "missing" },
+            "recommendedNextAction": if detail_satisfied { "none" } else { "execution_repair" },
+            "reason": if detail_satisfied {
+                "Assigned TaskResult evidence reports this requirement detail as satisfied."
+            } else {
+                "Assigned TaskResult evidence is missing or does not report this requirement detail as satisfied."
+            }
+        }));
+    }
+    for task in &task_plan.tasks {
+        if task.frontend_experience_requirement.is_some() {
+            signals.push(json!({
+                "signalId": format!("sig-frontend-task-{}", safe_signal_id(&task.task_id)),
+                "kind": "task_contract_presence",
+                "taskId": task.task_id,
+                "contractType": "frontend_experience"
+            }));
+        }
+        if let Some(requirement) = &task.runtime_delivery_requirement {
+            signals.push(json!({
+                "signalId": format!("sig-runtime-task-{}", safe_signal_id(&task.task_id)),
+                "kind": "task_contract_presence",
+                "taskId": task.task_id,
+                "contractType": "runtime_delivery",
+                "isClosureTask": matches!(task.task_kind, contracts::TaskKind::RuntimeDeliveryClosure),
+                "affectedContractFields": requirement.affected_contract_fields,
+                "requiredCodeLevelChecks": requirement.required_code_level_checks.iter().map(|check| check.check_id.clone()).collect::<Vec<_>>()
+            }));
+        }
+        for closure_id in frontend_closure_ids(task) {
+            let result = task_results
+                .iter()
+                .find(|result| result.task_id == task.task_id);
+            let check = result.and_then(|result| result.frontend_experience_self_check.as_ref());
+            let data_binding = check
+                .and_then(|check| check.get("dataBinding"))
+                .unwrap_or(&Value::Null);
+            let known_gap_count = data_binding
+                .get("knownGaps")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0);
+            let covered_closures = check
+                .and_then(|check| check.get("closureRequirementIds"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect::<BTreeSet<_>>();
+            let closure_satisfied = check
+                .and_then(|check| check.get("status"))
+                .and_then(Value::as_str)
+                == Some("satisfied")
+                && data_binding.get("mode").and_then(Value::as_str) == Some("wired")
+                && known_gap_count == 0
+                && covered_closures.contains(&closure_id);
+            signals.push(json!({
+                "signalId": format!("sig-workflow-closure-{}-{}", safe_signal_id(&closure_id), safe_signal_id(&task.task_id)),
+                "kind": "frontend_workflow_closure",
+                "closureId": closure_id,
+                "taskRefs": [task.task_id.clone()],
+                "taskResultId": result.map(|result| result.task_result_id.clone()),
+                "closureSatisfied": closure_satisfied,
+                "actualFrontendSelfCheckStatus": check.and_then(|check| check.get("status")).and_then(Value::as_str),
+                "actualDataBindingMode": data_binding.get("mode").and_then(Value::as_str),
+                "knownGapCount": known_gap_count,
+                "requiredDataBindingMode": "wired",
+                "recommendedNextAction": if closure_satisfied { "none" } else { "execution_repair" },
+                "reason": if closure_satisfied {
+                    "TaskResult self-check reports wired closure evidence with no known gaps."
+                } else {
+                    "Required workflow closure is not satisfied by TaskResult frontend self-check evidence."
+                }
+            }));
+        }
+    }
+    for result in task_results {
+        if result.runtime_delivery_evidence.is_some() {
+            signals.push(json!({
+                "signalId": format!("sig-runtime-evidence-{}", safe_signal_id(&result.task_result_id)),
+                "kind": "task_result_evidence_presence",
+                "taskResultId": result.task_result_id,
+                "taskId": result.task_id,
+                "evidenceType": "runtime_delivery"
+            }));
+        }
+        if result.frontend_experience_self_check.is_some() {
+            signals.push(json!({
+                "signalId": format!("sig-frontend-evidence-{}", safe_signal_id(&result.task_result_id)),
+                "kind": "task_result_evidence_presence",
+                "taskResultId": result.task_result_id,
+                "taskId": result.task_id,
+                "evidenceType": "frontend_experience"
+            }));
+        }
+    }
+    Value::Array(signals)
+}
+
+fn frontend_closure_ids(task: &TaskDefinition) -> Vec<String> {
+    task.frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("executionGuidance"))
+        .and_then(|guidance| guidance.get("closureRequirementRefs"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str().map(str::to_string).or_else(|| {
+                item.get("closureId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
             })
         })
-        .collect::<Vec<_>>();
-    json!({
-        "requirementDetailEvidence": detail,
-        "frontendWorkflowClosure": frontend
-    })
+        .collect()
+}
+
+fn safe_signal_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn compact_group_summaries(groups: &[TaskPlanGroup]) -> Vec<Value> {
