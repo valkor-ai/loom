@@ -154,8 +154,8 @@ where
         "outputContract.requiredTopLevelFields".to_string(),
     ];
     for optional_field in [
-        "taskConceptGrounding.conceptRefs",
-        "blockedOutput.blockedReasons",
+        "task.conceptRefs",
+        "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
         "task.runtimeDeliveryRequirement",
     ] {
@@ -199,7 +199,7 @@ where
             "artifactRefs": {}
         },
         "verificationIntents": array_field(&fields, "task.verificationIntents"),
-        "conceptRefs": array_field(&fields, "taskConceptGrounding.conceptRefs"),
+        "conceptRefs": array_field(&fields, "task.conceptRefs"),
         "conceptResponsibilities": [],
         "conceptVerificationIntents": [],
         "frontendExperienceRequirement": frontend_experience_requirement,
@@ -209,7 +209,7 @@ where
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let blocked_output = json!({
-        "blockedReasons": array_field(&fields, "blockedOutput.blockedReasons")
+        "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
@@ -864,7 +864,7 @@ fn validate_blocked_reasons(
             issues.push(issue(
                 "TASK_RESULT_BLOCKED_MAPPING_INVALID",
                 "blockedReasons",
-                "Blocked reason must match the request blockedOutput mapping.",
+                "Blocked reason must match the request blocked reason options.",
             ));
         }
     }
@@ -1211,6 +1211,58 @@ fn materialize_task_result_repair(
     let schema_shape = serde_json::to_value(schema_for!(TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let result_template = task_result_repair_template(&context, &issues);
+    let mut context_fields = vec![
+        "source.taskPlanId",
+        "source.taskId",
+        "source.taskPlanRunId",
+        "source.taskExecutionRequestRef",
+        "source.originalResultFile",
+        "source.issues",
+        "task.taskId",
+        "task.groupId",
+        "task.title",
+        "task.taskKind",
+        "task.objective",
+        "task.acceptanceRefs",
+        "task.requirementDetailRefs",
+        "task.verificationIntents",
+        "outputContract.blockedReasonOptions",
+        "repairRules.rule",
+    ];
+    if !context.task.concept_refs.is_empty() {
+        context_fields.push("task.conceptRefs");
+    }
+    if context.task.frontend_experience_requirement.is_some() {
+        context_fields.push("task.frontendExperienceRequirement");
+    }
+    if context.task.runtime_delivery_requirement.is_some() {
+        context_fields.push("task.runtimeDeliveryRequirement");
+    }
+    let mut write_contract_fields = vec![
+        "outputContract.resultFile",
+        "outputContract.writeTargets",
+        "outputContract.requiredTopLevelFields",
+        "outputContract.resultTemplate",
+        "outputContract.schemaShape.properties.status",
+        "outputContract.schemaShape.properties.changedFiles",
+        "outputContract.schemaShape.properties.noChangeReason",
+        "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.selfRepairSummary",
+        "outputContract.schemaShape.properties.failure",
+        "outputContract.schemaShape.properties.executionContinuity",
+        "outputContract.schemaShape.properties.notes",
+        "outputContract.schemaShape.properties.requirementDetailEvidence",
+        "outputContract.schemaShape.properties.conceptEvidence",
+        "outputContract.schemaShape.properties.blockedReasons",
+        "outputContract.resultRules",
+    ];
+    if context.task.frontend_experience_requirement.is_some() {
+        write_contract_fields
+            .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if context.task.runtime_delivery_requirement.is_some() {
+        write_contract_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
     let root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "task_result_repair",
@@ -1227,10 +1279,6 @@ fn materialize_task_result_repair(
             "issues": issues
         },
         "task": context.task.clone(),
-        "taskConceptGrounding": {
-            "conceptRefs": context.task.concept_refs.clone()
-        },
-        "blockedOutput": context.blocked_output,
         "repairRules": {
             "rule": "Rewrite the TaskResult JSON so it satisfies the original TaskExecutionRequest output contract. Do not edit source files for this repair."
         },
@@ -1246,6 +1294,10 @@ fn materialize_task_result_repair(
                 "description": "Rewrite the TaskResult JSON for the original task execution request."
             }],
             "requiredTopLevelFields": context.required_top_level_fields,
+            "blockedReasonOptions": context.blocked_output
+                .get("blockedReasons")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
             "schemaShape": schema_shape,
             "resultTemplate": result_template,
             "resultRules": [
@@ -1260,53 +1312,14 @@ fn materialize_task_result_repair(
                     "required": true,
                     "purpose": "Read the original TaskResult validation issues and task contract.",
                     "whenToRead": "Read before rewriting TaskResult.",
-                    "fields": [
-                        "source.taskPlanId",
-                        "source.taskId",
-                        "source.taskPlanRunId",
-                        "source.taskExecutionRequestRef",
-                        "source.originalResultFile",
-                        "source.issues",
-                        "task.taskId",
-                        "task.groupId",
-                        "task.title",
-                        "task.taskKind",
-                        "task.objective",
-                        "task.acceptanceRefs",
-                        "task.requirementDetailRefs",
-                        "task.verificationIntents",
-                        "taskConceptGrounding.conceptRefs",
-                        "task.frontendExperienceRequirement",
-                        "task.runtimeDeliveryRequirement",
-                        "blockedOutput.blockedReasons",
-                        "repairRules.rule"
-                    ]
+                    "fields": context_fields
                 },
                 {
                     "groupId": "task_result_repair_write_contract",
                     "required": true,
                     "purpose": "Read the TaskResult replacement output contract.",
                     "whenToRead": "Read before writing replacement TaskResult.",
-                    "fields": [
-                        "outputContract.resultFile",
-                        "outputContract.writeTargets",
-                        "outputContract.requiredTopLevelFields",
-                        "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.status",
-                        "outputContract.schemaShape.properties.changedFiles",
-                        "outputContract.schemaShape.properties.noChangeReason",
-                        "outputContract.schemaShape.properties.verificationResults",
-                        "outputContract.schemaShape.properties.selfRepairSummary",
-                        "outputContract.schemaShape.properties.failure",
-                        "outputContract.schemaShape.properties.executionContinuity",
-                        "outputContract.schemaShape.properties.notes",
-                        "outputContract.schemaShape.properties.frontendExperienceSelfCheck",
-                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
-                        "outputContract.schemaShape.properties.requirementDetailEvidence",
-                        "outputContract.schemaShape.properties.conceptEvidence",
-                        "outputContract.schemaShape.properties.blockedReasons",
-                        "outputContract.resultRules"
-                    ]
+                    "fields": write_contract_fields
                 }
             ]
         }

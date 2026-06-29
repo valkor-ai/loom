@@ -107,7 +107,7 @@ pub fn dispatch_repair_route(
             failed(
                 project_root,
                 "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
-                "The active TaskResult repair request is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
+                "The active TaskResult correction action is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
                 "task_result_repair",
             )
         }),
@@ -540,6 +540,80 @@ fn build_repair_execution_request(
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let result_template = task_result_template(&task_plan.task_plan_id, task);
+    let mut repair_core_fields = vec![
+        "source.deliveryId",
+        "source.phaseId",
+        "source.taskPlanId",
+        "source.taskPlanRunId",
+        "source.taskId",
+        "source.groupId",
+        "task.taskId",
+        "task.groupId",
+        "task.title",
+        "task.taskKind",
+        "task.implementationActions",
+        "task.objective",
+        "task.dependsOn",
+        "task.scopeRefs",
+        "task.acceptanceRefs",
+        "task.requirementDetailRefs",
+        "task.writeBoundary.forbiddenPaths",
+        "task.writeBoundary.artifactRefs",
+        "task.verificationIntents",
+        "repairContext.sourceTaskId",
+        "repairContext.repairOrigin",
+        "repairContext.attemptCount",
+        "repairContext.sourceRef",
+        "repairContext.findingRefs",
+        "executionRules.completionBarrier",
+        "executionRules.finalResponseGuard",
+        "executionRules.completionContinuityRequirement",
+        "executionRules.verificationCommandSchedulingRules",
+        "executionRules.boundaryRules",
+    ];
+    if !task.concept_refs.is_empty() {
+        repair_core_fields.push("task.conceptRefs");
+    }
+    if !task.concept_responsibilities.is_empty() {
+        repair_core_fields.push("task.conceptResponsibilities");
+    }
+    if !task.concept_verification_intents.is_empty() {
+        repair_core_fields.push("task.conceptVerificationIntents");
+    }
+    if task.frontend_experience_requirement.is_some() {
+        repair_core_fields.push("task.frontendExperienceRequirement");
+    }
+    if task.runtime_delivery_requirement.is_some() {
+        repair_core_fields.push("task.runtimeDeliveryRequirement");
+    }
+    let mut repair_result_fields = vec![
+        "enumRefs.taskResultStatus",
+        "enumRefs.verificationStatus",
+        "outputContract.resultFile",
+        "outputContract.requiredTopLevelFields",
+        "outputContract.resultTemplate",
+        "outputContract.schemaShape.properties.status",
+        "outputContract.schemaShape.properties.changedFiles",
+        "outputContract.schemaShape.properties.noChangeReason",
+        "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.selfRepairSummary",
+        "outputContract.schemaShape.properties.failure",
+        "outputContract.schemaShape.properties.executionContinuity",
+        "outputContract.schemaShape.properties.notes",
+        "outputContract.schemaShape.properties.requirementDetailEvidence",
+        "outputContract.schemaShape.properties.conceptEvidence",
+        "outputContract.schemaShape.properties.blockedReasons",
+        "outputContract.resultRules",
+        "outputContract.blockedReasonOptions",
+        "executionRules.completionBarrier",
+    ];
+    if task.frontend_experience_requirement.is_some() {
+        repair_result_fields
+            .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if task.runtime_delivery_requirement.is_some() {
+        repair_result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "delivery_execution_repair",
@@ -555,11 +629,6 @@ fn build_repair_execution_request(
             "groupId": task.group_id
         },
         "task": task,
-        "taskConceptGrounding": {
-            "conceptRefs": task.concept_refs,
-            "conceptResponsibilities": task.concept_responsibilities,
-            "conceptVerificationIntents": task.concept_verification_intents
-        },
         "repairContext": {
             "sourceTaskId": task.task_id,
             "repairOrigin": repair_origin,
@@ -616,18 +685,16 @@ fn build_repair_execution_request(
                 "runtimeDeliveryEvidence", "requirementDetailEvidence", "conceptEvidence",
                 "blockedReasons", "createdAt", "updatedAt"
             ],
+            "blockedReasonOptions": [
+                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
+                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
+                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
+            ],
             "schemaShape": schema_shape,
             "resultTemplate": result_template,
             "resultRules": [
                 "TaskResult must include every requiredTopLevelFields entry.",
                 "If status is completed, evidence must show the repair was verified."
-            ]
-        },
-        "blockedOutput": {
-            "blockedReasons": [
-                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
-                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
-                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ]
         },
         "requestReadPlan": {
@@ -637,71 +704,14 @@ fn build_repair_execution_request(
                     "required": true,
                     "purpose": "Read task, repair context, and execution rules before editing.",
                     "whenToRead": "Read before source edits.",
-                    "fields": [
-                        "source.deliveryId",
-                        "source.phaseId",
-                        "source.taskPlanId",
-                        "source.taskPlanRunId",
-                        "source.taskId",
-                        "source.groupId",
-                        "task.taskId",
-                        "task.groupId",
-                        "task.title",
-                        "task.taskKind",
-                        "task.implementationActions",
-                        "task.objective",
-                        "task.dependsOn",
-                        "task.scopeRefs",
-                        "task.acceptanceRefs",
-                        "task.requirementDetailRefs",
-                        "task.writeBoundary.forbiddenPaths",
-                        "task.writeBoundary.artifactRefs",
-                        "task.verificationIntents",
-                        "taskConceptGrounding.conceptRefs",
-                        "taskConceptGrounding.conceptResponsibilities",
-                        "taskConceptGrounding.conceptVerificationIntents",
-                        "task.frontendExperienceRequirement",
-                        "task.runtimeDeliveryRequirement",
-                        "repairContext.sourceTaskId",
-                        "repairContext.repairOrigin",
-                        "repairContext.attemptCount",
-                        "repairContext.sourceRef",
-                        "repairContext.findingRefs",
-                        "executionRules.completionBarrier",
-                        "executionRules.finalResponseGuard",
-                        "executionRules.completionContinuityRequirement",
-                        "executionRules.verificationCommandSchedulingRules",
-                        "executionRules.boundaryRules"
-                    ]
+                    "fields": repair_core_fields
                 },
                 {
                     "groupId": "repair_result_contract",
                     "required": true,
                     "purpose": "Read TaskResult write contract before submitting repair result.",
                     "whenToRead": "Read before writing TaskResult.",
-                    "fields": [
-                        "enumRefs.taskResultStatus",
-                        "enumRefs.verificationStatus",
-                        "outputContract.resultFile",
-                        "outputContract.requiredTopLevelFields",
-                        "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.status",
-                        "outputContract.schemaShape.properties.changedFiles",
-                        "outputContract.schemaShape.properties.noChangeReason",
-                        "outputContract.schemaShape.properties.verificationResults",
-                        "outputContract.schemaShape.properties.selfRepairSummary",
-                        "outputContract.schemaShape.properties.failure",
-                        "outputContract.schemaShape.properties.executionContinuity",
-                        "outputContract.schemaShape.properties.notes",
-                        "outputContract.schemaShape.properties.frontendExperienceSelfCheck",
-                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
-                        "outputContract.schemaShape.properties.requirementDetailEvidence",
-                        "outputContract.schemaShape.properties.conceptEvidence",
-                        "outputContract.schemaShape.properties.blockedReasons",
-                        "outputContract.resultRules",
-                        "blockedOutput.blockedReasons",
-                        "executionRules.completionBarrier"
-                    ]
+                    "fields": repair_result_fields
                 }
             ]
         }

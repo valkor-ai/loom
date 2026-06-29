@@ -1826,8 +1826,7 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         request_ref: repair_request_ref.to_string(),
         fields: vec![
             "outputContract.resultTemplate".to_string(),
-            "taskConceptGrounding.conceptRefs".to_string(),
-            "blockedOutput.blockedReasons".to_string(),
+            "outputContract.blockedReasonOptions".to_string(),
         ],
     })
     .expect("read execution repair result template")
@@ -1835,12 +1834,12 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
     assert!(
         repair_fields["outputContract.resultTemplate"].value["verificationResults"][0].is_object()
     );
-    assert!(repair_fields["taskConceptGrounding.conceptRefs"]
+    assert!(repair_fields["outputContract.blockedReasonOptions"]
         .value
         .is_array());
-    assert!(repair_fields["blockedOutput.blockedReasons"]
-        .value
-        .is_array());
+    let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
+    assert!(repair_root.get("taskConceptGrounding").is_none());
+    assert!(repair_root.get("blockedOutput").is_none());
     remove_task_result_optional_validation_fields(&fixture, repair_request_ref);
     write_task_result_candidate(&fixture, repair_request_ref);
     let repaired_result = call_submit(
@@ -4514,7 +4513,7 @@ fn remove_task_result_optional_validation_fields(fixture: &Fixture, request_ref:
         fields.retain(|field| {
             !matches!(
                 field.as_str(),
-                Some("taskConceptGrounding.conceptRefs" | "blockedOutput.blockedReasons")
+                Some("task.conceptRefs" | "outputContract.blockedReasonOptions")
             )
         });
     }

@@ -321,18 +321,6 @@ fn build_execution_request(
                 "Write TaskResult JSON only to outputContract.resultFile."
             ]
         },
-        "taskConceptGrounding": {
-            "conceptRefs": task.concept_refs,
-            "conceptResponsibilities": task.concept_responsibilities,
-            "conceptVerificationIntents": task.concept_verification_intents
-        },
-        "blockedOutput": {
-            "blockedReasons": [
-                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
-                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
-                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
-            ]
-        },
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
             "verificationStatus": ["passed", "not_run", "failed", "inconclusive"],
@@ -356,6 +344,11 @@ fn build_execution_request(
                 "failure", "executionContinuity", "notes", "frontendExperienceSelfCheck",
                 "runtimeDeliveryEvidence", "requirementDetailEvidence", "conceptEvidence",
                 "blockedReasons", "createdAt", "updatedAt"
+            ],
+            "blockedReasonOptions": [
+                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
+                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
+                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
             "schemaShape": schema_shape,
             "resultTemplate": task_result_template(&task_plan.task_plan_id, &request_task),
@@ -426,6 +419,15 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
         core_fields.push("task.runtimeDeliveryRequirement");
         core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
     }
+    if !task.concept_refs.is_empty() {
+        core_fields.push("task.conceptRefs");
+    }
+    if !task.concept_responsibilities.is_empty() {
+        core_fields.push("task.conceptResponsibilities");
+    }
+    if !task.concept_verification_intents.is_empty() {
+        core_fields.push("task.conceptVerificationIntents");
+    }
 
     let mut result_fields = vec![
         "enumRefs.taskResultStatus",
@@ -447,7 +449,7 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
         "outputContract.schemaShape.properties.conceptEvidence",
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
-        "blockedOutput.blockedReasons",
+        "outputContract.blockedReasonOptions",
         "executionRules.completionBarrier",
         "executionRules.finalResponseGuard",
         "executionRules.completionContinuityRequirement",
@@ -487,9 +489,6 @@ fn task_execution_read_groups(task: &TaskDefinition) -> Value {
                 "sourceRefs.taskPlanRef",
                 "sourceRefs.taskPlanRunRef",
                 "sourceRefs.phaseConceptGroundingRef",
-                "taskConceptGrounding.conceptRefs",
-                "taskConceptGrounding.conceptResponsibilities",
-                "taskConceptGrounding.conceptVerificationIntents",
                 "sourceContext.dependencyResults"
             ]
         }),

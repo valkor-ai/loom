@@ -307,11 +307,6 @@ fn build_request_root(
         "generationRules": generation_rules(aac),
         "enumRefs": enum_refs(),
         "outputContract": output_contract,
-        "blockedOutput": {
-            "status": "blocked",
-            "blockedReasonCode": "AAC_INSUFFICIENT",
-            "nextNode": "architecture_artifact_repair"
-        },
         "requestReadPlan": {
             "groups": taskplan_read_groups(
                 aac,
