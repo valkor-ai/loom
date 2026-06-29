@@ -1286,6 +1286,50 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
 }
 
 #[test]
+fn taskplan_request_keeps_deferred_scope_out_of_current_scope_refs() {
+    let fixture = Fixture::new("taskplan-scope-boundary");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        candidate_with_planning_details_json(),
+    );
+    let result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let taskplan_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec![
+            "allowedRefs.scopeRefs".to_string(),
+            "allowedRefs.deferredScopeRefs".to_string(),
+            "allowedRefs.excludedScopeRefs".to_string(),
+            "contextProjection.requirementDetailTransfer.requirementDetailAssignment".to_string(),
+        ],
+    })
+    .expect("read taskplan scope fields")
+    .fields;
+
+    assert_eq!(fields["allowedRefs.scopeRefs"].value, json!(["scope_1"]));
+    assert_eq!(
+        fields["allowedRefs.deferredScopeRefs"].value,
+        json!(["deferred_1"])
+    );
+    assert_eq!(
+        fields["allowedRefs.excludedScopeRefs"].value,
+        json!(["excluded_1"])
+    );
+    let assignment =
+        &fields["contextProjection.requirementDetailTransfer.requirementDetailAssignment"].value;
+    let item = &assignment["items"][0];
+    assert!(item.get("coverage").is_none());
+    assert!(item["quality"].is_string());
+    assert!(item["coverageStatus"].is_string());
+    assert!(item["artifactRefs"].is_object() || item["artifactRefs"].is_null());
+    assert!(item["coverageReason"].is_null() || item["coverageReason"].is_string());
+}
+
+#[test]
 fn taskplan_request_derives_frontend_workflow_closure_requirements() {
     let fixture = Fixture::new("taskplan-workflow-closure");
     let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(

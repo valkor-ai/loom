@@ -1403,6 +1403,7 @@ fn requirement_detail_transfer(
         .iter()
         .filter(|item| item.required_for_current_phase)
         .map(|item| {
+            let coverage = detail_coverage.get(&item.detail_id);
             json!({
                 "detailId": item.detail_id,
                 "kind": item.kind,
@@ -1411,11 +1412,23 @@ fn requirement_detail_transfer(
                 "priority": item.priority,
                 "impactTags": item.impact_tags,
                 "lifecycleStage": item.lifecycle_stage,
+                "quality": item.quality,
                 "scopeRefs": item.scope_refs,
                 "acceptanceRefs": item.acceptance_refs,
                 "conceptRefs": item.concept_refs,
                 "frontendRefs": item.frontend_refs,
-                "coverage": detail_coverage.get(&item.detail_id).cloned().unwrap_or(Value::Null)
+                "coverageStatus": coverage
+                    .and_then(|value| value.get("coverageStatus"))
+                    .cloned()
+                    .unwrap_or_else(|| Value::String("uncovered".to_string())),
+                "artifactRefs": coverage
+                    .and_then(|value| value.get("artifactRefs"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "coverageReason": coverage
+                    .and_then(|value| value.get("reason"))
+                    .cloned()
+                    .unwrap_or(Value::Null)
             })
         })
         .collect::<Vec<_>>();
@@ -1423,7 +1436,9 @@ fn requirement_detail_transfer(
         "authority": "planning_generation_contract_plus_architecture_artifact_contract",
         "requirementDetailAssignment": {
             "items": requirement_items,
-            "assignmentRule": "Every covered current-phase requirement detail must be assigned to task.requirementDetailRefs and verificationIntents[].requirementDetailRefs."
+            "assignmentRule": "Every item with coverageStatus=covered must be assigned to at least one task.requirementDetailRefs entry using its detailId.",
+            "verificationRule": "Every assigned covered detail should be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+            "insufficientAacRule": "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks."
         },
         "currentPhaseScope": {
             "included": pgc.phase_scope.included,
@@ -1632,7 +1647,9 @@ fn allowed_refs(
         .map(|item| item.detail_id.clone())
         .collect::<Vec<_>>();
     json!({
-        "scopeRefs": pgc.phase_scope.included.iter().chain(pgc.phase_scope.deferred.iter()).chain(pgc.phase_scope.excluded.iter()).map(|item| item.id.clone()).collect::<Vec<_>>(),
+        "scopeRefs": pgc.phase_scope.included.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+        "deferredScopeRefs": pgc.phase_scope.deferred.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+        "excludedScopeRefs": pgc.phase_scope.excluded.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
         "acceptanceRefs": pgc.phase_scope.acceptance_candidates.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
         "requirementDetailIds": detail_ids,
         "moduleRefs": ids_from_values(&aac.modules, "moduleId"),
@@ -1640,8 +1657,8 @@ fn allowed_refs(
         "interfaceRefs": ids_from_values(&aac.interfaces, "interfaceId"),
         "userFlowRefs": ids_from_values(&aac.user_flows, "flowId"),
         "stateMachineRefs": ids_from_values(&aac.state_machines, "machineId"),
-        "decisionRefs": [],
-        "riskRefs": []
+        "decisionRefs": ids_from_value_array(&aac.risks_and_decisions, "/decisions", "decisionId"),
+        "riskRefs": ids_from_value_array(&aac.risks_and_decisions, "/risks", "riskId")
     })
 }
 
