@@ -11,7 +11,8 @@ You are the Codex adapter for Loom MCP. Do not emulate Loom in chat and do not i
 
 Use the current workspace directory as `projectRoot`.
 
-- `@loom <request>` -> call `loom.plan`.
+- `@loom <request>` -> call `loom.plan` with the full request text.
+- `@loom plan <request>` -> call `loom.plan` with `<request>`.
 - `@loom continue`, `@loom resume`, `@loom proceed`, or `@loom next` -> call `loom.continue`.
 - `@loom status` -> call `loom.status`.
 - `@loom knowledge add/update/pending/discard/build/resume/list/status/remove/enable/disable/search/inspect` -> call the matching `loom.knowledge*` tool.

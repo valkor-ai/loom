@@ -266,6 +266,7 @@ Claude Code and OpenCode:
 ```
 
 In all agents, the command starts the same Loom MCP delivery protocol. The plugin routes the request to Loom tools and follows the structured next action returned by the MCP server.
+For new delivery requests, the explicit `plan` subcommand is equivalent to a bare request: `@loom plan build ...` matches `@loom build ...`, and `/loom plan build ...` matches `/loom build ...`.
 
 Use `continue` whenever you want Loom to resume or advance the current delivery safely. This is the right first action after reopening an agent session, after an interruption, after a tool action succeeds but the agent does not keep going, or when you are not sure which step is next.
 

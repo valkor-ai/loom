@@ -1,6 +1,6 @@
 ---
 description: Route Loom delivery, knowledge, and deploy commands through MCP.
-argument-hint: "<request> | continue | knowledge [subcommand] | deploy [subcommand] | status"
+argument-hint: "<request> | plan <request> | continue | knowledge [subcommand] | deploy [subcommand] | status"
 ---
 
 # loom
@@ -14,7 +14,8 @@ Call the matching Loom MCP tool for the current project directory before doing a
 - `knowledge ...` -> matching `loom.knowledge*` tool
 - `deploy` -> `loom.deployRun`
 - `deploy ...` -> matching `loom.deploy*` tool
-- Any other request text -> `loom.plan`
+- `plan <request>` -> `loom.plan` with `<request>`
+- Any other request text -> `loom.plan` with the full request text
 
 After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; do not report progress or stop while `stopAllowed=false`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking; repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
 
