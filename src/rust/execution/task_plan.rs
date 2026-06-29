@@ -1797,24 +1797,140 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
 }
 
 fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) -> Value {
-    let status = aac
-        .runtime_delivery
-        .as_ref()
-        .and_then(|value| value.get("status"))
-        .and_then(Value::as_str);
+    let Some(runtime_delivery) = aac.runtime_delivery.as_ref() else {
+        return Value::Null;
+    };
+    let status = runtime_delivery.get("status").and_then(Value::as_str);
     if status != Some("modified") {
         return Value::Null;
     }
+    let affected_contract_fields = runtime_delivery_closure_fields(runtime_delivery);
+    let required_code_level_checks = affected_contract_fields
+        .iter()
+        .map(|field| runtime_delivery_closure_check(field))
+        .collect::<Vec<_>>();
     json!({
         "taskKind": "runtime_delivery_closure",
         "runtimeDeliveryRequirement": {
             "appliesToThisTask": true,
             "reason": "Final code-level closure for the RuntimeDeliveryContract.",
             "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
-            "affectedContractFields": ["build.command", "start.command", "runtimeSurfaces", "deliveryMechanics"],
-            "requiredCodeLevelChecks": []
+            "affectedContractFields": affected_contract_fields,
+            "requiredCodeLevelChecks": required_code_level_checks,
+            "evidenceExpectedInTaskResult": [
+                "runtimeDeliveryEvidence.checkedFields covers every affectedContractFields entry.",
+                "runtimeDeliveryEvidence.codeLevelChecks reports every requiredCodeLevelChecks entry using the exact checkId.",
+                "commandsRun records only code-level checks actually run; environment blockers become unverifiedItems."
+            ],
+            "forbiddenActions": [
+                "do_not_create_or_edit_deploy_generated_files",
+                "do_not_require_clean_install_or_container_build_for_this_task",
+                "do_not_require_docker_or_registry_or_full_deploy_for_this_task",
+                "do_not_claim_deploy_success_from_code_level_checks_only"
+            ]
         }
     })
+}
+
+fn runtime_delivery_closure_fields(runtime_delivery: &Value) -> Vec<String> {
+    let mut fields = Vec::new();
+    if has_non_empty_string(runtime_delivery, "/build/command") {
+        fields.push("build.command".to_string());
+    }
+    if has_non_empty_string(runtime_delivery, "/start/command") {
+        fields.push("start.command".to_string());
+    }
+    if has_non_empty_array(runtime_delivery, "/runtimeSurfaces") {
+        fields.push("runtimeSurfaces".to_string());
+    }
+    if runtime_delivery.get("httpProbes").is_some() {
+        fields.push("httpProbes".to_string());
+    }
+    if runtime_delivery
+        .pointer("/deliveryMechanics/staticAssets")
+        .is_some()
+    {
+        fields.push("deliveryMechanics.staticAssets".to_string());
+    }
+    if runtime_delivery.pointer("/deliveryMechanics/api").is_some() {
+        fields.push("deliveryMechanics.api".to_string());
+    }
+    if runtime_delivery.get("frontend").is_some() {
+        fields.push("frontend".to_string());
+    }
+    if runtime_delivery.get("api").is_some() {
+        fields.push("api".to_string());
+    }
+    if runtime_delivery.get("environment").is_some() {
+        fields.push("environment".to_string());
+    }
+    if runtime_delivery_has_codegen(runtime_delivery) {
+        fields.push("deliveryMechanics.codegen".to_string());
+    }
+    fields
+}
+
+fn runtime_delivery_closure_check(contract_field: &str) -> Value {
+    json!({
+        "checkId": runtime_delivery_closure_check_id(contract_field),
+        "contractField": contract_field,
+        "objective": format!("Confirm {contract_field} is closed at code level against RuntimeDeliveryContract."),
+        "acceptableEvidence": acceptable_evidence_for_runtime_closure_field(contract_field)
+    })
+}
+
+fn runtime_delivery_closure_check_id(contract_field: &str) -> String {
+    let mut id = String::from("rd-closure-");
+    let mut previous_dash = false;
+    for ch in contract_field.chars() {
+        if ch.is_ascii_alphanumeric() {
+            id.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            id.push('-');
+            previous_dash = true;
+        }
+    }
+    while id.ends_with('-') {
+        id.pop();
+    }
+    id
+}
+
+fn acceptable_evidence_for_runtime_closure_field(contract_field: &str) -> Vec<&'static str> {
+    if matches!(
+        contract_field,
+        "httpProbes" | "runtimeSurfaces" | "api" | "frontend"
+    ) {
+        return vec!["static_check", "runtime_api_check", "manual_command_output"];
+    }
+    vec!["static_check", "manual_command_output"]
+}
+
+fn runtime_delivery_has_codegen(runtime_delivery: &Value) -> bool {
+    let Some(codegen) = runtime_delivery.pointer("/deliveryMechanics/codegen") else {
+        return false;
+    };
+    codegen
+        .get("required")
+        .and_then(Value::as_str)
+        .is_some_and(|required| required != "no")
+        || has_non_empty_array(codegen, "/commands")
+}
+
+fn has_non_empty_string(value: &Value, pointer: &str) -> bool {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|item| !item.is_empty())
+}
+
+fn has_non_empty_array(value: &Value, pointer: &str) -> bool {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
 }
 
 fn enum_refs() -> Value {

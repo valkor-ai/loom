@@ -808,11 +808,39 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
     json!({
         "runtimeDelivery": {
             "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
+            "runtimeKind": "string",
+            "deploymentShape": "single-service | frontend-and-backend",
             "basis": Value::Object(basis),
-            "build": "object",
-            "start": "object",
+            "build": {
+                "command": "string",
+                "workingDirectory": "string",
+                "outputs": ["string"],
+                "codeLevelExpectations": ["string"]
+            },
+            "start": {
+                "command": "string",
+                "workingDirectory": "string",
+                "port": "number",
+                "codeLevelExpectations": ["string"]
+            },
             "runtimeSurfaces": ["object"],
-            "taskPlanningGuidance": "object"
+            "httpProbes": {
+                "previewPath": "string",
+                "apiPaths": ["string"],
+                "expectedStatus": "2xx_or_3xx"
+            },
+            "frontend": "optional object when a separate frontend surface exists",
+            "api": "optional object when a separate API/backend surface exists",
+            "environment": {
+                "required": ["string"],
+                "optional": ["string"]
+            },
+            "taskPlanningGuidance": {
+                "requireRuntimeDeliveryRequirementWhenTaskTouches": ["string"],
+                "doNotRequireForTaskKinds": ["string"],
+                "verificationBoundary": "code_level_only",
+                "doNotRequireCleanInstallOrContainerBuild": "boolean"
+            }
         }
     })
 }
@@ -1030,14 +1058,20 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
     json!({
         "runtimeDelivery": {
             "status": "modified",
+            "runtimeKind": "",
+            "deploymentShape": "single-service",
             "basis": Value::Object(basis),
             "build": {
                 "command": "",
-                "output": ""
+                "workingDirectory": ".",
+                "outputs": [],
+                "codeLevelExpectations": [""]
             },
             "start": {
                 "command": "",
-                "port": null
+                "workingDirectory": ".",
+                "port": null,
+                "codeLevelExpectations": [""]
             },
             "runtimeSurfaces": [{
                 "surfaceId": "runtime_surface_1",
@@ -1045,9 +1079,30 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
                 "urlPath": "",
                 "purpose": ""
             }],
+            "httpProbes": {
+                "previewPath": "/",
+                "apiPaths": [],
+                "expectedStatus": "2xx_or_3xx"
+            },
+            "environment": {
+                "required": [],
+                "optional": []
+            },
             "taskPlanningGuidance": {
-                "runtimeAffectingTasks": [],
-                "closureRequired": true
+                "requireRuntimeDeliveryRequirementWhenTaskTouches": [
+                    "build_or_packaging",
+                    "runtime_entry",
+                    "serving_or_routing",
+                    "configuration_or_environment",
+                    "generated_artifacts",
+                    "runtime_surface"
+                ],
+                "doNotRequireForTaskKinds": [
+                    "domain_only_validation",
+                    "pure_unit_test_additions"
+                ],
+                "verificationBoundary": "code_level_only",
+                "doNotRequireCleanInstallOrContainerBuild": true
             }
         }
     })
@@ -1137,6 +1192,12 @@ fn section_generation_rules(
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."
                 .to_string(),
             runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
+            "For status=modified, fill build.command, runtimeSurfaces, httpProbes.previewPath, httpProbes.expectedStatus, and taskPlanningGuidance so TaskPlan and Deploy do not guess runtime facts."
+                .to_string(),
+            "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
+                .to_string(),
+            "Runtime delivery is a code-level contract. Do not require Docker, clean install, registry access, or deploy success here."
+                .to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."

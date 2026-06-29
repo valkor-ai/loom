@@ -613,7 +613,208 @@ fn validate_runtime_rules(
             ));
         }
     }
+    if status == Some("modified") {
+        let Some(runtime) = candidate.content.get("runtimeDelivery") else {
+            return issues;
+        };
+        require_runtime_string(
+            runtime,
+            "/basis/technicalBaselineRef",
+            "content.runtimeDelivery.basis.technicalBaselineRef",
+            &mut issues,
+        );
+        require_runtime_string(
+            runtime,
+            "/build/command",
+            "content.runtimeDelivery.build.command",
+            &mut issues,
+        );
+        require_runtime_array(
+            runtime,
+            "/build/codeLevelExpectations",
+            "content.runtimeDelivery.build.codeLevelExpectations",
+            &mut issues,
+        );
+        if runtime.get("start").is_some() {
+            require_runtime_array(
+                runtime,
+                "/start/codeLevelExpectations",
+                "content.runtimeDelivery.start.codeLevelExpectations",
+                &mut issues,
+            );
+        }
+        if runtime
+            .pointer("/start/command")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+            && runtime
+                .get("runtimeSurfaces")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        {
+            issues.push(issue(
+                "RUNTIME_START_OR_SURFACE_REQUIRED",
+                "content.runtimeDelivery.start.command",
+                "runtime_delivery status=modified requires start.command or at least one runtimeSurfaces entry.",
+            ));
+        }
+        require_runtime_non_empty_array(
+            runtime,
+            "/runtimeSurfaces",
+            "content.runtimeDelivery.runtimeSurfaces",
+            &mut issues,
+        );
+        require_runtime_string(
+            runtime,
+            "/httpProbes/previewPath",
+            "content.runtimeDelivery.httpProbes.previewPath",
+            &mut issues,
+        );
+        require_runtime_array(
+            runtime,
+            "/httpProbes/apiPaths",
+            "content.runtimeDelivery.httpProbes.apiPaths",
+            &mut issues,
+        );
+        if runtime
+            .pointer("/httpProbes/expectedStatus")
+            .and_then(Value::as_str)
+            != Some("2xx_or_3xx")
+        {
+            issues.push(issue(
+                "RUNTIME_HTTP_PROBE_STATUS_INVALID",
+                "content.runtimeDelivery.httpProbes.expectedStatus",
+                "runtime_delivery httpProbes.expectedStatus must be 2xx_or_3xx.",
+            ));
+        }
+        let guidance = runtime.get("taskPlanningGuidance").unwrap_or(&Value::Null);
+        require_runtime_non_empty_array(
+            guidance,
+            "/requireRuntimeDeliveryRequirementWhenTaskTouches",
+            "content.runtimeDelivery.taskPlanningGuidance.requireRuntimeDeliveryRequirementWhenTaskTouches",
+            &mut issues,
+        );
+        if guidance.get("verificationBoundary").and_then(Value::as_str) != Some("code_level_only") {
+            issues.push(issue(
+                "RUNTIME_VERIFICATION_BOUNDARY_INVALID",
+                "content.runtimeDelivery.taskPlanningGuidance.verificationBoundary",
+                "runtime_delivery taskPlanningGuidance.verificationBoundary must be code_level_only.",
+            ));
+        }
+        if guidance
+            .get("doNotRequireCleanInstallOrContainerBuild")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            issues.push(issue(
+                "RUNTIME_CLEAN_INSTALL_BOUNDARY_INVALID",
+                "content.runtimeDelivery.taskPlanningGuidance.doNotRequireCleanInstallOrContainerBuild",
+                "runtime_delivery must keep AAC verification at code level and not require clean install, container build, registry, or deploy success.",
+            ));
+        }
+        if runtime
+            .pointer("/frontend/required")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            require_runtime_string(
+                runtime,
+                "/frontend/outputDir",
+                "content.runtimeDelivery.frontend.outputDir",
+                &mut issues,
+            );
+            require_runtime_string(
+                runtime,
+                "/frontend/servedBy",
+                "content.runtimeDelivery.frontend.servedBy",
+                &mut issues,
+            );
+        }
+        if runtime.pointer("/api/required").and_then(Value::as_bool) == Some(true)
+            && runtime
+                .pointer("/api/entry")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            && runtime
+                .pointer("/api/probePaths")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        {
+            issues.push(issue(
+                "RUNTIME_API_ENTRY_REQUIRED",
+                "content.runtimeDelivery.api",
+                "runtime_delivery api.required=true requires api.entry or at least one api.probePaths entry.",
+            ));
+        }
+        if runtime.pointer("/deliveryMechanics/codegen").is_some() {
+            require_runtime_array(
+                runtime,
+                "/deliveryMechanics/codegen/codeLevelExpectations",
+                "content.runtimeDelivery.deliveryMechanics.codegen.codeLevelExpectations",
+                &mut issues,
+            );
+        }
+    }
     issues
+}
+
+fn require_runtime_string(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if root
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        issues.push(issue(
+            "RUNTIME_FIELD_REQUIRED",
+            field_path,
+            "runtime_delivery status=modified requires this field for TaskPlan, Execution, Deploy, and Repair.",
+        ));
+    }
+}
+
+fn require_runtime_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if root.pointer(pointer).and_then(Value::as_array).is_none() {
+        issues.push(issue(
+            "RUNTIME_FIELD_REQUIRED",
+            field_path,
+            "runtime_delivery status=modified requires this array field for code-level verification planning.",
+        ));
+    }
+}
+
+fn require_runtime_non_empty_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if root
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        issues.push(issue(
+            "RUNTIME_FIELD_REQUIRED",
+            field_path,
+            "runtime_delivery status=modified requires at least one item here.",
+        ));
+    }
 }
 
 fn validate_coverage_section(

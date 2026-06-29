@@ -985,6 +985,32 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
     assert!(runtime_contract
         .pointer("/schemaShape/content/runtimeDelivery/basis/previousRuntimeDeliveryRef")
         .is_none());
+    assert_eq!(
+        runtime_contract
+            .pointer("/schemaShape/content/runtimeDelivery/httpProbes/expectedStatus")
+            .cloned()
+            .unwrap(),
+        json!("2xx_or_3xx")
+    );
+    assert_eq!(
+        runtime_contract
+            .pointer("/resultTemplate/content/runtimeDelivery/httpProbes/expectedStatus")
+            .cloned()
+            .unwrap(),
+        json!("2xx_or_3xx")
+    );
+    assert_eq!(
+        runtime_contract
+            .pointer(
+                "/resultTemplate/content/runtimeDelivery/taskPlanningGuidance/verificationBoundary"
+            )
+            .cloned()
+            .unwrap(),
+        json!("code_level_only")
+    );
+    assert!(runtime_contract
+        .pointer("/resultTemplate/content/runtimeDelivery/api")
+        .is_none());
     assert!(runtime_contract
         .pointer("/generationRules")
         .and_then(Value::as_array)
@@ -1279,6 +1305,59 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         continued["next"]["writeTargets"][0]["targetId"],
         "domain_contract"
     );
+}
+
+#[test]
+fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
+    let fixture = Fixture::new("architecture-runtime-contract-repair");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["runtimeDelivery"]["build"]
+        .as_object_mut()
+        .expect("build object")
+        .remove("codeLevelExpectations");
+    candidate["content"]["runtimeDelivery"]
+        .as_object_mut()
+        .expect("runtime object")
+        .remove("httpProbes");
+    candidate["content"]["runtimeDelivery"]["taskPlanningGuidance"]
+        .as_object_mut()
+        .expect("guidance object")
+        .remove("requireRuntimeDeliveryRequirementWhenTaskTouches");
+    candidate["content"]["runtimeDelivery"]["taskPlanningGuidance"]["verificationBoundary"] =
+        json!("deploy_success");
+    candidate["content"]["runtimeDelivery"]["frontend"]
+        .as_object_mut()
+        .expect("frontend object")
+        .remove("outputDir");
+    candidate["content"]["runtimeDelivery"]["api"]["entry"] = json!("");
+    candidate["content"]["runtimeDelivery"]["api"]["probePaths"] = json!([]);
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    let issues = result["issues"].as_array().expect("issues");
+    for field_path in [
+        "content.runtimeDelivery.build.codeLevelExpectations",
+        "content.runtimeDelivery.httpProbes.previewPath",
+        "content.runtimeDelivery.taskPlanningGuidance.requireRuntimeDeliveryRequirementWhenTaskTouches",
+        "content.runtimeDelivery.taskPlanningGuidance.verificationBoundary",
+        "content.runtimeDelivery.frontend.outputDir",
+        "content.runtimeDelivery.api",
+    ] {
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue["fieldPath"] == json!(field_path)),
+            "missing issue for {field_path}: {issues:#?}"
+        );
+    }
 }
 
 #[test]
@@ -1612,6 +1691,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             "outputContract.outlineResultTemplate".to_string(),
             "outputContract.groupResultTemplate".to_string(),
             "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
+            "outputContract.runtimeDeliveryClosureTaskTemplate".to_string(),
         ],
     })
     .expect("read taskplan contract fields")
@@ -1649,6 +1729,32 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             .as_array()
             .is_some_and(|items| !items.is_empty()),
         "{runtime_requirement_template:#}"
+    );
+    let runtime_closure_template =
+        &taskplan_contract_fields["outputContract.runtimeDeliveryClosureTaskTemplate"].value;
+    let closure_requirement = &runtime_closure_template["runtimeDeliveryRequirement"];
+    assert!(closure_requirement["affectedContractFields"]
+        .as_array()
+        .expect("affectedContractFields")
+        .contains(&json!("httpProbes")));
+    assert!(closure_requirement["affectedContractFields"]
+        .as_array()
+        .expect("affectedContractFields")
+        .contains(&json!("frontend")));
+    let closure_checks = closure_requirement["requiredCodeLevelChecks"]
+        .as_array()
+        .expect("requiredCodeLevelChecks");
+    assert!(closure_checks
+        .iter()
+        .any(|check| check["checkId"] == json!("rd-closure-httpprobes")
+            && check["contractField"] == json!("httpProbes")));
+    assert_eq!(
+        closure_checks.len(),
+        closure_requirement["affectedContractFields"]
+            .as_array()
+            .expect("affectedContractFields")
+            .len(),
+        "{closure_requirement:#}"
     );
     assert!(inspected
         .read_groups
@@ -5396,6 +5502,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         "allowedRefs.deferredScopeRefs",
         "allowedRefs.excludedScopeRefs",
         "allowedRefs.requirementDetailIds",
+        "sourceRefs.technicalBaselineRef",
         "contextProjection.planningContractId",
         "contextProjection.technicalBaseline.technicalBaselineId",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
@@ -5414,10 +5521,6 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     })
     .expect("read architecture request fields")
     .fields;
-    let source_refs = request_root
-        .get("sourceRefs")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
     let allowed_refs = json!({
         "scopeRefs": field_value(&fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": field_value(&fields, "allowedRefs.acceptanceRefs"),
@@ -5463,8 +5566,9 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 .pointer("/frontendExperienceSource/currentFrontendExperienceRef")
                 .and_then(Value::as_str)
         });
-    let technical_baseline_ref = source_refs
-        .get("technicalBaselineRef")
+    let technical_baseline_ref = fields
+        .get("sourceRefs.technicalBaselineRef")
+        .map(|field| &field.value)
         .and_then(Value::as_str)
         .unwrap_or_default();
 
@@ -5524,11 +5628,93 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         "runtime_delivery" => json!({
             "runtimeDelivery": {
                 "status": "modified",
+                "runtimeKind": "spring_boot_serves_react_static",
+                "deploymentShape": "frontend-and-backend",
                 "basis": {
                     "technicalBaselineRef": technical_baseline_ref
                 },
-                "applications": [],
-                "requiredChecks": []
+                "build": {
+                    "command": "cd web && npm run build && cd ../service && ./gradlew build",
+                    "workingDirectory": ".",
+                    "outputs": ["web/dist", "service/build/libs"],
+                    "codeLevelExpectations": [
+                        "Frontend assets and backend artifact are produced by declared build commands."
+                    ]
+                },
+                "start": {
+                    "command": "cd service && ./gradlew bootRun",
+                    "workingDirectory": ".",
+                    "port": 8080,
+                    "codeLevelExpectations": [
+                        "Backend starts the accepted API/runtime surface."
+                    ]
+                },
+                "runtimeSurfaces": [{
+                    "surfaceId": "runtime-preview-root",
+                    "kind": "http",
+                    "urlPath": "/",
+                    "purpose": "Preview the staff-facing account workflow."
+                }],
+                "httpProbes": {
+                    "previewPath": "/",
+                    "apiPaths": ["/api/securities-accounts/runtime-info"],
+                    "expectedStatus": "2xx_or_3xx"
+                },
+                "frontend": {
+                    "required": true,
+                    "kind": "vite_react",
+                    "buildCommand": "cd web && npm run build",
+                    "sourceRoot": "web",
+                    "outputDir": "web/dist",
+                    "servedBy": "spring_boot_static"
+                },
+                "api": {
+                    "required": true,
+                    "kind": "spring_boot",
+                    "buildCommand": "cd service && ./gradlew build",
+                    "entry": "service/src/main",
+                    "basePath": "/api",
+                    "probePaths": ["/api/securities-accounts/runtime-info"]
+                },
+                "environment": {
+                    "required": [],
+                    "optional": ["PORT"]
+                },
+                "deliveryMechanics": {
+                    "staticAssets": {
+                        "required": true,
+                        "source": "web",
+                        "output": "web/dist",
+                        "servedBy": "spring_boot_static"
+                    },
+                    "api": {
+                        "required": true,
+                        "entry": "service/src/main",
+                        "basePath": "/api",
+                        "probePaths": ["/api/securities-accounts/runtime-info"]
+                    },
+                    "codegen": {
+                        "required": "no",
+                        "commands": [],
+                        "codeLevelExpectations": []
+                    }
+                },
+                "taskPlanningGuidance": {
+                    "requireRuntimeDeliveryRequirementWhenTaskTouches": [
+                        "build_or_packaging",
+                        "runtime_entry",
+                        "serving_or_routing",
+                        "configuration_or_environment",
+                        "generated_artifacts",
+                        "runtime_surface"
+                    ],
+                    "doNotRequireForTaskKinds": [
+                        "domain_only_validation",
+                        "pure_unit_test_additions"
+                    ],
+                    "verificationBoundary": "code_level_only",
+                    "doNotRequireCleanInstallOrContainerBuild": true
+                }
             }
         }),
         "coverage" => json!({
