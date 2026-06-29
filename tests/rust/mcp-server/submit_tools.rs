@@ -4079,6 +4079,19 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             "architecture_frontend_context",
         ],
     );
+    let frontend_core_fields =
+        architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
+    assert!(
+        !frontend_core_fields.contains(
+            &"contextProjection.requirementDetailTransfer.requirementDetails".to_string()
+        ),
+        "frontend architecture repair must not inherit broad requirement detail reads"
+    );
+    assert!(
+        !frontend_core_fields
+            .contains(&"contextProjection.phaseScope.acceptanceCandidates".to_string()),
+        "frontend architecture repair must rely on focused frontend context"
+    );
     let frontend_group = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repair_action_ref.clone(),
@@ -4096,6 +4109,37 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     assert!(
         repair_root.get("sectionOutputs").is_none(),
         "architecture repair request root must not expose all section contracts"
+    );
+    advance_architecture_to_section(&fixture, &repair_action_ref, "runtime_delivery");
+    assert_architecture_group_ids(
+        &fixture,
+        &repair_action_ref,
+        &["architecture_core_context", "architecture_section_contract"],
+    );
+    let runtime_core_fields =
+        architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
+    for forbidden in [
+        "contextProjection.phaseScope.acceptanceCandidates",
+        "contextProjection.requirementDetailTransfer.requirementDetails",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlows",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.requirementDetailIds",
+    ] {
+        assert!(
+            !runtime_core_fields.contains(&forbidden.to_string()),
+            "runtime_delivery architecture repair must not read non-runtime field {forbidden}"
+        );
+    }
+    advance_architecture_to_section(&fixture, &repair_action_ref, "coverage");
+    let coverage_core_fields =
+        architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
+    assert!(
+        coverage_core_fields.contains(
+            &"contextProjection.requirementDetailTransfer.requirementDetails".to_string()
+        ),
+        "coverage architecture repair still needs the detail index"
     );
     let repair_coverage_template =
         architecture_section_contract(&fixture, &repair_action_ref, "coverage")["resultTemplate"]

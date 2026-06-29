@@ -1366,7 +1366,11 @@ fn materialize_architecture_repair_action(
             }
         },
         "requestReadPlan": {
-            "groups": architecture_repair_read_groups(ArchitectureSectionGroup::Foundation)
+            "groups": architecture_repair_read_groups(
+                ArchitectureSectionGroup::Foundation,
+                &source_refs,
+                &frontend_experience_source
+            )
         }
     });
     let stored = state::write_native_request(
@@ -1524,49 +1528,76 @@ fn taskplan_repair_optional_projection_fields(
     fields
 }
 
-fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
+fn architecture_repair_read_groups(
+    section: ArchitectureSectionGroup,
+    source_refs: &Value,
+    frontend_experience_source: &Value,
+) -> Value {
+    let mut core_fields = vec![
+        "sourceRefs.planningContractRef",
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.brainstormContractRef",
+    ];
+    for ref_key in [
+        "repositoryContextRef",
+        "deliveryConceptGlossaryRef",
+        "phaseConceptGroundingRef",
+        "confirmedFrontendExperienceRef",
+        "currentFrontendExperienceRef",
+        "previousRuntimeDeliveryRef",
+    ] {
+        if has_non_null_key(source_refs, ref_key) {
+            core_fields.push(match ref_key {
+                "repositoryContextRef" => "sourceRefs.repositoryContextRef",
+                "deliveryConceptGlossaryRef" => "sourceRefs.deliveryConceptGlossaryRef",
+                "phaseConceptGroundingRef" => "sourceRefs.phaseConceptGroundingRef",
+                "confirmedFrontendExperienceRef" => "sourceRefs.confirmedFrontendExperienceRef",
+                "currentFrontendExperienceRef" => "sourceRefs.currentFrontendExperienceRef",
+                "previousRuntimeDeliveryRef" => "sourceRefs.previousRuntimeDeliveryRef",
+                _ => unreachable!(),
+            });
+        }
+    }
+    core_fields.extend([
+        "repairContext.sourceArchitectureRequestRef",
+        "repairContext.sourceRef",
+        "contextProjection.phaseScope.phaseName",
+        "contextProjection.phaseScope.phaseGoal",
+        "contextProjection.phaseScope.included",
+        "contextProjection.phaseScope.deferred",
+        "contextProjection.phaseScope.excluded",
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.technicalBaseline.technicalBaselineId",
+        "contextProjection.technicalBaseline.status",
+        "contextProjection.technicalBaseline.scope",
+        "contextProjection.technicalBaseline.summary",
+        "contextProjection.technicalBaseline.mustFollow",
+    ]);
+    if architecture_section_uses_detail_refs(section) {
+        core_fields.extend([
+            "contextProjection.phaseScope.acceptanceCandidates",
+            "contextProjection.requirementDetailTransfer.requirementDetails",
+            "contextProjection.requirementDetailTransfer.acceptanceDetails",
+            "contextProjection.requirementDetailTransfer.businessFlows",
+            "allowedRefs.scopeRefs",
+            "allowedRefs.acceptanceRefs",
+            "allowedRefs.deferredScopeRefs",
+            "allowedRefs.excludedScopeRefs",
+            "allowedRefs.requirementDetailIds",
+        ]);
+    }
     let mut groups = vec![
         json!({
             "groupId": "architecture_core_context",
             "required": true,
-            "purpose": "Read the current-phase planning authority, repair context, and allowed refs before generating the replacement Architecture section.",
+            "purpose": if architecture_section_uses_detail_refs(section) {
+                "Read the current-phase planning authority, repair context, and allowed refs before generating the replacement Architecture section."
+            } else {
+                "Read the current-phase planning authority and repair context before generating the replacement Architecture section."
+            },
             "whenToRead": "Read before drafting any replacement Architecture section candidate.",
-            "fields": [
-                "sourceRefs.planningContractRef",
-                "sourceRefs.technicalBaselineRef",
-                "sourceRefs.brainstormContractRef",
-                "sourceRefs.repositoryContextRef",
-                "sourceRefs.deliveryConceptGlossaryRef",
-                "sourceRefs.phaseConceptGroundingRef",
-                "sourceRefs.confirmedFrontendExperienceRef",
-                "sourceRefs.currentFrontendExperienceRef",
-                "sourceRefs.previousRuntimeDeliveryRef",
-                "repairContext.sourceArchitectureRequestRef",
-                "repairContext.sourceRef",
-                "contextProjection.phaseScope.phaseName",
-                "contextProjection.phaseScope.phaseGoal",
-                "contextProjection.phaseScope.included",
-                "contextProjection.phaseScope.deferred",
-                "contextProjection.phaseScope.excluded",
-                "contextProjection.phaseScope.acceptanceCandidates",
-                "contextProjection.phaseId",
-                "contextProjection.planningContractId",
-                "contextProjection.technicalBaseline.technicalBaselineId",
-                "contextProjection.technicalBaseline.status",
-                "contextProjection.technicalBaseline.scope",
-                "contextProjection.technicalBaseline.summary",
-                "contextProjection.technicalBaseline.mustFollow",
-                "contextProjection.requirementDetailTransfer.requirementDetails",
-                "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                "contextProjection.requirementDetailTransfer.businessFlows",
-                "contextProjection.requirementDetailTransfer.actors",
-                "contextProjection.requirementDetailTransfer.capabilityGroups",
-                "allowedRefs.scopeRefs",
-                "allowedRefs.acceptanceRefs",
-                "allowedRefs.deferredScopeRefs",
-                "allowedRefs.excludedScopeRefs",
-                "allowedRefs.requirementDetailIds"
-            ]
+            "fields": core_fields
         }),
         json!({
             "groupId": "architecture_section_contract",
@@ -1592,19 +1623,35 @@ fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+        let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
+        for ref_key in [
+            "confirmedFrontendExperienceRef",
+            "currentFrontendExperienceRef",
+            "repositoryContextRef",
+        ] {
+            if has_non_null_key(frontend_experience_source, ref_key) {
+                frontend_fields.push(match ref_key {
+                    "confirmedFrontendExperienceRef" => {
+                        "frontendExperienceSource.confirmedFrontendExperienceRef"
+                    }
+                    "currentFrontendExperienceRef" => {
+                        "frontendExperienceSource.currentFrontendExperienceRef"
+                    }
+                    "repositoryContextRef" => "frontendExperienceSource.repositoryContextRef",
+                    _ => unreachable!(),
+                });
+            }
+        }
+        frontend_fields.extend([
+            "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
+            "contextProjection.requirementDetailTransfer.userFacingLanguage",
+        ]);
         groups.push(json!({
             "groupId": "architecture_frontend_context",
             "required": true,
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
-            "fields": [
-                "frontendExperienceSource.confirmedFrontendExperienceRef",
-                "frontendExperienceSource.currentFrontendExperienceRef",
-                "frontendExperienceSource.repositoryContextRef",
-                "frontendExperienceSource.authorityRule",
-                "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
-                "contextProjection.requirementDetailTransfer.userFacingLanguage"
-            ]
+            "fields": frontend_fields
         }));
     }
     if matches!(
@@ -1625,6 +1672,20 @@ fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
         }));
     }
     Value::Array(groups)
+}
+
+fn architecture_section_uses_detail_refs(section: ArchitectureSectionGroup) -> bool {
+    matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+            | ArchitectureSectionGroup::Coverage
+    )
+}
+
+fn has_non_null_key(value: &Value, key: &str) -> bool {
+    value.get(key).is_some_and(|item| !item.is_null())
 }
 
 fn build_architecture_repair_section_outputs(

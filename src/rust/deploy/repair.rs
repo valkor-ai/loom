@@ -299,7 +299,7 @@ fn accept_deploy_execution_repair_file_inner(
             vec![repair_issue(
                 "DEPLOY_REPAIR_ID_MISMATCH",
                 "repairId",
-                "repairId must match outputContract.repairId from the active deploy repair request.",
+                "repairId must match outputContract.repairId from the active deploy repair action.",
             )],
         ));
     }
@@ -311,7 +311,7 @@ fn accept_deploy_execution_repair_file_inner(
             vec![repair_issue(
                 "DEPLOY_REPAIR_FAILURE_REF_MISMATCH",
                 "deploymentFailureRef",
-                "deploymentFailureRef must match outputContract.deploymentFailureRef from the active deploy repair request.",
+                "deploymentFailureRef must match outputContract.deploymentFailureRef from the active deploy repair action.",
             )],
         ));
     }
