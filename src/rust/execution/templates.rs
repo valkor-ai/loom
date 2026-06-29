@@ -109,7 +109,7 @@ pub(crate) fn runtime_delivery_requirement_template(runtime_delivery: Option<&Va
             "objective": "Verify this task preserves the runtime delivery contract it touches.",
             "acceptableEvidence": ["manual_command_output", "runtime_api_check", "static_check"]
         }],
-        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "evidenceExpectedInTaskResult": [],
         "forbiddenActions": []
     })
 }

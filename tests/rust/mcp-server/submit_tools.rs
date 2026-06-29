@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     path::PathBuf,
     process::Command,
     sync::{Mutex, MutexGuard},
@@ -2241,6 +2242,22 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     );
 
     assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    assert_eq!(task_result["next"]["kind"], "execute_task");
+    assert_eq!(
+        task_result["next"]["submitTool"],
+        "loom.recordTaskResultFile"
+    );
+    let closure_execution_ref = task_result["next"]["requestRef"]
+        .as_str()
+        .expect("closure execution requestRef")
+        .to_string();
+    write_task_result_candidate(&fixture, &closure_execution_ref);
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &closure_execution_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
     assert_eq!(task_result["next"]["kind"], "write_artifact");
     assert_eq!(task_result["next"]["artifactKind"], "review_result");
     assert_eq!(task_result["next"]["submitTool"], "loom.reviewAcceptFile");
@@ -2490,7 +2507,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
             "objective": "Verify runtime surface wiring still works.",
             "acceptableEvidence": ["runtime_api_check", "static_check"]
         }],
-        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "evidenceExpectedInTaskResult": [],
         "forbiddenActions": []
     });
     write_json_atomic(&group_path, &group_value).expect("write runtime group file");
@@ -2519,6 +2536,9 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     assert!(read_fields.contains(&"executionRules.runtimeDeliveryExecutionRules".to_string()));
     assert!(read_fields
         .contains(&"task.runtimeDeliveryRequirement.requiredCodeLevelChecks".to_string()));
+    assert!(!read_fields
+        .contains(&"task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult".to_string()));
+    assert!(!read_fields.contains(&"task.runtimeDeliveryRequirement.forbiddenActions".to_string()));
     assert!(!read_fields.contains(&"task.runtimeDeliveryRequirement".to_string()));
     assert!(!read_fields
         .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
@@ -2594,7 +2614,7 @@ fn task_result_repair_template_resets_conflicting_runtime_evidence() {
             "objective": "Verify runtime surface wiring still works.",
             "acceptableEvidence": ["runtime_api_check", "static_check"]
         }],
-        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "evidenceExpectedInTaskResult": [],
         "forbiddenActions": []
     });
     write_json_atomic(&group_path, &group_value).expect("write runtime group file");
@@ -3445,13 +3465,40 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
         fixture.root_str(),
     );
     assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
-    let review_request_ref = task_result["next"]["requestRef"]
-        .as_str()
-        .expect("review requestRef");
+    let review_request_ref = if task_result["next"]["artifactKind"] == json!("review_result") {
+        task_result["next"]["requestRef"]
+            .as_str()
+            .expect("review requestRef")
+            .to_string()
+    } else {
+        assert_eq!(
+            task_result["next"]["kind"], "execute_task",
+            "{task_result:#}"
+        );
+        let next_execution_ref = task_result["next"]["requestRef"]
+            .as_str()
+            .expect("next execution requestRef")
+            .to_string();
+        write_task_result_candidate(&fixture, &next_execution_ref);
+        let review_result = call_submit(
+            "loom.recordTaskResultFile",
+            &next_execution_ref,
+            fixture.root_str(),
+        );
+        assert_eq!(review_result["state"], "auto_runnable", "{review_result:#}");
+        assert_eq!(
+            review_result["next"]["artifactKind"], "review_result",
+            "{review_result:#}"
+        );
+        review_result["next"]["requestRef"]
+            .as_str()
+            .expect("review requestRef")
+            .to_string()
+    };
 
     let change_context = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: review_request_ref.to_string(),
+        request_ref: review_request_ref.clone(),
         group_id: "change_context".to_string(),
     })
     .expect("read change context");
@@ -3465,7 +3512,7 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
         .expect("changed files");
     let diff_ref = changed_files[0]["diffRef"].as_str().expect("diffRef");
     assert!(fixture.root.join(diff_ref).exists());
-    let request_root = read_request_root_value(fixture.root_str(), review_request_ref);
+    let request_root = read_request_root_value(fixture.root_str(), &review_request_ref);
     assert!(
         request_root.get("changeContext").is_none(),
         "diff refs must stay in private request storage"
@@ -3666,7 +3713,7 @@ fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
         "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
         "affectedContractFields": ["runtimeSurfaces"],
         "requiredCodeLevelChecks": ["manual_command_output"],
-        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "evidenceExpectedInTaskResult": [],
         "forbiddenActions": []
     });
     write_json_atomic(&group_path, &group_value).expect("write invalid group file");
@@ -3686,6 +3733,96 @@ fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
         }),
         "{result:#}"
     );
+}
+
+#[test]
+fn taskplan_submit_requires_runtime_delivery_closure() {
+    let fixture = Fixture::new("taskplan-runtime-closure-required");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec!["outputContract.outlineFile".to_string()],
+    })
+    .expect("read taskplan outline field")
+    .fields;
+    let outline_file = fields["outputContract.outlineFile"]
+        .value
+        .as_str()
+        .expect("outline file");
+    let outline_path = fixture.root.join(outline_file);
+    let mut outline_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&outline_path).expect("read outline"))
+            .expect("parse outline");
+    outline_value["groups"]
+        .as_array_mut()
+        .expect("outline groups")
+        .retain(|group| group["groupId"] != json!("group-runtime-delivery-closure"));
+    write_json_atomic(&outline_path, &outline_value).expect("write outline without closure");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "RUNTIME_CLOSURE_TASK_REQUIRED"
+            && issue["fieldPath"] == "tasks.runtimeDeliveryClosure"
+    }));
+}
+
+#[test]
+fn taskplan_submit_rejects_runtime_closure_check_mismatch() {
+    let fixture = Fixture::new("taskplan-runtime-closure-check-mismatch");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec!["outputContract.groupFilePattern".to_string()],
+    })
+    .expect("read taskplan group pattern")
+    .fields;
+    let group_pattern = fields["outputContract.groupFilePattern"]
+        .value
+        .as_str()
+        .expect("group pattern");
+    let closure_group_file = group_pattern.replace("{groupId}", "group-runtime-delivery-closure");
+    let closure_group_path = fixture.root.join(&closure_group_file);
+    let mut closure_group: Value = serde_json::from_str(
+        &std::fs::read_to_string(&closure_group_path).expect("read closure group"),
+    )
+    .expect("parse closure group");
+    closure_group["tasks"][0]["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"][0]
+        ["checkId"] = json!("wrong-runtime-check-id");
+    write_json_atomic(&closure_group_path, &closure_group).expect("write bad closure group");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "RUNTIME_CLOSURE_CHECK_INVALID"
+            && issue["fieldPath"] == "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks"
+    }));
 }
 
 #[test]
@@ -4578,17 +4715,31 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     let request_id = request_root["requestId"].as_str().expect("requestId");
     let delivery_id = request_root["deliveryId"].as_str().expect("deliveryId");
     let phase_id = request_root["phaseId"].as_str().expect("phaseId");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect taskplan request");
+    let allowed_read_fields = inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut fields_to_read = vec![
+        "allowedRefs.scopeRefs".to_string(),
+        "allowedRefs.acceptanceRefs".to_string(),
+        "allowedRefs.requirementDetailIds".to_string(),
+        "allowedRefs.moduleRefs".to_string(),
+        "outputContract.outlineFile".to_string(),
+        "outputContract.groupFilePattern".to_string(),
+    ];
+    if allowed_read_fields.contains("outputContract.runtimeDeliveryClosureTaskTemplate") {
+        fields_to_read.push("outputContract.runtimeDeliveryClosureTaskTemplate".to_string());
+    }
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
-        fields: vec![
-            "allowedRefs.scopeRefs".to_string(),
-            "allowedRefs.acceptanceRefs".to_string(),
-            "allowedRefs.requirementDetailIds".to_string(),
-            "allowedRefs.moduleRefs".to_string(),
-            "outputContract.outlineFile".to_string(),
-            "outputContract.groupFilePattern".to_string(),
-        ],
+        fields: fields_to_read,
     })
     .expect("read taskplan fields")
     .fields;
@@ -4615,6 +4766,43 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
         .expect("group file pattern");
     let group_id = "group-account";
     let task_id = "task-account-001";
+    let runtime_closure_template =
+        field_value(&fields, "outputContract.runtimeDeliveryClosureTaskTemplate");
+    let has_runtime_closure = runtime_closure_template.is_object();
+    let closure_group_id = "group-runtime-delivery-closure";
+    let closure_task_id = "task-runtime-delivery-closure";
+    let outline_groups = if has_runtime_closure {
+        json!([
+            {
+                "groupId": group_id,
+                "title": "Account capability",
+                "objective": "Implement the account capability slice.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [task_id]
+            },
+            {
+                "groupId": closure_group_id,
+                "title": "Runtime delivery closure",
+                "objective": "Verify the final RuntimeDeliveryContract code-level closure.",
+                "dependsOn": [group_id],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [closure_task_id]
+            }
+        ])
+    } else {
+        json!([{
+            "groupId": group_id,
+            "title": "Account capability",
+            "objective": "Implement the account capability slice.",
+            "dependsOn": [],
+            "scopeRefs": [scope_id],
+            "acceptanceRefs": [acceptance_id],
+            "taskIds": [task_id]
+        }])
+    };
     write_json_atomic(
         &fixture.root.join(outline_file),
         &json!({
@@ -4624,15 +4812,7 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
             "phaseId": phase_id,
             "status": "ready",
             "taskPlanId": "taskplan-phase-1",
-            "groups": [{
-                "groupId": group_id,
-                "title": "Account capability",
-                "objective": "Implement the account capability slice.",
-                "dependsOn": [],
-                "scopeRefs": [scope_id],
-                "acceptanceRefs": [acceptance_id],
-                "taskIds": [task_id]
-            }],
+            "groups": outline_groups,
             "createdAt": "2026-06-24T10:00:00+08:00"
         }),
     )
@@ -4694,6 +4874,67 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
         }),
     )
     .expect("write taskplan group");
+    if has_runtime_closure {
+        let closure_group_file = group_pattern.replace("{groupId}", closure_group_id);
+        let closure_requirement = runtime_closure_template["runtimeDeliveryRequirement"].clone();
+        write_json_atomic(
+            &fixture.root.join(closure_group_file),
+            &json!({
+                "schemaVersion": "1.0",
+                "requestId": request_id,
+                "deliveryId": delivery_id,
+                "phaseId": phase_id,
+                "status": "ready",
+                "group": {
+                    "groupId": closure_group_id,
+                    "title": "Runtime delivery closure",
+                    "objective": "Verify the final RuntimeDeliveryContract code-level closure.",
+                    "dependsOn": [group_id],
+                    "scopeRefs": [scope_id],
+                    "acceptanceRefs": [acceptance_id],
+                    "taskIds": [closure_task_id]
+                },
+                "tasks": [{
+                    "taskId": closure_task_id,
+                    "groupId": closure_group_id,
+                    "title": "Verify runtime delivery closure",
+                    "taskKind": "runtime_delivery_closure",
+                    "implementationActions": ["implement_runtime_delivery_contract", "add_or_update_tests"],
+                    "objective": "Verify build, start, runtime surfaces, probes, frontend/API serving, and environment fields against RuntimeDeliveryContract.",
+                    "dependsOn": [],
+                    "scopeRefs": [scope_id],
+                    "acceptanceRefs": [acceptance_id],
+                    "requirementDetailRefs": [detail_id],
+                    "writeBoundary": {
+                        "forbiddenPaths": [".loom"],
+                        "artifactRefs": {
+                            "modules": ["module.account-service"],
+                            "entities": [],
+                            "interfaces": [],
+                            "userFlows": [],
+                            "stateMachines": [],
+                            "decisions": [],
+                            "risks": []
+                        }
+                    },
+                    "verificationIntents": [{
+                        "verificationId": "verify-runtime-delivery-closure",
+                        "acceptanceRefs": [acceptance_id],
+                        "requirementDetailRefs": [detail_id],
+                        "behavior": "Verify runtime delivery contract fields are closed at code level.",
+                        "preferredEvidence": ["static_check"],
+                        "acceptableEvidence": ["static_check", "manual_command_output", "runtime_api_check"]
+                    }],
+                    "runtimeDeliveryRequirement": closure_requirement,
+                    "conceptRefs": [],
+                    "conceptResponsibilities": [],
+                    "conceptVerificationIntents": []
+                }],
+                "createdAt": "2026-06-24T10:00:00+08:00"
+            }),
+        )
+        .expect("write runtime closure group");
+    }
 }
 
 fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, request_ref: &str) {
@@ -4904,6 +5145,7 @@ fn write_task_result_candidate_with_detail_evidence(
             "task.requirementDetailRefs".to_string(),
             "task.verificationIntents".to_string(),
             "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
         ],
     })
     .expect("read execution request fields")
@@ -4923,6 +5165,11 @@ fn write_task_result_candidate_with_detail_evidence(
     let verification_id = fields["task.verificationIntents"].value[0]["verificationId"]
         .as_str()
         .expect("verification id");
+    let result_template = fields["outputContract.resultTemplate"].value.clone();
+    let runtime_delivery_evidence = result_template
+        .get("runtimeDeliveryEvidence")
+        .cloned()
+        .unwrap_or(Value::Null);
     let verification_summary = if include_large_text {
         format!("very large verification summary {}", "x".repeat(20_000))
     } else {
@@ -4961,7 +5208,7 @@ fn write_task_result_candidate_with_detail_evidence(
             "changedFiles": ["src/main.tsx"],
             "noChangeReason": null,
             "verificationResults": [{
-                "verificationId": "verify-account-001",
+                "verificationId": verification_id,
                 "status": "passed",
                 "evidenceType": "static_check",
                 "summary": verification_summary
@@ -4980,7 +5227,7 @@ fn write_task_result_candidate_with_detail_evidence(
             },
             "notes": result_notes,
             "frontendExperienceSelfCheck": null,
-            "runtimeDeliveryEvidence": null,
+            "runtimeDeliveryEvidence": runtime_delivery_evidence,
             "requirementDetailEvidence": requirement_detail_evidence,
             "conceptEvidence": [],
             "blockedReasons": [],
@@ -4996,25 +5243,37 @@ fn complete_task_execution_to_review(fixture: &Fixture) -> String {
 }
 
 fn complete_task_execution_to_review_with_candidate(fixture: &Fixture, candidate: Value) -> String {
-    let execution_request_ref = start_planned_task_execution_with_candidate(fixture, candidate);
-    write_task_result_candidate(fixture, &execution_request_ref);
-    let task_result = call_submit(
-        "loom.recordTaskResultFile",
-        &execution_request_ref,
-        fixture.root_str(),
-    );
-    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
-    assert_eq!(task_result["next"]["artifactKind"], "review_result");
-    task_result["next"]["requestRef"]
-        .as_str()
-        .expect("review requestRef")
-        .to_string()
+    let mut execution_request_ref = start_planned_task_execution_with_candidate(fixture, candidate);
+    for _ in 0..8 {
+        write_task_result_candidate(fixture, &execution_request_ref);
+        let task_result = call_submit(
+            "loom.recordTaskResultFile",
+            &execution_request_ref,
+            fixture.root_str(),
+        );
+        assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+        if task_result["next"]["artifactKind"] == json!("review_result") {
+            return task_result["next"]["requestRef"]
+                .as_str()
+                .expect("review requestRef")
+                .to_string();
+        }
+        assert_eq!(
+            task_result["next"]["kind"], "execute_task",
+            "{task_result:#}"
+        );
+        execution_request_ref = task_result["next"]["requestRef"]
+            .as_str()
+            .expect("next execution requestRef")
+            .to_string();
+    }
+    panic!("execution did not reach review_result");
 }
 
 #[test]
 fn task_result_repair_template_preserves_previous_changed_files_for_replacement() {
     let fixture = Fixture::new("task-result-repair-preserves-changed-files");
-    let execution_request_ref = start_planned_task_execution(&fixture);
+    let execution_request_ref = start_planned_task_execution_without_runtime_closure(&fixture);
 
     write_task_result_candidate(&fixture, &execution_request_ref);
     let accepted = call_submit(
@@ -5069,6 +5328,82 @@ fn task_result_repair_template_preserves_previous_changed_files_for_replacement(
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {
     start_planned_task_execution_with_candidate(fixture, valid_candidate_json())
+}
+
+fn start_planned_task_execution_without_runtime_closure(fixture: &Fixture) -> String {
+    let architecture_request_ref = start_existing_project_architecture_flow(fixture);
+    let taskplan_result = complete_architecture_sections(fixture, &architecture_request_ref);
+    assert_eq!(
+        taskplan_result["state"], "auto_runnable",
+        "{taskplan_result:#}"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
+    let aac_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "architectureArtifact");
+    let aac_path = fixture.root.join(&aac_ref);
+    let mut aac: Value =
+        serde_json::from_str(&std::fs::read_to_string(&aac_path).expect("read AAC"))
+            .expect("parse AAC");
+    aac["runtimeDelivery"] = Value::Null;
+    write_json_atomic(&aac_path, &aac).expect("write AAC without runtime delivery");
+
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let mut index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read index"))
+            .expect("parse index");
+    let latest_refs = index["phases"]
+        .as_array_mut()
+        .expect("phases")
+        .iter_mut()
+        .find(|phase| phase["phaseId"].as_str() == Some("phase-1"))
+        .expect("phase-1")["latestRefs"]
+        .as_object_mut()
+        .expect("latestRefs object");
+    latest_refs.remove("taskPlanRequestId");
+    latest_refs.remove("taskPlanRequestRef");
+    write_json_atomic(&index_path, &index).expect("write index without taskplan request");
+
+    let result = execution::ExecutionDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &RouteAction {
+            kind: RouteActionKind::TaskplanGeneration,
+            source: "test".to_string(),
+            reason: "regenerate_taskplan_request_without_runtime_closure".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: None,
+            target_phase_id: None,
+        },
+    );
+    let taskplan_result = serde_json::to_value(result).expect("serialize taskplan result");
+    assert_eq!(
+        taskplan_result["state"], "auto_runnable",
+        "{taskplan_result:#}"
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+    write_taskplan_grouped_candidates(fixture, &taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string()
 }
 
 fn start_planned_task_execution_with_candidate(fixture: &Fixture, candidate: Value) -> String {

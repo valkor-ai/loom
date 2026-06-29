@@ -690,6 +690,7 @@ where
     }
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
+    issues.extend(validate_runtime_delivery_requirements(&tasks));
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
@@ -700,6 +701,14 @@ where
     let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    issues.extend(validate_runtime_delivery_closure_task(
+        &groups,
+        &tasks,
+        aac.runtime_delivery.as_ref(),
+    ));
+    if !issues.is_empty() {
+        return Ok(repairable(input, authorized, outline_ref, issues, mode));
+    }
     let now = state::store::now_string();
     let task_plan = TaskPlan {
         schema_version: "1.0".to_string(),
@@ -1303,6 +1312,312 @@ fn validate_taskplan_refs(
     issues
 }
 
+fn validate_runtime_delivery_requirements(
+    tasks: &[TaskDefinition],
+) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    for task in tasks {
+        let Some(requirement) = task.runtime_delivery_requirement.as_ref() else {
+            continue;
+        };
+        let target = Some(task.task_id.as_str());
+        if requirement.applies_to_this_task {
+            if requirement
+                .runtime_delivery_ref
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.runtimeDeliveryRef",
+                    "Runtime-affecting tasks must reference the accepted RuntimeDeliveryContract.",
+                    target,
+                ));
+            }
+            if requirement.affected_contract_fields.is_empty() {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.affectedContractFields",
+                    "Runtime-affecting tasks must list affected runtime contract fields.",
+                    target,
+                ));
+            }
+            if requirement.required_code_level_checks.is_empty() {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                    "Runtime-affecting tasks must list required code-level runtime checks.",
+                    target,
+                ));
+            }
+            let boundary_text = format!(
+                "{} {} {}",
+                requirement
+                    .required_code_level_checks
+                    .iter()
+                    .map(|check| format!(
+                        "{} {}",
+                        check.objective,
+                        check.contract_field.as_deref().unwrap_or_default()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                requirement.evidence_expected_in_task_result.join(" "),
+                requirement.forbidden_actions.join(" ")
+            )
+            .to_ascii_lowercase();
+            if boundary_text.contains("require clean install")
+                || boundary_text.contains("required clean install")
+                || boundary_text.contains("require container")
+                || boundary_text.contains("required container")
+                || boundary_text.contains("must run docker")
+                || boundary_text.contains("must run deploy")
+            {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_BOUNDARY_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.verificationBoundary",
+                    "RuntimeDeliveryRequirement must stay at code level and must not require clean install, container build, registry, or deploy success.",
+                    target,
+                ));
+            }
+        } else if requirement.reason.trim().is_empty() {
+            issues.push(issue(
+                "RUNTIME_REQUIREMENT_INVALID",
+                "tasks[].runtimeDeliveryRequirement.reason",
+                "Non-applicable runtimeDeliveryRequirement entries must explain why the task does not affect runtime delivery.",
+                target,
+            ));
+        }
+    }
+    issues
+}
+
+fn validate_runtime_delivery_closure_task(
+    groups: &[TaskPlanGroup],
+    tasks: &[TaskDefinition],
+    runtime_delivery: Option<&Value>,
+) -> Vec<delivery_core::RepairIssue> {
+    let Some(runtime_delivery) = runtime_delivery else {
+        return Vec::new();
+    };
+    if runtime_delivery.get("status").and_then(Value::as_str) != Some("modified") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    let closure_tasks = tasks
+        .iter()
+        .filter(|task| matches!(task.task_kind, contracts::TaskKind::RuntimeDeliveryClosure))
+        .collect::<Vec<_>>();
+    if closure_tasks.len() != 1 {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_TASK_REQUIRED",
+            "tasks.runtimeDeliveryClosure",
+            "RuntimeDelivery status=modified requires exactly one runtime_delivery_closure task.",
+            None,
+        ));
+        return issues;
+    }
+    let closure = closure_tasks[0];
+    let target = Some(closure.task_id.as_str());
+    let Some(requirement) = closure.runtime_delivery_requirement.as_ref() else {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_REQUIREMENT_INVALID",
+            "tasks[].runtimeDeliveryRequirement",
+            "runtime_delivery_closure task must carry runtimeDeliveryRequirement.",
+            target,
+        ));
+        return issues;
+    };
+    if !requirement.applies_to_this_task {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_REQUIREMENT_INVALID",
+            "tasks[].runtimeDeliveryRequirement.appliesToThisTask",
+            "runtime_delivery_closure task must have runtimeDeliveryRequirement.appliesToThisTask=true.",
+            target,
+        ));
+        return issues;
+    }
+
+    let required_fields = runtime_delivery_closure_fields(runtime_delivery);
+    let required_field_set = required_fields.iter().cloned().collect::<BTreeSet<_>>();
+    let affected_fields = requirement
+        .affected_contract_fields
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for field in &required_fields {
+        if !affected_fields.contains(field) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_FIELD_MISSING",
+                "tasks[].runtimeDeliveryRequirement.affectedContractFields",
+                &format!("runtime_delivery_closure must include affected field {field}."),
+                target,
+            ));
+        }
+    }
+    for field in &requirement.affected_contract_fields {
+        if !required_field_set.contains(field) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_FIELD_INVALID",
+                "tasks[].runtimeDeliveryRequirement.affectedContractFields",
+                &format!("runtime_delivery_closure affected field {field} is not required by RuntimeDeliveryContract."),
+                target,
+            ));
+        }
+    }
+
+    let check_id_by_field = requirement
+        .required_code_level_checks
+        .iter()
+        .filter_map(|check| {
+            check
+                .contract_field
+                .as_ref()
+                .map(|field| (field.clone(), check.check_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let required_check_ids = required_fields
+        .iter()
+        .map(|field| (field, runtime_delivery_closure_check_id(field)))
+        .collect::<Vec<_>>();
+    let required_check_id_set = required_check_ids
+        .iter()
+        .map(|(_, check_id)| check_id.clone())
+        .collect::<BTreeSet<_>>();
+    for (field, check_id) in &required_check_ids {
+        if check_id_by_field.get(*field) != Some(check_id) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_CHECK_INVALID",
+                "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                &format!("runtime_delivery_closure must include checkId {check_id} for {field}."),
+                target,
+            ));
+        }
+    }
+    for check in &requirement.required_code_level_checks {
+        let contract_field = check.contract_field.as_deref().unwrap_or_default();
+        if !required_field_set.contains(contract_field)
+            || !required_check_id_set.contains(&check.check_id)
+        {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_CHECK_INVALID",
+                "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                "runtime_delivery_closure checkIds and contractFields must match RuntimeDeliveryContract exactly.",
+                target,
+            ));
+        }
+    }
+
+    let Some(closure_group) = groups
+        .iter()
+        .find(|group| group.group_id == closure.group_id)
+    else {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].groupId",
+            "runtime_delivery_closure group must exist.",
+            target,
+        ));
+        return issues;
+    };
+    if closure_group.task_ids != vec![closure.task_id.clone()] {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].taskIds",
+            "runtime_delivery_closure group must contain exactly the closure task.",
+            Some(&closure_group.group_id),
+        ));
+    }
+    if groups.last().map(|group| group.group_id.as_str()) != Some(closure_group.group_id.as_str()) {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].position",
+            "runtime_delivery_closure group must be the final TaskPlan group.",
+            Some(&closure_group.group_id),
+        ));
+    }
+    for group in groups
+        .iter()
+        .filter(|group| group.depends_on.contains(&closure_group.group_id))
+    {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].dependsOn",
+            "No TaskPlan group may depend on the final runtime_delivery_closure group.",
+            Some(&group.group_id),
+        ));
+    }
+
+    let task_group_by_id = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task.group_id.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for dependency in &closure.depends_on {
+        if let Some(dependency_group) = task_group_by_id.get(dependency.as_str()) {
+            if *dependency_group != closure_group.group_id.as_str() {
+                issues.push(issue(
+                    "RUNTIME_CLOSURE_TASK_DEPENDENCY_INVALID",
+                    "tasks[].dependsOn",
+                    "runtime_delivery_closure task must not depend directly on tasks in other groups; use group dependsOn.",
+                    target,
+                ));
+            }
+        }
+    }
+
+    let closure_group_dependencies = transitive_group_dependencies(groups, &closure_group.group_id);
+    for runtime_task in tasks.iter().filter(|task| {
+        task.task_id != closure.task_id
+            && task
+                .runtime_delivery_requirement
+                .as_ref()
+                .is_some_and(|requirement| requirement.applies_to_this_task)
+    }) {
+        if runtime_task.group_id == closure_group.group_id {
+            if !closure.depends_on.contains(&runtime_task.task_id) {
+                issues.push(issue(
+                    "RUNTIME_CLOSURE_TASK_DEPENDENCY_INVALID",
+                    "tasks[].dependsOn",
+                    "runtime_delivery_closure must depend on runtime-affecting tasks in its own group.",
+                    target,
+                ));
+            }
+        } else if !closure_group_dependencies.contains(&runtime_task.group_id) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_GROUP_DEPENDENCY_INVALID",
+                "groups[].dependsOn",
+                "runtime_delivery_closure group must depend on every group containing runtime-affecting tasks.",
+                Some(&closure_group.group_id),
+            ));
+        }
+    }
+
+    issues
+}
+
+fn transitive_group_dependencies(groups: &[TaskPlanGroup], group_id: &str) -> BTreeSet<String> {
+    let by_id = groups
+        .iter()
+        .map(|group| (group.group_id.clone(), group))
+        .collect::<BTreeMap<_, _>>();
+    let mut visited = BTreeSet::new();
+    let mut stack = by_id
+        .get(group_id)
+        .map(|group| group.depends_on.clone())
+        .unwrap_or_default();
+    while let Some(dependency) = stack.pop() {
+        if visited.insert(dependency.clone()) {
+            if let Some(group) = by_id.get(&dependency) {
+                stack.extend(group.depends_on.clone());
+            }
+        }
+    }
+    visited
+}
+
 fn validate_ref_list(
     refs: &[String],
     allowed: &BTreeSet<String>,
@@ -1817,17 +2132,8 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
             "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
             "affectedContractFields": affected_contract_fields,
             "requiredCodeLevelChecks": required_code_level_checks,
-            "evidenceExpectedInTaskResult": [
-                "runtimeDeliveryEvidence.checkedFields covers every affectedContractFields entry.",
-                "runtimeDeliveryEvidence.codeLevelChecks reports every requiredCodeLevelChecks entry using the exact checkId.",
-                "commandsRun records only code-level checks actually run; environment blockers become unverifiedItems."
-            ],
-            "forbiddenActions": [
-                "do_not_create_or_edit_deploy_generated_files",
-                "do_not_require_clean_install_or_container_build_for_this_task",
-                "do_not_require_docker_or_registry_or_full_deploy_for_this_task",
-                "do_not_claim_deploy_success_from_code_level_checks_only"
-            ]
+            "evidenceExpectedInTaskResult": [],
+            "forbiddenActions": []
         }
     })
 }
