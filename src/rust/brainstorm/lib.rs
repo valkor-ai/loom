@@ -99,10 +99,18 @@ pub fn next_phase_handoff_from_preview(
     else {
         return Ok(None);
     };
-    let phase_id = requested_phase_id
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| normalize_next_phase_id(&delivery, suggested_phase_id));
+    let phase_id =
+        if let Some(requested) = requested_phase_id.filter(|value| !value.trim().is_empty()) {
+            requested.to_string()
+        } else if delivery
+            .phases
+            .iter()
+            .any(|phase| phase.phase_id == *suggested_phase_id)
+        {
+            suggested_phase_id.clone()
+        } else {
+            normalize_next_phase_id(&delivery, source_phase_id, suggested_phase_id)
+        };
     Ok(Some(NextPhaseHandoff {
         phase_id,
         title: title.clone(),
@@ -133,19 +141,50 @@ pub fn materialize_next_phase_from_preview(
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
-    if delivery
-        .phases
-        .iter()
-        .any(|phase| phase.phase_id == handoff.phase_id)
-    {
-        return Ok(Some(handoff));
-    }
     let source_phase = delivery
         .phases
         .iter()
         .find(|phase| phase.phase_id == source_phase_id)
+        .cloned()
         .ok_or_else(|| StateError::InvalidArgument(format!("phase {source_phase_id} not found")))?;
     let now = state::store::now_string();
+    let latest_refs = next_phase_latest_refs(root, delivery_id, &source_phase)?;
+    let next_action = next_phase_repository_context_action(source_phase_id, &handoff);
+    if let Some(existing_phase) = delivery
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase_id == handoff.phase_id)
+    {
+        for (key, value) in latest_refs {
+            existing_phase.latest_refs.entry(key).or_insert(value);
+        }
+        if should_attach_repository_context_start(existing_phase) {
+            existing_phase.next_action = Some(next_action);
+        }
+    } else {
+        delivery.phases.push(DeliveryPhaseState {
+            phase_id: handoff.phase_id.clone(),
+            latest_refs,
+            next_action: Some(next_action),
+        });
+    }
+    delivery.status = DeliveryLifecycleStatus::Planning;
+    delivery.updated_at = now;
+    store
+        .save_delivery_index(project_root, &delivery)
+        .map_err(to_state_error)?;
+    apply_delivery_index(&mut status, &delivery);
+    store
+        .save_status(project_root, &status)
+        .map_err(to_state_error)?;
+    Ok(Some(handoff))
+}
+
+fn next_phase_latest_refs(
+    root: &Path,
+    delivery_id: &str,
+    source_phase: &DeliveryPhaseState,
+) -> StateResult<BTreeMap<String, String>> {
     let contract_ref = latest_ref(source_phase, "brainstormContract")?;
     let requirement_context_ref = latest_ref(source_phase, "requirementContext")?;
     let mut latest_refs = BTreeMap::new();
@@ -189,37 +228,56 @@ pub fn materialize_next_phase_from_preview(
             state::paths::to_project_relative(root, &decisions_index)?,
         );
     }
-    delivery.phases.push(DeliveryPhaseState {
-        phase_id: handoff.phase_id.clone(),
-        latest_refs,
-        next_action: Some(RouteAction {
-            kind: RouteActionKind::RepositoryContextRequest,
-            source: "phase_handoff".to_string(),
-            reason: "next_phase_preview_candidate".to_string(),
-            prompt: None,
-            accepted_responses: vec![],
-            request_ref: None,
-            details: Some(json!({
-                "fromPhaseId": source_phase_id,
-                "phaseId": handoff.phase_id.clone(),
-                "title": handoff.title.clone(),
-                "goal": handoff.goal.clone(),
-                "scopePreview": handoff.scope_preview.clone(),
-                "reason": handoff.reason.clone()
-            })),
-            target_phase_id: None,
-        }),
-    });
-    delivery.status = DeliveryLifecycleStatus::Planning;
-    delivery.updated_at = now;
-    store
-        .save_delivery_index(project_root, &delivery)
-        .map_err(to_state_error)?;
-    apply_delivery_index(&mut status, &delivery);
-    store
-        .save_status(project_root, &status)
-        .map_err(to_state_error)?;
-    Ok(Some(handoff))
+    Ok(latest_refs)
+}
+
+fn next_phase_repository_context_action(
+    source_phase_id: &str,
+    handoff: &NextPhaseHandoff,
+) -> RouteAction {
+    RouteAction {
+        kind: RouteActionKind::RepositoryContextRequest,
+        source: "phase_handoff".to_string(),
+        reason: "next_phase_preview_candidate".to_string(),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: None,
+        details: Some(json!({
+            "fromPhaseId": source_phase_id,
+            "phaseId": handoff.phase_id.clone(),
+            "title": handoff.title.clone(),
+            "goal": handoff.goal.clone(),
+            "scopePreview": handoff.scope_preview.clone(),
+            "reason": handoff.reason.clone()
+        })),
+        target_phase_id: None,
+    }
+}
+
+fn should_attach_repository_context_start(phase: &DeliveryPhaseState) -> bool {
+    let has_started_refs = [
+        "repositoryContext",
+        "brainstormRequestRef",
+        "planningGenerationContract",
+        "architectureArtifact",
+        "taskPlan",
+        "reviewResult",
+    ]
+    .iter()
+    .any(|key| phase.latest_refs.contains_key(*key));
+    if has_started_refs {
+        return false;
+    }
+    phase
+        .next_action
+        .as_ref()
+        .map(|action| {
+            matches!(
+                action.kind,
+                RouteActionKind::RepositoryContextRequest | RouteActionKind::Done
+            )
+        })
+        .unwrap_or(true)
 }
 
 pub fn materialize_phase_brainstorm_from_preview(
@@ -592,10 +650,21 @@ fn attach_phase_continuation_context(
     }
 }
 
-fn normalize_next_phase_id(delivery: &DeliveryIndex, suggested_phase_id: &str) -> String {
+fn normalize_next_phase_id(
+    delivery: &DeliveryIndex,
+    source_phase_id: &str,
+    suggested_phase_id: &str,
+) -> String {
     let suggested = suggested_phase_id.trim();
     if !suggested.is_empty() && suggested != "phase-next" {
         return suggested.to_string();
+    }
+    if let Some(next) = source_phase_id
+        .strip_prefix("phase-")
+        .and_then(|suffix| suffix.parse::<u32>().ok())
+        .map(|phase_number| format!("phase-{}", phase_number + 1))
+    {
+        return next;
     }
     let next = delivery
         .phases

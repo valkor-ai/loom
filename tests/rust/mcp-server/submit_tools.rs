@@ -3404,6 +3404,16 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         .iter()
         .find(|phase| phase["phaseId"] == "phase-2")
         .expect("phase-2");
+    assert_eq!(
+        index["phases"]
+            .as_array()
+            .expect("phases")
+            .iter()
+            .filter(|phase| phase["phaseId"] == "phase-2")
+            .count(),
+        1,
+        "existing phase-2 must be reused, not duplicated"
+    );
     assert_eq!(phase_2["nextAction"]["kind"], "repository_context_request");
     assert!(phase_2["latestRefs"]["brainstormRequestRef"].is_null());
     assert!(phase_2["latestRefs"]["technicalBaseline"].is_string());
@@ -3597,6 +3607,52 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         phase_2_contract["handoff"]["nextNode"],
         "planning_generation_contract"
     );
+}
+
+#[test]
+fn review_accept_approved_activates_existing_unstarted_next_phase_from_preview() {
+    let fixture = Fixture::new("review-existing-next-phase");
+    let review_request_ref = complete_task_execution_to_review_with_candidate(
+        &fixture,
+        candidate_with_next_phase_preview(),
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    append_unstarted_phase(&fixture, &delivery_id, "phase-2");
+
+    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(
+        result["next"]["artifactKind"], "repository_context_candidate",
+        "{result:#}"
+    );
+    assert_eq!(
+        active_phase_id(fixture.root_str(), &delivery_id),
+        "phase-2".to_string()
+    );
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read index"))
+            .expect("parse index");
+    let phase_2 = index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .find(|phase| phase["phaseId"] == "phase-2")
+        .expect("phase-2");
+    assert_eq!(phase_2["nextAction"]["kind"], "repository_context_request");
+    assert!(phase_2["latestRefs"]["brainstormContract"].is_string());
+    assert!(phase_2["latestRefs"]["requirementContext"].is_string());
+    assert!(phase_2["latestRefs"]["technicalBaseline"].is_string());
 }
 
 #[test]
@@ -6769,6 +6825,22 @@ fn append_done_phase(fixture: &Fixture, delivery_id: &str, phase_id: &str) {
             "source": "test",
             "reason": "phase_done"
         }
+    }));
+    write_json_atomic(&index_path, &index).expect("write delivery index");
+}
+
+fn append_unstarted_phase(fixture: &Fixture, delivery_id: &str, phase_id: &str) {
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(delivery_id)
+        .join("index.json");
+    let mut index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read index"))
+            .expect("parse index");
+    index["phases"].as_array_mut().expect("phases").push(json!({
+        "phaseId": phase_id,
+        "latestRefs": {}
     }));
     write_json_atomic(&index_path, &index).expect("write delivery index");
 }
