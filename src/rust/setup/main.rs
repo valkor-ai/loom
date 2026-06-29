@@ -1,6 +1,7 @@
 use setup::{
-    archive_package_layout, doctor, install, package_file_names, parse_agent_selection, purge,
-    uninstall, write_package_layout, SetupEnvironment, SetupError, TargetPlatform, VERSION,
+    archive_package_layout, doctor, install, parse_agent_selection, purge,
+    release_artifact_file_names, uninstall, write_package_layout, SetupEnvironment, SetupError,
+    TargetPlatform, VERSION,
 };
 use std::path::PathBuf;
 
@@ -123,7 +124,7 @@ fn run() -> Result<serde_json::Value, SetupError> {
                 "status": "ok",
                 "version": VERSION,
                 "packages": packages,
-                "expectedReleaseArtifacts": package_file_names(VERSION)
+                "expectedReleaseArtifacts": release_artifact_file_names(VERSION)
             }))
         }
         "package-archive" => {

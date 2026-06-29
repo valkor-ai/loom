@@ -1,10 +1,12 @@
 use setup::{
-    archive_package_layout, install, package_file_names, purge, write_package_layout, AgentKind,
-    ReleaseManifest, SetupEnvironment, SetupError, TargetPlatform, VERSION,
+    archive_package_layout, install, package_file_names, purge, release_artifact_file_names,
+    write_package_layout, AgentKind, ReleaseManifest, SetupEnvironment, SetupError, TargetPlatform,
+    VERSION,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml_edit::DocumentMut;
 
@@ -255,6 +257,22 @@ fn release_package_names_cover_supported_platforms() {
             format!("loom-{VERSION}-windows-x64.zip"),
         ]
     );
+    let artifacts = release_artifact_file_names(VERSION);
+    assert_eq!(
+        artifacts,
+        vec![
+            format!("loom-{VERSION}-darwin-arm64.tar.gz"),
+            format!("loom-{VERSION}-darwin-arm64.tar.gz.sha256"),
+            format!("loom-{VERSION}-darwin-x64.tar.gz"),
+            format!("loom-{VERSION}-darwin-x64.tar.gz.sha256"),
+            format!("loom-{VERSION}-linux-x64.tar.gz"),
+            format!("loom-{VERSION}-linux-x64.tar.gz.sha256"),
+            format!("loom-{VERSION}-linux-arm64.tar.gz"),
+            format!("loom-{VERSION}-linux-arm64.tar.gz.sha256"),
+            format!("loom-{VERSION}-windows-x64.zip"),
+            format!("loom-{VERSION}-windows-x64.zip.sha256"),
+        ]
+    );
 }
 
 #[test]
@@ -273,6 +291,94 @@ fn archive_package_layout_writes_windows_zip_artifact() {
         format!("loom-{VERSION}-windows-x64.zip")
     );
     assert!(archive.exists());
+    let checksum = archive.with_file_name(format!(
+        "{}.sha256",
+        archive.file_name().unwrap().to_string_lossy()
+    ));
+    assert!(checksum.exists());
+    let checksum_text = fs::read_to_string(checksum).unwrap();
+    assert!(checksum_text.contains(&sha256(&archive)));
+    assert!(checksum_text.contains(&format!("loom-{VERSION}-windows-x64.zip")));
+}
+
+#[test]
+fn install_sh_release_plan_resolves_platform_assets_and_checksums() {
+    let repo = repo_root();
+    let script = repo.join("install.sh");
+    let mac_output = Command::new("sh")
+        .arg(&script)
+        .args([
+            "--agent",
+            "claude-code",
+            "--version",
+            "9.8.7",
+            "--print-plan",
+        ])
+        .env("LOOM_INSTALL_TEST_OS", "Darwin")
+        .env("LOOM_INSTALL_TEST_ARCH", "arm64")
+        .output()
+        .unwrap();
+    assert!(
+        mac_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mac_output.stderr)
+    );
+    let mac_plan: serde_json::Value = serde_json::from_slice(&mac_output.stdout).unwrap();
+    assert_eq!(mac_plan["agent"], "claude-code");
+    assert_eq!(mac_plan["platform"], "darwin-arm64");
+    assert_eq!(mac_plan["package"], "loom-9.8.7-darwin-arm64.tar.gz");
+    assert_eq!(
+        mac_plan["packageUrl"],
+        "https://github.com/valkor-ai/loom/releases/download/v9.8.7/loom-9.8.7-darwin-arm64.tar.gz"
+    );
+    assert_eq!(
+        mac_plan["checksumUrl"],
+        "https://github.com/valkor-ai/loom/releases/download/v9.8.7/loom-9.8.7-darwin-arm64.tar.gz.sha256"
+    );
+    assert_eq!(mac_plan["archiveChecksumRequired"], true);
+
+    let linux_output = Command::new("sh")
+        .arg(&script)
+        .args([
+            "--agent",
+            "all",
+            "--version",
+            "9.8.7",
+            "--base-url",
+            "https://mirror.example/loom",
+            "--print-plan",
+        ])
+        .env("LOOM_INSTALL_TEST_OS", "linux")
+        .env("LOOM_INSTALL_TEST_ARCH", "x86_64")
+        .output()
+        .unwrap();
+    assert!(
+        linux_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linux_output.stderr)
+    );
+    let linux_plan: serde_json::Value = serde_json::from_slice(&linux_output.stdout).unwrap();
+    assert_eq!(linux_plan["agent"], "all");
+    assert_eq!(linux_plan["platform"], "linux-x64");
+    assert_eq!(
+        linux_plan["packageUrl"],
+        "https://mirror.example/loom/loom-9.8.7-linux-x64.tar.gz"
+    );
+    assert_eq!(
+        linux_plan["checksumUrl"],
+        "https://mirror.example/loom/loom-9.8.7-linux-x64.tar.gz.sha256"
+    );
+}
+
+#[test]
+fn install_ps1_release_contract_uses_windows_zip_checksum_and_doctor() {
+    let script = fs::read_to_string(repo_root().join("install.ps1")).unwrap();
+    assert!(script.contains("loom-$Version-$platform.zip"));
+    assert!(script.contains("$packageUrl.sha256"));
+    assert!(script.contains("Get-FileHash -Algorithm SHA256"));
+    assert!(script.contains("windows-x64"));
+    assert!(script.contains("install --agent $Agent --package-root"));
+    assert!(script.contains("doctor --agent $Agent --package-root"));
 }
 
 #[test]

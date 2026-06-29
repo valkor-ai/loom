@@ -153,6 +153,10 @@ impl TargetPlatform {
             platform = self.as_str()
         )
     }
+
+    pub fn package_checksum_file_name(self, version: &str) -> String {
+        format!("{}.sha256", self.package_file_name(version))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -740,6 +744,7 @@ pub fn archive_package_layout(
     } else {
         write_tar_gz_archive(package_dir, output_dir, &archive)?;
     }
+    write_archive_checksum(&archive)?;
     Ok(archive)
 }
 
@@ -747,6 +752,18 @@ pub fn package_file_names(version: &str) -> Vec<String> {
     TargetPlatform::all()
         .iter()
         .map(|platform| platform.package_file_name(version))
+        .collect()
+}
+
+pub fn release_artifact_file_names(version: &str) -> Vec<String> {
+    TargetPlatform::all()
+        .iter()
+        .flat_map(|platform| {
+            [
+                platform.package_file_name(version),
+                platform.package_checksum_file_name(version),
+            ]
+        })
         .collect()
 }
 
@@ -1900,6 +1917,21 @@ fn write_checksums(root: &Path) -> Result<(), SetupError> {
         &root.join("checksums.txt"),
         &format!("{}\n", lines.join("\n")),
     )
+}
+
+fn write_archive_checksum(archive: &Path) -> Result<(), SetupError> {
+    let hash = sha256_file(archive)?;
+    let file_name = archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            SetupError::InvalidArgument(format!(
+                "archive path has no valid file name: {}",
+                archive.display()
+            ))
+        })?;
+    let checksum_path = archive.with_file_name(format!("{file_name}.sha256"));
+    write_text(&checksum_path, &format!("{hash}  {file_name}\n"))
 }
 
 fn write_zip_archive(package_dir: &Path, archive: &Path) -> Result<(), SetupError> {

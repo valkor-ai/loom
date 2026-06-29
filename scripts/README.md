@@ -9,7 +9,7 @@ Current product runtime entry points are Rust binaries installed from release pa
 - bundled Python algorithm runtime
 - Codex, Claude Code, and OpenCode MCP plugin templates
 
-User installation is handled by the release installers:
+User installation is handled by the release installers. They resolve the host platform, verify the downloaded archive with its `.sha256` release asset, install through `loom-setup`, and run doctor:
 
 ```bash
 curl -fsSL https://github.com/valkor-ai/loom/releases/latest/download/install.sh | bash -s -- --agent codex
@@ -32,4 +32,4 @@ After a local runtime or plugin fix, refresh the local agent through the Quick S
 ./scripts/install-local-opencode.sh
 ```
 
-This validates the Rust release build, package layout, `loom-setup install`, MCP registration, and plugin refresh as one path.
+This validates the Rust release build, package layout, `loom-setup install`, MCP registration, doctor checks, and plugin refresh as one path.
