@@ -115,7 +115,7 @@ Your coding agent / app
 Agent turn / LLM context
 ```
 
-最新 11-case agent-run benchmark 中，Codex + Loom 相比单独使用 Codex 节省了 15.8% token，同时保持 100% 完成度。当前数据对比可以查看 [最新 benchmark 结果](./benchmarks/agent-run/results/latest.md)，运行方式见 [run guide](./benchmarks/agent-run/README.md)。
+Benchmark cases 和结果见 [`benchmarks/`](./benchmarks/)。
 
 ## 前置条件
 
