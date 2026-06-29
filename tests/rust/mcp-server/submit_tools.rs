@@ -1084,6 +1084,7 @@ fn architecture_read_groups_follow_current_section() {
             .contains(&"contextProjection.phaseScope.acceptanceCandidates".to_string()),
         "frontend_experience must rely on its focused frontend context instead of broad acceptance candidates"
     );
+    assert_architecture_scope_summary_fields(&frontend_core_fields);
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
     assert_architecture_group_ids(
@@ -1097,6 +1098,9 @@ fn architecture_read_groups_follow_current_section() {
         "architecture_core_context",
     );
     for forbidden in [
+        "contextProjection.phaseScope.included",
+        "contextProjection.phaseScope.deferred",
+        "contextProjection.phaseScope.excluded",
         "contextProjection.phaseScope.acceptanceCandidates",
         "contextProjection.requirementDetailTransfer.requirementDetails",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
@@ -1110,6 +1114,7 @@ fn architecture_read_groups_follow_current_section() {
             "runtime_delivery must not read non-runtime field {forbidden}"
         );
     }
+    assert_architecture_scope_summary_fields(&runtime_core_fields);
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
     assert_architecture_group_ids(
@@ -1128,6 +1133,7 @@ fn architecture_read_groups_follow_current_section() {
         ),
         "coverage still needs the detail index for detailCoverage"
     );
+    assert_architecture_scope_summary_fields(&coverage_core_fields);
 }
 
 #[test]
@@ -4955,6 +4961,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     );
     let frontend_core_fields =
         architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
+    assert_architecture_scope_summary_fields(&frontend_core_fields);
     assert!(
         !frontend_core_fields.contains(
             &"contextProjection.requirementDetailTransfer.requirementDetails".to_string()
@@ -4992,6 +4999,9 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     let runtime_core_fields =
         architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
     for forbidden in [
+        "contextProjection.phaseScope.included",
+        "contextProjection.phaseScope.deferred",
+        "contextProjection.phaseScope.excluded",
         "contextProjection.phaseScope.acceptanceCandidates",
         "contextProjection.requirementDetailTransfer.requirementDetails",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
@@ -5005,6 +5015,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             "runtime_delivery architecture repair must not read non-runtime field {forbidden}"
         );
     }
+    assert_architecture_scope_summary_fields(&runtime_core_fields);
     let repair_runtime_template =
         architecture_section_contract(&fixture, &repair_action_ref, "runtime_delivery")
             ["resultTemplate"]["content"]
@@ -5024,6 +5035,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     advance_architecture_to_section(&fixture, &repair_action_ref, "coverage");
     let coverage_core_fields =
         architecture_group_fields(&fixture, &repair_action_ref, "architecture_core_context");
+    assert_architecture_scope_summary_fields(&coverage_core_fields);
     assert!(
         coverage_core_fields.contains(
             &"contextProjection.requirementDetailTransfer.requirementDetails".to_string()
@@ -5738,6 +5750,35 @@ fn architecture_group_fields(fixture: &Fixture, request_ref: &str, group_id: &st
         .unwrap_or_else(|| panic!("missing architecture read group {group_id}"))
         .fields
         .clone()
+}
+
+fn assert_architecture_scope_summary_fields(fields: &[String]) {
+    for forbidden in [
+        "contextProjection.phaseScope.included",
+        "contextProjection.phaseScope.deferred",
+        "contextProjection.phaseScope.excluded",
+    ] {
+        assert!(
+            !fields.contains(&forbidden.to_string()),
+            "architecture read group must not expose broad phase scope field {forbidden}"
+        );
+    }
+    for required in [
+        "contextProjection.phaseScopeSummary.includedIds",
+        "contextProjection.phaseScopeSummary.includedLabels",
+        "contextProjection.phaseScopeSummary.includedItems",
+        "contextProjection.phaseScopeSummary.deferredIds",
+        "contextProjection.phaseScopeSummary.deferredLabels",
+        "contextProjection.phaseScopeSummary.deferredItems",
+        "contextProjection.phaseScopeSummary.excludedIds",
+        "contextProjection.phaseScopeSummary.excludedLabels",
+        "contextProjection.phaseScopeSummary.excludedItems",
+    ] {
+        assert!(
+            fields.contains(&required.to_string()),
+            "architecture read group must expose compact phase scope field {required}"
+        );
+    }
 }
 
 fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {

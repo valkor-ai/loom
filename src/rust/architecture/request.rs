@@ -342,9 +342,15 @@ pub(crate) fn architecture_read_groups(
     core_fields.extend([
         "contextProjection.phaseScope.phaseName",
         "contextProjection.phaseScope.phaseGoal",
-        "contextProjection.phaseScope.included",
-        "contextProjection.phaseScope.deferred",
-        "contextProjection.phaseScope.excluded",
+        "contextProjection.phaseScopeSummary.includedIds",
+        "contextProjection.phaseScopeSummary.includedLabels",
+        "contextProjection.phaseScopeSummary.includedItems",
+        "contextProjection.phaseScopeSummary.deferredIds",
+        "contextProjection.phaseScopeSummary.deferredLabels",
+        "contextProjection.phaseScopeSummary.deferredItems",
+        "contextProjection.phaseScopeSummary.excludedIds",
+        "contextProjection.phaseScopeSummary.excludedLabels",
+        "contextProjection.phaseScopeSummary.excludedItems",
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
         "contextProjection.technicalBaseline.technicalBaselineId",
@@ -578,6 +584,7 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
         "phaseId": planning_contract.source.phase_id,
         "planningContractId": planning_contract.planning_contract_id,
         "phaseScope": planning_contract.phase_scope,
+        "phaseScopeSummary": phase_scope_summary(planning_contract),
         "technicalBaseline": planning_contract.technical_baseline,
         "requirementDetailTransfer": {
             "requirementDetails": compact_requirement_details_index(planning_contract),
@@ -589,6 +596,32 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
             "businessFlows": planning_contract.planning_inputs.business_flows
         }
     })
+}
+
+fn phase_scope_summary(planning_contract: &PlanningGenerationContract) -> Value {
+    json!({
+        "includedIds": scope_ids(&planning_contract.phase_scope.included),
+        "includedLabels": scope_labels(&planning_contract.phase_scope.included),
+        "includedItems": scope_items(&planning_contract.phase_scope.included),
+        "deferredIds": scope_ids(&planning_contract.phase_scope.deferred),
+        "deferredLabels": scope_labels(&planning_contract.phase_scope.deferred),
+        "deferredItems": scope_items(&planning_contract.phase_scope.deferred),
+        "excludedIds": scope_ids(&planning_contract.phase_scope.excluded),
+        "excludedLabels": scope_labels(&planning_contract.phase_scope.excluded),
+        "excludedItems": scope_items(&planning_contract.phase_scope.excluded)
+    })
+}
+
+fn scope_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.id.clone()).collect()
+}
+
+fn scope_labels(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.label.clone()).collect()
+}
+
+fn scope_items(items: &[contracts::ScopeItem]) -> Vec<Vec<String>> {
+    items.iter().map(|item| item.items.clone()).collect()
 }
 
 fn compact_requirement_details_index(planning_contract: &PlanningGenerationContract) -> Value {
