@@ -33,6 +33,8 @@ use crate::{
     DeployToolInput,
 };
 
+const DEFAULT_DEPLOY_REPAIR_MAX_ATTEMPTS: u32 = 2;
+
 pub fn deploy_repair(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root = Path::new(&input.project_root);
     match latest_repair_action(project_root) {
@@ -80,10 +82,12 @@ pub fn write_repair_action(
     let (failure_owner, repair_route) = classify_repair(failure_kind, editable_files.len());
     let current_error_window = error_window(stdout, stderr);
     if let Some(existing) =
-        same_pending_repair_action(project_root, failure_kind, &current_error_window)?
+        reusable_pending_execution_repair_action(project_root, failure_kind, &current_error_window)?
     {
         return Ok(repair_next(project_root, &existing));
     }
+    let attempts = next_repair_attempt(project_root, failure_kind, &current_error_window)?;
+    let max_attempts = DEFAULT_DEPLOY_REPAIR_MAX_ATTEMPTS;
     let failure_ref = if repair_route == DeploymentRepairRoute::ExecutionRepair {
         let report = create_failure_report(
             project_root,
@@ -95,6 +99,8 @@ pub fn write_repair_action(
             exit_code,
             stdout,
             stderr,
+            attempts.saturating_add(1),
+            max_attempts,
         )?;
         write_json_atomic(&paths.failure_file, &report)?;
         Some(to_project_relative(project_root, &paths.failure_file)?)
@@ -120,8 +126,8 @@ pub fn write_repair_action(
         editable_files,
         protected_files: protected_files_for(spec),
         instruction: instruction_for(failure_kind, failure_owner),
-        max_attempts: 2,
-        attempts: 0,
+        max_attempts,
+        attempts,
         status: "pending".to_string(),
     };
     write_json_atomic(&paths.repair_action_file, &request)?;
@@ -129,6 +135,9 @@ pub fn write_repair_action(
 }
 
 pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> LoomMcpActionResult {
+    if repair_attempt_limit_reached(request) {
+        return repair_attempt_limit_result(project_root, request);
+    }
     match request.repair_route {
         DeploymentRepairRoute::DeployRepair => {
             let spec = read_spec(project_root).ok();
@@ -638,6 +647,69 @@ fn same_pending_repair_action(
     Ok(None)
 }
 
+fn reusable_pending_execution_repair_action(
+    project_root: &Path,
+    failure_kind: DeploymentFailureKind,
+    window: &DeploymentErrorWindow,
+) -> StateResult<Option<DeploymentRepairAction>> {
+    let Some(existing) = same_pending_repair_action(project_root, failure_kind, window)? else {
+        return Ok(None);
+    };
+    if existing.repair_route != DeploymentRepairRoute::ExecutionRepair {
+        return Ok(None);
+    }
+    let Some(failure_ref) = existing.failure_ref.as_deref() else {
+        return Ok(Some(existing));
+    };
+    if existing_materialized_execution_repair(project_root, &existing.repair_id, failure_ref)?
+        .is_some()
+    {
+        return Ok(Some(existing));
+    }
+    Ok(None)
+}
+
+fn next_repair_attempt(
+    project_root: &Path,
+    failure_kind: DeploymentFailureKind,
+    window: &DeploymentErrorWindow,
+) -> StateResult<u32> {
+    let Some(existing) = same_pending_repair_action(project_root, failure_kind, window)? else {
+        return Ok(0);
+    };
+    Ok(existing.attempts.saturating_add(1))
+}
+
+fn repair_attempt_limit_reached(request: &DeploymentRepairAction) -> bool {
+    !matches!(request.repair_route, DeploymentRepairRoute::None)
+        && request.max_attempts > 0
+        && request.attempts >= request.max_attempts
+}
+
+fn repair_attempt_limit_result(
+    project_root: &Path,
+    request: &DeploymentRepairAction,
+) -> LoomMcpActionResult {
+    LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+        project_root: project_root.to_string_lossy().into_owned(),
+        blockers: vec![format!(
+            "Deployment repair attempt limit reached for {} after {} automatic repair attempts.",
+            enum_string(&request.failure_kind),
+            request.attempts
+        )],
+        recommended_tool: Some("loom.deployInspect".to_string()),
+        details: Some(json!({
+            "failureKind": enum_string(&request.failure_kind),
+            "failureOwner": enum_string(&request.failure_owner),
+            "repairRoute": enum_string(&request.repair_route),
+            "failureRef": request.failure_ref,
+            "fullLogRef": request.full_log_ref,
+            "attempts": request.attempts,
+            "maxAttempts": request.max_attempts
+        })),
+    })
+}
+
 fn existing_materialized_execution_repair(
     project_root: &Path,
     repair_id: &str,
@@ -814,6 +886,8 @@ fn create_failure_report(
     exit_code: i32,
     stdout: &str,
     stderr: &str,
+    attempt: u32,
+    max_attempts: u32,
 ) -> StateResult<DeploymentFailureReport> {
     let fields = failed_contract_fields(failure_kind);
     let required_checks = fields
@@ -821,7 +895,6 @@ fn create_failure_report(
         .map(|field| format!("check_{field}").replace('.', "_"))
         .collect::<Vec<_>>();
     let window = error_window(stdout, stderr);
-    let attempt = next_failure_attempt(project_root, failure_kind, &window)?;
     let mut must_not_edit = vec![".loom".to_string(), spec.runtime_contract_ref.clone()];
     must_not_edit.extend(spec.files.dockerfile_paths.values().cloned());
     must_not_edit.extend(spec.files.nginx_config_paths.values().cloned());
@@ -849,25 +922,8 @@ fn create_failure_report(
         error_window: window,
         must_not_edit,
         attempt,
-        max_attempts: 2,
+        max_attempts,
     })
-}
-
-fn next_failure_attempt(
-    project_root: &Path,
-    failure_kind: DeploymentFailureKind,
-    window: &DeploymentErrorWindow,
-) -> StateResult<u32> {
-    let path = deployment_paths(project_root).failure_file;
-    if !path_exists(&path) {
-        return Ok(1);
-    }
-    let existing: DeploymentFailureReport = read_json(&path)?;
-    if existing.failure_kind == failure_kind && existing.error_window.lines == window.lines {
-        Ok(existing.attempt.saturating_add(1))
-    } else {
-        Ok(1)
-    }
 }
 
 fn failed_contract_fields(failure_kind: DeploymentFailureKind) -> Vec<String> {

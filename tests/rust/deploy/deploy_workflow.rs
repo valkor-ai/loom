@@ -6,6 +6,9 @@ use std::{
     thread,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use contracts::{
     DeploymentErrorWindow, DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
     DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec, PackageManager,
@@ -16,7 +19,7 @@ use delivery_core::{
     FileSubmitInput, InspectRequestInput, ProjectStatus, ReadRequestFieldsInput,
 };
 use deploy::{
-    accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status,
+    accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status, deploy_up,
     deploy_validate, DeployToolInput,
 };
 use serde_json::{json, Value};
@@ -610,6 +613,160 @@ fn deploy_execution_repair_invalid_result_returns_repairable_error() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn deploy_up_routes_runtime_build_failure_to_execution_repair_and_counts_retry_attempts() {
+    let fixture = Fixture::new("deploy-build-failure-route");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","start":"node dist/server.js"},"dependencies":{"vite":"latest"}}"#,
+    );
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "#13 RUN npm run build"
+  echo "#13 1.262 src/App.tsx(1,1): error TS7006: Parameter 'value' implicitly has an 'any' type." >&2
+  echo "failed to solve: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 2" >&2
+  exit 1
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+    assert_eq!(value["next"]["executionKind"], "deploy_execution_repair");
+    assert_eq!(
+        value["next"]["repairContext"]["issues"],
+        json!(["build_command_failed"]),
+        "{value:#}"
+    );
+    assert_eq!(
+        fixture.repair_action_value()["failureKind"],
+        "build_command_failed"
+    );
+    assert_eq!(fixture.repair_action_value()["attempts"], 0);
+    assert_forbidden_cli_fields_absent(&value);
+
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": fixture.repair_action_value()["repairId"],
+            "status": "completed",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": ["package.json"],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["build.command"],
+                "codeLevelChecks": [{
+                    "checkId": "check_build_command",
+                    "status": "passed",
+                    "evidence": "Adjusted the runtime build script."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "auto_runnable",
+        "{submitted_value:#}"
+    );
+    assert_eq!(fixture.repair_action_value()["attempts"], 1);
+    assert_eq!(
+        submitted_value["next"]["repairContext"]["issues"],
+        json!(["build_command_failed"]),
+        "{submitted_value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&submitted_value);
+}
+
+#[test]
+fn deploy_repair_blocks_when_attempt_limit_is_reached() {
+    let fixture = Fixture::new("deploy-repair-attempt-limit");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+    let mut action = fixture.repair_action_value();
+    action["attempts"] = json!(2);
+    action["maxAttempts"] = json!(2);
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/deployment/state/repair-action.json"),
+        &action,
+    )
+    .expect("write limited repair action");
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    assert_eq!(value["recommendedTool"], "loom.deployInspect");
+    assert_eq!(value["details"]["attempts"], 2);
+    assert_eq!(value["details"]["maxAttempts"], 2);
+    assert_forbidden_cli_fields_absent(&value);
+}
+
 fn runtime_delivery() -> Value {
     json!({
         "status": "modified",
@@ -703,6 +860,31 @@ impl Fixture {
             std::fs::create_dir_all(parent).expect("create parent");
         }
         std::fs::write(file, text).expect("write text fixture");
+    }
+
+    #[cfg(unix)]
+    fn write_mock_docker(&self, script: &str) {
+        let docker = self.root.join("mock-bin/docker");
+        std::fs::create_dir_all(docker.parent().unwrap()).expect("create mock bin");
+        std::fs::write(&docker, script).expect("write mock docker");
+        let mut permissions = std::fs::metadata(&docker)
+            .expect("mock docker metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&docker, permissions).expect("chmod mock docker");
+    }
+
+    #[cfg(unix)]
+    fn prepend_mock_bin_to_path(&self) -> PathEnvGuard {
+        let previous = std::env::var("PATH").unwrap_or_default();
+        let mock_bin = self.root.join("mock-bin");
+        std::env::set_var("PATH", format!("{}:{previous}", mock_bin.display()));
+        PathEnvGuard { previous }
+    }
+
+    fn repair_action_value(&self) -> Value {
+        read_json(&self.root.join(".loom/deployment/state/repair-action.json"))
+            .expect("repair action")
     }
 
     fn write_runtime_delivery(&self, runtime_delivery: Value) {
@@ -844,6 +1026,18 @@ impl Fixture {
             },
         )
         .expect("write failure report");
+    }
+}
+
+#[cfg(unix)]
+struct PathEnvGuard {
+    previous: String,
+}
+
+#[cfg(unix)]
+impl Drop for PathEnvGuard {
+    fn drop(&mut self) {
+        std::env::set_var("PATH", &self.previous);
     }
 }
 
