@@ -39,6 +39,14 @@ pub struct KnowledgeProjectInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct KnowledgePendingInput {
+    pub project_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct KnowledgeInspectChunkInput {
     pub project_root: String,
     pub source_name: String,
@@ -160,9 +168,17 @@ pub struct KnowledgeMatchedSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct KnowledgeContextMatchedSource {
+    pub source_name: String,
+    pub score: f64,
+    pub matched_focus_coverage: f64,
+    pub chunk_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct KnowledgeReadPlanChunk {
     pub source_name: String,
-    pub source_id: String,
     pub build_id: String,
     pub chunk_id: String,
 }
@@ -178,6 +194,6 @@ pub struct KnowledgeReadPlan {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeBrainstormContextResult {
     pub status: String,
-    pub matched_sources: Vec<KnowledgeMatchedSource>,
+    pub matched_sources: Vec<KnowledgeContextMatchedSource>,
     pub read_plan: KnowledgeReadPlan,
 }

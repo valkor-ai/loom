@@ -9,8 +9,8 @@ use algorithm_client::AlgorithmClient;
 use crate::{
     mcp_models::{
         KnowledgeBrainstormContextInput, KnowledgeBrainstormContextResult, KnowledgeChunkCard,
-        KnowledgeMatchedLabel, KnowledgeMatchedSource, KnowledgeReadPlan, KnowledgeReadPlanChunk,
-        KnowledgeSearchInput, KnowledgeSearchResult,
+        KnowledgeContextMatchedSource, KnowledgeMatchedLabel, KnowledgeMatchedSource,
+        KnowledgeReadPlan, KnowledgeReadPlanChunk, KnowledgeSearchInput, KnowledgeSearchResult,
     },
     models::{BlockAffinity, ChunksFile, KnowledgeChunk, LexicalIndex},
     paths,
@@ -102,7 +102,6 @@ pub fn brainstorm_context(
                     .iter()
                     .map(|chunk| KnowledgeReadPlanChunk {
                         source_name: source.source_name.clone(),
-                        source_id: source.source_id.clone(),
                         build_id: source.build_id.clone(),
                         chunk_id: chunk.chunk_id.clone(),
                     })
@@ -115,11 +114,25 @@ pub fn brainstorm_context(
         } else {
             "available".to_string()
         },
-        matched_sources,
+        matched_sources: context_source_summaries(&matched_sources),
         read_plan,
     };
     persist_brainstorm_context(&input, &request_scope, &result)?;
     Ok(result)
+}
+
+fn context_source_summaries(
+    matched_sources: &[KnowledgeMatchedSource],
+) -> Vec<KnowledgeContextMatchedSource> {
+    matched_sources
+        .iter()
+        .map(|source| KnowledgeContextMatchedSource {
+            source_name: source.source_name.clone(),
+            score: source.score,
+            matched_focus_coverage: source.matched_focus_coverage,
+            chunk_count: source.top_chunks.len(),
+        })
+        .collect()
 }
 
 fn search_cards(

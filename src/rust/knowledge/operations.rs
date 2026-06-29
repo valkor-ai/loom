@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     builder::validate_candidate_paths,
     mcp_models::{
-        KnowledgeAddInput, KnowledgeList, KnowledgeNameInput, KnowledgeProjectInput,
-        KnowledgeSummary, KnowledgeUpdateInput,
+        KnowledgeAddInput, KnowledgeList, KnowledgeNameInput, KnowledgePendingInput,
+        KnowledgeProjectInput, KnowledgeSummary, KnowledgeUpdateInput,
     },
     models::{KnowledgeSource, PendingOperation, PendingOperationKind, PendingQueue, SkippedFile},
     paths,
@@ -120,8 +120,24 @@ pub fn update_source(input: KnowledgeUpdateInput) -> KnowledgeResult<KnowledgeSu
     Ok(summary(source_snapshot, Some(queue), warnings))
 }
 
-pub fn pending_sources(_input: KnowledgeProjectInput) -> KnowledgeResult<KnowledgeList> {
+pub fn pending_sources(input: KnowledgePendingInput) -> KnowledgeResult<KnowledgeList> {
     let registry = load_registry()?;
+    if let Some(name) = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        let source = registry_source(&registry, name)?.clone();
+        let queue = load_pending(&source.source_id, &source.name)?;
+        return Ok(KnowledgeList {
+            sources: if queue.operations.is_empty() {
+                vec![]
+            } else {
+                vec![summary(source, Some(queue), vec![])]
+            },
+        });
+    }
     let mut sources = Vec::new();
     for source in registry.sources {
         let queue = load_pending(&source.source_id, &source.name)?;

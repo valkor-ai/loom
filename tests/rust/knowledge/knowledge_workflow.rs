@@ -691,6 +691,15 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
         .chunks
         .iter()
         .all(|chunk| chunk.source_name == "page-paths"));
+    assert!(context
+        .read_plan
+        .chunks
+        .iter()
+        .all(|chunk| !chunk.build_id.is_empty() && !chunk.chunk_id.is_empty()));
+    let context_json = serde_json::to_value(&context).expect("context json");
+    assert!(context_json["matchedSources"].is_array());
+    assert!(!context_json.to_string().contains("topChunks"));
+    assert!(!context_json.to_string().contains("sourceId"));
     let query_file = fixture.root.join(
         ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/frontend_experience/frontend_paths/query.json",
     );
