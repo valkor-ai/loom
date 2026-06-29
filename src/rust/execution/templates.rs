@@ -78,9 +78,16 @@ pub(crate) fn taskplan_group_result_template(
                 "preferredEvidence": ["automated_test"],
                 "acceptableEvidence": ["automated_test", "manual_command_output", "static_check"]
             }],
-            "conceptRefs": [],
-            "conceptResponsibilities": [],
-            "conceptVerificationIntents": []
+            "conceptRefs": ["contextProjection.requirementDetailTransfer.conceptRefs item"],
+            "conceptResponsibilities": [{
+                "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
+                "responsibility": "How this task preserves or implements that concept."
+            }],
+            "conceptVerificationIntents": [{
+                "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
+                "evidenceType": "static_check",
+                "intent": "How verification will prove this task preserved or implemented that concept."
+            }]
         }],
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"

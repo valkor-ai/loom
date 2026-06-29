@@ -1064,6 +1064,16 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
             .is_object()
     );
+    assert!(
+        taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
+            ["conceptResponsibilities"][0]
+            .is_object()
+    );
+    assert!(
+        taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
+            ["conceptVerificationIntents"][0]
+            .is_object()
+    );
     let runtime_requirement_template =
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
     assert!(runtime_requirement_template.is_object());
@@ -1634,6 +1644,16 @@ fn blocked_task_result_routes_to_taskplan_repair() {
     assert!(repair_fields["outputContract.outlineResultTemplate"].value["groups"][0].is_object());
     assert!(repair_fields["outputContract.groupResultTemplate"].value["group"].is_object());
     assert!(repair_fields["outputContract.groupResultTemplate"].value["tasks"][0].is_object());
+    assert!(
+        repair_fields["outputContract.groupResultTemplate"].value["tasks"][0]
+            ["conceptResponsibilities"][0]
+            .is_object()
+    );
+    assert!(
+        repair_fields["outputContract.groupResultTemplate"].value["tasks"][0]
+            ["conceptVerificationIntents"][0]
+            .is_object()
+    );
 }
 
 #[test]
