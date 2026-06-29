@@ -856,6 +856,70 @@ fn repository_context_accept_persists_pgc_and_hands_off_to_architecture() {
 }
 
 #[test]
+fn planning_contract_create_reroutes_existing_project_without_repository_context() {
+    let fixture = Fixture::new("pgc-requires-repository-context");
+    write_json_atomic(
+        &fixture.root.join("package.json"),
+        &json!({ "name": "loom-fixture", "private": true }),
+    )
+    .expect("write package.json");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    write_candidate_target(
+        &fixture,
+        &baseline_request_ref,
+        &technical_baseline_candidate_json("existing_project", "policy_auto_accept"),
+    );
+    let baseline_result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        baseline_result["next"]["artifactKind"],
+        "repository_context_candidate"
+    );
+
+    let rerouted = planning::create_contract_and_route(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        workflow::WorkflowDomainDispatcher,
+    );
+    let rerouted_value = serde_json::to_value(&rerouted).expect("serialize rerouted result");
+
+    assert_eq!(
+        rerouted_value["state"], "auto_runnable",
+        "{rerouted_value:#}"
+    );
+    assert_eq!(
+        rerouted_value["next"]["artifactKind"],
+        "repository_context_candidate"
+    );
+    assert_eq!(
+        rerouted_value["next"]["submitTool"],
+        "loom.repositoryContextAcceptFile"
+    );
+    assert!(!fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("contracts/planning/phase-1/pgc.json")
+        .exists());
+}
+
+#[test]
 fn architecture_read_groups_follow_current_section() {
     let fixture = Fixture::new("architecture-read-groups-by-section");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);

@@ -7,13 +7,16 @@ use contracts::{
     BrainstormContract, ConceptPhaseRelevance, ConceptPriority, PlanningContractContextRefs,
     PlanningContractPhaseScope, PlanningContractSource, PlanningContractStatus,
     PlanningContractTechnicalBaseline, PlanningDeploymentRules, PlanningGenerationContract,
-    PlanningHandoff, PlanningInputs, PlanningRules, QualityGates, RequirementDetailItem,
-    RequirementDetailsIndex, ScopeIsolationRules, ScopeItem, TechnicalBaselineContract,
+    PlanningHandoff, PlanningInputs, PlanningRules, ProjectKind, QualityGates,
+    RequirementDetailItem, RequirementDetailsIndex, ScopeIsolationRules, ScopeItem,
+    TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
     apply_delivery_index, DeliveryLifecycleStatus, DomainDispatcher, LoomMcpActionResult,
-    LoomMcpFailure, LoomMcpFailureResult, RouteAction, RouteActionKind, TransitionStore,
+    LoomMcpBlockedResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction, RouteActionKind,
+    TransitionStore,
 };
+use serde_json::json;
 use state::{lifecycle_store::FileTransitionStore, paths::DeliveryPhaseLocator};
 
 use crate::paths::{planning_contract_file, planning_latest_file};
@@ -91,6 +94,49 @@ where
     let baseline = read_technical_baseline(root, &baseline_ref)?;
 
     let repository_context_ref = phase.latest_refs.get("latestRepositoryContext").cloned();
+    if !matches!(
+        baseline.status,
+        TechnicalBaselineStatus::AutoAccepted | TechnicalBaselineStatus::Confirmed
+    ) {
+        return Ok(LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+            project_root: project_root.to_string(),
+            blockers: vec![
+                "TechnicalBaseline is not confirmed, so PlanningGenerationContract cannot be created.".to_string(),
+            ],
+            recommended_tool: Some("loom.continue".to_string()),
+            details: Some(json!({
+                "deliveryId": delivery_id,
+                "phaseId": phase_id,
+                "technicalBaselineRef": baseline_ref,
+                "technicalBaselineStatus": baseline.status
+            })),
+        }));
+    }
+    if matches!(baseline.project_kind, ProjectKind::ExistingProject)
+        && repository_context_ref.is_none()
+    {
+        let action = RouteAction {
+            kind: RouteActionKind::RepositoryContextRequest,
+            source: "planning_contract".to_string(),
+            reason: "repository_context_required_before_pgc".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: None,
+            details: None,
+            target_phase_id: None,
+        };
+        phase.next_action = Some(action.clone());
+        delivery.status = DeliveryLifecycleStatus::Planning;
+        delivery.updated_at = state::store::now_string();
+        store
+            .save_delivery_index(project_root, &delivery)
+            .map_err(to_state_error)?;
+        apply_delivery_index(&mut status, &delivery);
+        store
+            .save_status(project_root, &status)
+            .map_err(to_state_error)?;
+        return Ok(dispatcher.dispatch_route_action(project_root, delivery_id, phase_id, &action));
+    }
     let current_scope_ids = brainstorm
         .phase_plan
         .current
