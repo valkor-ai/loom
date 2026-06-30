@@ -2981,6 +2981,62 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
 }
 
 #[test]
+fn taskplan_accept_normalizes_forbidden_paths_before_execution() {
+    let fixture = Fixture::new("taskplan-normalizes-forbidden-paths");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["writeBoundary"]["forbiddenPaths"] =
+        json!([".loom", "node_modules", "dist"]);
+    write_json_atomic(&group_path, &group_value).expect("write noisy forbidden paths");
+
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef");
+    let execution_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+        fields: vec!["task.writeBoundary.forbiddenPaths".to_string()],
+    })
+    .expect("read execution write boundary")
+    .fields;
+    assert_eq!(
+        execution_fields["task.writeBoundary.forbiddenPaths"].value,
+        json!([".loom"])
+    );
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    assert!(persisted["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .all(|task| task["writeBoundary"]["forbiddenPaths"] == json!([".loom"])));
+}
+
+#[test]
 fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     let fixture = Fixture::new("task-exec-runtime-rules");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);

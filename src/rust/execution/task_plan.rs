@@ -695,6 +695,7 @@ where
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
+    normalize_taskplan_write_boundaries(&mut tasks);
     let now = state::store::now_string();
     let task_plan = TaskPlan {
         schema_version: "1.0".to_string(),
@@ -1296,6 +1297,12 @@ fn validate_taskplan_refs(
         );
     }
     issues
+}
+
+fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        task.write_boundary.forbidden_paths = vec![".loom".to_string()];
+    }
 }
 
 fn validate_runtime_delivery_requirements(
