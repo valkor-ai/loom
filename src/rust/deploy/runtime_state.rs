@@ -7,7 +7,9 @@ use state::{
     store::{now_string, path_exists, write_json_atomic, StateResult},
 };
 
-use crate::{paths::deployment_paths, validate::DeploymentValidationResult};
+use crate::{
+    paths::deployment_paths, port_plan::primary_url, validate::DeploymentValidationResult,
+};
 
 pub fn write_success_state(
     project_root: &Path,
@@ -25,7 +27,8 @@ pub fn write_success_state(
             "specRef": to_project_relative(project_root, &paths.spec_file).ok(),
             "composePath": spec.files.compose_path,
             "running": true,
-            "url": spec.runtime.url,
+            "primaryUrl": primary_url(&spec.runtime),
+            "ports": spec.runtime.ports.clone(),
             "preview": validation.preview,
             "apiRoutes": validation.api_routes,
             "updatedAt": now_string()

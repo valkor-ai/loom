@@ -132,11 +132,17 @@ pub fn source_model_from_runtime_contract(
         };
     }
 
-    let contract_kind = runtime_kind_from_signals(&[
-        runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
-        runtime.runtime_kind.as_deref(),
-        runtime.start_command.as_deref(),
-    ]);
+    let contract_kind = if runtime_contract_declares_multi_root(runtime)
+        && fallback_probe.kind != RuntimeKind::Unknown
+    {
+        RuntimeKind::Unknown
+    } else {
+        runtime_kind_from_signals(&[
+            runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
+            runtime.runtime_kind.as_deref(),
+            runtime.start_command.as_deref(),
+        ])
+    };
     let service = DeploymentSourceService {
         service_id: "app".to_string(),
         role: SourceServiceRole::App,
@@ -160,10 +166,12 @@ pub fn source_model_from_runtime_contract(
             .or(fallback_probe.package_manager)
             .or_else(|| default_package_manager(fallback_probe.kind)),
         has_lockfile: fallback_probe.has_lockfile,
-        framework: runtime
-            .runtime_kind
-            .clone()
-            .or_else(|| fallback_probe.framework.clone()),
+        framework: fallback_probe.framework.clone().or_else(|| {
+            runtime
+                .runtime_kind
+                .as_deref()
+                .and_then(normalized_framework_label)
+        }),
         runtime_version: fallback_probe.runtime_version.clone(),
         runtime_version_source: fallback_probe.runtime_version_source.clone(),
         build_command: runtime
@@ -254,8 +262,60 @@ fn dependencies_from_runtime_or_probe(
 }
 
 fn command_is_usable(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    !(lower.contains("service:") || lower.contains("web:"))
+    labeled_command_segments(command).is_empty()
+}
+
+pub fn runtime_contract_declares_multi_root(runtime: &DeploymentRuntimeContract) -> bool {
+    if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend) {
+        return true;
+    }
+    let mut labels = Vec::new();
+    for command in [
+        runtime.build_command.as_deref(),
+        runtime.start_command.as_deref(),
+        runtime
+            .frontend
+            .as_ref()
+            .and_then(|endpoint| endpoint.build_command.as_deref()),
+        runtime
+            .api
+            .as_ref()
+            .and_then(|api| api.build_command.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        labels.extend(labeled_command_segments(command));
+    }
+    labels.sort();
+    labels.dedup();
+    labels.len() >= 2
+}
+
+fn labeled_command_segments(command: &str) -> Vec<String> {
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let (label, rest) = trimmed.split_once(':')?;
+            let label = label.trim();
+            if rest.trim().is_empty() || !is_command_segment_label(label) {
+                return None;
+            }
+            Some(label.to_ascii_lowercase())
+        })
+        .collect()
+}
+
+fn is_command_segment_label(value: &str) -> bool {
+    if value.is_empty() || value.contains(char::is_whitespace) {
+        return false;
+    }
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 fn runtime_kind_from_signals(signals: &[Option<&str>]) -> RuntimeKind {
@@ -294,6 +354,29 @@ fn runtime_kind_from_signals(signals: &[Option<&str>]) -> RuntimeKind {
         return RuntimeKind::Go;
     }
     RuntimeKind::Unknown
+}
+
+fn normalized_framework_label(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("spring") {
+        Some("spring-boot".to_string())
+    } else if lower.contains("fastapi") {
+        Some("fastapi".to_string())
+    } else if lower.contains("django") {
+        Some("django".to_string())
+    } else if lower.contains("flask") {
+        Some("flask".to_string())
+    } else if lower.contains("aspnet") || lower.contains("asp.net") {
+        Some("aspnet".to_string())
+    } else if lower.contains("express") {
+        Some("express".to_string())
+    } else if lower.contains("next") {
+        Some("nextjs".to_string())
+    } else if lower.contains("vite") {
+        Some("vite".to_string())
+    } else {
+        None
+    }
 }
 
 fn package_manager_from_command(command: Option<&str>) -> Option<PackageManager> {

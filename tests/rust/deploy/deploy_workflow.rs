@@ -12,8 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 use contracts::{
     DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
     DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape,
-    DeploymentSpec, PackageManager, SourceModelSource,
+    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentRuntimePort,
+    DeploymentShape, DeploymentSpec, PackageManager, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -73,6 +73,21 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     assert!(serde_json::to_string(&spec.topology)
         .unwrap()
         .contains("\"publicPath\":\"/api\""));
+    let frontend_port = runtime_port(&spec, "frontend").expect("frontend runtime port");
+    assert_eq!(frontend_port.purpose, "preview");
+    assert_eq!(frontend_port.container_port, 80);
+    assert_eq!(frontend_port.preferred_host_port, Some(4173));
+    assert!(frontend_port.host_port.is_some(), "{frontend_port:?}");
+    assert!(!frontend_port.internal_only);
+    let backend_port = runtime_port(&spec, "backend").expect("backend runtime port");
+    assert_eq!(backend_port.purpose, "api");
+    assert_eq!(backend_port.container_port, 8080);
+    assert_eq!(backend_port.host_port, None);
+    assert!(backend_port.internal_only);
+    let postgres_port = runtime_port(&spec, "postgres").expect("postgres runtime port");
+    assert_eq!(postgres_port.purpose, "dependency");
+    assert_eq!(postgres_port.host_port, None);
+    assert!(postgres_port.internal_only);
 
     let nginx = read_text(
         &fixture
@@ -94,13 +109,25 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
             .join(".loom/deployment/specs/generated/compose.yaml"),
     )
     .expect("compose");
+    assert!(
+        compose.starts_with(&format!("name: {}\nservices:\n", spec.service_name)),
+        "{compose}"
+    );
     assert!(compose.contains("  frontend:"));
-    assert!(compose.contains("      dockerfile: Dockerfile.frontend"));
-    assert!(compose.contains("      dockerfile: Dockerfile.backend"));
+    assert!(
+        compose.contains("      dockerfile: .loom/deployment/specs/generated/Dockerfile.frontend")
+    );
+    assert!(
+        compose.contains("      dockerfile: .loom/deployment/specs/generated/Dockerfile.backend")
+    );
     assert!(compose.contains("  backend:"));
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
     assert!(compose.contains("      - postgres"));
+    assert!(compose.contains("  frontend:\n    build:"), "{compose}");
+    assert!(compose.contains("    ports:\n"), "{compose}");
+    let backend_block = compose_service_block(&compose, "backend").expect("backend compose block");
+    assert!(!backend_block.contains("ports:"), "{backend_block}");
 }
 
 #[test]
@@ -149,6 +176,7 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
         .expect("app service");
     assert_eq!(spec.source_model.source, SourceModelSource::RuntimeContract);
     assert_eq!(service.package_manager, Some(PackageManager::Gradle));
+    assert_eq!(service.framework.as_deref(), Some("spring-boot"));
     assert_eq!(
         service.build_command.as_deref(),
         Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon")
@@ -167,11 +195,11 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
     )
     .expect("compose");
     assert!(compose.contains("context: ../../../.."), "{compose}");
-    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
     assert!(
-        !compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
+        compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
         "{compose}"
     );
+    assert!(!compose.contains("additional_contexts"), "{compose}");
 
     let dockerfile = read_text(
         &fixture
@@ -192,6 +220,20 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
         "{dockerfile}"
     );
     assert!(!dockerfile.contains("./mvnw"), "{dockerfile}");
+    assert!(fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.app.dockerignore")
+        .exists());
+    assert_eq!(
+        spec.files.dockerignore_paths["app"],
+        ".loom/deployment/specs/generated/Dockerfile.app.dockerignore"
+    );
+    let spec_json: Value =
+        read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec json");
+    assert!(
+        spec_json["files"].get("dockerignorePath").is_none(),
+        "{spec_json:#}"
+    );
 
     let evidence: Value = read_json(
         &fixture
@@ -203,6 +245,101 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
     assert!(serde_json::to_string(&evidence)
         .unwrap()
         .contains("service/build.gradle"));
+}
+
+#[test]
+fn prepare_promotes_composite_runtime_above_preview_app_path() {
+    let fixture = Fixture::new("deploy-composite-app-path");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "spring boot service with vite web",
+        "deploymentShape": "single-service",
+        "build": { "command": "service: ./gradlew test && ./gradlew bootJar; web: npm run build" },
+        "start": { "command": "service: ./gradlew bootRun; web: npm run dev", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "service/build.gradle",
+        "plugins { id 'org.springframework.boot' version '3.5.6' }\n",
+    );
+    fixture.write_text("service/gradlew", "#!/bin/sh\n");
+    fixture.write_text(
+        "web/package.json",
+        r#"{"scripts":{"build":"vite"},"dependencies":{"react":"latest"}}"#,
+    );
+    fixture.write_text("web/package-lock.json", "{}\n");
+    fixture.write_text("web/vite.config.ts", "export default {}\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: Some("web".to_string()),
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("result json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
+        .expect("deployment spec");
+    let service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(spec.source_model.build_context_path, "../../../..");
+    assert_eq!(service.runtime_kind, contracts::RuntimeKind::Java);
+    assert_eq!(service.package_manager, Some(PackageManager::Gradle));
+    assert_eq!(service.framework.as_deref(), Some("spring-boot"));
+    assert_eq!(
+        service.workspace_package_json_paths,
+        vec!["web/package.json"]
+    );
+    assert_eq!(service.output_directory.as_deref(), Some("web/dist"));
+    assert_eq!(
+        service.build_command.as_deref(),
+        Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon")
+    );
+    assert!(!serde_json::to_string(&spec.source_model)
+        .unwrap()
+        .contains("npm run preview"));
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(compose.contains("context: ../../../.."), "{compose}");
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.app"),
+    )
+    .expect("dockerfile");
+    assert!(
+        dockerfile.contains("FROM node:22-bookworm-slim AS web-builder"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("FROM eclipse-temurin:21-jdk AS service-builder"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("COPY --from=service-builder /tmp/app.jar /app/app.jar"),
+        "{dockerfile}"
+    );
+    assert!(!dockerfile.contains("FROM nginx"), "{dockerfile}");
+
+    let evidence: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/evidence/latest-code-evidence.json"),
+    )
+    .expect("code evidence");
+    assert_eq!(evidence["projectRoot"], fixture.root_str());
+    assert_eq!(evidence["repositoryShape"], "multi_application");
 }
 
 #[test]
@@ -227,6 +364,8 @@ fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections(
     assert!(details["sourceModelSummary"].is_object(), "{value:#}");
     assert!(details["topologySummary"].is_object(), "{value:#}");
     assert!(details["generatedFileRefs"].is_array(), "{value:#}");
+    assert!(details["primaryUrl"].as_str().is_some(), "{value:#}");
+    assert!(details["ports"].as_array().is_some(), "{value:#}");
     assert!(
         details.get("sourceModel").is_none()
             && details.get("topology").is_none()
@@ -234,6 +373,43 @@ fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections(
         "deploy prepare must not inline full deploy spec sections: {value:#}"
     );
     assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_prepare_auto_resolves_occupied_preferred_host_port() {
+    let fixture = Fixture::new("deploy-port-fallback");
+    let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("bind occupied test port");
+    let preferred_port = occupied.local_addr().expect("occupied test addr").port();
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "httpProbes": { "previewPath": "/" },
+        "start": { "command": "npm run start", "port": preferred_port }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","start":"vite --host 0.0.0.0"}}"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    let preview = runtime_port(&spec, "app").expect("app runtime port");
+    assert_eq!(preview.preferred_host_port, Some(preferred_port));
+    assert_ne!(preview.host_port, Some(preferred_port));
+    assert!(preview.host_port.is_some());
+    assert_ne!(
+        runtime_primary_url(&spec),
+        format!("http://localhost:{preferred_port}")
+    );
 }
 
 #[test]
@@ -277,8 +453,14 @@ fn deploy_prepare_prefers_existing_compose_without_inlining_or_editing_it() {
     let spec = fixture.read_spec();
     assert_eq!(spec.provider, DeployProvider::ComposeExisting);
     assert_eq!(spec.files.compose_path, "compose.yaml");
-    assert_eq!(spec.runtime.host_port, 5555);
-    assert_eq!(spec.runtime.container_port, 8080);
+    let preview_port = spec
+        .runtime
+        .ports
+        .iter()
+        .find(|port| port.purpose == "preview")
+        .expect("preview port");
+    assert_eq!(preview_port.host_port, Some(5555));
+    assert_eq!(preview_port.container_port, 8080);
     assert!(!fixture
         .root
         .join(".loom/deployment/specs/generated/compose.yaml")
@@ -318,10 +500,16 @@ fn deploy_prepare_reuses_existing_dockerfile_and_generates_only_wrapper_assets()
         .unwrap()
         .iter()
         .any(|item| item == ".loom/deployment/specs/generated/compose.yaml"));
+    assert!(!value["details"]["generatedFileRefs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == ".loom/deployment/specs/generated/Dockerfile.app.dockerignore"));
 
     let spec = fixture.read_spec();
     assert_eq!(spec.provider, DeployProvider::DockerfileExisting);
     assert_eq!(spec.files.dockerfile_paths["app"], "Dockerfile");
+    assert!(spec.files.dockerignore_paths.is_empty());
     assert!(fixture
         .root
         .join(".loom/deployment/specs/generated/compose.yaml")
@@ -507,15 +695,116 @@ exit 0
     assert_eq!(value["state"], "blocked", "{value:#}");
 }
 
+#[cfg(unix)]
+#[test]
+fn deploy_up_updates_active_operation_phase_and_streams_docker_logs() {
+    let fixture = Fixture::new("deploy-active-operation-logs");
+    let _heartbeat_guard = EnvVarGuard::set("LOOM_DEPLOY_OPERATION_HEARTBEAT_MS", "100");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","start":"vite --host 0.0.0.0"}}"#,
+    );
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
+  echo "config ok"
+  exit 0
+fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "build started"
+  sleep 1
+  echo "build done"
+  exit 0
+fi
+if [ "$1" = "compose" ] && [ "$4" = "logs" ]; then
+  echo "app did not become reachable"
+  exit 0
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+    let root = fixture.root_str();
+    let handle = thread::spawn(move || {
+        deploy_up(DeployToolInput {
+            project_root: root,
+            app_path: None,
+            healthcheck: None,
+            provider_policy: Some(DeploymentProviderPolicy {
+                provider: Some(DeployProvider::Generated),
+                reuse_existing: false,
+                force_generate: true,
+            }),
+        })
+    });
+
+    let active_file = fixture
+        .root
+        .join(".loom/deployment/state/active-operation.json");
+    let log_file = fixture.root.join(".loom/deployment/logs/local.log");
+    let mut observed_building = false;
+    let mut observed_log = false;
+    let mut first_building_updated_at: Option<u128> = None;
+    let mut observed_building_heartbeat = false;
+    for _ in 0..40 {
+        if active_file.exists() {
+            if let Ok(active) = read_json::<Value>(&active_file) {
+                observed_building |= active["phase"] == "building";
+                if active["phase"] == "building" {
+                    if let Some(updated_at) = active["updatedAt"]
+                        .as_str()
+                        .and_then(|value| value.parse::<u128>().ok())
+                    {
+                        if let Some(first) = first_building_updated_at {
+                            observed_building_heartbeat |= updated_at > first;
+                        } else {
+                            first_building_updated_at = Some(updated_at);
+                        }
+                    }
+                }
+            }
+        }
+        if log_file.exists() {
+            if let Ok(log) = read_text(&log_file) {
+                observed_log |= log.contains("phase=building command=docker compose")
+                    && log.contains("build started");
+            }
+        }
+        if observed_building && observed_log && observed_building_heartbeat {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = handle.join().expect("deploy up thread");
+    let log = read_text(&log_file).expect("deploy log");
+    assert!(observed_building, "{log}");
+    assert!(observed_log, "{log}");
+    assert!(observed_building_heartbeat, "{log}");
+    assert!(
+        log.contains("phase=checking_compose command=docker compose"),
+        "{log}"
+    );
+    assert!(log.contains("config ok"), "{log}");
+}
+
 #[test]
 fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
     let fixture = Fixture::new("deploy-validate-clears-failure");
+    let preferred_port = free_test_port();
     fixture.write_runtime_delivery(json!({
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
         "httpProbes": { "previewPath": "/" },
-        "start": { "port": 8080 }
+        "start": { "port": preferred_port }
     }));
     fixture.write_text(
         "package.json",
@@ -531,7 +820,7 @@ fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
     assert_eq!(value["state"], "done", "{value:#}");
     let spec: DeploymentSpec =
         read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec");
-    let _server = spawn_one_shot_http_server(spec.runtime.host_port);
+    let _server = spawn_one_shot_http_server(runtime_public_port(&spec));
     fixture.write_text(".loom/deployment/state/latest-failure.json", "{}\n");
     fixture.write_text(".loom/deployment/state/repair-action.json", "{}\n");
 
@@ -584,12 +873,15 @@ fn deploy_validate_flags_compose_dockerfile_paths_that_do_not_resolve() {
         .root
         .join(".loom/deployment/specs/generated/compose.yaml");
     let compose = read_text(&compose_path).expect("compose");
-    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
+    assert!(
+        compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
+        "{compose}"
+    );
     std::fs::write(
         &compose_path,
         compose.replace(
-            "dockerfile: Dockerfile.app",
             "dockerfile: .loom/deployment/specs/generated/Dockerfile.app",
+            "dockerfile: Dockerfile.app",
         ),
     )
     .expect("write bad compose");
@@ -1950,6 +2242,29 @@ impl Drop for PathEnvGuard {
     }
 }
 
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var(self.key, previous);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
+}
+
 fn spawn_one_shot_http_server(port: u16) -> thread::JoinHandle<()> {
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind test http server");
     thread::spawn(move || {
@@ -1965,6 +2280,67 @@ fn spawn_one_shot_http_server(port: u16) -> thread::JoinHandle<()> {
             let _ = stream.write_all(response.as_bytes());
         }
     })
+}
+
+fn free_test_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind dynamic test port")
+        .local_addr()
+        .expect("test port addr")
+        .port()
+}
+
+fn runtime_port<'a>(
+    spec: &'a DeploymentSpec,
+    service_id: &str,
+) -> Option<&'a DeploymentRuntimePort> {
+    spec.runtime
+        .ports
+        .iter()
+        .find(|port| port.service_id == service_id)
+}
+
+fn runtime_public_port(spec: &DeploymentSpec) -> u16 {
+    spec.runtime
+        .ports
+        .iter()
+        .find(|port| port.service_id == spec.runtime.primary_service_id && !port.internal_only)
+        .and_then(|port| port.host_port)
+        .or_else(|| {
+            spec.runtime
+                .ports
+                .iter()
+                .find(|port| !port.internal_only)
+                .and_then(|port| port.host_port)
+        })
+        .expect("public runtime host port")
+}
+
+fn runtime_primary_url(spec: &DeploymentSpec) -> String {
+    spec.runtime
+        .ports
+        .iter()
+        .find(|port| port.service_id == spec.runtime.primary_service_id && !port.internal_only)
+        .and_then(|port| port.url.clone())
+        .or_else(|| {
+            spec.runtime
+                .ports
+                .iter()
+                .find(|port| !port.internal_only)
+                .and_then(|port| port.url.clone())
+        })
+        .expect("runtime primary url")
+}
+
+fn compose_service_block<'a>(compose: &'a str, service_id: &str) -> Option<&'a str> {
+    let marker = format!("  {service_id}:");
+    let start = compose.find(&marker)?;
+    let rest = &compose[start + marker.len()..];
+    let end = rest
+        .find("\n  ")
+        .map(|index| start + marker.len() + index)
+        .unwrap_or(compose.len());
+    Some(&compose[start..end])
 }
 
 fn test_env_lock() -> &'static Mutex<()> {

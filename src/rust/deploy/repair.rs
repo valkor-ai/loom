@@ -1117,25 +1117,7 @@ fn editable_files_for(spec: &DeploymentSpec, failure_kind: DeploymentFailureKind
         | DeploymentFailureKind::HttpProbeFailed
         | DeploymentFailureKind::PreviewNotVerified => vec![],
         _ if spec.provider == DeployProvider::ComposeExisting => vec![],
-        _ => {
-            let reused = spec
-                .files
-                .reused
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>();
-            let mut files = vec![
-                spec.files.compose_path.clone(),
-                spec.files.dockerignore_path.clone(),
-            ];
-            files.extend(spec.files.nginx_config_paths.values().cloned());
-            if spec.provider == DeployProvider::Generated {
-                files.extend(spec.files.dockerfile_paths.values().cloned());
-            }
-            files.sort();
-            files.dedup();
-            files.retain(|file| !file.is_empty() && !reused.contains(file));
-            files
-        }
+        _ => deployment_generated_file_refs(spec),
     }
 }
 

@@ -1,8 +1,11 @@
 use std::{
+    fs::{File, OpenOptions},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output, Stdio},
+    sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use contracts::{DeployProvider, DeploymentFailureKind, DeploymentProviderPolicy};
@@ -14,8 +17,11 @@ use state::{
 };
 
 use crate::{
-    active_operation::{acquire_operation, active_operation_result},
+    active_operation::{
+        acquire_operation, active_operation_result, touch_operation, update_operation_phase,
+    },
     paths::deployment_paths,
+    port_plan::primary_url,
     prepare::{deploy_prepare_inner, read_spec},
     repair::write_repair_action,
     runtime_state::write_success_state,
@@ -25,6 +31,8 @@ use crate::{
 
 const DEPLOY_STARTUP_VALIDATION_ATTEMPTS: usize = 24;
 const DEPLOY_STARTUP_VALIDATION_INTERVAL: Duration = Duration::from_millis(1500);
+const DEPLOY_OPERATION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const DEPLOY_OPERATION_HEARTBEAT_POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root_buf = PathBuf::from(&input.project_root);
@@ -49,6 +57,7 @@ pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
 pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpActionResult {
     let paths = deployment_paths(project_root);
     if !path_exists(&paths.spec_file) {
+        let _ = update_operation_phase(project_root, "preparing", "running");
         match deploy_prepare_inner(project_root, input.clone()) {
             Ok(LoomMcpActionResult::Done(_)) => {}
             Ok(result) => return result,
@@ -62,6 +71,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             }
         }
     }
+    let _ = update_operation_phase(project_root, "checking_docker", "running");
     let spec = match read_spec(project_root) {
         Ok(spec) => spec,
         Err(error) => {
@@ -76,6 +86,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     if let Err(result) = docker_available(project_root, &spec) {
         return result;
     }
+    let _ = update_operation_phase(project_root, "checking_compose", "running");
     let compose_file = match from_project_relative(project_root, &spec.files.compose_path) {
         Ok(file) => file,
         Err(error) => {
@@ -91,11 +102,20 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
     };
-    let compose_config = Command::new("docker")
-        .args(["compose", "-f"])
-        .arg(&compose_file)
-        .args(["config", "--quiet"])
-        .output();
+    let compose_file_arg = compose_file.to_string_lossy().into_owned();
+    let compose_config_args = vec![
+        "compose".to_string(),
+        "-f".to_string(),
+        compose_file_arg.clone(),
+        "config".to_string(),
+        "--quiet".to_string(),
+    ];
+    let compose_config = run_logged_command(
+        project_root,
+        "checking_compose",
+        "docker",
+        &compose_config_args,
+    );
     match compose_config {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
@@ -145,11 +165,16 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
     }
-    let up = Command::new("docker")
-        .args(["compose", "-f"])
-        .arg(&compose_file)
-        .args(["up", "-d", "--build"])
-        .output();
+    let _ = update_operation_phase(project_root, "building", "running");
+    let up_args = vec![
+        "compose".to_string(),
+        "-f".to_string(),
+        compose_file_arg,
+        "up".to_string(),
+        "-d".to_string(),
+        "--build".to_string(),
+    ];
+    let up = run_logged_command(project_root, "building", "docker", &up_args);
     match up {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
@@ -202,6 +227,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
     }
+    let _ = update_operation_phase(project_root, "validating", "running");
     let validation = match wait_for_valid_deployment(project_root) {
         Ok(validation) => validation,
         Err(error) => {
@@ -252,13 +278,208 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         project_root: project_root.to_string_lossy().into_owned(),
         summary: "Deployment is running and validation passed.".to_string(),
         details: Some(json!({
-            "url": spec.runtime.url,
+            "primaryUrl": primary_url(&spec.runtime),
+            "ports": spec.runtime.ports,
             "preview": validation.preview,
             "apiRoutes": validation.api_routes,
             "stateRef": state_ref
         })),
         warnings: vec![],
     })
+}
+
+fn run_logged_command(
+    project_root: &Path,
+    phase: &str,
+    program: &str,
+    args: &[String],
+) -> io::Result<Output> {
+    let paths = deployment_paths(project_root);
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&paths.log_file)?;
+    let log = Arc::new(Mutex::new(log_file));
+    write_log_line(
+        &log,
+        &format!(
+            "\n[{}] phase={} command={}",
+            state::store::now_string(),
+            phase,
+            shell_display(program, args)
+        ),
+    )?;
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = write_log_line(
+                &log,
+                &format!("[{}] spawn-error={}", state::store::now_string(), error),
+            );
+            return Err(error);
+        }
+    };
+
+    let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+    let heartbeat = OperationHeartbeat::new(project_root);
+    let stdout_handle = child.stdout.take().map(|stdout| {
+        tee_stream(
+            stdout,
+            "stdout",
+            log.clone(),
+            stdout_buffer.clone(),
+            heartbeat.clone(),
+        )
+    });
+    let stderr_handle = child.stderr.take().map(|stderr| {
+        tee_stream(
+            stderr,
+            "stderr",
+            log.clone(),
+            stderr_buffer.clone(),
+            heartbeat.clone(),
+        )
+    });
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        heartbeat.touch_if_due();
+        thread::sleep(heartbeat.poll_interval());
+    };
+    if let Some(handle) = stdout_handle {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_handle {
+        let _ = handle.join();
+    }
+    write_log_line(
+        &log,
+        &format!(
+            "[{}] phase={} exit={}",
+            state::store::now_string(),
+            phase,
+            status.code().unwrap_or(-1)
+        ),
+    )?;
+    let stdout = stdout_buffer
+        .lock()
+        .map(|buffer| buffer.clone())
+        .unwrap_or_default();
+    let stderr = stderr_buffer
+        .lock()
+        .map(|buffer| buffer.clone())
+        .unwrap_or_default();
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn tee_stream<R: Read + Send + 'static>(
+    mut reader: R,
+    label: &'static str,
+    log: Arc<Mutex<File>>,
+    buffer: Arc<Mutex<Vec<u8>>>,
+    heartbeat: OperationHeartbeat,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut chunk = [0_u8; 8192];
+        let mut wrote_label = false;
+        loop {
+            let Ok(read) = reader.read(&mut chunk) else {
+                break;
+            };
+            if read == 0 {
+                break;
+            }
+            if let Ok(mut output) = buffer.lock() {
+                output.extend_from_slice(&chunk[..read]);
+            }
+            heartbeat.touch_if_due();
+            if let Ok(mut file) = log.lock() {
+                if !wrote_label {
+                    let _ = writeln!(file, "\n[{label}]");
+                    wrote_label = true;
+                }
+                let _ = file.write_all(&chunk[..read]);
+                let _ = file.flush();
+            }
+        }
+    })
+}
+
+#[derive(Clone)]
+struct OperationHeartbeat {
+    project_root: PathBuf,
+    interval: Duration,
+    last_touch: Arc<Mutex<Instant>>,
+}
+
+impl OperationHeartbeat {
+    fn new(project_root: &Path) -> Self {
+        Self {
+            project_root: project_root.to_path_buf(),
+            interval: operation_heartbeat_interval(),
+            last_touch: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    fn poll_interval(&self) -> Duration {
+        self.interval.min(DEPLOY_OPERATION_HEARTBEAT_POLL_INTERVAL)
+    }
+
+    fn touch_if_due(&self) {
+        let Ok(mut last_touch) = self.last_touch.lock() else {
+            return;
+        };
+        if last_touch.elapsed() < self.interval {
+            return;
+        }
+        if touch_operation(&self.project_root).is_ok() {
+            *last_touch = Instant::now();
+        }
+    }
+}
+
+fn operation_heartbeat_interval() -> Duration {
+    std::env::var("LOOM_DEPLOY_OPERATION_HEARTBEAT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 50)
+        .map(Duration::from_millis)
+        .unwrap_or(DEPLOY_OPERATION_HEARTBEAT_INTERVAL)
+}
+
+fn write_log_line(log: &Arc<Mutex<File>>, line: &str) -> io::Result<()> {
+    let mut file = log
+        .lock()
+        .map_err(|_| io::Error::other("deploy log mutex poisoned"))?;
+    writeln!(file, "{line}")?;
+    file.flush()
+}
+
+fn shell_display(program: &str, args: &[String]) -> String {
+    std::iter::once(program.to_string())
+        .chain(args.iter().map(|arg| {
+            if arg
+                .chars()
+                .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\'' | '$' | '\\'))
+            {
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            } else {
+                arg.clone()
+            }
+        }))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn should_fallback_to_generated(spec: &contracts::DeploymentSpec) -> bool {

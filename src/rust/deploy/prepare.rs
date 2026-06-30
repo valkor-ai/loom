@@ -1,12 +1,11 @@
 use std::{
     collections::BTreeMap,
-    net::TcpListener,
     path::{Path, PathBuf},
 };
 
 use contracts::{
     DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentGeneratedFiles,
-    DeploymentProviderPolicy, DeploymentSourceModel, DeploymentSpec,
+    DeploymentProviderPolicy, DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSpec,
 };
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
@@ -29,10 +28,11 @@ use crate::{
         analyze_existing_compose, find_existing_deployment_files, selected_compose_port,
         ExistingDeploymentFiles,
     },
-    generate::{deployment_runtime, generate_deployment_files, generated_file_refs},
+    generate::{generate_deployment_files, generated_file_refs},
     paths::{deployment_paths, DeploymentPaths},
+    port_plan::{build_deployment_runtime, primary_url},
     runtime_contract::load_runtime_contract,
-    source_model::source_model_from_runtime_contract,
+    source_model::{runtime_contract_declares_multi_root, source_model_from_runtime_contract},
     strategy::resolve_deployment_strategy,
     topology::build_topology,
     DeployToolInput,
@@ -66,8 +66,13 @@ pub fn deploy_prepare_inner(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.logs_dir)?;
 
-    let deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
     let runtime_contract = load_runtime_contract(project_root)?;
+    let requested_deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
+    let deployment_root = deployment_root_for_runtime_contract(
+        project_root,
+        requested_deployment_root,
+        &runtime_contract,
+    );
     let code_probe = build_deployment_code_probe(&deployment_root)?;
     let build_context_path = relative_context_from_generated_to_root(
         project_root,
@@ -126,11 +131,12 @@ pub fn deploy_prepare_inner(
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
     let environment = env_diagnostics(&runtime_contract);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
-    let host_port = compose_port
-        .as_ref()
-        .and_then(|port| port.host_port)
-        .unwrap_or_else(find_host_port);
-    let runtime = deployment_runtime(&runtime_contract, &source_model, host_port);
+    let runtime = build_deployment_runtime(
+        &runtime_contract,
+        &source_model,
+        &topology,
+        compose_info.as_ref(),
+    );
     let service_name = sanitize_name(
         deployment_root
             .file_name()
@@ -198,13 +204,16 @@ pub fn deploy_prepare_inner(
         DeployProvider::ComposeExisting => {}
         DeployProvider::DockerfileExisting => {
             write_text_atomic(&paths.compose_file, &generated.compose)?;
-            write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
         }
         DeployProvider::Generated => {
             for (service_id, content) in &generated.dockerfiles {
                 write_text_atomic(
                     &crate::paths::dockerfile_path(project_root, service_id),
                     content,
+                )?;
+                write_text_atomic(
+                    &crate::paths::dockerfile_ignore_path(project_root, service_id),
+                    &generated.dockerignore,
                 )?;
             }
             for (service_id, content) in &generated.nginx_configs {
@@ -214,7 +223,6 @@ pub fn deploy_prepare_inner(
                 )?;
             }
             write_text_atomic(&paths.compose_file, &generated.compose)?;
-            write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
         }
     }
     write_json_atomic(&paths.spec_file, &spec)?;
@@ -270,15 +278,6 @@ fn env_diagnostics(runtime: &contracts::DeploymentRuntimeContract) -> Deployment
     }
 }
 
-fn find_host_port() -> u16 {
-    for port in 4173..4300 {
-        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    4173
-}
-
 fn deployment_root_for(project_root: &Path, app_path: Option<&str>) -> StateResult<PathBuf> {
     let Some(app_path) = app_path.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(project_root.to_path_buf());
@@ -290,6 +289,18 @@ fn deployment_root_for(project_root: &Path, app_path: Option<&str>) -> StateResu
         )));
     }
     Ok(root)
+}
+
+fn deployment_root_for_runtime_contract(
+    project_root: &Path,
+    requested_root: PathBuf,
+    runtime: &DeploymentRuntimeContract,
+) -> PathBuf {
+    if requested_root != project_root && runtime_contract_declares_multi_root(runtime) {
+        project_root.to_path_buf()
+    } else {
+        requested_root
+    }
 }
 
 fn validate_selected_provider(
@@ -351,8 +362,8 @@ fn deployment_files_for_provider(
             }
             Ok(DeploymentGeneratedFiles {
                 compose_path: to_project_relative(project_root, &paths.compose_file)?,
-                dockerignore_path: to_project_relative(project_root, &paths.dockerignore_file)?,
                 dockerfile_paths,
+                dockerignore_paths: BTreeMap::new(),
                 nginx_config_paths: BTreeMap::new(),
                 reused: vec![dockerfile_ref],
             })
@@ -371,8 +382,8 @@ fn deployment_files_for_provider(
             reused.dedup();
             Ok(DeploymentGeneratedFiles {
                 compose_path: to_project_relative(project_root, compose_path)?,
-                dockerignore_path: to_project_relative(project_root, &paths.dockerignore_file)?,
                 dockerfile_paths: BTreeMap::new(),
+                dockerignore_paths: BTreeMap::new(),
                 nginx_config_paths: BTreeMap::new(),
                 reused,
             })
@@ -489,16 +500,25 @@ pub(crate) fn deployment_prepare_details(
         })),
         "generatedFileRefs": deployment_generated_file_refs(spec),
         "reusedFileRefs": spec.files.reused,
-        "url": spec.runtime.url
+        "primaryUrl": primary_url(&spec.runtime),
+        "ports": spec.runtime.ports.iter().map(|port| json!({
+            "serviceId": port.service_id.clone(),
+            "purpose": port.purpose.clone(),
+            "containerPort": port.container_port,
+            "preferredHostPort": port.preferred_host_port,
+            "hostPort": port.host_port,
+            "path": port.path.clone(),
+            "internalOnly": port.internal_only,
+            "protocol": port.protocol.clone(),
+            "url": port.url.clone()
+        })).collect::<Vec<_>>()
     }))
 }
 
 pub(crate) fn deployment_file_refs(spec: &DeploymentSpec) -> Vec<String> {
-    let mut refs = vec![
-        spec.files.compose_path.clone(),
-        spec.files.dockerignore_path.clone(),
-    ];
+    let mut refs = vec![spec.files.compose_path.clone()];
     refs.extend(spec.files.dockerfile_paths.values().cloned());
+    refs.extend(spec.files.dockerignore_paths.values().cloned());
     refs.extend(spec.files.nginx_config_paths.values().cloned());
     refs.sort();
     refs.dedup();

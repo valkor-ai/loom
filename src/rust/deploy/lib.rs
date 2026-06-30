@@ -7,6 +7,7 @@ mod generate;
 mod inspect;
 mod logs;
 mod paths;
+mod port_plan;
 mod prepare;
 mod repair;
 mod run;

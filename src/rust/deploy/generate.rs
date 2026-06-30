@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, path::Path};
 
 use contracts::{
-    DependencyService, DeploymentGeneratedFiles, DeploymentRoute, DeploymentRuntime,
-    DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSourceService, DeploymentSpec,
-    DeploymentTopology, PackageManager, RuntimeKind, SourceServiceRole,
+    DependencyService, DeploymentGeneratedFiles, DeploymentRoute, DeploymentSourceModel,
+    DeploymentSourceService, DeploymentSpec, DeploymentTopology, PackageManager, RuntimeKind,
+    SourceServiceRole,
 };
 use state::paths::to_project_relative;
 
-use crate::{paths, topology::proxy_target_service_ids};
+use crate::{paths, port_plan::host_port_for_service, topology::proxy_target_service_ids};
 
 #[derive(Debug, Clone)]
 pub struct GeneratedDeploymentText {
@@ -23,6 +23,7 @@ pub fn generated_file_refs(
     topology: &DeploymentTopology,
 ) -> state::store::StateResult<DeploymentGeneratedFiles> {
     let mut dockerfile_paths = BTreeMap::new();
+    let mut dockerignore_paths = BTreeMap::new();
     let mut nginx_config_paths = BTreeMap::new();
     for service in &source_model.services {
         dockerfile_paths.insert(
@@ -30,6 +31,13 @@ pub fn generated_file_refs(
             to_project_relative(
                 project_root,
                 &paths::dockerfile_path(project_root, &service.service_id),
+            )?,
+        );
+        dockerignore_paths.insert(
+            service.service_id.clone(),
+            to_project_relative(
+                project_root,
+                &paths::dockerfile_ignore_path(project_root, &service.service_id),
             )?,
         );
         if service.service_id == topology.public_entry_service_id
@@ -51,31 +59,11 @@ pub fn generated_file_refs(
     let deployment_paths = paths::deployment_paths(project_root);
     Ok(DeploymentGeneratedFiles {
         compose_path: to_project_relative(project_root, &deployment_paths.compose_file)?,
-        dockerignore_path: to_project_relative(project_root, &deployment_paths.dockerignore_file)?,
         dockerfile_paths,
+        dockerignore_paths,
         nginx_config_paths,
         reused: vec![],
     })
-}
-
-pub fn deployment_runtime(
-    runtime_contract: &DeploymentRuntimeContract,
-    source_model: &DeploymentSourceModel,
-    host_port: u16,
-) -> DeploymentRuntime {
-    let preview = source_model
-        .services
-        .iter()
-        .find(|service| service.service_id == source_model.preview_service_id)
-        .or_else(|| source_model.services.first());
-    let container_port = preview.map(|service| service.port).unwrap_or(8080);
-    DeploymentRuntime {
-        host_port,
-        container_port,
-        url: format!("http://localhost:{host_port}"),
-        preview_path: runtime_contract.preview_path.clone(),
-        api_paths: runtime_contract.api_paths.clone(),
-    }
 }
 
 pub fn generate_deployment_files(spec: &DeploymentSpec) -> GeneratedDeploymentText {
@@ -200,8 +188,8 @@ fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
 }
 
 fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
-    if java_service_has_frontend_overlay(service) {
-        return generate_java_with_frontend_dockerfile(service);
+    if java_service_needs_static_asset_overlay(service) {
+        return generate_java_dockerfile_with_static_asset_overlay(service);
     }
     let build_command = service
         .build_command
@@ -237,7 +225,7 @@ fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
     .join("\n")
 }
 
-fn generate_java_with_frontend_dockerfile(service: &DeploymentSourceService) -> String {
+fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSourceService) -> String {
     let frontend_root =
         frontend_root_from_package_refs(service).unwrap_or_else(|| "web".to_string());
     let frontend_output = service
@@ -280,7 +268,7 @@ fn generate_java_with_frontend_dockerfile(service: &DeploymentSourceService) -> 
     .join("\n")
 }
 
-fn java_service_has_frontend_overlay(service: &DeploymentSourceService) -> bool {
+fn java_service_needs_static_asset_overlay(service: &DeploymentSourceService) -> bool {
     service.runtime_kind == RuntimeKind::Java
         && !service.workspace_package_json_paths.is_empty()
         && service.output_directory.is_some()
@@ -375,7 +363,10 @@ fn generate_dotnet_dockerfile(service: &DeploymentSourceService) -> String {
 }
 
 fn generate_compose(spec: &DeploymentSpec) -> String {
-    let mut lines = vec!["services:".to_string()];
+    let mut lines = vec![
+        format!("name: {}", yaml_string(&spec.service_name)),
+        "services:".to_string(),
+    ];
     for service in &spec.source_model.services {
         lines.extend(generate_app_service(spec, service));
     }
@@ -413,7 +404,9 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
         .parent()
         .and_then(Path::to_str)
         .unwrap_or(".");
-    let dockerfile = project_path_relative_to_directory(compose_dir, &dockerfile_project_path);
+    let build_context_dir = project_path_join(compose_dir, &spec.source_model.build_context_path);
+    let dockerfile =
+        project_path_relative_to_directory(&build_context_dir, &dockerfile_project_path);
     let mut env = runtime_env(service);
     if service.role != SourceServiceRole::Frontend {
         for dependency in &spec.source_model.dependencies {
@@ -432,12 +425,9 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
         format!("      dockerfile: {}", yaml_string(&dockerfile)),
         format!("    image: {}-{}", spec.image_name, service.service_id),
     ];
-    if service.service_id == spec.source_model.preview_service_id {
+    if let Some(host_port) = host_port_for_service(&spec.runtime, &service.service_id) {
         lines.push("    ports:".to_string());
-        lines.push(format!(
-            "      - \"{}:{}\"",
-            spec.runtime.host_port, service.port
-        ));
+        lines.push(format!("      - \"{}:{}\"", host_port, service.port));
     }
     lines.extend(yaml_environment(&env, 4));
     if service.start_command.is_some() {
@@ -720,11 +710,33 @@ fn project_path_relative_to_directory(
     }
 }
 
+fn project_path_join(base_project_relative_directory: &str, relative_path: &str) -> String {
+    let value = match (base_project_relative_directory, relative_path) {
+        ("", path) | (".", path) => path.to_string(),
+        (base, "") | (base, ".") => base.to_string(),
+        (base, path) => format!("{base}/{path}"),
+    };
+    let parts = normalized_relative_parts(&value);
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
 fn normalized_relative_parts(value: &str) -> Vec<&str> {
-    value
-        .split('/')
-        .filter(|part| !part.is_empty() && *part != ".")
-        .collect()
+    let mut parts = Vec::new();
+    for part in value.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            let _ = parts.pop();
+        } else {
+            parts.push(part);
+        }
+    }
+    parts
 }
 
 fn normalize_nginx_public_path(value: &str) -> String {
