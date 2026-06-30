@@ -32,7 +32,7 @@ use crate::{
 const DEPLOY_STARTUP_VALIDATION_ATTEMPTS: usize = 24;
 const DEPLOY_STARTUP_VALIDATION_INTERVAL: Duration = Duration::from_millis(1500);
 const DEPLOY_OPERATION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
-const DEPLOY_OPERATION_HEARTBEAT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DEPLOY_OPERATION_HEARTBEAT_POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root_buf = PathBuf::from(&input.project_root);
