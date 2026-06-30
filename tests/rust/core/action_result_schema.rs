@@ -316,6 +316,15 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
         failure_kind: "runtime".to_string(),
         failure_owner: "deploy".to_string(),
         repair_route: "asset_repair".to_string(),
+        primary_reason: "nginx proxy route is missing".to_string(),
+        diagnostics: vec![delivery_core::DeploymentFailureDiagnostic {
+            code: "api_route_not_verified".to_string(),
+            severity: "error".to_string(),
+            message: "API route did not proxy to the backend service.".to_string(),
+            evidence: vec!["GET /api/health returned HTML fallback".to_string()],
+            suggested_action: "Repair generated nginx proxy route before retrying.".to_string(),
+        }],
+        suggested_actions: vec!["Repair generated deployment assets.".to_string()],
         editable_files: vec!["deploy/nginx.conf".to_string()],
         protected_files: vec!["src".to_string()],
         source_model_ref: Some(".loom/deployment/specs/generated/source-model.json".to_string()),
@@ -323,6 +332,11 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
         generated_file_refs: vec![".loom/deployment/specs/generated/compose.yaml".to_string()],
         diagnostics_ref: None,
         error_window: None,
+        read_policy: delivery_core::DeploymentRepairReadPolicy {
+            first_read: "Use next diagnostics first.".to_string(),
+            diagnostics_ref: "Read diagnosticsRef only if needed.".to_string(),
+            full_log_ref: "Read full logs only if compact evidence is insufficient.".to_string(),
+        },
         retry_tool: "loom.deployUp".to_string(),
     })
 }

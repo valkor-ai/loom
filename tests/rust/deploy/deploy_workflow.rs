@@ -10,10 +10,10 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 use contracts::{
-    DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureKind,
-    DeploymentFailureOwner, DeploymentFailureReport, DeploymentProviderPolicy,
-    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec, PackageManager,
-    SourceModelSource,
+    DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
+    DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
+    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape,
+    DeploymentSpec, PackageManager, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -685,7 +685,8 @@ fn deploy_inspect_returns_refs_without_inlining_spec_or_repair_action() {
         "{value:#}"
     );
     assert_eq!(
-        details["repairSummary"]["primaryReason"], "failed",
+        details["repairSummary"]["primaryReason"],
+        "api_route_not_verified: Generated API proxy route failed.",
         "{value:#}"
     );
     assert_eq!(
@@ -812,6 +813,24 @@ fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
     assert_eq!(value["state"], "auto_runnable", "{value:#}");
     assert_eq!(value["next"]["kind"], "deploy_repair_assets");
     assert_eq!(value["next"]["retryTool"], "loom.deployUp");
+    assert_eq!(
+        value["next"]["primaryReason"], "api_route_not_verified: Generated API proxy route failed.",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["next"]["diagnostics"][0]["code"], "api_route_not_verified",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["next"]["suggestedActions"],
+        json!(["Repair generated API proxy route."]),
+        "{value:#}"
+    );
+    assert!(value["next"]["readPolicy"]["firstRead"]
+        .as_str()
+        .unwrap()
+        .contains("next.primaryReason"));
+    assert!(value["next"].get("repairSummary").is_none(), "{value:#}");
     assert!(value["next"]["sourceModelRef"]
         .as_str()
         .unwrap()
@@ -1843,8 +1862,14 @@ impl Fixture {
                     total_line_count: 1,
                     matched_patterns: vec!["error".to_string()],
                 }),
-                diagnostics: vec![],
-                suggested_actions: vec![],
+                diagnostics: vec![DeploymentFailureDiagnostic {
+                    code: "api_route_not_verified".to_string(),
+                    severity: "error".to_string(),
+                    message: "Generated API proxy route failed.".to_string(),
+                    evidence: vec!["GET /api/health returned frontend HTML.".to_string()],
+                    suggested_action: "Repair generated API proxy route.".to_string(),
+                }],
+                suggested_actions: vec!["Repair generated API proxy route.".to_string()],
                 editable_files: vec![
                     spec.files.compose_path,
                     spec.files

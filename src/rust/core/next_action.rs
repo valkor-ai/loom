@@ -229,6 +229,11 @@ pub struct DeployRepairAssetsNext {
     pub failure_kind: String,
     pub failure_owner: String,
     pub repair_route: String,
+    pub primary_reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<DeploymentFailureDiagnostic>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggested_actions: Vec<String>,
     pub editable_files: Vec<String>,
     pub protected_files: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,7 +244,19 @@ pub struct DeployRepairAssetsNext {
     pub generated_file_refs: Vec<String>,
     pub diagnostics_ref: Option<String>,
     pub error_window: Option<DeploymentErrorWindow>,
+    pub read_policy: DeploymentRepairReadPolicy,
     pub retry_tool: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentFailureDiagnostic {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
+    pub suggested_action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -254,4 +271,12 @@ pub struct DeploymentErrorWindow {
     pub total_line_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matched_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentRepairReadPolicy {
+    pub first_read: String,
+    pub diagnostics_ref: String,
+    pub full_log_ref: String,
 }

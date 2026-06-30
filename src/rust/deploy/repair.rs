@@ -158,6 +158,14 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                     failure_kind: enum_string(&request.failure_kind),
                     failure_owner: enum_string(&request.failure_owner),
                     repair_route: enum_string(&request.repair_route),
+                    primary_reason: primary_repair_reason(request),
+                    diagnostics: compact_next_diagnostics(&request.diagnostics),
+                    suggested_actions: request
+                        .suggested_actions
+                        .iter()
+                        .take(6)
+                        .cloned()
+                        .collect::<Vec<_>>(),
                     editable_files: request.editable_files.clone(),
                     protected_files: request.protected_files.clone(),
                     source_model_ref: spec.as_ref().map(|spec| spec.source_model_ref.clone()),
@@ -175,16 +183,12 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                             ".loom/deployment/state/repair-action.json".to_string()
                         }),
                     ),
-                    error_window: request.error_window.as_ref().map(|window| {
-                        delivery_core::DeploymentErrorWindow {
-                            started_at: None,
-                            ended_at: None,
-                            lines: window.lines.clone(),
-                            truncated: window.truncated,
-                            total_line_count: window.total_line_count,
-                            matched_patterns: window.matched_patterns.clone(),
-                        }
-                    }),
+                    error_window: request.error_window.as_ref().map(compact_next_error_window),
+                    read_policy: delivery_core::DeploymentRepairReadPolicy {
+                        first_read: "Use next.primaryReason, next.diagnostics, and next.errorWindow before reading refs.".to_string(),
+                        diagnostics_ref: "Read next.diagnosticsRef only when compact diagnostics and errorWindow are insufficient.".to_string(),
+                        full_log_ref: "Read full logs only after diagnosticsRef is still insufficient or the retry returns a new failure.".to_string(),
+                    },
                     retry_tool: "loom.deployUp".to_string(),
                 }),
             ))
@@ -867,6 +871,46 @@ fn compact_diagnostics(diagnostics: &[DeploymentFailureDiagnostic]) -> Vec<Value
             })
         })
         .collect()
+}
+
+fn compact_next_diagnostics(
+    diagnostics: &[DeploymentFailureDiagnostic],
+) -> Vec<delivery_core::DeploymentFailureDiagnostic> {
+    diagnostics
+        .iter()
+        .take(5)
+        .map(|diagnostic| delivery_core::DeploymentFailureDiagnostic {
+            code: diagnostic.code.clone(),
+            severity: diagnostic.severity.clone(),
+            message: diagnostic.message.clone(),
+            evidence: diagnostic.evidence.iter().take(3).cloned().collect(),
+            suggested_action: diagnostic.suggested_action.clone(),
+        })
+        .collect()
+}
+
+fn compact_next_error_window(
+    window: &DeploymentErrorWindow,
+) -> delivery_core::DeploymentErrorWindow {
+    let max_lines = 24usize;
+    let lines = window
+        .lines
+        .iter()
+        .rev()
+        .take(max_lines)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    delivery_core::DeploymentErrorWindow {
+        started_at: None,
+        ended_at: None,
+        lines,
+        truncated: window.truncated || window.lines.len() > max_lines,
+        total_line_count: window.total_line_count,
+        matched_patterns: window.matched_patterns.clone(),
+    }
 }
 
 fn compact_error_window(window: &DeploymentErrorWindow) -> Value {
