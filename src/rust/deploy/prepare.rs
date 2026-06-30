@@ -345,8 +345,8 @@ fn deployment_files_for_provider(
             }
             Ok(DeploymentGeneratedFiles {
                 compose_path: to_project_relative(project_root, &paths.compose_file)?,
-                dockerignore_path: to_project_relative(project_root, &paths.dockerignore_file)?,
                 dockerfile_paths,
+                dockerignore_paths: BTreeMap::new(),
                 nginx_config_paths: BTreeMap::new(),
                 reused: vec![dockerfile_ref],
             })
@@ -365,8 +365,8 @@ fn deployment_files_for_provider(
             reused.dedup();
             Ok(DeploymentGeneratedFiles {
                 compose_path: to_project_relative(project_root, compose_path)?,
-                dockerignore_path: to_project_relative(project_root, &paths.dockerignore_file)?,
                 dockerfile_paths: BTreeMap::new(),
+                dockerignore_paths: BTreeMap::new(),
                 nginx_config_paths: BTreeMap::new(),
                 reused,
             })
@@ -501,14 +501,7 @@ pub(crate) fn deployment_prepare_details(
 pub(crate) fn deployment_file_refs(spec: &DeploymentSpec) -> Vec<String> {
     let mut refs = vec![spec.files.compose_path.clone()];
     refs.extend(spec.files.dockerfile_paths.values().cloned());
-    if spec.provider == DeployProvider::Generated {
-        refs.extend(
-            spec.files
-                .dockerfile_paths
-                .values()
-                .map(|path| format!("{path}.dockerignore")),
-        );
-    }
+    refs.extend(spec.files.dockerignore_paths.values().cloned());
     refs.extend(spec.files.nginx_config_paths.values().cloned());
     refs.sort();
     refs.dedup();

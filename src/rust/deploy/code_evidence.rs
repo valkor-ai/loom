@@ -86,11 +86,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
         } else {
             vec![]
         };
-        let framework = if has_web {
-            Some("spring-boot+vite-react".to_string())
-        } else {
-            Some("spring-boot".to_string())
-        };
+        let framework = Some("spring-boot".to_string());
         let build_command = if has_service_gradle {
             Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon".to_string())
         } else {

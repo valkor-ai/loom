@@ -160,10 +160,12 @@ pub fn source_model_from_runtime_contract(
             .or(fallback_probe.package_manager)
             .or_else(|| default_package_manager(fallback_probe.kind)),
         has_lockfile: fallback_probe.has_lockfile,
-        framework: runtime
-            .runtime_kind
-            .clone()
-            .or_else(|| fallback_probe.framework.clone()),
+        framework: fallback_probe.framework.clone().or_else(|| {
+            runtime
+                .runtime_kind
+                .as_deref()
+                .and_then(normalized_framework_label)
+        }),
         runtime_version: fallback_probe.runtime_version.clone(),
         runtime_version_source: fallback_probe.runtime_version_source.clone(),
         build_command: runtime
@@ -294,6 +296,29 @@ fn runtime_kind_from_signals(signals: &[Option<&str>]) -> RuntimeKind {
         return RuntimeKind::Go;
     }
     RuntimeKind::Unknown
+}
+
+fn normalized_framework_label(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("spring") {
+        Some("spring-boot".to_string())
+    } else if lower.contains("fastapi") {
+        Some("fastapi".to_string())
+    } else if lower.contains("django") {
+        Some("django".to_string())
+    } else if lower.contains("flask") {
+        Some("flask".to_string())
+    } else if lower.contains("aspnet") || lower.contains("asp.net") {
+        Some("aspnet".to_string())
+    } else if lower.contains("express") {
+        Some("express".to_string())
+    } else if lower.contains("next") {
+        Some("nextjs".to_string())
+    } else if lower.contains("vite") {
+        Some("vite".to_string())
+    } else {
+        None
+    }
 }
 
 fn package_manager_from_command(command: Option<&str>) -> Option<PackageManager> {

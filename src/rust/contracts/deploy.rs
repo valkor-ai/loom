@@ -403,9 +403,10 @@ pub struct DeploymentBootstrapDiagnostics {
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentGeneratedFiles {
     pub compose_path: String,
-    pub dockerignore_path: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dockerfile_paths: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dockerignore_paths: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub nginx_config_paths: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

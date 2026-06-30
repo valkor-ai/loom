@@ -4,7 +4,7 @@ use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
 use serde_json::json;
 
 use crate::{
-    active_operation::{acquire_operation, active_operation_result},
+    active_operation::{acquire_operation, active_operation_result, update_operation_phase},
     prepare::deploy_prepare_inner,
     up::deploy_up_inner,
     DeployToolInput,
@@ -25,6 +25,7 @@ pub fn deploy_run(input: DeployToolInput) -> LoomMcpActionResult {
             })
         }
     };
+    let _ = update_operation_phase(project_root, "preparing", "running");
     let prepare = deploy_prepare_inner(project_root, input.clone());
     match prepare {
         Ok(LoomMcpActionResult::Done(_)) => {}
@@ -42,6 +43,7 @@ pub fn deploy_run(input: DeployToolInput) -> LoomMcpActionResult {
             });
         }
     }
+    let _ = update_operation_phase(project_root, "building", "running");
     let result = deploy_up_inner(project_root, input);
     drop(guard);
     result

@@ -109,6 +109,10 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
             .join(".loom/deployment/specs/generated/compose.yaml"),
     )
     .expect("compose");
+    assert!(
+        compose.starts_with(&format!("name: {}\nservices:\n", spec.service_name)),
+        "{compose}"
+    );
     assert!(compose.contains("  frontend:"));
     assert!(
         compose.contains("      dockerfile: .loom/deployment/specs/generated/Dockerfile.frontend")
@@ -172,6 +176,7 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
         .expect("app service");
     assert_eq!(spec.source_model.source, SourceModelSource::RuntimeContract);
     assert_eq!(service.package_manager, Some(PackageManager::Gradle));
+    assert_eq!(service.framework.as_deref(), Some("spring-boot"));
     assert_eq!(
         service.build_command.as_deref(),
         Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon")
@@ -219,6 +224,16 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
         .root
         .join(".loom/deployment/specs/generated/Dockerfile.app.dockerignore")
         .exists());
+    assert_eq!(
+        spec.files.dockerignore_paths["app"],
+        ".loom/deployment/specs/generated/Dockerfile.app.dockerignore"
+    );
+    let spec_json: Value =
+        read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec json");
+    assert!(
+        spec_json["files"].get("dockerignorePath").is_none(),
+        "{spec_json:#}"
+    );
 
     let evidence: Value = read_json(
         &fixture
@@ -390,10 +405,16 @@ fn deploy_prepare_reuses_existing_dockerfile_and_generates_only_wrapper_assets()
         .unwrap()
         .iter()
         .any(|item| item == ".loom/deployment/specs/generated/compose.yaml"));
+    assert!(!value["details"]["generatedFileRefs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == ".loom/deployment/specs/generated/Dockerfile.app.dockerignore"));
 
     let spec = fixture.read_spec();
     assert_eq!(spec.provider, DeployProvider::DockerfileExisting);
     assert_eq!(spec.files.dockerfile_paths["app"], "Dockerfile");
+    assert!(spec.files.dockerignore_paths.is_empty());
     assert!(fixture
         .root
         .join(".loom/deployment/specs/generated/compose.yaml")
@@ -577,6 +598,90 @@ exit 0
         .unwrap_or(true));
     assert_eq!(repair["protectedFiles"], json!(["compose.yaml"]));
     assert_eq!(value["state"], "blocked", "{value:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_updates_active_operation_phase_and_streams_docker_logs() {
+    let fixture = Fixture::new("deploy-active-operation-logs");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","start":"vite --host 0.0.0.0"}}"#,
+    );
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
+  echo "config ok"
+  exit 0
+fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "build started"
+  sleep 1
+  echo "build done"
+  exit 0
+fi
+if [ "$1" = "compose" ] && [ "$4" = "logs" ]; then
+  echo "app did not become reachable"
+  exit 0
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+    let root = fixture.root_str();
+    let handle = thread::spawn(move || {
+        deploy_up(DeployToolInput {
+            project_root: root,
+            app_path: None,
+            healthcheck: None,
+            provider_policy: Some(DeploymentProviderPolicy {
+                provider: Some(DeployProvider::Generated),
+                reuse_existing: false,
+                force_generate: true,
+            }),
+        })
+    });
+
+    let active_file = fixture
+        .root
+        .join(".loom/deployment/state/active-operation.json");
+    let log_file = fixture.root.join(".loom/deployment/logs/local.log");
+    let mut observed_building = false;
+    let mut observed_log = false;
+    for _ in 0..40 {
+        if active_file.exists() {
+            if let Ok(active) = read_json::<Value>(&active_file) {
+                observed_building |= active["phase"] == "building";
+            }
+        }
+        if log_file.exists() {
+            if let Ok(log) = read_text(&log_file) {
+                observed_log |= log.contains("phase=building command=docker compose")
+                    && log.contains("build started");
+            }
+        }
+        if observed_building && observed_log {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = handle.join().expect("deploy up thread");
+    let log = read_text(&log_file).expect("deploy log");
+    assert!(observed_building, "{log}");
+    assert!(observed_log, "{log}");
+    assert!(
+        log.contains("phase=checking_compose command=docker compose"),
+        "{log}"
+    );
+    assert!(log.contains("config ok"), "{log}");
 }
 
 #[test]

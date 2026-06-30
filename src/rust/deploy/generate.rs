@@ -23,6 +23,7 @@ pub fn generated_file_refs(
     topology: &DeploymentTopology,
 ) -> state::store::StateResult<DeploymentGeneratedFiles> {
     let mut dockerfile_paths = BTreeMap::new();
+    let mut dockerignore_paths = BTreeMap::new();
     let mut nginx_config_paths = BTreeMap::new();
     for service in &source_model.services {
         dockerfile_paths.insert(
@@ -30,6 +31,13 @@ pub fn generated_file_refs(
             to_project_relative(
                 project_root,
                 &paths::dockerfile_path(project_root, &service.service_id),
+            )?,
+        );
+        dockerignore_paths.insert(
+            service.service_id.clone(),
+            to_project_relative(
+                project_root,
+                &paths::dockerfile_ignore_path(project_root, &service.service_id),
             )?,
         );
         if service.service_id == topology.public_entry_service_id
@@ -51,8 +59,8 @@ pub fn generated_file_refs(
     let deployment_paths = paths::deployment_paths(project_root);
     Ok(DeploymentGeneratedFiles {
         compose_path: to_project_relative(project_root, &deployment_paths.compose_file)?,
-        dockerignore_path: to_project_relative(project_root, &deployment_paths.dockerignore_file)?,
         dockerfile_paths,
+        dockerignore_paths,
         nginx_config_paths,
         reused: vec![],
     })
@@ -180,8 +188,8 @@ fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
 }
 
 fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
-    if java_service_has_frontend_overlay(service) {
-        return generate_java_with_frontend_dockerfile(service);
+    if java_service_needs_static_asset_overlay(service) {
+        return generate_java_dockerfile_with_static_asset_overlay(service);
     }
     let build_command = service
         .build_command
@@ -217,7 +225,7 @@ fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
     .join("\n")
 }
 
-fn generate_java_with_frontend_dockerfile(service: &DeploymentSourceService) -> String {
+fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSourceService) -> String {
     let frontend_root =
         frontend_root_from_package_refs(service).unwrap_or_else(|| "web".to_string());
     let frontend_output = service
@@ -260,7 +268,7 @@ fn generate_java_with_frontend_dockerfile(service: &DeploymentSourceService) -> 
     .join("\n")
 }
 
-fn java_service_has_frontend_overlay(service: &DeploymentSourceService) -> bool {
+fn java_service_needs_static_asset_overlay(service: &DeploymentSourceService) -> bool {
     service.runtime_kind == RuntimeKind::Java
         && !service.workspace_package_json_paths.is_empty()
         && service.output_directory.is_some()
@@ -355,7 +363,10 @@ fn generate_dotnet_dockerfile(service: &DeploymentSourceService) -> String {
 }
 
 fn generate_compose(spec: &DeploymentSpec) -> String {
-    let mut lines = vec!["services:".to_string()];
+    let mut lines = vec![
+        format!("name: {}", yaml_string(&spec.service_name)),
+        "services:".to_string(),
+    ];
     for service in &spec.source_model.services {
         lines.extend(generate_app_service(spec, service));
     }
