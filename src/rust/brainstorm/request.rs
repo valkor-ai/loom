@@ -623,7 +623,8 @@ fn knowledge_query_plan() -> Value {
             "If loom.knowledgeBrainstormContext returns status empty, continue with source requirements and mention no knowledge match only when it affects confidence.",
             "If any knowledge tool returns state failed or an error object, stop the clarification block and report the failure; do not silently fall back to a knowledge-free answer.",
             "Do not ask the user to choose, name, enable, or manage a knowledge source inside Brainstorm clarification. Loom selects enabled request-relevant knowledge automatically, and an empty knowledge result is allowed after the required knowledge calls have run.",
-            "Use knowledge only to improve clarification quality. Do not write knowledge source ids, chunk ids, inspect output, or knowledge paths into the Brainstorm candidate."
+            "Use knowledge only to improve clarification quality. Do not write knowledge source ids, chunk ids, inspect output, or knowledge paths into the Brainstorm candidate.",
+            "semanticFocus is a compact string array. Prefer typed entries in kind:text form, such as object:证券账户, operation:开户, rule:持仓清空后方可销户, page:账户管理页面, or flow:挂失补办流程. Use plain strings only when the kind is genuinely unclear."
         ],
         "toolContract": {
             "contextTool": "loom.knowledgeBrainstormContext",
@@ -672,7 +673,7 @@ fn knowledge_query_plan() -> Value {
                             "Each capability_closure query covers exactly one module, object lifecycle, workflow, backend capability, or page-operation set.",
                             "Keep semanticFocus inside the current unit's object, operation, rule, state, field, or flow anchors.",
                             "Do not include sibling, downstream, or next-phase capability units in semanticFocus.",
-                            "Use separate operation focus entries for separate operations; never combine multiple operations into one operation focus.",
+                            "Use separate typed operation focus entries for separate operations; never combine multiple operations into one focus entry.",
                             "For connected processes, lifecycle transitions, replacement, recovery, or ordered flows, include the primary object plus each identifiable component operation as separate operation focus entries; add a flow focus only when the whole flow wording is explicit."
                         ]
                     }
@@ -689,7 +690,7 @@ fn knowledge_query_plan() -> Value {
                             "naturalLanguageQuery should ask for the subject's objects, fields, rules, states, validations, blockers, outcomes, feedback, and misunderstanding boundaries.",
                             "semanticFocus must stay inside the confirmed scope item or tight group, pairing object focus with relevant operation, rule, state, field, or flow anchors when those anchors are explicit.",
                             "Do not re-query the whole system or every deferred module.",
-                            "Use separate operation focus entries for separate actions and lifecycle steps; do not use a single compound operation focus as a substitute for lifecycle or process component operations."
+                            "Use separate typed operation focus entries for separate actions and lifecycle steps; do not use a single compound focus as a substitute for lifecycle or process component operations."
                         ]
                     }
                 ]

@@ -743,6 +743,105 @@ fn knowledge_search_prioritizes_semantic_focus_coverage_before_lexical_fallback(
 }
 
 #[test]
+fn knowledge_search_respects_typed_semantic_focus_kinds() {
+    let fixture = Fixture::new("typed-semantic-focus");
+    let source_id = "ksrc_typed_focus";
+    let build_id = "kbld_typed_focus";
+    let loom_home = fixture.root.join(".loom-home");
+    let build_dir = loom_home
+        .join("knowledge/sources")
+        .join(source_id)
+        .join("build-runs")
+        .join(build_id);
+    std::fs::create_dir_all(build_dir.join("chunks")).expect("typed focus chunks dir");
+    std::fs::write(
+        loom_home.join("knowledge/registry.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sources": [{
+                "sourceId": source_id,
+                "name": "typed-focus-rules",
+                "enabled": true,
+                "documentPaths": ["/fixture/typed-focus.md"],
+                "currentBuildId": build_id,
+                "createdAt": "2026-06-30T00:00:00Z",
+                "updatedAt": "2026-06-30T00:00:00Z",
+                "lastBuiltAt": "2026-06-30T00:00:00Z"
+            }]
+        }))
+        .expect("registry json"),
+    )
+    .expect("write registry");
+    std::fs::write(
+        build_dir.join("chunks.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": source_id,
+            "sourceName": "typed-focus-rules",
+            "buildId": build_id,
+            "chunks": [
+                semantic_chunk(
+                    "kchunk_operation_only",
+                    "operation wording",
+                    "证券账户持仓清空后方可销户只是一个操作短语。",
+                    json!([
+                        {"kind": "operation", "text": "证券账户持仓清空后方可销户", "normalizedText": "证券账户持仓清空后方可销户", "aliases": [], "confidence": "high"}
+                    ]),
+                    json!([]),
+                    1.0,
+                ),
+                semantic_chunk(
+                    "kchunk_object_rule",
+                    "object rule",
+                    "证券账户对象及持仓清空后方可销户规则。",
+                    json!([
+                        {"kind": "object", "text": "证券账户", "normalizedText": "证券账户", "aliases": [], "confidence": "high"},
+                        {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "aliases": [], "confidence": "high"}
+                    ]),
+                    json!([]),
+                    0.0,
+                )
+            ]
+        }))
+        .expect("chunks json"),
+    )
+    .expect("write chunks");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_operation_only.txt"),
+        "证券账户持仓清空后方可销户只是一个操作短语。",
+    )
+    .expect("write operation-only chunk");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_object_rule.txt"),
+        "证券账户对象及持仓清空后方可销户规则。",
+    )
+    .expect("write object-rule chunk");
+
+    let search = search_knowledge(KnowledgeSearchInput {
+        project_root: fixture.root_str().to_string(),
+        natural_language_query: "".to_string(),
+        semantic_focus: vec![
+            "object:证券账户".to_string(),
+            "rule:持仓清空后方可销户".to_string(),
+        ],
+        source_names: vec![],
+        block: Some("concept_grounding".to_string()),
+        limit: Some(2),
+    })
+    .expect("typed focus search");
+
+    assert_eq!(search.status, "available");
+    assert_eq!(search.cards[0].chunk_id, "kchunk_object_rule");
+    let matched_kinds = search.cards[0]
+        .matched_labels
+        .iter()
+        .map(|label| label.kind.as_str())
+        .collect::<Vec<_>>();
+    assert!(matched_kinds.contains(&"object"));
+    assert!(matched_kinds.contains(&"rule"));
+}
+
+#[test]
 fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     let fixture = Fixture::new("brainstorm-context");
     fixture.write_file(

@@ -91,9 +91,9 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         group_id: "conversation_protocol".to_string(),
     })
     .expect("read conversation protocol");
-    let current_turn_rule =
-        &conversation_protocol.fields["clarificationConversationProtocol.currentTurnAnswerRule"]
-            .value;
+    let current_turn_rule = &conversation_protocol.fields
+        ["clarificationConversationProtocol.currentTurnAnswerRule"]
+        .value;
     assert_eq!(current_turn_rule["consumeCurrentUserMessage"], true);
     assert_eq!(current_turn_rule["explicitOnly"], true);
     assert!(
@@ -200,6 +200,14 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .value
         .to_string()
         .contains("empty knowledge result is allowed"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("kind:text"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("object:证券账户"));
     assert!(
         knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"]
             .value
