@@ -20,8 +20,8 @@ use delivery_core::{
     ReadRequestFieldsInput,
 };
 use deploy::{
-    accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status, deploy_up,
-    deploy_validate, DeployToolInput,
+    accept_deploy_execution_repair_file, deploy_bootstrap, deploy_prepare, deploy_repair,
+    deploy_status, deploy_up, deploy_validate, DeployBootstrapInput, DeployToolInput,
 };
 use serde_json::{json, Value};
 use state::store::{ensure_dir, now_millis, now_string, read_json, read_text, write_json_atomic};
@@ -1099,6 +1099,90 @@ exit 0
         .iter()
         .filter_map(Value::as_str)
         .any(|action| action.contains("registry_network")));
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_prepare_detects_bootstrap_tasks_without_executing_them() {
+    let fixture = Fixture::new("deploy-bootstrap-detect");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"}}"#,
+    );
+    fixture.write_text(
+        "prisma/schema.prisma",
+        "datasource db { provider = \"sqlite\" }\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    let spec: DeploymentSpec =
+        read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec");
+    assert_eq!(spec.bootstrap.tasks.len(), 1);
+    assert_eq!(spec.bootstrap.tasks[0].kind, "prisma");
+    assert_eq!(spec.bootstrap.tasks[0].command, "npx prisma migrate deploy");
+    assert!(!spec.bootstrap.tasks[0].automatic);
+    assert!(
+        !fixture.root.join("bootstrap-ran.txt").exists(),
+        "prepare must only detect bootstrap tasks"
+    );
+}
+
+#[test]
+fn deploy_bootstrap_returns_confirmation_gate_with_declared_tasks() {
+    let fixture = Fixture::new("deploy-bootstrap-gate");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"}}"#,
+    );
+    fixture.write_text(
+        "prisma/schema.prisma",
+        "datasource db { provider = \"sqlite\" }\n",
+    );
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+
+    let result = deploy_bootstrap(DeployBootstrapInput {
+        project_root: fixture.root_str(),
+        confirm: false,
+        kind: Some("prisma".to_string()),
+    });
+    let value = serde_json::to_value(result).expect("bootstrap json");
+
+    assert_eq!(value["state"], "user_gate", "{value:#}");
+    assert_eq!(value["gate"]["confirmRequired"], true);
+    assert_eq!(value["gate"]["tasks"][0]["kind"], "prisma");
+    assert_eq!(
+        value["gate"]["tasks"][0]["command"],
+        "npx prisma migrate deploy"
+    );
     assert_forbidden_cli_fields_absent(&value);
 }
 

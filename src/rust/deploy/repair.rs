@@ -1263,7 +1263,13 @@ fn diagnose_deployment_failure(
             code: "bootstrap_task_relevant".to_string(),
             severity: "warning".to_string(),
             message: "Detected bootstrap tasks may be relevant to this failure.".to_string(),
-            evidence: spec.bootstrap.tasks.iter().take(12).cloned().collect(),
+            evidence: spec
+                .bootstrap
+                .tasks
+                .iter()
+                .take(12)
+                .map(|task| format!("{}: {}", task.kind, task.command))
+                .collect(),
             suggested_action:
                 "Ask before running bootstrap or migration commands; use them as diagnosis first."
                     .to_string(),

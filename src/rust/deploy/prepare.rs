@@ -4,10 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use contracts::{
-    DeployProvider, DeploymentBootstrapDiagnostics, DeploymentEnvDiagnostics,
-    DeploymentEnvVariable, DeploymentSpec,
-};
+use contracts::{DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentSpec};
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
     LoomMcpFailureResult,
@@ -23,6 +20,7 @@ use state::{
 
 use crate::{
     active_operation::{acquire_operation, active_operation_result},
+    bootstrap::analyze_deployment_bootstrap,
     code_evidence::build_deployment_code_probe,
     generate::{deployment_runtime, generate_deployment_files, generated_file_refs},
     paths::deployment_paths,
@@ -86,10 +84,7 @@ pub fn deploy_prepare_inner(
         to_project_relative(project_root, &paths.generated_dir.join("topology.json"))?;
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
     let environment = env_diagnostics(&runtime_contract);
-    let bootstrap = DeploymentBootstrapDiagnostics {
-        tasks: vec![],
-        warnings: vec![],
-    };
+    let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
     let host_port = find_host_port();
     let runtime = deployment_runtime(&runtime_contract, &source_model, host_port);
     let service_name = sanitize_name(

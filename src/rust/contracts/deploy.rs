@@ -300,9 +300,18 @@ pub struct DeploymentEnvDiagnostics {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct DeploymentBootstrapTask {
+    pub kind: String,
+    pub command: String,
+    pub automatic: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentBootstrapDiagnostics {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<String>,
+    pub tasks: Vec<DeploymentBootstrapTask>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
