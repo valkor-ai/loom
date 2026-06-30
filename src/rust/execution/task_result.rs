@@ -215,8 +215,13 @@ where
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
-    let normalized_result =
-        normalize_task_result_machine_fields(raw_result.clone(), &task_plan_id, &task_id, &task);
+    let normalized_result = normalize_task_result_machine_fields(
+        raw_result.clone(),
+        &authorized.request_id,
+        &task_plan_id,
+        &task_id,
+        &task,
+    );
     let result: TaskResult = match serde_json::from_value(normalized_result.clone()) {
         Ok(result) => result,
         Err(error) => {
@@ -526,6 +531,7 @@ fn validate_result(
 
 fn normalize_task_result_machine_fields(
     mut raw_result: Value,
+    request_id: &str,
     task_plan_id: &str,
     task_id: &str,
     task: &TaskDefinition,
@@ -534,8 +540,41 @@ fn normalize_task_result_machine_fields(
         return raw_result;
     };
 
+    let now = state::store::now_string();
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    if !object
+        .get("taskResultId")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
+        object.insert(
+            "taskResultId".to_string(),
+            json!(format!("taskresult-{}", safe_id(request_id))),
+        );
+    }
     object.insert("taskPlanId".to_string(), json!(task_plan_id));
     object.insert("taskId".to_string(), json!(task_id));
+    if !object
+        .get("changedFiles")
+        .and_then(Value::as_array)
+        .is_some()
+    {
+        object.insert("changedFiles".to_string(), json!([]));
+    }
+    if !object.contains_key("noChangeReason") {
+        object.insert("noChangeReason".to_string(), Value::Null);
+    }
+    if !object.contains_key("selfRepairSummary") {
+        object.insert(
+            "selfRepairSummary".to_string(),
+            json!({
+                "attempted": false,
+                "attemptCount": 0,
+                "stopReason": "not_attempted",
+                "progressObserved": false
+            }),
+        );
+    }
     if object
         .get("status")
         .and_then(Value::as_str)
@@ -544,42 +583,42 @@ fn normalize_task_result_machine_fields(
     {
         object.insert("failure".to_string(), Value::Null);
     }
-
-    let verification_ids = task
-        .verification_intents
-        .iter()
-        .map(|intent| intent.verification_id.clone())
-        .collect::<Vec<_>>();
-    if let Some(verifications) = object
-        .get_mut("verificationResults")
-        .and_then(Value::as_array_mut)
-    {
-        normalize_indexed_object_string_field(verifications, "verificationId", &verification_ids);
+    if !object.get("notes").and_then(Value::as_array).is_some() {
+        object.insert("notes".to_string(), json!([]));
     }
+    if object
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|status| status != "blocked")
+        .unwrap_or(false)
+    {
+        object.insert("blockedReasons".to_string(), json!([]));
+    } else if !object
+        .get("blockedReasons")
+        .and_then(Value::as_array)
+        .is_some()
+    {
+        object.insert("blockedReasons".to_string(), json!([]));
+    }
+    if !object
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("createdAt".to_string(), json!(now.clone()));
+    }
+    if !object
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+
+    normalize_verification_result_machine_fields(object, task);
 
     let detail_ids = required_requirement_detail_ids(task);
-    if let Some(details) = object
-        .get_mut("requirementDetailEvidence")
-        .and_then(Value::as_array_mut)
-    {
-        for (index, detail) in details.iter_mut().enumerate() {
-            let Some(detail_object) = detail.as_object_mut() else {
-                continue;
-            };
-            if let Some(detail_id) = detail_ids.get(index) {
-                detail_object.insert("detailId".to_string(), json!(detail_id));
-                let detail_verification_ids = verification_ids_for_detail(task, detail_id);
-                if !detail_verification_ids.is_empty() {
-                    detail_object.insert(
-                        "verificationIds".to_string(),
-                        json!(detail_verification_ids),
-                    );
-                }
-            } else if !verification_ids.is_empty() {
-                detail_object.insert("verificationIds".to_string(), json!(verification_ids));
-            }
-        }
-    }
+    normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
 
     if let Some(concepts) = object
         .get_mut("conceptEvidence")
@@ -599,6 +638,173 @@ fn normalize_task_result_machine_fields(
     }
 
     raw_result
+}
+
+fn is_iso_datetime_string(value: &str) -> bool {
+    value.contains('T')
+        && (value.ends_with('Z') || value.contains('+') || value.rsplit_once('-').is_some())
+        && !value.contains("ISO-8601")
+}
+
+fn normalize_verification_result_machine_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    let raw_items = object
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut used = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for (index, intent) in task.verification_intents.iter().enumerate() {
+        let matching_index = raw_items
+            .iter()
+            .enumerate()
+            .find(|(item_index, item)| {
+                !used.contains(item_index)
+                    && item
+                        .get("verificationId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == intent.verification_id)
+            })
+            .map(|(item_index, _)| item_index)
+            .or_else(|| (index < raw_items.len()).then_some(index));
+        let raw = matching_index
+            .and_then(|item_index| {
+                used.insert(item_index);
+                raw_items.get(item_index).cloned()
+            })
+            .unwrap_or_else(|| json!({}));
+        let mut item = raw.as_object().cloned().unwrap_or_default();
+        item.insert(
+            "verificationId".to_string(),
+            json!(intent.verification_id.clone()),
+        );
+        if !item
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert("status".to_string(), json!("not_run"));
+        }
+        let evidence_type = item
+            .get("evidenceType")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let evidence_allowed = evidence_type.as_ref().is_some_and(|candidate| {
+            intent
+                .acceptable_evidence
+                .iter()
+                .any(|allowed| verification_evidence_name(*allowed) == candidate)
+        });
+        if !evidence_allowed {
+            if let Some(first) = intent.acceptable_evidence.first() {
+                item.insert(
+                    "evidenceType".to_string(),
+                    json!(verification_evidence_name(*first)),
+                );
+            } else {
+                item.remove("evidenceType");
+            }
+        }
+        if !item
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert(
+                "summary".to_string(),
+                json!("Verification result was not reported before TaskResult submission."),
+            );
+        }
+        normalized.push(Value::Object(item));
+    }
+    for (index, item) in raw_items.into_iter().enumerate() {
+        if !used.contains(&index) {
+            normalized.push(item);
+        }
+    }
+    object.insert("verificationResults".to_string(), Value::Array(normalized));
+}
+
+fn normalize_requirement_detail_evidence_machine_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+    detail_ids: &[String],
+) {
+    let raw_items = object
+        .get("requirementDetailEvidence")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut used = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for (index, detail_id) in detail_ids.iter().enumerate() {
+        let matching_index = raw_items
+            .iter()
+            .enumerate()
+            .find(|(item_index, item)| {
+                !used.contains(item_index)
+                    && item
+                        .get("detailId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == detail_id)
+            })
+            .map(|(item_index, _)| item_index)
+            .or_else(|| (index < raw_items.len()).then_some(index));
+        let raw = matching_index
+            .and_then(|item_index| {
+                used.insert(item_index);
+                raw_items.get(item_index).cloned()
+            })
+            .unwrap_or_else(|| json!({}));
+        let mut item = raw.as_object().cloned().unwrap_or_default();
+        item.insert("detailId".to_string(), json!(detail_id));
+        if !item
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert("status".to_string(), json!("not_verified"));
+        }
+        let detail_verification_ids = verification_ids_for_detail(task, detail_id);
+        if !detail_verification_ids.is_empty() {
+            item.insert(
+                "verificationIds".to_string(),
+                json!(detail_verification_ids),
+            );
+        } else if !item
+            .get("verificationIds")
+            .and_then(Value::as_array)
+            .is_some()
+        {
+            item.insert("verificationIds".to_string(), json!([]));
+        }
+        if !item.get("evidenceRefs").and_then(Value::as_array).is_some() {
+            item.insert("evidenceRefs".to_string(), json!([]));
+        }
+        if !item
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert(
+                "summary".to_string(),
+                json!("Requirement detail evidence was not reported before TaskResult submission."),
+            );
+        }
+        normalized.push(Value::Object(item));
+    }
+    for (index, item) in raw_items.into_iter().enumerate() {
+        if !used.contains(&index) {
+            normalized.push(item);
+        }
+    }
+    object.insert(
+        "requirementDetailEvidence".to_string(),
+        Value::Array(normalized),
+    );
 }
 
 fn normalize_indexed_object_string_field(items: &mut [Value], field: &str, values: &[String]) {

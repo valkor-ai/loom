@@ -6756,6 +6756,88 @@ fn task_result_repair_template_preserves_previous_changed_files_for_replacement(
         .is_none());
 }
 
+#[test]
+fn task_result_submit_backfills_machine_owned_shape_fields() {
+    let fixture = Fixture::new("task-result-backfills-machine-shape");
+    let execution_request_ref = start_planned_task_execution_without_runtime_closure(&fixture);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read task result contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/main.tsx"]);
+    for field in [
+        "schemaVersion",
+        "taskResultId",
+        "taskId",
+        "taskPlanId",
+        "noChangeReason",
+        "selfRepairSummary",
+        "failure",
+        "notes",
+        "blockedReasons",
+        "createdAt",
+        "updatedAt",
+    ] {
+        result
+            .as_object_mut()
+            .expect("task result object")
+            .remove(field);
+    }
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write compact task result");
+
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(accepted["next"]["artifactKind"], "task_result_repair");
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+    let persisted_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(persisted_ref)).unwrap())
+            .expect("parse persisted task result");
+    assert_eq!(persisted["schemaVersion"], "1.0");
+    assert!(persisted["taskResultId"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("taskresult-")));
+    assert_eq!(persisted["noChangeReason"], Value::Null);
+    assert_eq!(
+        persisted["selfRepairSummary"],
+        json!({
+            "attempted": false,
+            "attemptCount": 0,
+            "stopReason": "not_attempted",
+            "progressObserved": false
+        })
+    );
+    assert_eq!(persisted["failure"], Value::Null);
+    assert!(persisted
+        .get("notes")
+        .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty)));
+    assert!(persisted
+        .get("blockedReasons")
+        .is_none_or(|value| value.as_array().is_some_and(Vec::is_empty)));
+    assert!(persisted["createdAt"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(persisted["updatedAt"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+}
+
 fn start_planned_task_execution(fixture: &Fixture) -> String {
     start_planned_task_execution_with_candidate(fixture, valid_candidate_json())
 }
