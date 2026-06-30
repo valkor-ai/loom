@@ -413,7 +413,9 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
         .parent()
         .and_then(Path::to_str)
         .unwrap_or(".");
-    let dockerfile = project_path_relative_to_directory(compose_dir, &dockerfile_project_path);
+    let build_context_dir = project_path_join(compose_dir, &spec.source_model.build_context_path);
+    let dockerfile =
+        project_path_relative_to_directory(&build_context_dir, &dockerfile_project_path);
     let mut env = runtime_env(service);
     if service.role != SourceServiceRole::Frontend {
         for dependency in &spec.source_model.dependencies {
@@ -720,11 +722,33 @@ fn project_path_relative_to_directory(
     }
 }
 
+fn project_path_join(base_project_relative_directory: &str, relative_path: &str) -> String {
+    let value = match (base_project_relative_directory, relative_path) {
+        ("", path) | (".", path) => path.to_string(),
+        (base, "") | (base, ".") => base.to_string(),
+        (base, path) => format!("{base}/{path}"),
+    };
+    let parts = normalized_relative_parts(&value);
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
+}
+
 fn normalized_relative_parts(value: &str) -> Vec<&str> {
-    value
-        .split('/')
-        .filter(|part| !part.is_empty() && *part != ".")
-        .collect()
+    let mut parts = Vec::new();
+    for part in value.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            let _ = parts.pop();
+        } else {
+            parts.push(part);
+        }
+    }
+    parts
 }
 
 fn normalize_nginx_public_path(value: &str) -> String {

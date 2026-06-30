@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
     net::TcpStream,
-    path::Path,
+    path::{Component, Path, PathBuf},
     time::Duration,
 };
 
@@ -128,10 +128,13 @@ pub fn validate_generated_assets(
         issues.push("compose file must include services.".to_string());
     }
     let compose_dir = compose_file.parent().unwrap_or(project_root);
-    for dockerfile in compose_dockerfile_paths(&compose) {
-        if !compose_dir.join(&dockerfile).exists() {
+    for build in compose_build_specs(&compose) {
+        let context_dir = normalize_path(compose_dir.join(&build.context));
+        let dockerfile_path = normalize_path(context_dir.join(&build.dockerfile));
+        if !dockerfile_path.exists() {
             issues.push(format!(
-                "compose dockerfile path {dockerfile} does not resolve from compose directory."
+                "compose dockerfile path {} does not resolve from build context {}.",
+                build.dockerfile, build.context
             ));
         }
     }
@@ -191,16 +194,68 @@ pub fn validate_generated_assets(
     Ok(issues)
 }
 
-fn compose_dockerfile_paths(compose: &str) -> Vec<String> {
-    compose
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            let value = trimmed.strip_prefix("dockerfile:")?.trim();
-            Some(value.trim_matches('"').trim_matches('\'').to_string())
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposeBuildSpec {
+    context: String,
+    dockerfile: String,
+}
+
+fn compose_build_specs(compose: &str) -> Vec<ComposeBuildSpec> {
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(compose) else {
+        return Vec::new();
+    };
+    let Some(root) = value.as_mapping() else {
+        return Vec::new();
+    };
+    let Some(services) = yaml_get(root, "services").and_then(serde_yaml::Value::as_mapping) else {
+        return Vec::new();
+    };
+    services
+        .values()
+        .filter_map(|service| {
+            let service = service.as_mapping()?;
+            let build = yaml_get(service, "build")?;
+            if let Some(context) = build.as_str() {
+                return Some(ComposeBuildSpec {
+                    context: context.to_string(),
+                    dockerfile: "Dockerfile".to_string(),
+                });
+            }
+            let build = build.as_mapping()?;
+            Some(ComposeBuildSpec {
+                context: yaml_string_field(build, "context").unwrap_or_else(|| ".".to_string()),
+                dockerfile: yaml_string_field(build, "dockerfile")
+                    .unwrap_or_else(|| "Dockerfile".to_string()),
+            })
         })
-        .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn yaml_get<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
+    mapping.get(&serde_yaml::Value::String(key.to_string()))
+}
+
+fn yaml_string_field(mapping: &serde_yaml::Mapping, key: &str) -> Option<String> {
+    yaml_get(mapping, key)
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 fn probe_http(port: u16, path: &str, reject_html_fallback: bool) -> HttpProbeResult {

@@ -95,8 +95,12 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     )
     .expect("compose");
     assert!(compose.contains("  frontend:"));
-    assert!(compose.contains("      dockerfile: Dockerfile.frontend"));
-    assert!(compose.contains("      dockerfile: Dockerfile.backend"));
+    assert!(
+        compose.contains("      dockerfile: .loom/deployment/specs/generated/Dockerfile.frontend")
+    );
+    assert!(
+        compose.contains("      dockerfile: .loom/deployment/specs/generated/Dockerfile.backend")
+    );
     assert!(compose.contains("  backend:"));
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
@@ -167,11 +171,11 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
     )
     .expect("compose");
     assert!(compose.contains("context: ../../../.."), "{compose}");
-    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
     assert!(
-        !compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
+        compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
         "{compose}"
     );
+    assert!(!compose.contains("additional_contexts"), "{compose}");
 
     let dockerfile = read_text(
         &fixture
@@ -192,6 +196,10 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
         "{dockerfile}"
     );
     assert!(!dockerfile.contains("./mvnw"), "{dockerfile}");
+    assert!(fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.app.dockerignore")
+        .exists());
 
     let evidence: Value = read_json(
         &fixture
@@ -584,12 +592,15 @@ fn deploy_validate_flags_compose_dockerfile_paths_that_do_not_resolve() {
         .root
         .join(".loom/deployment/specs/generated/compose.yaml");
     let compose = read_text(&compose_path).expect("compose");
-    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
+    assert!(
+        compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
+        "{compose}"
+    );
     std::fs::write(
         &compose_path,
         compose.replace(
-            "dockerfile: Dockerfile.app",
             "dockerfile: .loom/deployment/specs/generated/Dockerfile.app",
+            "dockerfile: Dockerfile.app",
         ),
     )
     .expect("write bad compose");

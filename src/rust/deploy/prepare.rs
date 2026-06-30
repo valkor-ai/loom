@@ -198,13 +198,16 @@ pub fn deploy_prepare_inner(
         DeployProvider::ComposeExisting => {}
         DeployProvider::DockerfileExisting => {
             write_text_atomic(&paths.compose_file, &generated.compose)?;
-            write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
         }
         DeployProvider::Generated => {
             for (service_id, content) in &generated.dockerfiles {
                 write_text_atomic(
                     &crate::paths::dockerfile_path(project_root, service_id),
                     content,
+                )?;
+                write_text_atomic(
+                    &crate::paths::dockerfile_ignore_path(project_root, service_id),
+                    &generated.dockerignore,
                 )?;
             }
             for (service_id, content) in &generated.nginx_configs {
@@ -214,7 +217,6 @@ pub fn deploy_prepare_inner(
                 )?;
             }
             write_text_atomic(&paths.compose_file, &generated.compose)?;
-            write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
         }
     }
     write_json_atomic(&paths.spec_file, &spec)?;
@@ -494,11 +496,16 @@ pub(crate) fn deployment_prepare_details(
 }
 
 pub(crate) fn deployment_file_refs(spec: &DeploymentSpec) -> Vec<String> {
-    let mut refs = vec![
-        spec.files.compose_path.clone(),
-        spec.files.dockerignore_path.clone(),
-    ];
+    let mut refs = vec![spec.files.compose_path.clone()];
     refs.extend(spec.files.dockerfile_paths.values().cloned());
+    if spec.provider == DeployProvider::Generated {
+        refs.extend(
+            spec.files
+                .dockerfile_paths
+                .values()
+                .map(|path| format!("{path}.dockerignore")),
+        );
+    }
     refs.extend(spec.files.nginx_config_paths.values().cloned());
     refs.sort();
     refs.dedup();

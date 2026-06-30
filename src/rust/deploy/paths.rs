@@ -56,6 +56,12 @@ pub fn dockerfile_path(project_root: &Path, service_id: &str) -> PathBuf {
         .join(format!("Dockerfile.{service_id}"))
 }
 
+pub fn dockerfile_ignore_path(project_root: &Path, service_id: &str) -> PathBuf {
+    deployment_paths(project_root)
+        .generated_dir
+        .join(format!("Dockerfile.{service_id}.dockerignore"))
+}
+
 pub fn nginx_config_path(project_root: &Path, service_id: &str) -> PathBuf {
     deployment_paths(project_root)
         .generated_dir
