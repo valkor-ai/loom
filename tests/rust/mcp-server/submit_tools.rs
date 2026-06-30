@@ -2153,7 +2153,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     let taskplan_result = complete_architecture_sections_with(
         &fixture,
         &architecture_request_ref,
-        architecture_section_candidate_with_workflow_closure_json,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
     );
     let taskplan_request_ref = taskplan_result["next"]["requestRef"]
         .as_str()
@@ -4236,6 +4236,239 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
 }
 
 #[test]
+fn review_flags_missing_workflow_closure_assignment_as_taskplan_repair() {
+    let fixture = Fixture::new("review-workflow-closure-missing-assignment");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    assert_eq!(
+        taskplan_result["state"], "auto_runnable",
+        "{taskplan_result:#}"
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+
+    let mut current_execution_request_ref = execution_request_ref.clone();
+    let mut task_result = Value::Null;
+    for _ in 0..4 {
+        let execution_fields = state::read_request_fields(ReadRequestFieldsInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: current_execution_request_ref.clone(),
+            fields: vec![
+                "outputContract.resultFile".to_string(),
+                "outputContract.resultTemplate".to_string(),
+            ],
+        })
+        .expect("read execution result template")
+        .fields;
+        let result_file = execution_fields["outputContract.resultFile"]
+            .value
+            .as_str()
+            .expect("result file");
+        let mut task_result_candidate = execution_fields["outputContract.resultTemplate"]
+            .value
+            .clone();
+        task_result_candidate["changedFiles"] = json!(["src/App.tsx"]);
+        write_json_atomic(&fixture.root.join(result_file), &task_result_candidate)
+            .expect("write task result from template");
+        let result = call_submit(
+            "loom.recordTaskResultFile",
+            &current_execution_request_ref,
+            fixture.root_str(),
+        );
+        assert_eq!(result["state"], "auto_runnable", "{result:#}");
+        if result["next"]["artifactKind"] == json!("review_result") {
+            task_result = result;
+            break;
+        }
+        assert_eq!(result["next"]["kind"], "execute_task", "{result:#}");
+        current_execution_request_ref = result["next"]["requestRef"]
+            .as_str()
+            .expect("next execution requestRef")
+            .to_string();
+    }
+    assert_eq!(task_result["next"]["artifactKind"], "review_result");
+
+    let architecture_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "architectureArtifact");
+    let architecture_path = fixture.root.join(&architecture_ref);
+    let mut architecture: Value = serde_json::from_str(
+        &std::fs::read_to_string(&architecture_path).expect("read architecture artifact"),
+    )
+    .expect("parse architecture artifact");
+    architecture["interfaces"]
+        .as_array_mut()
+        .expect("interfaces")
+        .push(json!({
+            "interfaceId": "api.account.reissue",
+            "name": "Submit account reissue",
+            "type": "http_api",
+            "method": "POST",
+            "path": "/api/accounts/reissue",
+            "requestSchema": [{"field": "accountId", "type": "string", "required": true}],
+            "responseSchema": [{"field": "status", "type": "string", "required": true}],
+            "errorSchema": [{"field": "message", "type": "string", "required": true}]
+        }));
+    architecture["userFlows"]
+        .as_array_mut()
+        .expect("user flows")
+        .push(json!({
+            "flowId": "flow.account-reissue",
+            "name": "Account reissue workflow",
+            "kind": "user_interaction",
+            "moduleRefs": ["module.account-service"],
+            "acceptanceRefs": ["acc_1"],
+            "interfaceRefs": ["api.account.reissue"],
+            "entry": {},
+            "steps": [{
+                "stepId": "step.submit-reissue",
+                "interfaceRefs": ["api.account.reissue"],
+                "stateMachineRefs": []
+            }]
+        }));
+    architecture["frontendExperience"]["surfaces"]
+        .as_array_mut()
+        .expect("frontend surfaces")
+        .push(json!({
+            "surfaceId": "surface_account_reissue",
+            "name": "Account reissue",
+            "workflowRefs": ["flow.account-reissue"]
+        }));
+    architecture["frontendExperience"]["operationPaths"]
+        .as_array_mut()
+        .expect("frontend operation paths")
+        .push(json!({
+            "pathId": "path_account_reissue",
+            "surfaceRef": "surface_account_reissue",
+            "workflowRef": "flow.account-reissue",
+            "dataViewRefs": [],
+            "actionRefs": []
+        }));
+    write_json_atomic(&architecture_path, &architecture)
+        .expect("write architecture artifact with missing workflow closure assignment");
+
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let mut index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let latest_refs = index["phases"][0]["latestRefs"]
+        .as_object_mut()
+        .expect("latest refs");
+    latest_refs.remove("reviewRequestId");
+    latest_refs.remove("reviewRequestRef");
+    write_json_atomic(&index_path, &index).expect("clear existing review request refs");
+    let review_action = RouteAction {
+        kind: RouteActionKind::Review,
+        source: "test_rematerialize_review".to_string(),
+        reason: "rematerialize review after architecture artifact change".to_string(),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: None,
+        details: None,
+        target_phase_id: None,
+    };
+    let rematerialized = execution::ExecutionDomainDispatcher.dispatch_route_action(
+        fixture.root_str(),
+        &delivery_id,
+        "phase-1",
+        &review_action,
+    );
+    let rematerialized: Value =
+        serde_json::to_value(rematerialized).expect("serialize rematerialized review result");
+    assert_eq!(
+        rematerialized["state"], "auto_runnable",
+        "{rematerialized:#}"
+    );
+    assert_eq!(rematerialized["next"]["artifactKind"], "review_result");
+    let review_request_ref = rematerialized["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef")
+        .to_string();
+    let review_matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.clone(),
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read review matrices");
+    let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
+        .value
+        .as_array()
+        .expect("review signals");
+    assert!(
+        review_signals.iter().any(|signal| {
+            signal["kind"] == json!("frontend_workflow_closure")
+                && signal["missingTaskAssignment"] == json!(true)
+                && signal["recommendedNextAction"] == json!("taskplan_repair")
+                && signal["taskRefs"] == json!([])
+        }),
+        "review signals must include compact missing task assignment fact: {review_signals:#?}"
+    );
+
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-wrong-route",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "contract",
+            "failureClass": "contract_gap",
+            "category": "task_verification_mapping_issue",
+            "summary": "Workflow closure was not assigned to a task.",
+            "evidence": "Review signals show missingTaskAssignment=true.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "current_task",
+            "scopeRelation": "in_scope",
+            "introducedByCurrentTask": "no",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
+            && issue["fieldPath"] == "nextAction.type"
+    }));
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT" && issue["fieldPath"] == "findings"
+    }));
+}
+
+#[test]
 fn repeated_invalid_review_result_stays_repairable() {
     let fixture = Fixture::new("review-invalid-repairable");
     let review_request_ref = complete_task_execution_to_review(&fixture);
@@ -6094,21 +6327,35 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
     let request_id = request_root["requestId"].as_str().expect("requestId");
     let delivery_id = request_root["deliveryId"].as_str().expect("deliveryId");
     let phase_id = request_root["phaseId"].as_str().expect("phaseId");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect taskplan request");
+    let allowed_read_fields = inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut fields_to_read = vec![
+        "allowedRefs.scopeRefs".to_string(),
+        "allowedRefs.acceptanceRefs".to_string(),
+        "allowedRefs.requirementDetailIds".to_string(),
+        "allowedRefs.moduleRefs".to_string(),
+        "allowedRefs.entityRefs".to_string(),
+        "allowedRefs.interfaceRefs".to_string(),
+        "allowedRefs.userFlowRefs".to_string(),
+        "allowedRefs.stateMachineRefs".to_string(),
+        "outputContract.outlineFile".to_string(),
+        "outputContract.groupFilePattern".to_string(),
+    ];
+    if allowed_read_fields.contains("outputContract.runtimeDeliveryClosureTaskTemplate") {
+        fields_to_read.push("outputContract.runtimeDeliveryClosureTaskTemplate".to_string());
+    }
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
-        fields: vec![
-            "allowedRefs.scopeRefs".to_string(),
-            "allowedRefs.acceptanceRefs".to_string(),
-            "allowedRefs.requirementDetailIds".to_string(),
-            "allowedRefs.moduleRefs".to_string(),
-            "allowedRefs.entityRefs".to_string(),
-            "allowedRefs.interfaceRefs".to_string(),
-            "allowedRefs.userFlowRefs".to_string(),
-            "allowedRefs.stateMachineRefs".to_string(),
-            "outputContract.outlineFile".to_string(),
-            "outputContract.groupFilePattern".to_string(),
-        ],
+        fields: fields_to_read,
     })
     .expect("read taskplan fields")
     .fields;
@@ -7413,6 +7660,21 @@ fn architecture_section_candidate_with_workflow_closure_json(
             });
         }
         _ => {}
+    }
+    candidate
+}
+
+fn architecture_section_candidate_with_workflow_closure_no_runtime_json(
+    fixture: &Fixture,
+    request_ref: &str,
+) -> Value {
+    let mut candidate =
+        architecture_section_candidate_with_workflow_closure_json(fixture, request_ref);
+    if candidate["section"].as_str() == Some("runtime_delivery") {
+        candidate["content"]["runtimeDelivery"] = json!({
+            "status": "not_applicable",
+            "reason": "This test focuses on frontend workflow closure review signals."
+        });
     }
     candidate
 }

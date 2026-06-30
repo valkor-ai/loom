@@ -1519,7 +1519,7 @@ fn validate_workflow_closure_task_assignments(
     issues
 }
 
-fn task_covers_workflow_closure(task: &TaskDefinition, requirement: &Value) -> bool {
+pub(crate) fn task_covers_workflow_closure(task: &TaskDefinition, requirement: &Value) -> bool {
     let Some(workflow_ref) = requirement.get("workflowRef").and_then(Value::as_str) else {
         return false;
     };
@@ -1997,7 +1997,7 @@ fn requirement_detail_transfer(
     })
 }
 
-fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
+pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
     let Some(frontend) = aac.frontend_experience.as_ref() else {
         return vec![];
     };

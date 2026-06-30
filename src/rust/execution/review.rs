@@ -5,8 +5,9 @@ use std::{
 };
 
 use contracts::{
-    ManualReviewResolution, ReviewFinding, ReviewNextAction, ReviewResult, TaskDefinition,
-    TaskPlan, TaskPlanGroup, TaskPlanRun, TaskPlanRunStatus, TaskResult,
+    ArchitectureArtifactContract, ManualReviewResolution, ReviewFinding, ReviewNextAction,
+    ReviewResult, TaskDefinition, TaskPlan, TaskPlanGroup, TaskPlanRun, TaskPlanRunStatus,
+    TaskResult,
 };
 use delivery_core::{
     apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher, FileSubmitInput,
@@ -112,6 +113,13 @@ fn materialize_review_request_inner(
     let result_file = to_project_relative(root, &review_result_candidate_file(root, &review_id))?;
     let request_file = to_project_relative(root, &review_request_file(root, &locator, &review_id))?;
     let task_results = load_task_results(root, &locator, &task_plan, &run);
+    let architecture_contract = phase
+        .latest_refs
+        .get("architectureArtifact")
+        .and_then(|architecture_ref| from_project_relative(root, architecture_ref).ok())
+        .and_then(|architecture_path| {
+            state::store::read_json::<ArchitectureArtifactContract>(&architecture_path).ok()
+        });
     let next_phase_handoff =
         brainstorm::next_phase_handoff_from_preview(project_root, delivery_id, phase_id, None)?;
     let request_root = build_review_request(
@@ -123,6 +131,7 @@ fn materialize_review_request_inner(
         &task_plan,
         &run,
         &task_results,
+        architecture_contract.as_ref(),
         next_phase_handoff.as_ref(),
     )?;
     let stored = state::write_native_request(
@@ -177,11 +186,12 @@ fn build_review_request(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     task_results: &[TaskResult],
+    architecture_contract: Option<&ArchitectureArtifactContract>,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Result<Value, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let review_signals = build_review_signals(task_plan, run, task_results);
+    let review_signals = build_review_signals(task_plan, run, task_results, architecture_contract);
     let next_phase_preview = review_next_phase_preview(next_phase_handoff);
     let (change_set, change_context) =
         build_change_set(project_root, delivery_id, phase_id, review_id, task_results)?;
@@ -262,6 +272,7 @@ fn build_review_request(
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
                 "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure.",
+                "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
             ],
             "changeSetRules": change_set_rules(&change_context_mode),
@@ -1348,6 +1359,11 @@ fn validate_review_signals(
         item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
             && item.get("closureSatisfied").and_then(Value::as_bool) == Some(false)
     });
+    let missing_workflow_task_assignment = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
+            && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
+            && item.get("recommendedNextAction").and_then(Value::as_str) == Some("taskplan_repair")
+    });
     if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
         && (unsatisfied_detail || unsatisfied_frontend)
     {
@@ -1356,6 +1372,34 @@ fn validate_review_signals(
             "decision",
             "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail or frontend workflow closure.",
         ));
+    }
+    if missing_workflow_task_assignment {
+        let has_higher_priority_blocker = result.findings.iter().any(|finding| {
+            is_blocking_finding(finding)
+                && [
+                    "needs_user_decision",
+                    "manual_review",
+                    "architecture_artifact_repair",
+                ]
+                .contains(&finding.recommended_next_action.as_str())
+        });
+        let has_taskplan_repair_finding = result.findings.iter().any(|finding| {
+            is_blocking_finding(finding) && finding.recommended_next_action == "taskplan_repair"
+        });
+        if !has_higher_priority_blocker && result.next_action.r#type != "taskplan_repair" {
+            issues.push(issue(
+                "REVIEW_RESULT_STATUS_INCONSISTENT",
+                "nextAction.type",
+                "Missing workflow closure task assignment must route taskplan_repair unless a higher-priority blocking finding applies.",
+            ));
+        }
+        if !has_higher_priority_blocker && !has_taskplan_repair_finding {
+            issues.push(issue(
+                "REVIEW_RESULT_STATUS_INCONSISTENT",
+                "findings",
+                "Missing workflow closure task assignment requires a blocking taskplan_repair finding.",
+            ));
+        }
     }
 }
 
@@ -2224,6 +2268,7 @@ fn build_review_signals(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     task_results: &[TaskResult],
+    architecture_contract: Option<&ArchitectureArtifactContract>,
 ) -> Value {
     let mut signals = vec![json!({
         "signalId": "sig-task-run-summary",
@@ -2257,6 +2302,34 @@ fn build_review_signals(
                 "Assigned TaskResult evidence is missing or does not report this requirement detail as satisfied."
             }
         }));
+    }
+    if let Some(architecture_contract) = architecture_contract {
+        for requirement in crate::task_plan::workflow_closure_requirements(architecture_contract) {
+            if task_plan
+                .tasks
+                .iter()
+                .any(|task| crate::task_plan::task_covers_workflow_closure(task, &requirement))
+            {
+                continue;
+            }
+            let closure_id = requirement
+                .get("closureId")
+                .and_then(Value::as_str)
+                .unwrap_or("workflow_closure");
+            signals.push(json!({
+                "signalId": format!("sig-workflow-closure-missing-{}", safe_signal_id(closure_id)),
+                "kind": "frontend_workflow_closure",
+                "closureId": closure_id,
+                "workflowRef": requirement.get("workflowRef").and_then(Value::as_str),
+                "interfaceRefs": value_string_array(&requirement, "interfaceRefs"),
+                "acceptanceRefs": value_string_array(&requirement, "acceptanceRefs"),
+                "taskRefs": [],
+                "closureSatisfied": false,
+                "missingTaskAssignment": true,
+                "recommendedNextAction": "taskplan_repair",
+                "reason": "No TaskPlan task structurally covers this workflow closure requirement."
+            }));
+        }
     }
     for task in &task_plan.tasks {
         if task.frontend_experience_requirement.is_some() {
@@ -2346,6 +2419,16 @@ fn build_review_signals(
         }
     }
     Value::Array(signals)
+}
+
+fn value_string_array(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
 }
 
 fn frontend_closure_ids(task: &TaskDefinition) -> Vec<String> {
