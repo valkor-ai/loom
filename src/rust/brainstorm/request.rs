@@ -58,6 +58,7 @@ pub fn build_brainstorm_clarification_request_root(
             "clarificationConversationProtocol.currentBlock",
             "clarificationConversationProtocol.userVisibleBlockTitle",
             "clarificationConversationProtocol.userFacingLanguageRule",
+            "clarificationConversationProtocol.currentTurnAnswerRule",
             "clarificationConversationProtocol.blockRule",
             "clarificationConversationProtocol.confirmToolRule"
         ]
@@ -142,6 +143,7 @@ pub fn build_brainstorm_clarification_request_root(
             "requiredBlocks": required_blocks(),
             "userVisibleBlockTitle": user_visible_block_title(&current_block),
             "userFacingLanguageRule": user_facing_language.rule,
+            "currentTurnAnswerRule": current_turn_answer_rule(&current_block),
             "blockRule": block_rule(&current_block),
             "confirmToolRule": "After visible user confirmation, call loom.brainstormConfirmBlock with this requestRef, currentBlock, a concise user-facing summary, and current-block confirmedData. Do not write the final Brainstorm candidate in a clarification block."
         },
@@ -827,6 +829,35 @@ fn block_rule(block: &ClarificationBlockName) -> &'static str {
         }
         ClarificationBlockName::FinalSummary => {
             "Summarize already confirmed blocks for final confirmation; do not introduce new requirement detail here."
+        }
+    }
+}
+
+fn current_turn_answer_rule(block: &ClarificationBlockName) -> Value {
+    json!({
+        "consumeCurrentUserMessage": true,
+        "meaning": "If the same user message that started or continued this Loom turn already gives an explicit answer for this Brainstorm block, treat that message as the user's visible confirmation for this block instead of asking again.",
+        "explicitOnly": true,
+        "ifAmbiguousAskUser": true,
+        "evidenceSource": "Use compact requirement_context first; read requirement_full_text only when the compact context is insufficient to judge whether the current user message explicitly answered this block.",
+        "currentBlock": block_id(block),
+        "blockSpecificRule": current_turn_answer_block_rule(block)
+    })
+}
+
+fn current_turn_answer_block_rule(block: &ClarificationBlockName) -> &'static str {
+    match block {
+        ClarificationBlockName::PhaseScope => {
+            "Only consume the current message when it clearly selects the active phase boundary, not when it merely asks Loom to propose phase options."
+        }
+        ClarificationBlockName::ConceptGrounding => {
+            "Only consume the current message when it clearly confirms or corrects the business objects, operations, rules, fields, states, blockers, and boundaries for the already confirmed phase scope."
+        }
+        ClarificationBlockName::FrontendExperience => {
+            "Only consume the current message when it clearly confirms or corrects the user-visible page/workspace operation path or explicitly says UI is not applicable."
+        }
+        ClarificationBlockName::FinalSummary => {
+            "Only consume the current message when it clearly confirms the pre-submit checklist or gives concrete corrections to previously confirmed blocks."
         }
     }
 }

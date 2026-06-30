@@ -85,6 +85,31 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .find(|group| group.group_id == "knowledge_context_plan")
         .expect("knowledge_context_plan group");
     assert!(knowledge_group.required);
+    let conversation_protocol = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        group_id: "conversation_protocol".to_string(),
+    })
+    .expect("read conversation protocol");
+    let current_turn_rule =
+        &conversation_protocol.fields["clarificationConversationProtocol.currentTurnAnswerRule"]
+            .value;
+    assert_eq!(current_turn_rule["consumeCurrentUserMessage"], true);
+    assert_eq!(current_turn_rule["explicitOnly"], true);
+    assert!(
+        current_turn_rule["meaning"]
+            .as_str()
+            .expect("meaning")
+            .contains("instead of asking again"),
+        "{current_turn_rule:#}"
+    );
+    assert!(
+        current_turn_rule["blockSpecificRule"]
+            .as_str()
+            .expect("block specific rule")
+            .contains("active phase boundary"),
+        "{current_turn_rule:#}"
+    );
     let requirement_context = inspected
         .read_groups
         .iter()
