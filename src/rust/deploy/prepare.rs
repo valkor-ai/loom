@@ -5,7 +5,7 @@ use std::{
 
 use contracts::{
     DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentGeneratedFiles,
-    DeploymentProviderPolicy, DeploymentSourceModel, DeploymentSpec,
+    DeploymentProviderPolicy, DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSpec,
 };
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
@@ -32,7 +32,7 @@ use crate::{
     paths::{deployment_paths, DeploymentPaths},
     port_plan::{build_deployment_runtime, primary_url},
     runtime_contract::load_runtime_contract,
-    source_model::source_model_from_runtime_contract,
+    source_model::{runtime_contract_declares_multi_root, source_model_from_runtime_contract},
     strategy::resolve_deployment_strategy,
     topology::build_topology,
     DeployToolInput,
@@ -66,8 +66,13 @@ pub fn deploy_prepare_inner(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.logs_dir)?;
 
-    let deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
     let runtime_contract = load_runtime_contract(project_root)?;
+    let requested_deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
+    let deployment_root = deployment_root_for_runtime_contract(
+        project_root,
+        requested_deployment_root,
+        &runtime_contract,
+    );
     let code_probe = build_deployment_code_probe(&deployment_root)?;
     let build_context_path = relative_context_from_generated_to_root(
         project_root,
@@ -284,6 +289,18 @@ fn deployment_root_for(project_root: &Path, app_path: Option<&str>) -> StateResu
         )));
     }
     Ok(root)
+}
+
+fn deployment_root_for_runtime_contract(
+    project_root: &Path,
+    requested_root: PathBuf,
+    runtime: &DeploymentRuntimeContract,
+) -> PathBuf {
+    if requested_root != project_root && runtime_contract_declares_multi_root(runtime) {
+        project_root.to_path_buf()
+    } else {
+        requested_root
+    }
 }
 
 fn validate_selected_provider(

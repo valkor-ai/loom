@@ -248,6 +248,101 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
 }
 
 #[test]
+fn prepare_promotes_composite_runtime_above_preview_app_path() {
+    let fixture = Fixture::new("deploy-composite-app-path");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "spring boot service with vite web",
+        "deploymentShape": "single-service",
+        "build": { "command": "service: ./gradlew test && ./gradlew bootJar; web: npm run build" },
+        "start": { "command": "service: ./gradlew bootRun; web: npm run dev", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "service/build.gradle",
+        "plugins { id 'org.springframework.boot' version '3.5.6' }\n",
+    );
+    fixture.write_text("service/gradlew", "#!/bin/sh\n");
+    fixture.write_text(
+        "web/package.json",
+        r#"{"scripts":{"build":"vite"},"dependencies":{"react":"latest"}}"#,
+    );
+    fixture.write_text("web/package-lock.json", "{}\n");
+    fixture.write_text("web/vite.config.ts", "export default {}\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: Some("web".to_string()),
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("result json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
+        .expect("deployment spec");
+    let service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(spec.source_model.build_context_path, "../../../..");
+    assert_eq!(service.runtime_kind, contracts::RuntimeKind::Java);
+    assert_eq!(service.package_manager, Some(PackageManager::Gradle));
+    assert_eq!(service.framework.as_deref(), Some("spring-boot"));
+    assert_eq!(
+        service.workspace_package_json_paths,
+        vec!["web/package.json"]
+    );
+    assert_eq!(service.output_directory.as_deref(), Some("web/dist"));
+    assert_eq!(
+        service.build_command.as_deref(),
+        Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon")
+    );
+    assert!(!serde_json::to_string(&spec.source_model)
+        .unwrap()
+        .contains("npm run preview"));
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(compose.contains("context: ../../../.."), "{compose}");
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.app"),
+    )
+    .expect("dockerfile");
+    assert!(
+        dockerfile.contains("FROM node:22-bookworm-slim AS web-builder"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("FROM eclipse-temurin:21-jdk AS service-builder"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("COPY --from=service-builder /tmp/app.jar /app/app.jar"),
+        "{dockerfile}"
+    );
+    assert!(!dockerfile.contains("FROM nginx"), "{dockerfile}");
+
+    let evidence: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/evidence/latest-code-evidence.json"),
+    )
+    .expect("code evidence");
+    assert_eq!(evidence["projectRoot"], fixture.root_str());
+    assert_eq!(evidence["repositoryShape"], "multi_application");
+}
+
+#[test]
 fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections() {
     let fixture = Fixture::new("deploy-prepare-compact-output");
     fixture.write_runtime_delivery(runtime_delivery());

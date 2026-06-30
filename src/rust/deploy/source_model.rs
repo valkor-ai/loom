@@ -132,11 +132,17 @@ pub fn source_model_from_runtime_contract(
         };
     }
 
-    let contract_kind = runtime_kind_from_signals(&[
-        runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
-        runtime.runtime_kind.as_deref(),
-        runtime.start_command.as_deref(),
-    ]);
+    let contract_kind = if runtime_contract_declares_multi_root(runtime)
+        && fallback_probe.kind != RuntimeKind::Unknown
+    {
+        RuntimeKind::Unknown
+    } else {
+        runtime_kind_from_signals(&[
+            runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
+            runtime.runtime_kind.as_deref(),
+            runtime.start_command.as_deref(),
+        ])
+    };
     let service = DeploymentSourceService {
         service_id: "app".to_string(),
         role: SourceServiceRole::App,
@@ -256,8 +262,60 @@ fn dependencies_from_runtime_or_probe(
 }
 
 fn command_is_usable(command: &str) -> bool {
-    let lower = command.to_ascii_lowercase();
-    !(lower.contains("service:") || lower.contains("web:"))
+    labeled_command_segments(command).is_empty()
+}
+
+pub fn runtime_contract_declares_multi_root(runtime: &DeploymentRuntimeContract) -> bool {
+    if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend) {
+        return true;
+    }
+    let mut labels = Vec::new();
+    for command in [
+        runtime.build_command.as_deref(),
+        runtime.start_command.as_deref(),
+        runtime
+            .frontend
+            .as_ref()
+            .and_then(|endpoint| endpoint.build_command.as_deref()),
+        runtime
+            .api
+            .as_ref()
+            .and_then(|api| api.build_command.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        labels.extend(labeled_command_segments(command));
+    }
+    labels.sort();
+    labels.dedup();
+    labels.len() >= 2
+}
+
+fn labeled_command_segments(command: &str) -> Vec<String> {
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let (label, rest) = trimmed.split_once(':')?;
+            let label = label.trim();
+            if rest.trim().is_empty() || !is_command_segment_label(label) {
+                return None;
+            }
+            Some(label.to_ascii_lowercase())
+        })
+        .collect()
+}
+
+fn is_command_segment_label(value: &str) -> bool {
+    if value.is_empty() || value.contains(char::is_whitespace) {
+        return false;
+    }
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 fn runtime_kind_from_signals(signals: &[Option<&str>]) -> RuntimeKind {
