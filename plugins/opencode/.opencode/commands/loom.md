@@ -39,6 +39,8 @@ For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowl
 
 For `ExecuteTaskNext`, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
 
+For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress.
+
 For `DeployRepairAssetsNext`, edit only the returned deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
 
 The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`. Load no reference by default; load references only when the current action matches the trigger.

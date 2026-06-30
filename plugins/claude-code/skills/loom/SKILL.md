@@ -49,6 +49,8 @@ For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowl
 
 For task execution, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit before reporting completion.
 
+For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting completion.
+
 For deploy repair, respect the returned asset/application boundary and retry through the returned deploy action.
 
 ## Boundaries

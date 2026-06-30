@@ -51,6 +51,101 @@ fn brainstorm_clarification_request_has_no_candidate_write_contract() {
 }
 
 #[test]
+fn brainstorm_phase_scope_rejects_single_wide_capability_closure_query() {
+    let fixture = Fixture::new("brainstorm-phase-scope-single-wide-knowledge");
+    let server = LoomMcpServer::default();
+    let request_ref = start_brainstorm_request(&fixture);
+
+    for (step_id, query_id) in [
+        ("phase_scope_dependency_order", None),
+        (
+            "phase_scope_capability_closure",
+            Some("capability_closure_A"),
+        ),
+    ] {
+        server
+            .invoke_tool(
+                "loom.knowledgeBrainstormContext",
+                Some(
+                    json!({
+                        "projectRoot": fixture.root_str(),
+                        "requestRef": request_ref,
+                        "block": "phase_scope",
+                        "stepId": step_id,
+                        "queryId": query_id,
+                        "querySubject": "证券账户阶段边界",
+                        "naturalLanguageQuery": "证券账户 开户 挂失 补办 销户 资金账户 交易 依赖 闭环",
+                        "semanticFocus": ["证券账户", "开户", "挂失", "补办", "销户", "资金账户", "交易"]
+                    })
+                    .as_object()
+                    .expect("arguments object")
+                    .clone(),
+                ),
+            )
+            .expect("knowledge brainstorm context");
+    }
+
+    let result = server
+        .invoke_tool(
+            "loom.brainstormConfirmBlock",
+            Some(
+                json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "summary": "确认第一阶段为证券账户模块闭环。",
+                    "confirmedData": {
+                        "scope": {
+                            "included": ["证券账户开户", "证券账户挂失补办", "证券账户销户"],
+                            "deferred": ["资金账户", "交易客户端", "中央撮合"],
+                            "excluded": []
+                        },
+                        "recommendation": {
+                            "label": "证券账户模块闭环",
+                            "reason": "证券账户是资金账户和交易链路的上游基础对象。"
+                        }
+                    }
+                })
+                .as_object()
+                .expect("arguments object")
+                .clone(),
+            ),
+        )
+        .expect("confirm brainstorm block")
+        .structured_content
+        .expect("structured content");
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "run_loom_tool", "{result:#}");
+    assert_eq!(
+        result["next"]["toolName"], "loom.knowledgeBrainstormContext",
+        "{result:#}"
+    );
+    assert_eq!(
+        result["next"]["retryTool"], "loom.brainstormConfirmBlock",
+        "{result:#}"
+    );
+    let read_groups = result["next"]["readGroups"]
+        .as_array()
+        .expect("read groups");
+    assert_eq!(read_groups.len(), 1, "{result:#}");
+    assert_eq!(read_groups[0]["groupId"], "knowledge_context_plan");
+    let message = result["agentInstruction"].as_str().expect("message");
+    assert!(
+        message.contains("phase_scope_capability_closure"),
+        "{message}"
+    );
+    assert!(
+        message.contains("once per candidate phase boundary"),
+        "{message}"
+    );
+    assert!(
+        message.contains("Do not ask the user to reconfirm"),
+        "repair must not ask the user to reconfirm: {message}"
+    );
+}
+
+#[test]
 fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
     let fixture = Fixture::new("submit-schema-invalid");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);

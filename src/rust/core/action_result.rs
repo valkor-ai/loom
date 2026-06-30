@@ -79,6 +79,9 @@ fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
         LoomMcpNextAction::ExecuteTask(_) => {
             "Continue immediately: inspect requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress. Do not stop at a progress recap."
         }
+        LoomMcpNextAction::RunLoomTool(_) => {
+            "Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. Do not stop at a progress recap."
+        }
         LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
             "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated. Do not stop at a progress recap."
         }

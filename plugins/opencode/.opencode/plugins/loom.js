@@ -173,6 +173,14 @@ function idlePrompt(pending) {
   if (pending.state === "active_operation") {
     return "The latest Loom MCP result is active_operation. Call only the observation tools named by that result, then continue following the returned state.";
   }
+  if (pending.nextKind === "run_loom_tool") {
+    return [
+      "The latest Loom MCP result is auto_runnable.",
+      "Execute next.kind=run_loom_tool now.",
+      pending.requestRef ? `Use requestRef=${pending.requestRef}.` : null,
+      "Inspect the request, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress.",
+    ].filter(Boolean).join("\n");
+  }
   return [
     "The latest Loom MCP result is auto_runnable.",
     `Execute next.kind=${pending.nextKind || "unknown"} now.`,

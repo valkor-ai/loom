@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub enum LoomMcpNextAction {
     WriteArtifact(WriteArtifactNext),
     ExecuteTask(ExecuteTaskNext),
+    RunLoomTool(RunLoomToolNext),
     GenerateKnowledgeSemantics(GenerateKnowledgeSemanticsNext),
     DeployRepairAssets(DeployRepairAssetsNext),
 }
@@ -57,6 +58,15 @@ pub struct WriteTarget {
     pub path: String,
     pub required: bool,
     pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunLoomToolNext {
+    pub tool_name: String,
+    pub request_ref: String,
+    pub read_groups: Vec<ReadGroupRef>,
+    pub retry_tool: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
