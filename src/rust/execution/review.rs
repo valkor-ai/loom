@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::Path,
     process::Command,
 };
@@ -598,18 +599,20 @@ fn build_change_set(
         let mut diff_texts = Vec::new();
         for file in &changed_files {
             let diff_path = diffs_dir.join(format!("{}.diff", safe_id(file)));
-            let diff = git_output(project_root, &["diff", "HEAD", "--", file]).unwrap_or_default();
+            let tracked = git_tracked(project_root, file);
+            let diff = git_diff_for_declared_file(project_root, file, tracked);
             state::store::write_text_atomic(&diff_path, &diff)?;
             let has_diff = !diff.trim().is_empty();
             if has_diff {
                 diff_texts.push(diff);
             }
             let diff_ref = to_project_relative(project_root, &diff_path)?;
-            let (insertions, deletions) = git_numstat(project_root, file).unwrap_or((0, 0));
+            let (insertions, deletions) =
+                git_numstat(project_root, file, tracked).unwrap_or((0, 0));
             files.push(json!({
                 "path": file,
                 "source": source_by_path.get(file),
-                "changeType": if has_diff { "modified" } else { "declared_changed" },
+                "changeType": if tracked && has_diff { "modified" } else { "declared_changed" },
                 "insertions": insertions,
                 "deletions": deletions,
                 "diffRef": diff_ref
@@ -683,8 +686,67 @@ fn git_output(project_root: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn git_numstat(project_root: &Path, file: &str) -> Option<(u32, u32)> {
-    let output = git_output(project_root, &["diff", "HEAD", "--numstat", "--", file])?;
+fn git_output_allow_diff_exit(project_root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .ok()?;
+    if output.status.success() || output.status.code() == Some(1) {
+        return Some(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    None
+}
+
+fn git_tracked(project_root: &Path, file: &str) -> bool {
+    git_output(project_root, &["ls-files", "--error-unmatch", "--", file]).is_some()
+}
+
+fn git_diff_for_declared_file(project_root: &Path, file: &str, tracked: bool) -> String {
+    if tracked {
+        return git_output(project_root, &["diff", "HEAD", "--", file]).unwrap_or_default();
+    }
+    let file_path = project_root.join(file);
+    if !file_path.exists() {
+        return String::new();
+    }
+    git_output_allow_diff_exit(
+        project_root,
+        &["diff", "--no-index", "--", "/dev/null", file],
+    )
+    .filter(|diff| !diff.trim().is_empty())
+    .unwrap_or_else(|| synthetic_new_file_diff(&file_path, file))
+}
+
+fn synthetic_new_file_diff(file_path: &Path, file: &str) -> String {
+    let content = fs::read_to_string(file_path).unwrap_or_default();
+    let line_count = content.lines().count();
+    let mut diff = format!(
+        "diff --git a/{file} b/{file}\nnew file mode 100644\n--- /dev/null\n+++ b/{file}\n@@ -0,0 +1,{line_count} @@\n"
+    );
+    for line in content.lines() {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    if !content.ends_with('\n') && !content.is_empty() {
+        diff.push_str("\\ No newline at end of file\n");
+    }
+    diff
+}
+
+fn git_numstat(project_root: &Path, file: &str, tracked: bool) -> Option<(u32, u32)> {
+    let output = if tracked {
+        git_output(project_root, &["diff", "HEAD", "--numstat", "--", file])?
+    } else if project_root.join(file).exists() {
+        git_output_allow_diff_exit(
+            project_root,
+            &["diff", "--no-index", "--numstat", "--", "/dev/null", file],
+        )?
+    } else {
+        return None;
+    };
     let line = output.lines().next()?;
     let mut parts = line.split_whitespace();
     let insertions = parts.next()?.parse::<u32>().ok()?;

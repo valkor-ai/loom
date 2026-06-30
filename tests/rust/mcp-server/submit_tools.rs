@@ -4318,7 +4318,20 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
         "export const app = 'changed';\n",
     )
     .expect("modify tracked source");
+    std::fs::write(
+        fixture.root.join("src/new-widget.ts"),
+        "export const newWidget = true;\n",
+    )
+    .expect("write declared untracked source");
+    std::fs::write(
+        fixture.root.join("src/not-declared.ts"),
+        "export const notDeclared = true;\n",
+    )
+    .expect("write unrelated untracked source");
     write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["changedFiles"] = json!(["src/main.tsx", "src/new-widget.ts"]);
+    });
     let task_result = call_submit(
         "loom.recordTaskResultFile",
         &execution_request_ref,
@@ -4370,8 +4383,39 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
         .value
         .as_array()
         .expect("changed files");
-    let diff_ref = changed_files[0]["diffRef"].as_str().expect("diffRef");
-    assert!(fixture.root.join(diff_ref).exists());
+    let changed_files_json = serde_json::to_string(changed_files).expect("serialize changed files");
+    assert!(changed_files_json.contains("src/main.tsx"));
+    assert!(changed_files_json.contains("src/new-widget.ts"));
+    assert!(!changed_files_json.contains("not-declared"));
+    let tracked_file = changed_files
+        .iter()
+        .find(|file| file["path"] == json!("src/main.tsx"))
+        .expect("tracked changed file");
+    let tracked_diff_ref = tracked_file["diffRef"].as_str().expect("tracked diffRef");
+    assert!(fixture.root.join(tracked_diff_ref).exists());
+    let tracked_diff =
+        std::fs::read_to_string(fixture.root.join(tracked_diff_ref)).expect("read tracked diff");
+    assert!(tracked_diff.contains("export const app = 'changed'"));
+    let new_file = changed_files
+        .iter()
+        .find(|file| file["path"] == json!("src/new-widget.ts"))
+        .expect("declared new file");
+    assert_eq!(new_file["changeType"], json!("declared_changed"));
+    assert!(new_file["insertions"].as_u64().unwrap_or(0) >= 1);
+    let new_diff_ref = new_file["diffRef"].as_str().expect("new file diffRef");
+    let new_diff_path = fixture.root.join(new_diff_ref);
+    let new_diff = std::fs::read_to_string(&new_diff_path).expect("read new file diff");
+    assert!(new_diff.contains("new-widget.ts"));
+    assert!(new_diff.contains("+export const newWidget = true;"));
+    assert!(!new_diff.contains("notDeclared"));
+    let full_diff_path = new_diff_path
+        .parent()
+        .expect("diff parent")
+        .join("full.diff");
+    let full_diff = std::fs::read_to_string(full_diff_path).expect("read full diff");
+    assert!(full_diff.contains("export const app = 'changed'"));
+    assert!(full_diff.contains("+export const newWidget = true;"));
+    assert!(!full_diff.contains("notDeclared"));
     let request_root = read_request_root_value(fixture.root_str(), &review_request_ref);
     assert!(
         request_root.get("changeContext").is_none(),
@@ -4384,6 +4428,9 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
     assert!(!serde_json::to_string(&request_root)
         .expect("serialize request root")
         .contains("export const app = 'changed'"));
+    assert!(!serde_json::to_string(&request_root)
+        .expect("serialize request root")
+        .contains("newWidget"));
 }
 
 #[test]
