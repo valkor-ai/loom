@@ -831,16 +831,14 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("confirm brainstorm block"),
     );
-    assert_eq!(result["state"], "failed", "{result:#}");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "run_loom_tool");
     assert_eq!(
-        result["error"]["code"],
-        "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED"
-    );
-    assert_eq!(
-        result["error"]["recoveryTool"],
+        result["next"]["toolName"],
         "loom.knowledgeBrainstormContext"
     );
-    assert!(result["error"]["message"]
+    assert_eq!(result["next"]["retryTool"], "loom.brainstormConfirmBlock");
+    assert!(result["agentInstruction"]
         .as_str()
         .unwrap_or_default()
         .contains("Do not ask the user to reconfirm"));
@@ -856,7 +854,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
                     "stepId": "phase_scope_dependency_order",
                     "querySubject": "证券账户模块与后续资金账户、交易客户端的依赖边界",
                     "naturalLanguageQuery": "证券账户 资金账户 交易客户端 依赖 边界",
-                    "semanticFocus": ["证券账户", "资金账户", "交易客户端"]
+                    "semanticFocus": ["object:证券账户", "object:资金账户", "object:交易客户端"]
                 }))),
             )
             .expect("dependency order knowledge context"),
@@ -874,7 +872,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
                     "queryId": "capability_closure_A",
                     "querySubject": "方案A：证券账户模块闭环",
                     "naturalLanguageQuery": "证券账户 开户 挂失补办 销户 闭环",
-                    "semanticFocus": ["证券账户", "开户", "挂失补办", "销户"]
+                    "semanticFocus": ["object:证券账户", "operation:开户", "operation:挂失补办", "operation:销户"]
                 }))),
             )
             .expect("single capability closure knowledge context"),
@@ -904,8 +902,12 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("confirm brainstorm block with one closure"),
     );
-    assert_eq!(still_missing["state"], "failed", "{still_missing:#}");
-    assert!(still_missing["error"]["message"]
+    assert_eq!(still_missing["state"], "auto_runnable", "{still_missing:#}");
+    assert_eq!(
+        still_missing["next"]["toolName"],
+        "loom.knowledgeBrainstormContext"
+    );
+    assert!(still_missing["agentInstruction"]
         .as_str()
         .unwrap_or_default()
         .contains("distinct queryId"));
@@ -922,7 +924,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
                     "queryId": "capability_closure_B",
                     "querySubject": "方案B：证券账户加工作人员办理页面闭环",
                     "naturalLanguageQuery": "证券账户 工作人员界面 开户 挂失补办 销户",
-                    "semanticFocus": ["证券账户", "工作人员界面", "开户", "销户"]
+                    "semanticFocus": ["object:证券账户", "page:工作人员界面", "operation:开户", "operation:销户"]
                 }))),
             )
             .expect("second capability closure knowledge context"),
