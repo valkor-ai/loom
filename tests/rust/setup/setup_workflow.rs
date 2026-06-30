@@ -571,6 +571,8 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "GenerateKnowledgeSemanticsNext",
         "loom.knowledgeInspectChunk",
         "ExecuteTaskNext",
+        "RunLoomToolNext",
+        "retryTool",
         "DeployRepairAssetsNext",
         "Do not copy field-level contracts",
     ] {
@@ -646,6 +648,44 @@ fn agent_templates_expose_knowledge_direct_route_and_semantic_pack_discipline() 
                 assert!(content.contains(required), "{file} missing {required}");
             }
         }
+    }
+}
+
+#[test]
+fn agent_templates_expose_run_loom_tool_next_discipline() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    let files = [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/commands/loom.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+    ];
+
+    for file in files {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        for required in [
+            "RunLoomToolNext",
+            "inspect the requestRef",
+            "read only the returned readGroups",
+            "call the returned Loom MCP tool",
+            "retry the returned retryTool",
+        ] {
+            assert!(content.contains(required), "{file} missing {required}");
+        }
+    }
+
+    let opencode_plugin =
+        fs::read_to_string(plugin_root.join("opencode/.opencode/plugins/loom.js")).unwrap();
+    for required in [
+        "run_loom_tool",
+        "read only the returned readGroups",
+        "retry the returned retryTool",
+    ] {
+        assert!(
+            opencode_plugin.contains(required),
+            "opencode plugin missing auto-continue prompt discipline {required}"
+        );
     }
 }
 

@@ -4,7 +4,7 @@ use delivery_core::{
     LoomMcpActionResult, LoomMcpActiveOperationResult, LoomMcpAutoRunnableResult,
     LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult,
     LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, PostSubmitAction,
-    ReadGroupRef, RepairIssue, WriteArtifactNext, WriteMode, WriteTarget,
+    ReadGroupRef, RepairIssue, RunLoomToolNext, WriteArtifactNext, WriteMode, WriteTarget,
 };
 use serde_json::Value;
 
@@ -44,7 +44,7 @@ fn action_result_states_have_expected_next_boundaries() {
                 assert!(
                     value["agentInstruction"].as_str().is_some_and(|text| {
                         text.contains("Continue immediately")
-                            && text.contains("submit")
+                            && (text.contains("submit") || text.contains("retryTool"))
                             && text.contains("Do not stop at a progress recap")
                     }),
                     "auto_runnable must include agentInstruction: {value}"
@@ -97,6 +97,7 @@ fn next_action_shapes_are_stable() {
     let actions = vec![
         sample_write_artifact_next(),
         sample_execute_task_next(),
+        sample_run_loom_tool_next(),
         sample_generate_knowledge_semantics_next(),
         sample_deploy_repair_assets_next(),
     ];
@@ -113,6 +114,7 @@ fn next_action_shapes_are_stable() {
         vec![
             "write_artifact",
             "execute_task",
+            "run_loom_tool",
             "generate_knowledge_semantics",
             "deploy_repair_assets",
         ]
@@ -148,6 +150,10 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
         LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
             "/tmp/project",
             sample_write_artifact_next(),
+        )),
+        LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
+            "/tmp/project",
+            sample_run_loom_tool_next(),
         )),
         LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
             project_root: "/tmp/project".to_string(),
@@ -254,6 +260,20 @@ fn sample_execute_task_next() -> LoomMcpNextAction {
         },
         repair_context: None,
         post_submit: PostSubmitAction::ContinueDelivery,
+    })
+}
+
+fn sample_run_loom_tool_next() -> LoomMcpNextAction {
+    LoomMcpNextAction::RunLoomTool(RunLoomToolNext {
+        tool_name: "loom.knowledgeBrainstormContext".to_string(),
+        request_ref: "loom://projects/project_1/requests/request_knowledge".to_string(),
+        read_groups: vec![ReadGroupRef::new(
+            "knowledge_context_plan",
+            1,
+            vec!["knowledgeQueryPlan.blocks.phase_scope.executionOrder".to_string()],
+            "loom://projects/project_1/requests/request_knowledge/field-groups/knowledge_context_plan",
+        )],
+        retry_tool: "loom.brainstormConfirmBlock".to_string(),
     })
 }
 
