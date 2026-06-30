@@ -20,8 +20,9 @@ use delivery_core::{
     ReadRequestFieldsInput,
 };
 use deploy::{
-    accept_deploy_execution_repair_file, deploy_bootstrap, deploy_prepare, deploy_repair,
-    deploy_status, deploy_up, deploy_validate, DeployBootstrapInput, DeployToolInput,
+    accept_deploy_execution_repair_file, deploy_bootstrap, deploy_inspect, deploy_prepare,
+    deploy_repair, deploy_status, deploy_up, deploy_validate, DeployBootstrapInput,
+    DeployToolInput,
 };
 use serde_json::{json, Value};
 use state::store::{ensure_dir, now_millis, now_string, read_json, read_text, write_json_atomic};
@@ -204,6 +205,37 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
 }
 
 #[test]
+fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections() {
+    let fixture = Fixture::new("deploy-prepare-compact-output");
+    fixture.write_runtime_delivery(runtime_delivery());
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    let details = &value["details"];
+    assert!(details["specRef"].as_str().is_some(), "{value:#}");
+    assert!(details["sourceModelRef"].as_str().is_some(), "{value:#}");
+    assert!(details["topologyRef"].as_str().is_some(), "{value:#}");
+    assert!(details["codeEvidenceRef"].as_str().is_some(), "{value:#}");
+    assert!(details["sourceModelSummary"].is_object(), "{value:#}");
+    assert!(details["topologySummary"].is_object(), "{value:#}");
+    assert!(details["generatedFileRefs"].is_array(), "{value:#}");
+    assert!(
+        details.get("sourceModel").is_none()
+            && details.get("topology").is_none()
+            && details.get("generatedFiles").is_none(),
+        "deploy prepare must not inline full deploy spec sections: {value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
 fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
     let fixture = Fixture::new("deploy-validate-clears-failure");
     fixture.write_runtime_delivery(json!({
@@ -338,6 +370,47 @@ fn deploy_status_does_not_echo_project_root_inside_state_details() {
         value["details"]["state"].get("projectRoot").is_none(),
         "{value:#}"
     );
+}
+
+#[test]
+fn deploy_inspect_returns_refs_without_inlining_spec_or_repair_action() {
+    let fixture = Fixture::new("deploy-inspect-compact-output");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_repair_action(
+        DeploymentRepairRoute::DeployRepair,
+        DeploymentFailureOwner::DeploymentAssets,
+    );
+
+    let result = deploy_inspect(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("inspect json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    let details = &value["details"];
+    assert_eq!(details["prepared"], true, "{value:#}");
+    assert!(details["specRef"].as_str().is_some(), "{value:#}");
+    assert!(details["repairRef"].as_str().is_some(), "{value:#}");
+    assert!(details["sourceModelSummary"].is_object(), "{value:#}");
+    assert!(details["topologySummary"].is_object(), "{value:#}");
+    assert!(details["generatedFileRefs"].is_array(), "{value:#}");
+    assert!(
+        details.get("sourceModel").is_none()
+            && details.get("topology").is_none()
+            && details.get("files").is_none()
+            && details.get("repair").is_none(),
+        "deploy inspect must not inline full spec or repair action: {value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&value);
 }
 
 #[test]

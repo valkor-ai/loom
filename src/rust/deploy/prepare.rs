@@ -160,27 +160,7 @@ pub fn deploy_prepare_inner(
     Ok(LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: project_root.to_string_lossy().into_owned(),
         summary: "Deployment assets prepared from RuntimeDeliveryContract.".to_string(),
-        details: Some(json!({
-            "specRef": to_project_relative(project_root, &paths.spec_file)?,
-            "runtimeContractRef": spec.runtime_contract_ref,
-            "sourceModelRef": spec.source_model_ref,
-            "topologyRef": spec.topology_ref,
-            "codeEvidenceRef": spec.code_evidence_ref,
-            "sourceModel": {
-                "shape": spec.source_model.shape,
-                "primaryServiceId": spec.source_model.primary_service_id,
-                "previewServiceId": spec.source_model.preview_service_id,
-                "serviceIds": spec.source_model.services.iter().map(|service| service.service_id.clone()).collect::<Vec<_>>()
-            },
-            "topology": {
-                "publicEntryServiceId": spec.topology.public_entry_service_id,
-                "routes": spec.topology.routes,
-                "previewPaths": spec.topology.validation.preview_paths,
-                "apiPaths": spec.topology.validation.api_paths
-            },
-            "generatedFiles": spec.files,
-            "url": spec.runtime.url
-        })),
+        details: Some(deployment_prepare_details(project_root, &spec)?),
         warnings: vec![],
     }))
 }
@@ -264,6 +244,47 @@ fn relative_context_from_generated_to_project(project_root: &Path, generated_dir
             .collect::<Vec<_>>()
             .join("/")
     }
+}
+
+pub(crate) fn deployment_prepare_details(
+    project_root: &Path,
+    spec: &DeploymentSpec,
+) -> StateResult<serde_json::Value> {
+    let paths = deployment_paths(project_root);
+    Ok(json!({
+        "specRef": to_project_relative(project_root, &paths.spec_file)?,
+        "runtimeContractRef": spec.runtime_contract_ref,
+        "sourceModelRef": spec.source_model_ref,
+        "topologyRef": spec.topology_ref,
+        "codeEvidenceRef": spec.code_evidence_ref,
+        "sourceModelSummary": {
+            "shape": spec.source_model.shape,
+            "primaryServiceId": spec.source_model.primary_service_id,
+            "previewServiceId": spec.source_model.preview_service_id,
+            "serviceIds": spec.source_model.services.iter().map(|service| service.service_id.clone()).collect::<Vec<_>>()
+        },
+        "topologySummary": {
+            "publicEntryServiceId": spec.topology.public_entry_service_id,
+            "routeCount": spec.topology.routes.len(),
+            "previewPaths": spec.topology.validation.preview_paths,
+            "apiPaths": spec.topology.validation.api_paths
+        },
+        "generatedFileRefs": deployment_file_refs(spec),
+        "reusedFileRefs": spec.files.reused,
+        "url": spec.runtime.url
+    }))
+}
+
+pub(crate) fn deployment_file_refs(spec: &DeploymentSpec) -> Vec<String> {
+    let mut refs = vec![
+        spec.files.compose_path.clone(),
+        spec.files.dockerignore_path.clone(),
+    ];
+    refs.extend(spec.files.dockerfile_paths.values().cloned());
+    refs.extend(spec.files.nginx_config_paths.values().cloned());
+    refs.sort();
+    refs.dedup();
+    refs
 }
 
 fn runtime_contract_blocked(project_root: &Path, error: StateError) -> LoomMcpActionResult {
