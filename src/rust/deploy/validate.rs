@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use contracts::{DeploymentRoute, DeploymentSpec};
+use contracts::{DeployProvider, DeploymentRoute, DeploymentSpec};
 use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -135,12 +135,14 @@ pub fn validate_generated_assets(
             ));
         }
     }
-    for service in &spec.source_model.services {
-        if !compose.contains(&format!("  {}:", service.service_id)) {
-            issues.push(format!(
-                "compose is missing service {}.",
-                service.service_id
-            ));
+    if spec.provider != DeployProvider::ComposeExisting {
+        for service in &spec.source_model.services {
+            if !compose.contains(&format!("  {}:", service.service_id)) {
+                issues.push(format!(
+                    "compose is missing service {}.",
+                    service.service_id
+                ));
+            }
         }
     }
     for (service_id, nginx_ref) in &spec.files.nginx_config_paths {

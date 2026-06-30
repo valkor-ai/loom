@@ -10,9 +10,10 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 use contracts::{
-    DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureKind, DeploymentFailureOwner,
-    DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape,
-    DeploymentSpec, PackageManager, SourceModelSource,
+    DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureKind,
+    DeploymentFailureOwner, DeploymentFailureReport, DeploymentProviderPolicy,
+    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec, PackageManager,
+    SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -233,6 +234,277 @@ fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections(
         "deploy prepare must not inline full deploy spec sections: {value:#}"
     );
     assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_prepare_prefers_existing_compose_without_inlining_or_editing_it() {
+    let fixture = Fixture::new("deploy-compose-existing");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "compose.yaml",
+        "services:\n  web:\n    build: .\n    ports:\n      - \"5555:8080\"\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(
+        value["details"]["provider"], "compose-existing",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["composeSummary"]["selectedService"], "web",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["generatedFileRefs"],
+        json!([]),
+        "{value:#}"
+    );
+    assert_eq!(value["details"]["reusedFileRefs"], json!(["compose.yaml"]));
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::ComposeExisting);
+    assert_eq!(spec.files.compose_path, "compose.yaml");
+    assert_eq!(spec.runtime.host_port, 5555);
+    assert_eq!(spec.runtime.container_port, 8080);
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/specs/generated/compose.yaml")
+        .exists());
+}
+
+#[test]
+fn deploy_prepare_reuses_existing_dockerfile_and_generates_only_wrapper_assets() {
+    let fixture = Fixture::new("deploy-dockerfile-existing");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "Dockerfile",
+        "FROM node:22\nCMD [\"node\", \"server.js\"]\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(
+        value["details"]["provider"], "dockerfile-existing",
+        "{value:#}"
+    );
+    assert_eq!(value["details"]["reusedFileRefs"], json!(["Dockerfile"]));
+    assert!(value["details"]["generatedFileRefs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == ".loom/deployment/specs/generated/compose.yaml"));
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::DockerfileExisting);
+    assert_eq!(spec.files.dockerfile_paths["app"], "Dockerfile");
+    assert!(fixture
+        .root
+        .join(".loom/deployment/specs/generated/compose.yaml")
+        .exists());
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.app")
+        .exists());
+}
+
+#[test]
+fn deploy_prepare_force_generate_ignores_existing_assets() {
+    let fixture = Fixture::new("deploy-force-generated");
+    fixture.write_runtime_delivery(runtime_delivery());
+    fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
+    fixture.write_text("Dockerfile", "FROM nginx\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: Some(DeploymentProviderPolicy {
+            provider: Some(DeployProvider::Generated),
+            reuse_existing: false,
+            force_generate: true,
+        }),
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["provider"], "generated", "{value:#}");
+    assert_eq!(value["details"]["reusedFileRefs"], json!([]));
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::Generated);
+    assert!(fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.frontend")
+        .exists());
+}
+
+#[test]
+fn deploy_prepare_uses_app_path_when_selecting_existing_assets() {
+    let fixture = Fixture::new("deploy-app-path-existing");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text("apps/api/Dockerfile", "FROM node:22\n");
+    fixture.write_text(
+        "apps/api/package.json",
+        r#"{"scripts":{"start":"node server.js"}}"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: Some("apps/api".to_string()),
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(
+        value["details"]["provider"], "dockerfile-existing",
+        "{value:#}"
+    );
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::DockerfileExisting);
+    assert_eq!(spec.files.reused, vec!["apps/api/Dockerfile"]);
+    assert_eq!(spec.source_model.build_context_path, "../../../../apps/api");
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_auto_falls_back_from_existing_provider_to_generated() {
+    let fixture = Fixture::new("deploy-existing-fallback-generated");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["details"]["provider"], "compose-existing");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
+  echo "compose config failed for $3" >&2
+  exit 2
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(fixture.read_spec().provider, DeployProvider::Generated);
+    let repair = fixture.repair_action_value();
+    assert!(!repair["protectedFiles"]
+        .as_array()
+        .map(|items| items.iter().any(|item| item == "compose.yaml"))
+        .unwrap_or(false));
+    assert!(!repair["editableFiles"]
+        .as_array()
+        .map(|items| items.iter().any(|item| item == "compose.yaml"))
+        .unwrap_or(false));
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_respects_forced_existing_provider_without_fallback() {
+    let fixture = Fixture::new("deploy-forced-existing-no-fallback");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
+    let policy = DeploymentProviderPolicy {
+        provider: Some(DeployProvider::ComposeExisting),
+        reuse_existing: true,
+        force_generate: false,
+    };
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: Some(policy.clone()),
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["details"]["provider"], "compose-existing");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
+  echo "forced compose config failed" >&2
+  exit 2
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: Some(policy),
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(
+        fixture.read_spec().provider,
+        DeployProvider::ComposeExisting
+    );
+    let repair = fixture.repair_action_value();
+    assert_eq!(repair["repairRoute"], "none");
+    assert!(repair["editableFiles"]
+        .as_array()
+        .map(Vec::is_empty)
+        .unwrap_or(true));
+    assert_eq!(repair["protectedFiles"], json!(["compose.yaml"]));
+    assert_eq!(value["state"], "blocked", "{value:#}");
 }
 
 #[test]

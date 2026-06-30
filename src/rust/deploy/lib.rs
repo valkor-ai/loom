@@ -2,6 +2,7 @@ mod active_operation;
 mod bootstrap;
 mod code_evidence;
 mod down;
+mod existing;
 mod generate;
 mod inspect;
 mod logs;
@@ -13,10 +14,12 @@ mod runtime_contract;
 mod runtime_state;
 mod source_model;
 mod status;
+mod strategy;
 mod topology;
 mod up;
 mod validate;
 
+use contracts::DeploymentProviderPolicy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +43,7 @@ pub struct DeployToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_policy: Option<String>,
+    pub provider_policy: Option<DeploymentProviderPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

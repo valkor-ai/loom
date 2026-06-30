@@ -1,9 +1,10 @@
 use std::{fs, path::Path};
 
 use contracts::{
-    DeployExecutionRepairTaskResult, DeploymentErrorWindow, DeploymentFailedContract,
-    DeploymentFailureDiagnostic, DeploymentFailureKind, DeploymentFailureOwner,
-    DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute, DeploymentSpec,
+    DeployExecutionRepairTaskResult, DeployProvider, DeploymentErrorWindow,
+    DeploymentFailedContract, DeploymentFailureDiagnostic, DeploymentFailureKind,
+    DeploymentFailureOwner, DeploymentFailureReport, DeploymentRepairAction, DeploymentRepairRoute,
+    DeploymentSpec,
 };
 use delivery_core::{
     ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
@@ -28,7 +29,7 @@ use crate::{
     paths::{
         deploy_execution_repair_action_file, deploy_execution_repair_result_file, deployment_paths,
     },
-    prepare::read_spec,
+    prepare::{deployment_generated_file_refs, read_spec},
     run::deploy_retry_after_repair,
     DeployToolInput,
 };
@@ -156,17 +157,7 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                     topology_ref: spec.as_ref().map(|spec| spec.topology_ref.clone()),
                     generated_file_refs: spec
                         .as_ref()
-                        .map(|spec| {
-                            let mut refs = vec![
-                                spec.files.compose_path.clone(),
-                                spec.files.dockerignore_path.clone(),
-                            ];
-                            refs.extend(spec.files.dockerfile_paths.values().cloned());
-                            refs.extend(spec.files.nginx_config_paths.values().cloned());
-                            refs.sort();
-                            refs.dedup();
-                            refs
-                        })
+                        .map(deployment_generated_file_refs)
                         .unwrap_or_default(),
                     diagnostics_ref: Some(
                         to_project_relative(
@@ -936,16 +927,13 @@ fn classify_repair(
         ),
         DeploymentFailureKind::Healthcheck if editable_file_count == 0 => (
             DeploymentFailureOwner::ApplicationCode,
-            DeploymentRepairRoute::ManualReview,
+            DeploymentRepairRoute::ExecutionRepair,
         ),
         _ if editable_file_count > 0 => (
             DeploymentFailureOwner::DeploymentAssets,
             DeploymentRepairRoute::DeployRepair,
         ),
-        _ => (
-            DeploymentFailureOwner::Unknown,
-            DeploymentRepairRoute::ManualReview,
-        ),
+        _ => (DeploymentFailureOwner::Unknown, DeploymentRepairRoute::None),
     }
 }
 
@@ -961,15 +949,24 @@ fn editable_files_for(spec: &DeploymentSpec, failure_kind: DeploymentFailureKind
         | DeploymentFailureKind::ApplicationStartupFailed
         | DeploymentFailureKind::HttpProbeFailed
         | DeploymentFailureKind::PreviewNotVerified => vec![],
+        _ if spec.provider == DeployProvider::ComposeExisting => vec![],
         _ => {
+            let reused = spec
+                .files
+                .reused
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>();
             let mut files = vec![
                 spec.files.compose_path.clone(),
                 spec.files.dockerignore_path.clone(),
             ];
-            files.extend(spec.files.dockerfile_paths.values().cloned());
             files.extend(spec.files.nginx_config_paths.values().cloned());
+            if spec.provider == DeployProvider::Generated {
+                files.extend(spec.files.dockerfile_paths.values().cloned());
+            }
             files.sort();
             files.dedup();
+            files.retain(|file| !file.is_empty() && !reused.contains(file));
             files
         }
     }
@@ -1001,10 +998,10 @@ fn create_failure_report(
         .collect::<Vec<_>>();
     let window = error_window(stdout, stderr, diagnostics);
     let mut must_not_edit = vec![".loom".to_string(), spec.runtime_contract_ref.clone()];
-    must_not_edit.extend(spec.files.dockerfile_paths.values().cloned());
-    must_not_edit.extend(spec.files.nginx_config_paths.values().cloned());
-    must_not_edit.push(spec.files.compose_path.clone());
-    must_not_edit.push(spec.files.dockerignore_path.clone());
+    must_not_edit.extend(spec.files.reused.clone());
+    if repair_route == DeploymentRepairRoute::ExecutionRepair {
+        must_not_edit.extend(deployment_generated_file_refs(spec));
+    }
     must_not_edit.sort();
     must_not_edit.dedup();
     Ok(DeploymentFailureReport {

@@ -4,7 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use contracts::{DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentSpec};
+use contracts::{
+    DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentGeneratedFiles,
+    DeploymentProviderPolicy, DeploymentSourceModel, DeploymentSpec,
+};
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
     LoomMcpFailureResult,
@@ -12,7 +15,7 @@ use delivery_core::{
 use serde_json::json;
 use state::{
     lifecycle_store::init_project_state,
-    paths::to_project_relative,
+    paths::{from_project_relative, to_project_relative},
     store::{
         ensure_dir, now_string, write_json_atomic, write_text_atomic, StateError, StateResult,
     },
@@ -22,10 +25,15 @@ use crate::{
     active_operation::{acquire_operation, active_operation_result},
     bootstrap::analyze_deployment_bootstrap,
     code_evidence::build_deployment_code_probe,
+    existing::{
+        analyze_existing_compose, find_existing_deployment_files, selected_compose_port,
+        ExistingDeploymentFiles,
+    },
     generate::{deployment_runtime, generate_deployment_files, generated_file_refs},
-    paths::deployment_paths,
+    paths::{deployment_paths, DeploymentPaths},
     runtime_contract::load_runtime_contract,
     source_model::source_model_from_runtime_contract,
+    strategy::resolve_deployment_strategy,
     topology::build_topology,
     DeployToolInput,
 };
@@ -48,7 +56,7 @@ pub fn deploy_prepare(input: DeployToolInput) -> LoomMcpActionResult {
 
 pub fn deploy_prepare_inner(
     project_root: &Path,
-    _input: DeployToolInput,
+    input: DeployToolInput,
 ) -> StateResult<LoomMcpActionResult> {
     init_project_state(&project_root.to_string_lossy())?;
     let paths = deployment_paths(project_root);
@@ -58,10 +66,14 @@ pub fn deploy_prepare_inner(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.logs_dir)?;
 
+    let deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
     let runtime_contract = load_runtime_contract(project_root)?;
-    let code_probe = build_deployment_code_probe(project_root)?;
-    let build_context_path =
-        relative_context_from_generated_to_project(project_root, &paths.generated_dir);
+    let code_probe = build_deployment_code_probe(&deployment_root)?;
+    let build_context_path = relative_context_from_generated_to_root(
+        project_root,
+        &paths.generated_dir,
+        &deployment_root,
+    );
     let source_model =
         source_model_from_runtime_contract(&runtime_contract, &code_probe, build_context_path);
     if source_model.shape == contracts::DeploymentShape::FrontendAndBackend
@@ -72,8 +84,37 @@ pub fn deploy_prepare_inner(
                 .to_string(),
         ));
     }
+    let existing = find_existing_deployment_files(&deployment_root);
+    let strategy = resolve_deployment_strategy(
+        &code_probe,
+        &source_model,
+        &existing,
+        input.provider_policy.clone(),
+    );
+    validate_selected_provider(
+        &strategy.policy,
+        strategy.provider,
+        &existing,
+        &source_model,
+    )?;
+    let compose_info = if strategy.provider == DeployProvider::ComposeExisting {
+        existing
+            .compose_path
+            .as_ref()
+            .map(|path| analyze_existing_compose(path))
+    } else {
+        None
+    };
+    let compose_port = compose_info.as_ref().and_then(selected_compose_port);
+    let source_model = if strategy.provider == DeployProvider::ComposeExisting {
+        compose_port
+            .as_ref()
+            .map(|port| source_model_with_preview_port(source_model.clone(), port.container_port))
+            .unwrap_or(source_model)
+    } else {
+        source_model
+    };
     let topology = build_topology(&runtime_contract, &source_model);
-    let generated_refs = generated_file_refs(project_root, &source_model, &topology)?;
     let runtime_contract_ref = to_project_relative(
         project_root,
         &paths.generated_dir.join("runtime-contract.json"),
@@ -85,20 +126,31 @@ pub fn deploy_prepare_inner(
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
     let environment = env_diagnostics(&runtime_contract);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
-    let host_port = find_host_port();
+    let host_port = compose_port
+        .as_ref()
+        .and_then(|port| port.host_port)
+        .unwrap_or_else(find_host_port);
     let runtime = deployment_runtime(&runtime_contract, &source_model, host_port);
     let service_name = sanitize_name(
-        project_root
+        deployment_root
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("loom-app"),
     );
+    let files = deployment_files_for_provider(
+        project_root,
+        &paths,
+        strategy.provider,
+        &source_model,
+        &topology,
+        &existing,
+    )?;
     let spec = DeploymentSpec {
         schema_version: 1,
-        provider: DeployProvider::Generated,
-        provider_reason:
-            "Generated from RuntimeDeliveryContract, DeploymentSourceModel, and DeploymentTopology."
-                .to_string(),
+        provider: strategy.provider,
+        provider_reason: strategy.reason,
+        provider_policy: strategy.policy,
+        provider_candidates: strategy.candidates,
         service_name: service_name.clone(),
         image_name: format!("{service_name}:loom-local"),
         project_root: project_root.to_string_lossy().into_owned(),
@@ -112,7 +164,8 @@ pub fn deploy_prepare_inner(
         topology,
         environment,
         bootstrap,
-        files: generated_refs,
+        compose: compose_info,
+        files,
         runtime,
     };
     write_json_atomic(
@@ -141,25 +194,37 @@ pub fn deploy_prepare_inner(
     }
     write_json_atomic(&paths.code_evidence_file, &code_evidence)?;
     let generated = generate_deployment_files(&spec);
-    for (service_id, content) in &generated.dockerfiles {
-        write_text_atomic(
-            &crate::paths::dockerfile_path(project_root, service_id),
-            content,
-        )?;
+    match spec.provider {
+        DeployProvider::ComposeExisting => {}
+        DeployProvider::DockerfileExisting => {
+            write_text_atomic(&paths.compose_file, &generated.compose)?;
+            write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
+        }
+        DeployProvider::Generated => {
+            for (service_id, content) in &generated.dockerfiles {
+                write_text_atomic(
+                    &crate::paths::dockerfile_path(project_root, service_id),
+                    content,
+                )?;
+            }
+            for (service_id, content) in &generated.nginx_configs {
+                write_text_atomic(
+                    &crate::paths::nginx_config_path(project_root, service_id),
+                    content,
+                )?;
+            }
+            write_text_atomic(&paths.compose_file, &generated.compose)?;
+            write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
+        }
     }
-    for (service_id, content) in &generated.nginx_configs {
-        write_text_atomic(
-            &crate::paths::nginx_config_path(project_root, service_id),
-            content,
-        )?;
-    }
-    write_text_atomic(&paths.compose_file, &generated.compose)?;
-    write_text_atomic(&paths.dockerignore_file, &generated.dockerignore)?;
     write_json_atomic(&paths.spec_file, &spec)?;
 
     Ok(LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: project_root.to_string_lossy().into_owned(),
-        summary: "Deployment assets prepared from RuntimeDeliveryContract.".to_string(),
+        summary: format!(
+            "Deployment prepared with {} provider.",
+            provider_label(spec.provider)
+        ),
         details: Some(deployment_prepare_details(project_root, &spec)?),
         warnings: vec![],
     }))
@@ -214,6 +279,119 @@ fn find_host_port() -> u16 {
     4173
 }
 
+fn deployment_root_for(project_root: &Path, app_path: Option<&str>) -> StateResult<PathBuf> {
+    let Some(app_path) = app_path.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(project_root.to_path_buf());
+    };
+    let root = from_project_relative(project_root, app_path)?;
+    if !root.is_dir() {
+        return Err(StateError::InvalidArgument(format!(
+            "appPath must point to an existing directory: {app_path}"
+        )));
+    }
+    Ok(root)
+}
+
+fn validate_selected_provider(
+    policy: &DeploymentProviderPolicy,
+    provider: DeployProvider,
+    existing: &ExistingDeploymentFiles,
+    source_model: &DeploymentSourceModel,
+) -> StateResult<()> {
+    match provider {
+        DeployProvider::ComposeExisting if existing.compose_path.is_none() => {
+            Err(StateError::InvalidArgument(
+                "providerPolicy selected compose-existing, but no root-level Compose file was found."
+                    .to_string(),
+            ))
+        }
+        DeployProvider::DockerfileExisting if existing.dockerfile_path.is_none() => {
+            Err(StateError::InvalidArgument(
+                "providerPolicy selected dockerfile-existing, but no root-level Dockerfile was found."
+                    .to_string(),
+            ))
+        }
+        DeployProvider::DockerfileExisting if source_model.services.len() > 1 => {
+            Err(StateError::InvalidArgument(
+                "providerPolicy selected dockerfile-existing, but one root Dockerfile cannot represent multiple application services.".to_string(),
+            ))
+        }
+        DeployProvider::Generated | DeployProvider::ComposeExisting | DeployProvider::DockerfileExisting => {
+            if policy.force_generate && provider != DeployProvider::Generated {
+                Err(StateError::InvalidArgument(
+                    "forceGenerate can only select generated provider.".to_string(),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+fn deployment_files_for_provider(
+    project_root: &Path,
+    paths: &DeploymentPaths,
+    provider: DeployProvider,
+    source_model: &DeploymentSourceModel,
+    topology: &contracts::DeploymentTopology,
+    existing: &ExistingDeploymentFiles,
+) -> StateResult<DeploymentGeneratedFiles> {
+    match provider {
+        DeployProvider::Generated => generated_file_refs(project_root, source_model, topology),
+        DeployProvider::DockerfileExisting => {
+            let dockerfile_path = existing.dockerfile_path.as_ref().ok_or_else(|| {
+                StateError::InvalidArgument(
+                    "dockerfile-existing provider requires an existing Dockerfile.".to_string(),
+                )
+            })?;
+            let dockerfile_ref = to_project_relative(project_root, dockerfile_path)?;
+            let mut dockerfile_paths = BTreeMap::new();
+            if let Some(service) = source_model.services.first() {
+                dockerfile_paths.insert(service.service_id.clone(), dockerfile_ref.clone());
+            }
+            Ok(DeploymentGeneratedFiles {
+                compose_path: to_project_relative(project_root, &paths.compose_file)?,
+                dockerignore_path: to_project_relative(project_root, &paths.dockerignore_file)?,
+                dockerfile_paths,
+                nginx_config_paths: BTreeMap::new(),
+                reused: vec![dockerfile_ref],
+            })
+        }
+        DeployProvider::ComposeExisting => {
+            let compose_path = existing.compose_path.as_ref().ok_or_else(|| {
+                StateError::InvalidArgument(
+                    "compose-existing provider requires an existing Compose file.".to_string(),
+                )
+            })?;
+            let mut reused = vec![to_project_relative(project_root, compose_path)?];
+            if let Some(dockerfile) = &existing.dockerfile_path {
+                reused.push(to_project_relative(project_root, dockerfile)?);
+            }
+            reused.sort();
+            reused.dedup();
+            Ok(DeploymentGeneratedFiles {
+                compose_path: to_project_relative(project_root, compose_path)?,
+                dockerignore_path: to_project_relative(project_root, &paths.dockerignore_file)?,
+                dockerfile_paths: BTreeMap::new(),
+                nginx_config_paths: BTreeMap::new(),
+                reused,
+            })
+        }
+    }
+}
+
+fn source_model_with_preview_port(
+    mut source_model: DeploymentSourceModel,
+    container_port: u16,
+) -> DeploymentSourceModel {
+    for service in &mut source_model.services {
+        if service.service_id == source_model.preview_service_id {
+            service.port = container_port;
+        }
+    }
+    source_model
+}
+
 fn sanitize_name(value: &str) -> String {
     let mut output = value
         .chars()
@@ -231,18 +409,45 @@ fn sanitize_name(value: &str) -> String {
     output.trim_matches('-').to_string()
 }
 
-fn relative_context_from_generated_to_project(project_root: &Path, generated_dir: &Path) -> String {
+fn relative_context_from_generated_to_root(
+    project_root: &Path,
+    generated_dir: &Path,
+    deployment_root: &Path,
+) -> String {
     let Ok(relative) = generated_dir.strip_prefix(project_root) else {
         return ".".to_string();
     };
     let depth = relative.components().count();
-    if depth == 0 {
+    let prefix = if depth == 0 {
         ".".to_string()
     } else {
         std::iter::repeat("..")
             .take(depth)
             .collect::<Vec<_>>()
             .join("/")
+    };
+    let Ok(deployment_relative) = deployment_root.strip_prefix(project_root) else {
+        return prefix;
+    };
+    let deployment_relative = deployment_relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    if deployment_relative.is_empty() {
+        prefix
+    } else if prefix == "." {
+        deployment_relative
+    } else {
+        format!("{prefix}/{deployment_relative}")
+    }
+}
+
+fn provider_label(provider: DeployProvider) -> &'static str {
+    match provider {
+        DeployProvider::ComposeExisting => "compose-existing",
+        DeployProvider::DockerfileExisting => "dockerfile-existing",
+        DeployProvider::Generated => "generated",
     }
 }
 
@@ -253,6 +458,13 @@ pub(crate) fn deployment_prepare_details(
     let paths = deployment_paths(project_root);
     Ok(json!({
         "specRef": to_project_relative(project_root, &paths.spec_file)?,
+        "provider": spec.provider,
+        "providerReason": spec.provider_reason,
+        "providerCandidates": spec.provider_candidates.iter().map(|candidate| json!({
+            "provider": candidate.provider,
+            "status": candidate.status,
+            "reason": candidate.reason.clone()
+        })).collect::<Vec<_>>(),
         "runtimeContractRef": spec.runtime_contract_ref,
         "sourceModelRef": spec.source_model_ref,
         "topologyRef": spec.topology_ref,
@@ -269,7 +481,13 @@ pub(crate) fn deployment_prepare_details(
             "previewPaths": spec.topology.validation.preview_paths,
             "apiPaths": spec.topology.validation.api_paths
         },
-        "generatedFileRefs": deployment_file_refs(spec),
+        "composeSummary": spec.compose.as_ref().map(|compose| json!({
+            "selectedService": compose.selected_service.clone(),
+            "serviceReason": compose.service_reason.clone(),
+            "serviceCount": compose.services.len(),
+            "warnings": compose.warnings.clone()
+        })),
+        "generatedFileRefs": deployment_generated_file_refs(spec),
         "reusedFileRefs": spec.files.reused,
         "url": spec.runtime.url
     }))
@@ -285,6 +503,21 @@ pub(crate) fn deployment_file_refs(spec: &DeploymentSpec) -> Vec<String> {
     refs.sort();
     refs.dedup();
     refs
+}
+
+pub(crate) fn deployment_generated_file_refs(spec: &DeploymentSpec) -> Vec<String> {
+    if spec.provider == DeployProvider::ComposeExisting {
+        return vec![];
+    }
+    let reused = spec
+        .files
+        .reused
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    deployment_file_refs(spec)
+        .into_iter()
+        .filter(|item| !item.is_empty() && !reused.contains(item))
+        .collect()
 }
 
 fn runtime_contract_blocked(project_root: &Path, error: StateError) -> LoomMcpActionResult {

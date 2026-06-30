@@ -263,9 +263,92 @@ pub struct DeploymentTopology {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum DeployProvider {
+    ComposeExisting,
+    DockerfileExisting,
     Generated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentProviderPolicy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<DeployProvider>,
+    pub reuse_existing: bool,
+    pub force_generate: bool,
+}
+
+impl Default for DeploymentProviderPolicy {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            reuse_existing: true,
+            force_generate: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentProviderCandidateStatus {
+    Selected,
+    Available,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentProviderCandidate {
+    pub provider: DeployProvider,
+    pub status: DeploymentProviderCandidateStatus,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentComposePort {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
+    pub container_port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    pub raw: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentComposeService {
+    pub name: String,
+    pub score: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    pub build: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<DeploymentComposePort>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expose: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<String>,
+    pub dependency_like: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentComposeInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_service: Option<String>,
+    pub service_reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<DeploymentComposeService>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -346,6 +429,9 @@ pub struct DeploymentSpec {
     pub schema_version: u32,
     pub provider: DeployProvider,
     pub provider_reason: String,
+    pub provider_policy: DeploymentProviderPolicy,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provider_candidates: Vec<DeploymentProviderCandidate>,
     pub service_name: String,
     pub image_name: String,
     pub project_root: String,
@@ -359,6 +445,8 @@ pub struct DeploymentSpec {
     pub topology: DeploymentTopology,
     pub environment: DeploymentEnvDiagnostics,
     pub bootstrap: DeploymentBootstrapDiagnostics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compose: Option<DeploymentComposeInfo>,
     pub files: DeploymentGeneratedFiles,
     pub runtime: DeploymentRuntime,
 }

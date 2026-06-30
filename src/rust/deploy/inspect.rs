@@ -7,7 +7,7 @@ use state::{paths::to_project_relative, store::path_exists};
 use crate::{
     active_operation::{active_operation_result, live_operation},
     paths::deployment_paths,
-    prepare::{deployment_file_refs, read_spec},
+    prepare::{deployment_generated_file_refs, read_spec},
     DeployToolInput,
 };
 
@@ -25,6 +25,13 @@ pub fn deploy_inspect(input: DeployToolInput) -> LoomMcpActionResult {
         summary: "Deployment inspect loaded.".to_string(),
         details: Some(json!({
             "prepared": spec.is_some(),
+            "provider": spec.as_ref().map(|spec| spec.provider),
+            "providerReason": spec.as_ref().map(|spec| spec.provider_reason.clone()),
+            "providerCandidates": spec.as_ref().map(|spec| spec.provider_candidates.iter().map(|candidate| json!({
+                "provider": candidate.provider,
+                "status": candidate.status,
+                "reason": candidate.reason.clone()
+            })).collect::<Vec<_>>()).unwrap_or_default(),
             "specRef": spec.as_ref().and_then(|_| to_project_relative(project_root, &paths.spec_file).ok()),
             "runtimeContractRef": spec.as_ref().map(|spec| &spec.runtime_contract_ref),
             "sourceModelRef": spec.as_ref().map(|spec| &spec.source_model_ref),
@@ -42,7 +49,13 @@ pub fn deploy_inspect(input: DeployToolInput) -> LoomMcpActionResult {
                 "previewPaths": spec.topology.validation.preview_paths,
                 "apiPaths": spec.topology.validation.api_paths
             })),
-            "generatedFileRefs": spec.as_ref().map(deployment_file_refs).unwrap_or_default(),
+            "composeSummary": spec.as_ref().and_then(|spec| spec.compose.as_ref().map(|compose| json!({
+                "selectedService": compose.selected_service.clone(),
+                "serviceReason": compose.service_reason.clone(),
+                "serviceCount": compose.services.len(),
+                "warnings": compose.warnings.clone()
+            }))),
+            "generatedFileRefs": spec.as_ref().map(deployment_generated_file_refs).unwrap_or_default(),
             "reusedFileRefs": spec.as_ref().map(|spec| spec.files.reused.clone()).unwrap_or_default(),
             "stateRef": path_exists(&paths.state_file).then(|| to_project_relative(project_root, &paths.state_file).ok()).flatten(),
             "repairRef": path_exists(&paths.repair_action_file).then(|| to_project_relative(project_root, &paths.repair_action_file).ok()).flatten(),

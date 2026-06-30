@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use contracts::DeploymentFailureKind;
+use contracts::{DeployProvider, DeploymentFailureKind, DeploymentProviderPolicy};
 use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
 use serde_json::json;
 use state::{
@@ -99,6 +99,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     match compose_config {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing Compose config failed",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -115,6 +122,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
         Err(error) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing Compose config could not run",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -142,6 +156,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
             let kind = classify_compose_up_failure(&spec, &stdout, &stderr);
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing deployment provider failed",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -158,6 +179,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
         Err(error) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing deployment provider could not run",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -198,6 +226,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         } else {
             format!("docker compose logs --tail=120\n{logs}")
         };
+        if should_fallback_to_generated(&spec) {
+            return fallback_to_generated(
+                project_root,
+                input,
+                "existing deployment validation failed",
+            );
+        }
         return write_repair_action(
             project_root,
             &spec,
@@ -224,6 +259,31 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         })),
         warnings: vec![],
     })
+}
+
+fn should_fallback_to_generated(spec: &contracts::DeploymentSpec) -> bool {
+    matches!(
+        spec.provider,
+        DeployProvider::ComposeExisting | DeployProvider::DockerfileExisting
+    ) && !spec.provider_policy.force_generate
+        && spec.provider_policy.provider.is_none()
+}
+
+fn fallback_to_generated(
+    project_root: &Path,
+    mut input: DeployToolInput,
+    _reason: &str,
+) -> LoomMcpActionResult {
+    input.provider_policy = Some(DeploymentProviderPolicy {
+        provider: Some(DeployProvider::Generated),
+        reuse_existing: false,
+        force_generate: true,
+    });
+    match deploy_prepare_inner(project_root, input.clone()) {
+        Ok(LoomMcpActionResult::Done(_)) => deploy_up_inner(project_root, input),
+        Ok(result) => result,
+        Err(error) => failed(project_root, error.to_string()),
+    }
 }
 
 fn wait_for_valid_deployment(project_root: &Path) -> StateResult<DeploymentValidationResult> {
