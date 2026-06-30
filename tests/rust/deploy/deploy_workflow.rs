@@ -665,6 +665,239 @@ fn deploy_execution_repair_invalid_result_returns_repairable_error() {
     );
 }
 
+#[test]
+fn deploy_execution_repair_rejects_invalid_status() {
+    let fixture = Fixture::new("deploy-execution-repair-invalid-status");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": "deploy-repair-1",
+            "status": "done",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": ["package.json"],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["runtime.startup"],
+                "codeLevelChecks": [{
+                    "checkId": "check_runtime_startup",
+                    "status": "passed",
+                    "evidence": "Adjusted application startup wiring."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert!(submitted_value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["code"] == "DEPLOY_REPAIR_STATUS_INVALID" && issue["fieldPath"] == "status"
+        }));
+}
+
+#[test]
+fn deploy_execution_repair_completed_result_requires_changed_files() {
+    let fixture = Fixture::new("deploy-execution-repair-empty-changed-files");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": "deploy-repair-1",
+            "status": "completed",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": [],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["runtime.startup"],
+                "codeLevelChecks": [{
+                    "checkId": "check_runtime_startup",
+                    "status": "passed",
+                    "evidence": "Adjusted application startup wiring."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert!(submitted_value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["code"] == "DEPLOY_REPAIR_CHANGED_FILES_REQUIRED"
+                && issue["fieldPath"] == "changedFiles"
+        }));
+}
+
+#[test]
+fn deploy_execution_repair_completed_result_rejects_failed_code_level_checks() {
+    let fixture = Fixture::new("deploy-execution-repair-failed-check");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": "deploy-repair-1",
+            "status": "completed",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": ["package.json"],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["runtime.startup"],
+                "codeLevelChecks": [{
+                    "checkId": "check_runtime_startup",
+                    "status": "failed",
+                    "evidence": "Startup still fails."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert!(submitted_value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["code"] == "DEPLOY_REPAIR_RUNTIME_EVIDENCE_INVALID"
+                && issue["fieldPath"] == "runtimeDeliveryEvidence"
+        }));
+}
+
 #[cfg(unix)]
 #[test]
 fn deploy_up_routes_runtime_build_failure_to_execution_repair_and_counts_retry_attempts() {

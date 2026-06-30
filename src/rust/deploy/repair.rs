@@ -328,6 +328,30 @@ fn accept_deploy_execution_repair_file_inner(
             )],
         ));
     }
+    if !is_valid_deploy_repair_status(&result.status) {
+        return Ok(repairable(
+            input,
+            authorized,
+            target_file,
+            vec![repair_issue(
+                "DEPLOY_REPAIR_STATUS_INVALID",
+                "status",
+                "Deploy execution repair status must be completed, completed_with_notes, blocked, or failed.",
+            )],
+        ));
+    }
+    if is_completed_deploy_repair_status(&result.status) && result.changed_files.is_empty() {
+        return Ok(repairable(
+            input,
+            authorized,
+            target_file,
+            vec![repair_issue(
+                "DEPLOY_REPAIR_CHANGED_FILES_REQUIRED",
+                "changedFiles",
+                "Completed deploy execution repair requires at least one changed application code, package script, or runtime wiring file.",
+            )],
+        ));
+    }
     let protected = request_fields
         .fields
         .get("editBoundary.protectedPaths")
@@ -634,7 +658,7 @@ fn deploy_execution_repair_result_template(
         "repairId": request.repair_id,
         "status": "completed",
         "deploymentFailureRef": failure_ref,
-        "changedFiles": [],
+        "changedFiles": ["project-relative/source-or-config-file"],
         "runtimeDeliveryEvidence": {
             "addressedFailedContractFields": failure.failed_contract_fields,
             "codeLevelChecks": failure.required_code_level_checks.iter().map(|check| {
@@ -843,12 +867,50 @@ fn validate_runtime_delivery_evidence(
             )));
         }
     }
+    if is_completed_deploy_repair_status(&result.status) {
+        let failed_or_blocked_checks = result
+            .runtime_delivery_evidence
+            .get("codeLevelChecks")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| {
+                        let status = item.get("status").and_then(Value::as_str)?;
+                        matches!(status, "failed" | "blocked").then(|| {
+                            item.get("checkId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown")
+                                .to_string()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !failed_or_blocked_checks.is_empty() {
+            return Err(StateError::InvalidArgument(format!(
+                "completed deploy execution repair cannot contain failed or blocked runtime code-level checks: {}.",
+                failed_or_blocked_checks.join(", ")
+            )));
+        }
+    }
     if result.self_repair_summary.is_null() {
         return Err(StateError::InvalidArgument(
             "selfRepairSummary is required.".to_string(),
         ));
     }
     Ok(())
+}
+
+fn is_valid_deploy_repair_status(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "completed_with_notes" | "blocked" | "failed"
+    )
+}
+
+fn is_completed_deploy_repair_status(status: &str) -> bool {
+    matches!(status, "completed" | "completed_with_notes")
 }
 
 fn classify_repair(
