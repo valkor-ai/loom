@@ -107,7 +107,10 @@ fn execution_repair_context(action: &RouteAction) -> ExecutionRepairRouteContext
 
 fn target_task_ids_from_action_details(details: &Value) -> Vec<String> {
     let mut values = Vec::new();
-    for pointer in ["/nextAction/targetTaskIds", "/changeRequest/details/targetTaskIds"] {
+    for pointer in [
+        "/nextAction/targetTaskIds",
+        "/changeRequest/details/targetTaskIds",
+    ] {
         values.extend(
             details
                 .pointer(pointer)

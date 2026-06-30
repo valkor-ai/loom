@@ -369,7 +369,11 @@ fn validate_semantic_result(
         if let Some(labels) = semantic_labels {
             for (index, label) in labels.iter().enumerate() {
                 let field_path = format!("semanticLabels[{index}]");
-                if label.get("normalizedText").and_then(Value::as_str).is_none() {
+                if label
+                    .get("normalizedText")
+                    .and_then(Value::as_str)
+                    .is_none()
+                {
                     issues.push(issue(
                         "SEMANTIC_LABEL_NORMALIZED_TEXT_REQUIRED",
                         "semanticLabels[].normalizedText must be a string.",
@@ -377,8 +381,7 @@ fn validate_semantic_result(
                     ));
                 }
                 let aliases = label.get("aliases").and_then(Value::as_array);
-                if aliases
-                    .map(|items| items.iter().all(|item| item.as_str().is_some()))
+                if aliases.map(|items| items.iter().all(|item| item.as_str().is_some()))
                     != Some(true)
                 {
                     issues.push(issue(
@@ -408,11 +411,7 @@ fn validate_semantic_result(
                 ));
             }
         }
-        for field in [
-            "phaseScope",
-            "conceptGrounding",
-            "frontendExperience",
-        ] {
+        for field in ["phaseScope", "conceptGrounding", "frontendExperience"] {
             if affinity
                 .and_then(|value| value.get(field))
                 .and_then(Value::as_f64)
