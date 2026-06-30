@@ -151,6 +151,21 @@ pub fn update_operation_phase(project_root: &Path, phase: &str, status: &str) ->
     write_json_atomic(&paths.active_operation_file, &operation)
 }
 
+pub fn touch_operation(project_root: &Path) -> StateResult<()> {
+    let paths = deployment_paths(project_root);
+    if !path_exists(&paths.active_operation_file) {
+        return Ok(());
+    }
+    let mut operation: DeploymentActiveOperation = read_json(&paths.active_operation_file)?;
+    operation.updated_at = now_string();
+    operation.spec_ref = if path_exists(&paths.spec_file) {
+        Some(to_project_relative(project_root, &paths.spec_file)?)
+    } else {
+        None
+    };
+    write_json_atomic(&paths.active_operation_file, &operation)
+}
+
 pub fn live_operation(project_root: &Path) -> StateResult<Option<DeploymentActiveOperation>> {
     let paths = deployment_paths(project_root);
     if !path_exists(&paths.active_operation_file) {

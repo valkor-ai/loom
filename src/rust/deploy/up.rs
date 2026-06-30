@@ -5,7 +5,7 @@ use std::{
     process::{Command, Output, Stdio},
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use contracts::{DeployProvider, DeploymentFailureKind, DeploymentProviderPolicy};
@@ -17,7 +17,9 @@ use state::{
 };
 
 use crate::{
-    active_operation::{acquire_operation, active_operation_result, update_operation_phase},
+    active_operation::{
+        acquire_operation, active_operation_result, touch_operation, update_operation_phase,
+    },
     paths::deployment_paths,
     port_plan::primary_url,
     prepare::{deploy_prepare_inner, read_spec},
@@ -29,6 +31,8 @@ use crate::{
 
 const DEPLOY_STARTUP_VALIDATION_ATTEMPTS: usize = 24;
 const DEPLOY_STARTUP_VALIDATION_INTERVAL: Duration = Duration::from_millis(1500);
+const DEPLOY_OPERATION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const DEPLOY_OPERATION_HEARTBEAT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root_buf = PathBuf::from(&input.project_root);
@@ -323,15 +327,32 @@ fn run_logged_command(
 
     let stdout_buffer = Arc::new(Mutex::new(Vec::new()));
     let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
-    let stdout_handle = child
-        .stdout
-        .take()
-        .map(|stdout| tee_stream(stdout, "stdout", log.clone(), stdout_buffer.clone()));
-    let stderr_handle = child
-        .stderr
-        .take()
-        .map(|stderr| tee_stream(stderr, "stderr", log.clone(), stderr_buffer.clone()));
-    let status = child.wait()?;
+    let heartbeat = OperationHeartbeat::new(project_root);
+    let stdout_handle = child.stdout.take().map(|stdout| {
+        tee_stream(
+            stdout,
+            "stdout",
+            log.clone(),
+            stdout_buffer.clone(),
+            heartbeat.clone(),
+        )
+    });
+    let stderr_handle = child.stderr.take().map(|stderr| {
+        tee_stream(
+            stderr,
+            "stderr",
+            log.clone(),
+            stderr_buffer.clone(),
+            heartbeat.clone(),
+        )
+    });
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        heartbeat.touch_if_due();
+        thread::sleep(heartbeat.poll_interval());
+    };
     if let Some(handle) = stdout_handle {
         let _ = handle.join();
     }
@@ -367,6 +388,7 @@ fn tee_stream<R: Read + Send + 'static>(
     label: &'static str,
     log: Arc<Mutex<File>>,
     buffer: Arc<Mutex<Vec<u8>>>,
+    heartbeat: OperationHeartbeat,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut chunk = [0_u8; 8192];
@@ -381,6 +403,7 @@ fn tee_stream<R: Read + Send + 'static>(
             if let Ok(mut output) = buffer.lock() {
                 output.extend_from_slice(&chunk[..read]);
             }
+            heartbeat.touch_if_due();
             if let Ok(mut file) = log.lock() {
                 if !wrote_label {
                     let _ = writeln!(file, "\n[{label}]");
@@ -391,6 +414,48 @@ fn tee_stream<R: Read + Send + 'static>(
             }
         }
     })
+}
+
+#[derive(Clone)]
+struct OperationHeartbeat {
+    project_root: PathBuf,
+    interval: Duration,
+    last_touch: Arc<Mutex<Instant>>,
+}
+
+impl OperationHeartbeat {
+    fn new(project_root: &Path) -> Self {
+        Self {
+            project_root: project_root.to_path_buf(),
+            interval: operation_heartbeat_interval(),
+            last_touch: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    fn poll_interval(&self) -> Duration {
+        self.interval.min(DEPLOY_OPERATION_HEARTBEAT_POLL_INTERVAL)
+    }
+
+    fn touch_if_due(&self) {
+        let Ok(mut last_touch) = self.last_touch.lock() else {
+            return;
+        };
+        if last_touch.elapsed() < self.interval {
+            return;
+        }
+        if touch_operation(&self.project_root).is_ok() {
+            *last_touch = Instant::now();
+        }
+    }
+}
+
+fn operation_heartbeat_interval() -> Duration {
+    std::env::var("LOOM_DEPLOY_OPERATION_HEARTBEAT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value >= 50)
+        .map(Duration::from_millis)
+        .unwrap_or(DEPLOY_OPERATION_HEARTBEAT_INTERVAL)
 }
 
 fn write_log_line(log: &Arc<Mutex<File>>, line: &str) -> io::Result<()> {

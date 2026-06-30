@@ -699,6 +699,7 @@ exit 0
 #[test]
 fn deploy_up_updates_active_operation_phase_and_streams_docker_logs() {
     let fixture = Fixture::new("deploy-active-operation-logs");
+    let _heartbeat_guard = EnvVarGuard::set("LOOM_DEPLOY_OPERATION_HEARTBEAT_MS", "100");
     fixture.write_runtime_delivery(json!({
         "status": "modified",
         "runtimeKind": "node",
@@ -751,10 +752,24 @@ exit 0
     let log_file = fixture.root.join(".loom/deployment/logs/local.log");
     let mut observed_building = false;
     let mut observed_log = false;
+    let mut first_building_updated_at: Option<u128> = None;
+    let mut observed_building_heartbeat = false;
     for _ in 0..40 {
         if active_file.exists() {
             if let Ok(active) = read_json::<Value>(&active_file) {
                 observed_building |= active["phase"] == "building";
+                if active["phase"] == "building" {
+                    if let Some(updated_at) = active["updatedAt"]
+                        .as_str()
+                        .and_then(|value| value.parse::<u128>().ok())
+                    {
+                        if let Some(first) = first_building_updated_at {
+                            observed_building_heartbeat |= updated_at > first;
+                        } else {
+                            first_building_updated_at = Some(updated_at);
+                        }
+                    }
+                }
             }
         }
         if log_file.exists() {
@@ -763,7 +778,7 @@ exit 0
                     && log.contains("build started");
             }
         }
-        if observed_building && observed_log {
+        if observed_building && observed_log && observed_building_heartbeat {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -772,6 +787,7 @@ exit 0
     let log = read_text(&log_file).expect("deploy log");
     assert!(observed_building, "{log}");
     assert!(observed_log, "{log}");
+    assert!(observed_building_heartbeat, "{log}");
     assert!(
         log.contains("phase=checking_compose command=docker compose"),
         "{log}"
@@ -2223,6 +2239,29 @@ struct PathEnvGuard {
 impl Drop for PathEnvGuard {
     fn drop(&mut self) {
         std::env::set_var("PATH", &self.previous);
+    }
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var(self.key, previous);
+        } else {
+            std::env::remove_var(self.key);
+        }
     }
 }
 
