@@ -54,6 +54,13 @@ pub fn deploy_repair(input: DeployToolInput) -> LoomMcpActionResult {
     }
 }
 
+pub(crate) fn latest_repair_summary(project_root: &Path) -> Option<Value> {
+    latest_repair_action(project_root)
+        .ok()
+        .flatten()
+        .map(|request| compact_repair_summary(project_root, &request))
+}
+
 pub fn write_repair_action(
     project_root: &Path,
     spec: &DeploymentSpec,
@@ -200,14 +207,26 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                 request_ref: None,
                 delivery_id: None,
                 phase_id: None,
-                gate: Some(json!(request)),
+                gate: Some(json!({
+                    "repairRef": to_project_relative(
+                        project_root,
+                        &deployment_paths(project_root).repair_action_file
+                    ).ok(),
+                    "repairSummary": compact_repair_summary(project_root, request)
+                })),
             })
         }
         DeploymentRepairRoute::None => LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
             project_root: project_root.to_string_lossy().into_owned(),
             blockers: request.suggested_actions.clone(),
             recommended_tool: Some("loom.deployStatus".to_string()),
-            details: Some(json!(request)),
+            details: Some(json!({
+                "repairRef": to_project_relative(
+                    project_root,
+                    &deployment_paths(project_root).repair_action_file
+                ).ok(),
+                "repairSummary": compact_repair_summary(project_root, request)
+            })),
         }),
     }
 }
@@ -755,14 +774,118 @@ fn repair_attempt_limit_result(
         )],
         recommended_tool: Some("loom.deployInspect".to_string()),
         details: Some(json!({
-            "failureKind": enum_string(&request.failure_kind),
-            "failureOwner": enum_string(&request.failure_owner),
-            "repairRoute": enum_string(&request.repair_route),
-            "failureRef": request.failure_ref,
-            "fullLogRef": request.full_log_ref,
-            "attempts": request.attempts,
-            "maxAttempts": request.max_attempts
+            "repairRef": to_project_relative(
+                project_root,
+                &deployment_paths(project_root).repair_action_file
+            ).ok(),
+            "repairSummary": compact_repair_summary(project_root, request)
         })),
+    })
+}
+
+fn compact_repair_summary(project_root: &Path, request: &DeploymentRepairAction) -> Value {
+    json!({
+        "hasRepairRequest": true,
+        "repairId": request.repair_id.clone(),
+        "failureKind": enum_string(&request.failure_kind),
+        "failureOwner": enum_string(&request.failure_owner),
+        "repairRoute": enum_string(&request.repair_route),
+        "primaryReason": primary_repair_reason(request),
+        "nextAction": repair_next_action(request),
+        "diagnostics": compact_diagnostics(&request.diagnostics),
+        "errorWindow": request.error_window.as_ref().map(compact_error_window),
+        "suggestedActions": request.suggested_actions.iter().take(6).cloned().collect::<Vec<_>>(),
+        "editableFiles": request.editable_files.clone(),
+        "protectedFiles": request.protected_files.clone(),
+        "failureRef": request.failure_ref.clone(),
+        "fullLogRef": request.full_log_ref.clone(),
+        "attempts": request.attempts,
+        "maxAttempts": request.max_attempts,
+        "readPolicy": {
+            "firstRead": "repairSummary.diagnostics and repairSummary.errorWindow",
+            "fullLogRef": "Read only when compact diagnostics and errorWindow are insufficient."
+        },
+        "sourceRefs": {
+            "repairActionRef": to_project_relative(
+                project_root,
+                &deployment_paths(project_root).repair_action_file
+            ).ok()
+        }
+    })
+}
+
+fn primary_repair_reason(request: &DeploymentRepairAction) -> String {
+    if let Some(diagnostic) = request.diagnostics.first() {
+        return format!("{}: {}", diagnostic.code, diagnostic.message);
+    }
+    if let Some(line) = request.error_window.as_ref().and_then(|window| {
+        window
+            .lines
+            .iter()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+    }) {
+        return line.clone();
+    }
+    if let Some(action) = request.suggested_actions.first() {
+        return action.clone();
+    }
+    format!(
+        "{} owned by {}",
+        enum_string(&request.failure_kind),
+        enum_string(&request.failure_owner)
+    )
+}
+
+fn repair_next_action(request: &DeploymentRepairAction) -> &'static str {
+    if repair_attempt_limit_reached(request) {
+        return "inspect_attempt_limit";
+    }
+    match request.repair_route {
+        DeploymentRepairRoute::DeployRepair => "repair_deployment_assets",
+        DeploymentRepairRoute::ExecutionRepair => "repair_application_code",
+        DeploymentRepairRoute::ManualReview => "manual_review",
+        DeploymentRepairRoute::None => match request.failure_owner {
+            DeploymentFailureOwner::Environment => "fix_environment_then_retry",
+            DeploymentFailureOwner::ExternalSystem => "fix_external_system_then_retry",
+            _ => "inspect_blocker",
+        },
+    }
+}
+
+fn compact_diagnostics(diagnostics: &[DeploymentFailureDiagnostic]) -> Vec<Value> {
+    diagnostics
+        .iter()
+        .take(5)
+        .map(|diagnostic| {
+            json!({
+                "code": diagnostic.code.clone(),
+                "severity": diagnostic.severity.clone(),
+                "message": diagnostic.message.clone(),
+                "evidence": diagnostic.evidence.iter().take(3).cloned().collect::<Vec<_>>(),
+                "suggestedAction": diagnostic.suggested_action.clone()
+            })
+        })
+        .collect()
+}
+
+fn compact_error_window(window: &DeploymentErrorWindow) -> Value {
+    let max_lines = 24usize;
+    let lines = window
+        .lines
+        .iter()
+        .rev()
+        .take(max_lines)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    json!({
+        "lines": lines,
+        "truncated": window.truncated || window.lines.len() > max_lines,
+        "totalLineCount": window.total_line_count,
+        "matchedPatterns": window.matched_patterns.clone()
     })
 }
 

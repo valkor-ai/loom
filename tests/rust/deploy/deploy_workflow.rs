@@ -672,6 +672,30 @@ fn deploy_inspect_returns_refs_without_inlining_spec_or_repair_action() {
     assert_eq!(details["prepared"], true, "{value:#}");
     assert!(details["specRef"].as_str().is_some(), "{value:#}");
     assert!(details["repairRef"].as_str().is_some(), "{value:#}");
+    assert_eq!(
+        details["repairSummary"]["failureKind"], "api_route_not_verified",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["repairRoute"], "deploy_repair",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["nextAction"], "repair_deployment_assets",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["primaryReason"], "failed",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["errorWindow"]["lines"],
+        json!(["failed"]),
+        "{value:#}"
+    );
+    assert!(details["repairSummary"]["sourceRefs"]["repairActionRef"]
+        .as_str()
+        .is_some());
     assert!(details["sourceModelSummary"].is_object(), "{value:#}");
     assert!(details["topologySummary"].is_object(), "{value:#}");
     assert!(details["generatedFileRefs"].is_array(), "{value:#}");
@@ -681,6 +705,12 @@ fn deploy_inspect_returns_refs_without_inlining_spec_or_repair_action() {
             && details.get("files").is_none()
             && details.get("repair").is_none(),
         "deploy inspect must not inline full spec or repair action: {value:#}"
+    );
+    assert!(
+        details["repairSummary"].get("projectRoot").is_none()
+            && details["repairSummary"].get("specRef").is_none()
+            && details["repairSummary"].get("command").is_none(),
+        "deploy inspect repair summary must stay compact: {value:#}"
     );
     assert_forbidden_cli_fields_absent(&value);
 }
@@ -1429,6 +1459,32 @@ exit 0
     let value = serde_json::to_value(result).expect("deploy up json");
     assert_eq!(value["state"], "blocked", "{value:#}");
     assert_eq!(value["recommendedTool"], "loom.deployStatus");
+    assert_eq!(
+        value["details"]["repairSummary"]["failureKind"], "registry_network",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["failureOwner"], "external_system",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["repairRoute"], "none",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["nextAction"], "fix_external_system_then_retry",
+        "{value:#}"
+    );
+    assert!(value["details"]["repairSummary"]["primaryReason"]
+        .as_str()
+        .unwrap()
+        .contains("registry_network"));
+    assert!(
+        value["details"].get("projectRoot").is_none()
+            && value["details"].get("suggestedActions").is_none()
+            && value["details"].get("errorWindow").is_none(),
+        "blocked output must expose compact repairSummary instead of full repair action: {value:#}"
+    );
     let repair_action = fixture.repair_action_value();
     assert_eq!(repair_action["failureKind"], "registry_network");
     assert_eq!(repair_action["failureOwner"], "external_system");
@@ -1567,8 +1623,18 @@ fn deploy_repair_blocks_when_attempt_limit_is_reached() {
 
     assert_eq!(value["state"], "blocked", "{value:#}");
     assert_eq!(value["recommendedTool"], "loom.deployInspect");
-    assert_eq!(value["details"]["attempts"], 2);
-    assert_eq!(value["details"]["maxAttempts"], 2);
+    assert_eq!(value["details"]["repairSummary"]["attempts"], 2);
+    assert_eq!(value["details"]["repairSummary"]["maxAttempts"], 2);
+    assert_eq!(
+        value["details"]["repairSummary"]["nextAction"],
+        "inspect_attempt_limit"
+    );
+    assert!(
+        value["details"].get("projectRoot").is_none()
+            && value["details"].get("suggestedActions").is_none()
+            && value["details"].get("errorWindow").is_none(),
+        "attempt-limit blocker must expose compact repairSummary: {value:#}"
+    );
     assert_forbidden_cli_fields_absent(&value);
 }
 
