@@ -181,7 +181,7 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
     let Some(object) = template.as_object_mut() else {
         return template;
     };
-    if task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(task) {
         object.insert(
             "frontendExperienceSelfCheck".to_string(),
             frontend_experience_self_check_template(task),
@@ -233,7 +233,7 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
         "createdAt",
         "updatedAt",
     ];
-    if task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(task) {
         fields.push("frontendExperienceSelfCheck");
     }
     if runtime_delivery_evidence_applies(task) {
@@ -250,6 +250,10 @@ pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
         .as_ref()
         .map(|requirement| requirement.applies_to_this_task)
         .unwrap_or(false)
+}
+
+pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
+    task.frontend_experience_requirement.is_some() && !runtime_delivery_evidence_applies(task)
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {

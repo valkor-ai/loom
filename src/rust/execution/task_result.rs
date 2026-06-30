@@ -25,7 +25,9 @@ use crate::{
         load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
     },
     task_plan::update_run_summary,
-    templates::{runtime_delivery_evidence_applies, task_result_template},
+    templates::{
+        frontend_self_check_applies, runtime_delivery_evidence_applies, task_result_template,
+    },
 };
 
 pub fn accept_task_result_file<D>(
@@ -1171,6 +1173,9 @@ fn validate_frontend_experience_self_check(
     task: &TaskDefinition,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
+    if !frontend_self_check_applies(task) {
+        return;
+    }
     let Some(requirement) = &task.frontend_experience_requirement else {
         return;
     };
@@ -1632,7 +1637,7 @@ fn materialize_task_result_repair(
     if !context.task.concept_refs.is_empty() {
         context_fields.push("task.conceptRefs");
     }
-    if context.task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(&context.task) {
         context_fields
             .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
     }
@@ -1656,7 +1661,7 @@ fn materialize_task_result_repair(
         "outputContract.schemaShape.properties.blockedReasons",
         "outputContract.resultRules",
     ];
-    if context.task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(&context.task) {
         write_contract_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
     }

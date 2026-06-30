@@ -35,9 +35,9 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
-        task_result_required_top_level_fields, task_result_template,
-        taskplan_group_result_template, taskplan_outline_result_template,
+        frontend_self_check_applies, runtime_delivery_evidence_applies,
+        runtime_delivery_requirement_template, task_result_required_top_level_fields,
+        task_result_template, taskplan_group_result_template, taskplan_outline_result_template,
     },
 };
 
@@ -668,7 +668,7 @@ fn build_repair_execution_request(
     if !task.concept_verification_intents.is_empty() {
         repair_core_fields.push("task.conceptVerificationIntents");
     }
-    if task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(task) {
         repair_core_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
             "task.frontendExperienceRequirement.executionGuidance.purpose",
@@ -738,7 +738,7 @@ fn build_repair_execution_request(
         "outputContract.blockedReasonOptions",
         "executionRules.completionBarrier",
     ];
-    if task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(task) {
         repair_result_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
     }
@@ -975,7 +975,8 @@ fn materialize_taskplan_repair_action(
         "outputContract.runtimeDeliveryRequirementTemplate",
     );
     if runtime_requirement_template.is_null() {
-        let runtime_status = value_field(&rule_fields, "generationRules.runtimeDeliveryRules.status");
+        let runtime_status =
+            value_field(&rule_fields, "generationRules.runtimeDeliveryRules.status");
         if runtime_status
             .as_str()
             .is_some_and(|status| status != "not_applicable")

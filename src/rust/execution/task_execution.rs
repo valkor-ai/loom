@@ -25,8 +25,8 @@ use crate::{
     },
     task_plan::{execute_task_next_from_request, update_run_summary},
     templates::{
-        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_template,
+        frontend_self_check_applies, runtime_delivery_evidence_applies,
+        task_result_required_top_level_fields, task_result_template,
     },
 };
 
@@ -370,10 +370,12 @@ pub(crate) fn task_execution_rules(
         return rules;
     };
     if task_has_frontend_execution(task) {
-        object.insert(
-            "frontendImplementationOrganizationRules".to_string(),
-            frontend_implementation_organization_rules(),
-        );
+        if !runtime_delivery_evidence_applies(task) {
+            object.insert(
+                "frontendImplementationOrganizationRules".to_string(),
+                frontend_implementation_organization_rules(),
+            );
+        }
         object.insert(
             "interactiveVerificationProbePolicy".to_string(),
             interactive_verification_probe_policy(),
@@ -520,7 +522,7 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
     ];
-    if task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(task) {
         rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present.".to_string());
         rules.push("For browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy and record evidence through existing TaskResult fields.".to_string());
     }
@@ -589,10 +591,10 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         ]);
     }
     if has_frontend_execution {
-        core_fields.extend([
-            "executionRules.frontendImplementationOrganizationRules",
-            "executionRules.interactiveVerificationProbePolicy",
-        ]);
+        if !runtime_delivery_evidence_applies(task) {
+            core_fields.push("executionRules.frontendImplementationOrganizationRules");
+        }
+        core_fields.push("executionRules.interactiveVerificationProbePolicy");
     }
     if needs_runtime_probe_rules {
         core_fields.push("executionRules.controlledRuntimeProbeRules");
@@ -640,7 +642,7 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         "executionRules.completionContinuityRequirement",
         "executionRules.verificationCommandSchedulingRules",
     ];
-    if task.frontend_experience_requirement.is_some() {
+    if frontend_self_check_applies(task) {
         result_fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
     }
     if runtime_delivery_evidence_applies(task) {
@@ -678,7 +680,6 @@ fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
-                    | ImplementationAction::WireReferenceInApiOrUi
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
