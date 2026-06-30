@@ -378,6 +378,64 @@ fn knowledge_cleanup_tools_are_idempotent_and_include_pending_only_state() {
 }
 
 #[test]
+fn legacy_cli_pending_knowledge_can_be_listed_and_discarded() {
+    let fixture = Fixture::new("legacy-cli-pending");
+    let pending_dir = fixture.root.join(".loom-home/knowledge/pending");
+    std::fs::create_dir_all(&pending_dir).expect("pending dir");
+    std::fs::write(
+        pending_dir.join("legacy-cli-pending.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": "1.0",
+            "name": "legacy-cli-rules",
+            "sourceId": null,
+            "createNew": true,
+            "operations": [{
+                "type": "add_paths",
+                "paths": [fixture.root.join("docs/legacy.md").to_string_lossy().to_string()]
+            }],
+            "validation": {
+                "acceptedPaths": [],
+                "acceptedFiles": 0,
+                "acceptedDirectories": 0,
+                "supportedFiles": 0,
+                "skippedFiles": [],
+                "maxFileBytes": 20971520
+            },
+            "createdAt": "2026-06-30T00:00:00Z",
+            "updatedAt": "2026-06-30T00:00:00Z"
+        }))
+        .expect("legacy pending json"),
+    )
+    .expect("write legacy pending");
+
+    let listed = list_sources(KnowledgeProjectInput {
+        project_root: fixture.root_str().to_string(),
+    })
+    .expect("list legacy pending");
+    assert_eq!(listed.sources.len(), 1);
+    assert_eq!(listed.sources[0].source.name, "legacy-cli-rules");
+    assert_eq!(
+        listed.sources[0].pending.as_ref().unwrap().operations[0].kind,
+        knowledge::models::PendingOperationKind::AddPaths
+    );
+
+    let status = source_status(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "legacy-cli-rules".to_string(),
+    })
+    .expect("legacy pending status");
+    assert!(status.source.is_none());
+    assert!(status.pending.is_some());
+
+    let discarded = discard_pending(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "legacy-cli-rules".to_string(),
+    })
+    .expect("discard legacy pending");
+    assert!(discarded.discarded);
+}
+
+#[test]
 fn knowledge_update_remove_path_does_not_require_existing_file() {
     let fixture = Fixture::new("remove-missing-path");
     let document = fixture.write_file("docs/stock.md", "# 证券账户\n\n证券账户开户规则。");
