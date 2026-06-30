@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    net::TcpListener,
     path::{Path, PathBuf},
 };
 
@@ -29,8 +28,9 @@ use crate::{
         analyze_existing_compose, find_existing_deployment_files, selected_compose_port,
         ExistingDeploymentFiles,
     },
-    generate::{deployment_runtime, generate_deployment_files, generated_file_refs},
+    generate::{generate_deployment_files, generated_file_refs},
     paths::{deployment_paths, DeploymentPaths},
+    port_plan::{build_deployment_runtime, primary_url},
     runtime_contract::load_runtime_contract,
     source_model::source_model_from_runtime_contract,
     strategy::resolve_deployment_strategy,
@@ -126,11 +126,12 @@ pub fn deploy_prepare_inner(
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
     let environment = env_diagnostics(&runtime_contract);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
-    let host_port = compose_port
-        .as_ref()
-        .and_then(|port| port.host_port)
-        .unwrap_or_else(find_host_port);
-    let runtime = deployment_runtime(&runtime_contract, &source_model, host_port);
+    let runtime = build_deployment_runtime(
+        &runtime_contract,
+        &source_model,
+        &topology,
+        compose_info.as_ref(),
+    );
     let service_name = sanitize_name(
         deployment_root
             .file_name()
@@ -270,15 +271,6 @@ fn env_diagnostics(runtime: &contracts::DeploymentRuntimeContract) -> Deployment
         missing,
         warnings: vec![],
     }
-}
-
-fn find_host_port() -> u16 {
-    for port in 4173..4300 {
-        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-            return port;
-        }
-    }
-    4173
 }
 
 fn deployment_root_for(project_root: &Path, app_path: Option<&str>) -> StateResult<PathBuf> {
@@ -491,7 +483,18 @@ pub(crate) fn deployment_prepare_details(
         })),
         "generatedFileRefs": deployment_generated_file_refs(spec),
         "reusedFileRefs": spec.files.reused,
-        "url": spec.runtime.url
+        "primaryUrl": primary_url(&spec.runtime),
+        "ports": spec.runtime.ports.iter().map(|port| json!({
+            "serviceId": port.service_id.clone(),
+            "purpose": port.purpose.clone(),
+            "containerPort": port.container_port,
+            "preferredHostPort": port.preferred_host_port,
+            "hostPort": port.host_port,
+            "path": port.path.clone(),
+            "internalOnly": port.internal_only,
+            "protocol": port.protocol.clone(),
+            "url": port.url.clone()
+        })).collect::<Vec<_>>()
     }))
 }
 

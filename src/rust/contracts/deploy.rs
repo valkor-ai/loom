@@ -414,13 +414,27 @@ pub struct DeploymentGeneratedFiles {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct DeploymentRuntime {
-    pub host_port: u16,
+pub struct DeploymentRuntimePort {
+    pub service_id: String,
+    pub purpose: String,
     pub container_port: u16,
-    pub url: String,
-    pub preview_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_host_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
+    pub path: String,
+    pub internal_only: bool,
+    pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentRuntime {
+    pub primary_service_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub api_paths: Vec<String>,
+    pub ports: Vec<DeploymentRuntimePort>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

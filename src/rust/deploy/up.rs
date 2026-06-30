@@ -16,6 +16,7 @@ use state::{
 use crate::{
     active_operation::{acquire_operation, active_operation_result},
     paths::deployment_paths,
+    port_plan::primary_url,
     prepare::{deploy_prepare_inner, read_spec},
     repair::write_repair_action,
     runtime_state::write_success_state,
@@ -252,7 +253,8 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         project_root: project_root.to_string_lossy().into_owned(),
         summary: "Deployment is running and validation passed.".to_string(),
         details: Some(json!({
-            "url": spec.runtime.url,
+            "primaryUrl": primary_url(&spec.runtime),
+            "ports": spec.runtime.ports,
             "preview": validation.preview,
             "apiRoutes": validation.api_routes,
             "stateRef": state_ref

@@ -14,7 +14,10 @@ use state::{
     store::{read_text, StateResult},
 };
 
-use crate::{prepare::read_spec, runtime_state::write_success_state, DeployToolInput};
+use crate::{
+    port_plan::primary_public_port, prepare::read_spec, runtime_state::write_success_state,
+    DeployToolInput,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,19 +92,26 @@ pub fn deploy_validate(input: DeployToolInput) -> LoomMcpActionResult {
 pub fn deploy_validate_inner(project_root: &Path) -> StateResult<DeploymentValidationResult> {
     let spec = read_spec(project_root)?;
     let asset_issues = validate_generated_assets(project_root, &spec)?;
+    let public_port = primary_public_port(&spec.runtime);
     let preview = spec
         .topology
         .validation
         .preview_paths
         .iter()
-        .map(|path| probe_http(spec.runtime.host_port, path, false))
+        .map(|path| match public_port {
+            Some(port) => probe_http(port, path, false),
+            None => missing_public_port_probe(path),
+        })
         .collect::<Vec<_>>();
     let api_routes = spec
         .topology
         .validation
         .api_paths
         .iter()
-        .map(|path| probe_http(spec.runtime.host_port, path, true))
+        .map(|path| match public_port {
+            Some(port) => probe_http(port, path, true),
+            None => missing_public_port_probe(path),
+        })
         .collect::<Vec<_>>();
     let compose_valid = asset_issues.iter().all(|issue| !issue.contains("compose"));
     let http_valid = preview.iter().all(|probe| probe.status == "ok")
@@ -115,6 +125,20 @@ pub fn deploy_validate_inner(project_root: &Path) -> StateResult<DeploymentValid
         api_routes,
         asset_issues,
     })
+}
+
+fn missing_public_port_probe(path: &str) -> HttpProbeResult {
+    HttpProbeResult {
+        path: if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("/{path}")
+        },
+        status: "invalid".to_string(),
+        status_code: None,
+        error: Some("Deployment runtime has no public host port.".to_string()),
+        html_fallback: false,
+    }
 }
 
 pub fn validate_generated_assets(

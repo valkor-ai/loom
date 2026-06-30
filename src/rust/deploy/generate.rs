@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, path::Path};
 
 use contracts::{
-    DependencyService, DeploymentGeneratedFiles, DeploymentRoute, DeploymentRuntime,
-    DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSourceService, DeploymentSpec,
-    DeploymentTopology, PackageManager, RuntimeKind, SourceServiceRole,
+    DependencyService, DeploymentGeneratedFiles, DeploymentRoute, DeploymentSourceModel,
+    DeploymentSourceService, DeploymentSpec, DeploymentTopology, PackageManager, RuntimeKind,
+    SourceServiceRole,
 };
 use state::paths::to_project_relative;
 
-use crate::{paths, topology::proxy_target_service_ids};
+use crate::{paths, port_plan::host_port_for_service, topology::proxy_target_service_ids};
 
 #[derive(Debug, Clone)]
 pub struct GeneratedDeploymentText {
@@ -56,26 +56,6 @@ pub fn generated_file_refs(
         nginx_config_paths,
         reused: vec![],
     })
-}
-
-pub fn deployment_runtime(
-    runtime_contract: &DeploymentRuntimeContract,
-    source_model: &DeploymentSourceModel,
-    host_port: u16,
-) -> DeploymentRuntime {
-    let preview = source_model
-        .services
-        .iter()
-        .find(|service| service.service_id == source_model.preview_service_id)
-        .or_else(|| source_model.services.first());
-    let container_port = preview.map(|service| service.port).unwrap_or(8080);
-    DeploymentRuntime {
-        host_port,
-        container_port,
-        url: format!("http://localhost:{host_port}"),
-        preview_path: runtime_contract.preview_path.clone(),
-        api_paths: runtime_contract.api_paths.clone(),
-    }
 }
 
 pub fn generate_deployment_files(spec: &DeploymentSpec) -> GeneratedDeploymentText {
@@ -434,12 +414,9 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
         format!("      dockerfile: {}", yaml_string(&dockerfile)),
         format!("    image: {}-{}", spec.image_name, service.service_id),
     ];
-    if service.service_id == spec.source_model.preview_service_id {
+    if let Some(host_port) = host_port_for_service(&spec.runtime, &service.service_id) {
         lines.push("    ports:".to_string());
-        lines.push(format!(
-            "      - \"{}:{}\"",
-            spec.runtime.host_port, service.port
-        ));
+        lines.push(format!("      - \"{}:{}\"", host_port, service.port));
     }
     lines.extend(yaml_environment(&env, 4));
     if service.start_command.is_some() {

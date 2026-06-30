@@ -12,8 +12,8 @@ use std::os::unix::fs::PermissionsExt;
 use contracts::{
     DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
     DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape,
-    DeploymentSpec, PackageManager, SourceModelSource,
+    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentRuntimePort,
+    DeploymentShape, DeploymentSpec, PackageManager, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -73,6 +73,21 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     assert!(serde_json::to_string(&spec.topology)
         .unwrap()
         .contains("\"publicPath\":\"/api\""));
+    let frontend_port = runtime_port(&spec, "frontend").expect("frontend runtime port");
+    assert_eq!(frontend_port.purpose, "preview");
+    assert_eq!(frontend_port.container_port, 80);
+    assert_eq!(frontend_port.preferred_host_port, Some(4173));
+    assert!(frontend_port.host_port.is_some(), "{frontend_port:?}");
+    assert!(!frontend_port.internal_only);
+    let backend_port = runtime_port(&spec, "backend").expect("backend runtime port");
+    assert_eq!(backend_port.purpose, "api");
+    assert_eq!(backend_port.container_port, 8080);
+    assert_eq!(backend_port.host_port, None);
+    assert!(backend_port.internal_only);
+    let postgres_port = runtime_port(&spec, "postgres").expect("postgres runtime port");
+    assert_eq!(postgres_port.purpose, "dependency");
+    assert_eq!(postgres_port.host_port, None);
+    assert!(postgres_port.internal_only);
 
     let nginx = read_text(
         &fixture
@@ -105,6 +120,10 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
     assert!(compose.contains("      - postgres"));
+    assert!(compose.contains("  frontend:\n    build:"), "{compose}");
+    assert!(compose.contains("    ports:\n"), "{compose}");
+    let backend_block = compose_service_block(&compose, "backend").expect("backend compose block");
+    assert!(!backend_block.contains("ports:"), "{backend_block}");
 }
 
 #[test]
@@ -235,6 +254,8 @@ fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections(
     assert!(details["sourceModelSummary"].is_object(), "{value:#}");
     assert!(details["topologySummary"].is_object(), "{value:#}");
     assert!(details["generatedFileRefs"].is_array(), "{value:#}");
+    assert!(details["primaryUrl"].as_str().is_some(), "{value:#}");
+    assert!(details["ports"].as_array().is_some(), "{value:#}");
     assert!(
         details.get("sourceModel").is_none()
             && details.get("topology").is_none()
@@ -242,6 +263,43 @@ fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections(
         "deploy prepare must not inline full deploy spec sections: {value:#}"
     );
     assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_prepare_auto_resolves_occupied_preferred_host_port() {
+    let fixture = Fixture::new("deploy-port-fallback");
+    let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("bind occupied test port");
+    let preferred_port = occupied.local_addr().expect("occupied test addr").port();
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "httpProbes": { "previewPath": "/" },
+        "start": { "command": "npm run start", "port": preferred_port }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","start":"vite --host 0.0.0.0"}}"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    let preview = runtime_port(&spec, "app").expect("app runtime port");
+    assert_eq!(preview.preferred_host_port, Some(preferred_port));
+    assert_ne!(preview.host_port, Some(preferred_port));
+    assert!(preview.host_port.is_some());
+    assert_ne!(
+        runtime_primary_url(&spec),
+        format!("http://localhost:{preferred_port}")
+    );
 }
 
 #[test]
@@ -285,8 +343,14 @@ fn deploy_prepare_prefers_existing_compose_without_inlining_or_editing_it() {
     let spec = fixture.read_spec();
     assert_eq!(spec.provider, DeployProvider::ComposeExisting);
     assert_eq!(spec.files.compose_path, "compose.yaml");
-    assert_eq!(spec.runtime.host_port, 5555);
-    assert_eq!(spec.runtime.container_port, 8080);
+    let preview_port = spec
+        .runtime
+        .ports
+        .iter()
+        .find(|port| port.purpose == "preview")
+        .expect("preview port");
+    assert_eq!(preview_port.host_port, Some(5555));
+    assert_eq!(preview_port.container_port, 8080);
     assert!(!fixture
         .root
         .join(".loom/deployment/specs/generated/compose.yaml")
@@ -518,12 +582,13 @@ exit 0
 #[test]
 fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
     let fixture = Fixture::new("deploy-validate-clears-failure");
+    let preferred_port = free_test_port();
     fixture.write_runtime_delivery(json!({
         "status": "modified",
         "runtimeKind": "node",
         "deploymentShape": "single-service",
         "httpProbes": { "previewPath": "/" },
-        "start": { "port": 8080 }
+        "start": { "port": preferred_port }
     }));
     fixture.write_text(
         "package.json",
@@ -539,7 +604,7 @@ fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
     assert_eq!(value["state"], "done", "{value:#}");
     let spec: DeploymentSpec =
         read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec");
-    let _server = spawn_one_shot_http_server(spec.runtime.host_port);
+    let _server = spawn_one_shot_http_server(runtime_public_port(&spec));
     fixture.write_text(".loom/deployment/state/latest-failure.json", "{}\n");
     fixture.write_text(".loom/deployment/state/repair-action.json", "{}\n");
 
@@ -1976,6 +2041,67 @@ fn spawn_one_shot_http_server(port: u16) -> thread::JoinHandle<()> {
             let _ = stream.write_all(response.as_bytes());
         }
     })
+}
+
+fn free_test_port() -> u16 {
+    TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind dynamic test port")
+        .local_addr()
+        .expect("test port addr")
+        .port()
+}
+
+fn runtime_port<'a>(
+    spec: &'a DeploymentSpec,
+    service_id: &str,
+) -> Option<&'a DeploymentRuntimePort> {
+    spec.runtime
+        .ports
+        .iter()
+        .find(|port| port.service_id == service_id)
+}
+
+fn runtime_public_port(spec: &DeploymentSpec) -> u16 {
+    spec.runtime
+        .ports
+        .iter()
+        .find(|port| port.service_id == spec.runtime.primary_service_id && !port.internal_only)
+        .and_then(|port| port.host_port)
+        .or_else(|| {
+            spec.runtime
+                .ports
+                .iter()
+                .find(|port| !port.internal_only)
+                .and_then(|port| port.host_port)
+        })
+        .expect("public runtime host port")
+}
+
+fn runtime_primary_url(spec: &DeploymentSpec) -> String {
+    spec.runtime
+        .ports
+        .iter()
+        .find(|port| port.service_id == spec.runtime.primary_service_id && !port.internal_only)
+        .and_then(|port| port.url.clone())
+        .or_else(|| {
+            spec.runtime
+                .ports
+                .iter()
+                .find(|port| !port.internal_only)
+                .and_then(|port| port.url.clone())
+        })
+        .expect("runtime primary url")
+}
+
+fn compose_service_block<'a>(compose: &'a str, service_id: &str) -> Option<&'a str> {
+    let marker = format!("  {service_id}:");
+    let start = compose.find(&marker)?;
+    let rest = &compose[start + marker.len()..];
+    let end = rest
+        .find("\n  ")
+        .map(|index| start + marker.len() + index)
+        .unwrap_or(compose.len());
+    Some(&compose[start..end])
 }
 
 fn test_env_lock() -> &'static Mutex<()> {
