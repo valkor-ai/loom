@@ -4,6 +4,22 @@ use serde_json::Value;
 
 use crate::AcceptancePriority;
 
+pub const COVERAGE_ARTIFACT_TYPES: [&str; 13] = [
+    "module",
+    "data_entity",
+    "data_constraint",
+    "relationship",
+    "interface",
+    "user_flow",
+    "state_machine",
+    "state_rule",
+    "frontend_data_view",
+    "frontend_action",
+    "frontend_operation_path",
+    "decision",
+    "risk",
+];
+
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]

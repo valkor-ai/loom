@@ -107,10 +107,9 @@ impl<'de> Deserialize<'de> for KnowledgeSource {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingQueue {
-    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
     pub source_id: String,
     pub source_name: String,
@@ -128,7 +127,37 @@ impl PendingQueue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+impl<'de> Deserialize<'de> for PendingQueue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireQueue {
+            #[serde(deserialize_with = "deserialize_schema_version")]
+            schema_version: u32,
+            #[serde(default)]
+            source_id: Option<String>,
+            #[serde(default)]
+            source_name: Option<String>,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            operations: Vec<PendingOperation>,
+        }
+
+        let wire = WireQueue::deserialize(deserializer)?;
+        Ok(Self {
+            schema_version: wire.schema_version,
+            source_id: wire.source_id.unwrap_or_default(),
+            source_name: wire.source_name.or(wire.name).unwrap_or_default(),
+            operations: wire.operations,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PendingOperationKind {
     AddPaths,
@@ -136,13 +165,49 @@ pub enum PendingOperationKind {
     ReplacePaths,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingOperation {
     pub operation_id: String,
     pub kind: PendingOperationKind,
     pub paths: Vec<String>,
     pub created_at: String,
+}
+
+impl<'de> Deserialize<'de> for PendingOperation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct WireOperation {
+            #[serde(default)]
+            operation_id: Option<String>,
+            #[serde(default)]
+            kind: Option<PendingOperationKind>,
+            #[serde(default, rename = "type")]
+            operation_type: Option<PendingOperationKind>,
+            #[serde(default)]
+            paths: Vec<String>,
+            #[serde(default)]
+            created_at: Option<String>,
+        }
+
+        let wire = WireOperation::deserialize(deserializer)?;
+        let kind = wire
+            .kind
+            .or(wire.operation_type)
+            .ok_or_else(|| de::Error::custom("pending operation kind is required"))?;
+        Ok(Self {
+            operation_id: wire
+                .operation_id
+                .unwrap_or_else(|| "legacy_pending_operation".to_string()),
+            kind,
+            paths: wire.paths,
+            created_at: wire.created_at.unwrap_or_default(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -307,6 +372,10 @@ pub struct SemanticLabel {
     pub kind: String,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<String>,
 }
 
@@ -319,8 +388,6 @@ pub struct BlockAffinity {
     pub concept_grounding: f64,
     #[serde(default)]
     pub frontend_experience: f64,
-    #[serde(default)]
-    pub business_rules: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

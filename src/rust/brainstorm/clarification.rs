@@ -3,8 +3,8 @@ use std::path::Path;
 use contracts::{ClarificationBlockName, UserFacingLanguageConstraint};
 use delivery_core::{
     ArtifactKind, LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpUserGateResult, RouteAction, RouteActionKind,
-    TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpUserGateResult, ReadGroupRef, RouteAction,
+    RouteActionKind, RunLoomToolNext, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -88,27 +88,69 @@ pub fn initial_state(
 }
 
 pub fn confirm_block(input: BrainstormConfirmBlockInput) -> LoomMcpActionResult {
+    let original_input = input.clone();
     match confirm_block_inner(input) {
         Ok(result) => result,
-        Err(error) => {
-            let recovery_tool = if error.code == "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED" {
-                Some("loom.knowledgeBrainstormContext".to_string())
-            } else {
-                Some("loom.continue".to_string())
-            };
-            LoomMcpActionResult::Failed(LoomMcpFailureResult {
-                project_root: error.project_root,
-                error: LoomMcpFailure {
-                    code: error.code,
-                    message: error.message,
-                    target_batch: Some(7),
-                    domain: Some("brainstorm".to_string()),
-                    route_action: Some("brainstorm_confirm_block".to_string()),
-                    recovery_tool,
-                },
-            })
+        Err(error) if error.code == "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED" => {
+            missing_knowledge_context_next(&original_input, error)
         }
+        Err(error) => confirmation_failed(error, Some("loom.continue".to_string())),
     }
+}
+
+fn missing_knowledge_context_next(
+    input: &BrainstormConfirmBlockInput,
+    error: ConfirmError,
+) -> LoomMcpActionResult {
+    let inspected = match state::inspect_request(delivery_core::InspectRequestInput {
+        project_root: input.project_root.clone(),
+        request_ref: input.request_ref.clone(),
+    }) {
+        Ok(inspected) => inspected,
+        Err(inspect_error) => {
+            return confirmation_failed(
+                ConfirmError {
+                    project_root: error.project_root,
+                    code: "BRAINSTORM_KNOWLEDGE_CONTEXT_CHECK_FAILED".to_string(),
+                    message: inspect_error.to_string(),
+                },
+                Some("loom.continue".to_string()),
+            );
+        }
+    };
+    let read_groups = inspected
+        .read_groups
+        .into_iter()
+        .filter(|group| group.group_id == "knowledge_context_plan")
+        .collect::<Vec<ReadGroupRef>>();
+    LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult {
+        project_root: error.project_root,
+        stop_allowed: false,
+        agent_instruction: format!(
+            "{} Retry loom.brainstormConfirmBlock with the same requestRef, block, summary, and confirmedData already submitted.",
+            error.message
+        ),
+        next: LoomMcpNextAction::RunLoomTool(RunLoomToolNext {
+            tool_name: "loom.knowledgeBrainstormContext".to_string(),
+            request_ref: input.request_ref.clone(),
+            read_groups,
+            retry_tool: "loom.brainstormConfirmBlock".to_string(),
+        }),
+    })
+}
+
+fn confirmation_failed(error: ConfirmError, recovery_tool: Option<String>) -> LoomMcpActionResult {
+    LoomMcpActionResult::Failed(LoomMcpFailureResult {
+        project_root: error.project_root,
+        error: LoomMcpFailure {
+            code: error.code,
+            message: error.message,
+            target_batch: Some(7),
+            domain: Some("brainstorm".to_string()),
+            route_action: Some("brainstorm_confirm_block".to_string()),
+            recovery_tool,
+        },
+    })
 }
 
 pub fn materialize_confirmation_request(

@@ -2,12 +2,13 @@ use std::sync::{Mutex, MutexGuard};
 
 use delivery_core::{LoomMcpActionResult, LoomMcpNextAction};
 use knowledge::{
-    add_source, brainstorm_context, build_source, disable_source, inspect_chunk, list_sources,
+    add_source, brainstorm_context, build_source, disable_source, discard_pending, inspect_chunk,
+    list_sources,
     mcp_models::{
         KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
-        KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput,
+        KnowledgeNameInput, KnowledgePendingInput, KnowledgeProjectInput, KnowledgeSearchInput,
     },
-    search_knowledge, submit_semantic_pack,
+    pending_sources, remove_source, search_knowledge, source_status, submit_semantic_pack,
 };
 use serde_json::json;
 
@@ -127,10 +128,10 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         "chunkResults": semantic.chunk_read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "",
                 "semanticLabels": [],
-                "semanticAliases": [],
+                "semanticAliases": ["旧重复字段"],
                 "blockAffinity": {
                     "phaseScope": 0.2,
                     "conceptGrounding": 0.9,
@@ -154,6 +155,14 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
                 .issues
                 .iter()
                 .any(|issue| issue.code == "SUMMARY_REQUIRED"));
+            assert!(error
+                .issues
+                .iter()
+                .any(|issue| issue.code == "SEMANTIC_ALIASES_NOT_ALLOWED"));
+            assert!(error
+                .issues
+                .iter()
+                .any(|issue| issue.code == "BLOCK_AFFINITY_FIELD_NOT_ALLOWED"));
         }
         other => panic!("expected repairable semantic result, got {other:?}"),
     }
@@ -165,20 +174,18 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         "chunkResults": semantic.chunk_read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "证券账户开户、挂失补办、销户和持仓清空限制。",
                 "semanticLabels": [
-                    {"kind": "object", "text": "证券账户", "confidence": "high"},
-                    {"kind": "operation", "text": "证券账户开户", "confidence": "high"},
-                    {"kind": "operation", "text": "销户", "confidence": "high"},
-                    {"kind": "rule", "text": "持仓清空后方可销户", "confidence": "high"}
+                    {"kind": "object", "text": "证券账户", "normalizedText": "证券账户", "aliases": [], "confidence": "high"},
+                    {"kind": "operation", "text": "证券账户开户", "normalizedText": " 证券账户开户 ", "aliases": ["开户", " 开户 "], "confidence": "high"},
+                    {"kind": "operation", "text": "销户", "normalizedText": "销户", "aliases": ["证券账户销户", " 证券账户销户 "], "confidence": "high"},
+                    {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "aliases": ["恢复交易能力", "RESTORE TRADE"], "confidence": "high"}
                 ],
-                "semanticAliases": ["开户", "证券账户销户", "恢复交易能力"],
                 "blockAffinity": {
                     "phaseScope": 0.7,
                     "conceptGrounding": 1.0,
-                    "frontendExperience": 0.4,
-                    "businessRules": 0.9
+                    "frontendExperience": 0.4
                 }
             })
         }).collect::<Vec<_>>()
@@ -201,6 +208,25 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     let build_id = source.current_build_id.as_ref().expect("current build");
     assert_eq!(build_id, &semantic.build_id);
     assert!(source.last_built_at.is_some());
+    let chunks_file: knowledge::models::ChunksFile = knowledge::store::read_json(
+        &knowledge::paths::chunks_file(&source.source_id, build_id).expect("chunks path"),
+    )
+    .expect("chunks file");
+    let stored_aliases = chunks_file
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.semantic_aliases.iter().cloned())
+        .collect::<Vec<_>>();
+    assert!(stored_aliases.contains(&"证券账户开户".to_string()));
+    assert!(stored_aliases.contains(&"开户".to_string()));
+    assert!(stored_aliases.contains(&"restore trade".to_string()));
+    assert_eq!(
+        stored_aliases
+            .iter()
+            .filter(|alias| alias.as_str() == "开户")
+            .count(),
+        1
+    );
     let semantic_state: knowledge::models::SemanticState = knowledge::store::read_json(
         &knowledge::paths::semantic_state_file(&source.source_id, build_id).expect("state path"),
     )
@@ -245,11 +271,13 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     .expect("knowledge search");
     assert_eq!(search.status, "available");
     assert!(!search.cards.is_empty());
-    assert!(!serde_json::to_value(&search.cards[0])
-        .expect("card json")
-        .as_object()
-        .expect("card object")
-        .contains_key("text"));
+    let search_json = serde_json::to_value(&search).expect("search json");
+    assert!(search_json.get("matchedSources").is_none());
+    let card_json = serde_json::to_value(&search.cards[0]).expect("card json");
+    let card_object = card_json.as_object().expect("card object");
+    assert!(!card_object.contains_key("text"));
+    assert!(!card_object.contains_key("sourceId"));
+    assert!(!card_object.contains_key("semanticLabels"));
     assert!(!serde_json::to_value(&search.cards[0])
         .expect("card json")
         .as_object()
@@ -269,7 +297,7 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     assert!(suffix_search.cards.iter().any(|card| card
         .matched_labels
         .iter()
-        .any(|label| label.text == "恢复交易能力")));
+        .any(|label| label.text == "持仓清空后方可销户")));
 
     disable_source(KnowledgeNameInput {
         project_root: fixture.root_str().to_string(),
@@ -286,6 +314,163 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
     })
     .expect("disabled search");
     assert_eq!(disabled_search.status, "empty");
+}
+
+#[test]
+fn knowledge_cleanup_tools_are_idempotent_and_include_pending_only_state() {
+    let fixture = Fixture::new("pending-only-cleanup");
+    let pending_dir = fixture.root.join(".loom-home/knowledge/pending");
+    std::fs::create_dir_all(&pending_dir).expect("pending dir");
+    std::fs::write(
+        pending_dir.join("ksrc_orphan.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": "ksrc_orphan",
+            "sourceName": "orphan-rules",
+            "operations": [{
+                "operationId": "kop_orphan",
+                "kind": "add_paths",
+                "paths": [fixture.root.join("docs").to_string_lossy().to_string()],
+                "createdAt": "2026-06-30T00:00:00Z"
+            }]
+        }))
+        .expect("pending json"),
+    )
+    .expect("write pending");
+
+    let listed = list_sources(KnowledgeProjectInput {
+        project_root: fixture.root_str().to_string(),
+    })
+    .expect("list pending-only");
+    assert_eq!(listed.sources.len(), 1);
+    assert_eq!(listed.sources[0].source.name, "orphan-rules");
+    assert!(listed.sources[0].pending.is_some());
+
+    let pending = pending_sources(KnowledgePendingInput {
+        project_root: fixture.root_str().to_string(),
+        name: Some("orphan-rules".to_string()),
+    })
+    .expect("pending by name");
+    assert_eq!(pending.sources.len(), 1);
+
+    let status = source_status(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "orphan-rules".to_string(),
+    })
+    .expect("status pending-only");
+    assert!(status.source.is_none());
+    assert!(status.pending.is_some());
+
+    let discarded = discard_pending(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "orphan-rules".to_string(),
+    })
+    .expect("discard pending-only");
+    assert!(discarded.discarded);
+
+    let removed_missing = remove_source(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "orphan-rules".to_string(),
+    })
+    .expect("remove after discard");
+    assert!(!removed_missing.removed_source);
+    assert!(!removed_missing.removed_pending);
+}
+
+#[test]
+fn legacy_cli_pending_knowledge_can_be_listed_and_discarded() {
+    let fixture = Fixture::new("legacy-cli-pending");
+    let pending_dir = fixture.root.join(".loom-home/knowledge/pending");
+    std::fs::create_dir_all(&pending_dir).expect("pending dir");
+    std::fs::write(
+        pending_dir.join("legacy-cli-pending.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": "1.0",
+            "name": "legacy-cli-rules",
+            "sourceId": null,
+            "createNew": true,
+            "operations": [{
+                "type": "add_paths",
+                "paths": [fixture.root.join("docs/legacy.md").to_string_lossy().to_string()]
+            }],
+            "validation": {
+                "acceptedPaths": [],
+                "acceptedFiles": 0,
+                "acceptedDirectories": 0,
+                "supportedFiles": 0,
+                "skippedFiles": [],
+                "maxFileBytes": 20971520
+            },
+            "createdAt": "2026-06-30T00:00:00Z",
+            "updatedAt": "2026-06-30T00:00:00Z"
+        }))
+        .expect("legacy pending json"),
+    )
+    .expect("write legacy pending");
+
+    let listed = list_sources(KnowledgeProjectInput {
+        project_root: fixture.root_str().to_string(),
+    })
+    .expect("list legacy pending");
+    assert_eq!(listed.sources.len(), 1);
+    assert_eq!(listed.sources[0].source.name, "legacy-cli-rules");
+    assert_eq!(
+        listed.sources[0].pending.as_ref().unwrap().operations[0].kind,
+        knowledge::models::PendingOperationKind::AddPaths
+    );
+
+    let status = source_status(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "legacy-cli-rules".to_string(),
+    })
+    .expect("legacy pending status");
+    assert!(status.source.is_none());
+    assert!(status.pending.is_some());
+
+    let discarded = discard_pending(KnowledgeNameInput {
+        project_root: fixture.root_str().to_string(),
+        name: "legacy-cli-rules".to_string(),
+    })
+    .expect("discard legacy pending");
+    assert!(discarded.discarded);
+}
+
+#[test]
+fn knowledge_update_remove_path_does_not_require_existing_file() {
+    let fixture = Fixture::new("remove-missing-path");
+    let document = fixture.write_file("docs/stock.md", "# 证券账户\n\n证券账户开户规则。");
+    add_source(KnowledgeAddInput {
+        project_root: fixture.root_str().to_string(),
+        name: "remove-rules".to_string(),
+        paths: vec![document.to_string_lossy().into_owned()],
+    })
+    .expect("add source");
+
+    let removed_path = fixture
+        .root
+        .join("docs/deleted-before-remove.md")
+        .to_string_lossy()
+        .into_owned();
+    let updated = knowledge::update_source(knowledge::mcp_models::KnowledgeUpdateInput {
+        project_root: fixture.root_str().to_string(),
+        name: "remove-rules".to_string(),
+        add_paths: vec![],
+        remove_paths: vec![removed_path.clone()],
+        replace_paths: vec![],
+    })
+    .expect("remove missing path should be queued");
+
+    let pending = updated.pending.expect("pending remove queue");
+    assert!(pending.operations.iter().any(|operation| {
+        matches!(
+            operation.kind,
+            knowledge::models::PendingOperationKind::RemovePaths
+        ) && operation
+            .paths
+            .iter()
+            .any(|path| path.ends_with("deleted-before-remove.md"))
+    }));
+    assert!(updated.warnings.is_empty());
 }
 
 #[test]
@@ -616,6 +801,105 @@ fn knowledge_search_prioritizes_semantic_focus_coverage_before_lexical_fallback(
 }
 
 #[test]
+fn knowledge_search_respects_typed_semantic_focus_kinds() {
+    let fixture = Fixture::new("typed-semantic-focus");
+    let source_id = "ksrc_typed_focus";
+    let build_id = "kbld_typed_focus";
+    let loom_home = fixture.root.join(".loom-home");
+    let build_dir = loom_home
+        .join("knowledge/sources")
+        .join(source_id)
+        .join("build-runs")
+        .join(build_id);
+    std::fs::create_dir_all(build_dir.join("chunks")).expect("typed focus chunks dir");
+    std::fs::write(
+        loom_home.join("knowledge/registry.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sources": [{
+                "sourceId": source_id,
+                "name": "typed-focus-rules",
+                "enabled": true,
+                "documentPaths": ["/fixture/typed-focus.md"],
+                "currentBuildId": build_id,
+                "createdAt": "2026-06-30T00:00:00Z",
+                "updatedAt": "2026-06-30T00:00:00Z",
+                "lastBuiltAt": "2026-06-30T00:00:00Z"
+            }]
+        }))
+        .expect("registry json"),
+    )
+    .expect("write registry");
+    std::fs::write(
+        build_dir.join("chunks.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": source_id,
+            "sourceName": "typed-focus-rules",
+            "buildId": build_id,
+            "chunks": [
+                semantic_chunk(
+                    "kchunk_operation_only",
+                    "operation wording",
+                    "证券账户持仓清空后方可销户只是一个操作短语。",
+                    json!([
+                        {"kind": "operation", "text": "证券账户持仓清空后方可销户", "normalizedText": "证券账户持仓清空后方可销户", "aliases": [], "confidence": "high"}
+                    ]),
+                    json!([]),
+                    1.0,
+                ),
+                semantic_chunk(
+                    "kchunk_object_rule",
+                    "object rule",
+                    "证券账户对象及持仓清空后方可销户规则。",
+                    json!([
+                        {"kind": "object", "text": "证券账户", "normalizedText": "证券账户", "aliases": [], "confidence": "high"},
+                        {"kind": "rule", "text": "持仓清空后方可销户", "normalizedText": "持仓清空后方可销户", "aliases": [], "confidence": "high"}
+                    ]),
+                    json!([]),
+                    0.0,
+                )
+            ]
+        }))
+        .expect("chunks json"),
+    )
+    .expect("write chunks");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_operation_only.txt"),
+        "证券账户持仓清空后方可销户只是一个操作短语。",
+    )
+    .expect("write operation-only chunk");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_object_rule.txt"),
+        "证券账户对象及持仓清空后方可销户规则。",
+    )
+    .expect("write object-rule chunk");
+
+    let search = search_knowledge(KnowledgeSearchInput {
+        project_root: fixture.root_str().to_string(),
+        natural_language_query: "".to_string(),
+        semantic_focus: vec![
+            "object:证券账户".to_string(),
+            "rule:持仓清空后方可销户".to_string(),
+        ],
+        source_names: vec![],
+        block: Some("concept_grounding".to_string()),
+        limit: Some(2),
+    })
+    .expect("typed focus search");
+
+    assert_eq!(search.status, "available");
+    assert_eq!(search.cards[0].chunk_id, "kchunk_object_rule");
+    let matched_kinds = search.cards[0]
+        .matched_labels
+        .iter()
+        .map(|label| label.kind.as_str())
+        .collect::<Vec<_>>();
+    assert!(matched_kinds.contains(&"object"));
+    assert!(matched_kinds.contains(&"rule"));
+}
+
+#[test]
 fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     let fixture = Fixture::new("brainstorm-context");
     fixture.write_file(
@@ -691,6 +975,15 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
         .chunks
         .iter()
         .all(|chunk| chunk.source_name == "page-paths"));
+    assert!(context
+        .read_plan
+        .chunks
+        .iter()
+        .all(|chunk| !chunk.build_id.is_empty() && !chunk.chunk_id.is_empty()));
+    let context_json = serde_json::to_value(&context).expect("context json");
+    assert!(context_json["matchedSources"].is_array());
+    assert!(!context_json.to_string().contains("topChunks"));
+    assert!(!context_json.to_string().contains("sourceId"));
     let query_file = fixture.root.join(
         ".loom/deliveries/delivery_1/workspace/phase-1/brainstorm-knowledge/brainstorm_session_req_1/frontend_experience/frontend_paths/query.json",
     );
@@ -770,6 +1063,152 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     assert!(wrong_step.to_string().contains("does not belong"));
 }
 
+#[test]
+fn brainstorm_context_adds_block_retrieval_intent_without_agent_facing_bloat() {
+    let fixture = Fixture::new("block-retrieval-intent");
+    let source_id = "ksrc_block_intent";
+    let build_id = "kbld_block_intent";
+    let loom_home = fixture.root.join(".loom-home");
+    let build_dir = loom_home
+        .join("knowledge/sources")
+        .join(source_id)
+        .join("build-runs")
+        .join(build_id);
+    std::fs::create_dir_all(build_dir.join("chunks")).expect("intent chunks dir");
+    std::fs::write(
+        loom_home.join("knowledge/registry.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sources": [{
+                "sourceId": source_id,
+                "name": "block-intent-rules",
+                "enabled": true,
+                "documentPaths": ["/fixture/block-intent.md"],
+                "currentBuildId": build_id,
+                "createdAt": "2026-06-26T00:00:00Z",
+                "updatedAt": "2026-06-26T00:00:00Z",
+                "lastBuiltAt": "2026-06-26T00:00:00Z"
+            }]
+        }))
+        .expect("registry json"),
+    )
+    .expect("write registry");
+    std::fs::write(
+        build_dir.join("chunks.json"),
+        serde_json::to_string_pretty(&json!({
+            "schemaVersion": 1,
+            "sourceId": source_id,
+            "sourceName": "block-intent-rules",
+            "buildId": build_id,
+            "chunks": [
+                {
+                    "chunkId": "kchunk_000001",
+                    "documentId": "kdoc_000001",
+                    "documentTitle": "irrelevant frontend-affinity note",
+                    "sourcePath": "/fixture/block-intent.md",
+                    "headingPath": ["fixture", "runtime"],
+                    "tokenEstimate": 80,
+                    "contextPrefix": "运行容器端口健康检查。",
+                    "neighborChunkIds": [],
+                    "splitReason": "section",
+                    "bodyRef": "chunks/kchunk_000001.txt",
+                    "summary": "运行容器端口健康检查。",
+                    "semanticLabels": [],
+                    "semanticAliases": [],
+                    "blockAffinity": {
+                        "phaseScope": 0.0,
+                        "conceptGrounding": 0.0,
+                        "frontendExperience": 1.0
+                    }
+                },
+                {
+                    "chunkId": "kchunk_000002",
+                    "documentId": "kdoc_000001",
+                    "documentTitle": "frontend operation path",
+                    "sourcePath": "/fixture/block-intent.md",
+                    "headingPath": ["fixture", "frontend"],
+                    "tokenEstimate": 80,
+                    "contextPrefix": "页面操作路径包含查询、筛选、分页、列表、详情、操作入口、表单输入、成功反馈、业务阻断、刷新回读。",
+                    "neighborChunkIds": [],
+                    "splitReason": "section",
+                    "bodyRef": "chunks/kchunk_000002.txt",
+                    "summary": "页面操作路径包含查询、筛选、分页、列表、详情、操作入口、表单输入、成功反馈、业务阻断、刷新回读。",
+                    "semanticLabels": [],
+                    "semanticAliases": [],
+                    "blockAffinity": {
+                        "phaseScope": 0.0,
+                        "conceptGrounding": 0.0,
+                        "frontendExperience": 1.0
+                    }
+                }
+            ]
+        }))
+        .expect("chunks json"),
+    )
+    .expect("write chunks");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_000001.txt"),
+        "运行 容器 端口 健康检查。",
+    )
+    .expect("write irrelevant chunk");
+    std::fs::write(
+        build_dir.join("chunks/kchunk_000002.txt"),
+        "页面 操作 路径 查询 筛选 分页 列表 详情 操作 入口 表单 输入 成功 反馈 失败 提示 业务 阻断 加载 空状态 刷新 回读。",
+    )
+    .expect("write frontend chunk");
+
+    let stored = state::write_native_request(
+        fixture.root_str(),
+        state::NativeRequestInput {
+            request_id: "brainstorm_session_req_intent".to_string(),
+            request_kind: "brainstorm_session".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase-1".to_string()),
+            root: json!({
+                "knowledgeQueryPlan": {
+                    "blocks": {
+                        "frontend_experience": {
+                            "executionOrder": [{
+                                "stepId": "frontend_paths",
+                                "queryKind": "page_operation_path"
+                            }]
+                        }
+                    }
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "knowledge_context_protocol",
+                        "fields": ["knowledgeQueryPlan.blocks.frontend_experience.executionOrder"]
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write brainstorm request");
+
+    let context = brainstorm_context(KnowledgeBrainstormContextInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref,
+        block: "frontend_experience".to_string(),
+        step_id: "frontend_paths".to_string(),
+        query_id: None,
+        atomic_scope_reason: None,
+        query_subject: "当前办理体验".to_string(),
+        natural_language_query: "".to_string(),
+        semantic_focus: vec![],
+    })
+    .expect("frontend context");
+
+    assert_eq!(context.status, "available");
+    assert_eq!(context.read_plan.chunks[0].chunk_id, "kchunk_000002");
+    let context_json = serde_json::to_value(&context).expect("context json");
+    assert!(context_json.get("requestRef").is_none());
+    assert!(context_json.get("querySubject").is_none());
+    assert!(context_json.get("naturalLanguageQuery").is_none());
+    assert!(context_json.get("semanticFocus").is_none());
+}
+
 fn focus_chunk(
     chunk_id: &str,
     semantic_label: &str,
@@ -781,7 +1220,7 @@ fn focus_chunk(
         semantic_label,
         summary,
         json!([
-            {"kind": "operation", "text": semantic_label, "confidence": "high"}
+            {"kind": "operation", "text": semantic_label, "normalizedText": semantic_label, "aliases": [], "confidence": "high"}
         ]),
         json!([]),
         phase_scope,
@@ -813,8 +1252,7 @@ fn semantic_chunk(
         "blockAffinity": {
             "phaseScope": phase_scope,
             "conceptGrounding": phase_scope,
-            "frontendExperience": 0.0,
-            "businessRules": phase_scope
+            "frontendExperience": 0.0
         }
     })
 }
@@ -842,19 +1280,17 @@ fn publish_simple_source(fixture: &Fixture, name: &str) {
         "chunkResults": semantic.chunk_read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "证券账户管理页面的列表查询、开户、挂失补办和销户办理路径。",
                 "semanticLabels": [
-                    {"kind": "object", "text": "证券账户管理页面", "confidence": "high"},
-                    {"kind": "page_operation", "text": "证券账户销户办理路径", "confidence": "high"},
-                    {"kind": "operation", "text": "销户", "confidence": "high"}
+                    {"kind": "object", "text": "证券账户管理页面", "normalizedText": "证券账户管理页面", "aliases": ["证券账户页面"], "confidence": "high"},
+                    {"kind": "page", "text": "证券账户销户办理路径", "normalizedText": "证券账户销户办理路径", "aliases": ["页面办理路径", "销户办理"], "confidence": "high"},
+                    {"kind": "operation", "text": "销户", "normalizedText": "销户", "aliases": ["证券账户销户"], "confidence": "high"}
                 ],
-                "semanticAliases": ["页面办理路径", "销户办理", "证券账户"],
                 "blockAffinity": {
                     "phaseScope": 0.4,
                     "conceptGrounding": 0.6,
-                    "frontendExperience": 1.0,
-                    "businessRules": 0.7
+                    "frontendExperience": 1.0
                 }
             })
         }).collect::<Vec<_>>()

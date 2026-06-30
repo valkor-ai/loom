@@ -5,8 +5,8 @@ use std::{
     time::Duration,
 };
 
-use contracts::{DeploymentRoute, DeploymentSpec};
-use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
+use contracts::{DeployProvider, DeploymentRoute, DeploymentSpec};
+use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use state::{
@@ -14,7 +14,7 @@ use state::{
     store::{read_text, StateResult},
 };
 
-use crate::{prepare::read_spec, DeployToolInput};
+use crate::{prepare::read_spec, runtime_state::write_success_state, DeployToolInput};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,16 +39,43 @@ pub struct HttpProbeResult {
 pub fn deploy_validate(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root = Path::new(&input.project_root);
     match deploy_validate_inner(project_root) {
-        Ok(result) => LoomMcpActionResult::Done(LoomMcpDoneResult {
-            project_root: input.project_root,
-            summary: if result.valid {
-                "Deployment validation passed.".to_string()
-            } else {
-                "Deployment validation found issues.".to_string()
-            },
-            details: Some(json!(result)),
-            warnings: vec![],
-        }),
+        Ok(result) => {
+            let mut details = json!(result);
+            if result.valid {
+                match read_spec(project_root)
+                    .and_then(|spec| write_success_state(project_root, &spec, &result))
+                {
+                    Ok(state_ref) => {
+                        if let Some(object) = details.as_object_mut() {
+                            object.insert("stateRef".to_string(), json!(state_ref));
+                        }
+                    }
+                    Err(error) => {
+                        return LoomMcpActionResult::Failed(LoomMcpFailureResult {
+                            project_root: input.project_root,
+                            error: LoomMcpFailure {
+                                code: "DEPLOY_VALIDATE_STATE_WRITE_FAILED".to_string(),
+                                message: error.to_string(),
+                                target_batch: Some(10),
+                                domain: Some("deploy".to_string()),
+                                route_action: None,
+                                recovery_tool: Some("loom.deployInspect".to_string()),
+                            },
+                        })
+                    }
+                }
+            }
+            LoomMcpActionResult::Done(LoomMcpDoneResult {
+                project_root: input.project_root,
+                summary: if result.valid {
+                    "Deployment validation passed.".to_string()
+                } else {
+                    "Deployment validation found issues.".to_string()
+                },
+                details: Some(details),
+                warnings: vec![],
+            })
+        }
         Err(error) => LoomMcpActionResult::Done(LoomMcpDoneResult {
             project_root: input.project_root,
             summary: "Deployment validation could not run because deploy is not prepared."
@@ -95,19 +122,27 @@ pub fn validate_generated_assets(
     spec: &DeploymentSpec,
 ) -> StateResult<Vec<String>> {
     let mut issues = Vec::new();
-    let compose = read_text(&from_project_relative(
-        project_root,
-        &spec.files.compose_path,
-    )?)?;
+    let compose_file = from_project_relative(project_root, &spec.files.compose_path)?;
+    let compose = read_text(&compose_file)?;
     if !compose.contains("services:") {
         issues.push("compose file must include services.".to_string());
     }
-    for service in &spec.source_model.services {
-        if !compose.contains(&format!("  {}:", service.service_id)) {
+    let compose_dir = compose_file.parent().unwrap_or(project_root);
+    for dockerfile in compose_dockerfile_paths(&compose) {
+        if !compose_dir.join(&dockerfile).exists() {
             issues.push(format!(
-                "compose is missing service {}.",
-                service.service_id
+                "compose dockerfile path {dockerfile} does not resolve from compose directory."
             ));
+        }
+    }
+    if spec.provider != DeployProvider::ComposeExisting {
+        for service in &spec.source_model.services {
+            if !compose.contains(&format!("  {}:", service.service_id)) {
+                issues.push(format!(
+                    "compose is missing service {}.",
+                    service.service_id
+                ));
+            }
         }
     }
     for (service_id, nginx_ref) in &spec.files.nginx_config_paths {
@@ -154,6 +189,18 @@ pub fn validate_generated_assets(
         issues.push("topology has apiPaths but no http-proxy route.".to_string());
     }
     Ok(issues)
+}
+
+fn compose_dockerfile_paths(compose: &str) -> Vec<String> {
+    compose
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let value = trimmed.strip_prefix("dockerfile:")?.trim();
+            Some(value.trim_matches('"').trim_matches('\'').to_string())
+        })
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn probe_http(port: u16, path: &str, reject_html_fallback: bool) -> HttpProbeResult {

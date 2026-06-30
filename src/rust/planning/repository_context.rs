@@ -1,8 +1,9 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
-    BrainstormContract, BrainstormStatus, ClarificationBlockName,
-    RepositoryContextCandidateAgentWritable, RepositoryContextContract, TechnicalBaselineContract,
+    BrainstormContract, BrainstormStatus, ClarificationBlockName, PhaseDevelopmentMode,
+    ProjectKind, RepositoryContextCandidateAgentWritable, RepositoryContextContract,
+    RepositoryMode, TechnicalBaselineContract,
 };
 use delivery_core::{
     ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
@@ -10,7 +11,7 @@ use delivery_core::{
     RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
     paths::{from_project_relative, to_project_relative, DeliveryPhaseLocator},
@@ -112,6 +113,7 @@ fn materialize_request_inner(
         root,
         &repository_context_request_file(root, &locator, &request_id),
     )?;
+    let repository_lens = phase_repository_lens(root, &delivery, phase_id, baseline.project_kind);
     let request_root = build_request_root(
         &request_id,
         delivery_id,
@@ -119,6 +121,7 @@ fn materialize_request_inner(
         &candidate_file,
         &brainstorm_contract_ref,
         &baseline,
+        repository_lens,
     );
     let stored = state::write_native_request(
         project_root,
@@ -162,9 +165,46 @@ fn build_request_root(
     candidate_file: &str,
     brainstorm_contract_ref: &str,
     baseline: &TechnicalBaselineContract,
+    repository_lens: RepositoryLens,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(RepositoryContextCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    let mut scan_purpose = json!({
+        "scanPurpose": "phase_start_repository_snapshot",
+        "primaryConsumer": "phase_brainstorm",
+        "laterConsumers": ["PGC", "AAC", "TaskPlan"]
+    });
+    if !repository_lens.completed_phase_summaries.is_empty() {
+        scan_purpose["completedPhaseSummaries"] =
+            Value::Array(repository_lens.completed_phase_summaries.clone());
+    }
+    let mut generation_rules = vec![
+        "Summarize repository code facts only.",
+        "Do not restate or infer current phase scope, acceptance, tasks, or review conclusions.",
+        "All paths must stay inside projectRoot and must not use forbidden prefixes.",
+        "technologySignals and structureSignals are objects, not arrays.",
+        "repoOverview.primaryApplications, structureSignals.rootPaths, structureSignals.entryPoints, existingCapabilities, relevantSurfaces, and recommendedReadRefs are arrays of objects with the fields shown in outputContract.resultTemplate.",
+        "Every existingCapabilities[].surfaceRefs and recommendedReadRefs[].surfaceRefs value must reference a relevantSurfaces[].surfaceId.",
+    ];
+    if matches!(
+        repository_lens.phase_development_mode,
+        PhaseDevelopmentMode::IncrementalDelivery
+    ) {
+        generation_rules.push("When scanPurpose.completedPhaseSummaries exists, inspect and report current repository facts after those delivered phases instead of treating the repository as blank.");
+    }
+    let mut scan_contract_fields = vec![
+        "baselineProjectKind",
+        "repositoryMode",
+        "phaseDevelopmentMode",
+        "scanPurpose.scanPurpose",
+        "scanPurpose.primaryConsumer",
+        "scanPurpose.laterConsumers",
+        "source.brainstormContractRef",
+        "source.technicalBaselineRef",
+    ];
+    if !repository_lens.completed_phase_summaries.is_empty() {
+        scan_contract_fields.push("scanPurpose.completedPhaseSummaries");
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "repository_context_request",
@@ -172,25 +212,14 @@ fn build_request_root(
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "baselineProjectKind": baseline.project_kind,
-        "repositoryMode": "existing_project",
-        "phaseDevelopmentMode": "initial_delivery",
+        "repositoryMode": repository_lens.repository_mode,
+        "phaseDevelopmentMode": repository_lens.phase_development_mode,
         "source": {
             "brainstormContractRef": brainstorm_contract_ref,
             "technicalBaselineRef": format!(".loom/deliveries/{}/contracts/technical-baseline.json", delivery_id)
         },
-        "scanPurpose": {
-            "scanPurpose": "phase_start_repository_snapshot",
-            "primaryConsumer": "phase_brainstorm",
-            "laterConsumers": ["PGC", "AAC", "TaskPlan"]
-        },
-        "generationRules": [
-            "Summarize repository code facts only.",
-            "Do not restate or infer current phase scope, acceptance, tasks, or review conclusions.",
-            "All paths must stay inside projectRoot and must not use forbidden prefixes.",
-            "technologySignals and structureSignals are objects, not arrays.",
-            "repoOverview.primaryApplications, structureSignals.rootPaths, structureSignals.entryPoints, existingCapabilities, relevantSurfaces, and recommendedReadRefs are arrays of objects with the fields shown in outputContract.resultTemplate.",
-            "Every existingCapabilities[].surfaceRefs and recommendedReadRefs[].surfaceRefs value must reference a relevantSurfaces[].surfaceId."
-        ],
+        "scanPurpose": scan_purpose,
+        "generationRules": generation_rules,
         "enumRefs": {
             "projectKind": ["greenfield", "existing_project", "unknown"],
             "repositoryMode": ["empty_project", "existing_project", "unknown"],
@@ -267,8 +296,8 @@ fn build_request_root(
                 "requestLens": {
                     "projectKind": baseline.project_kind,
                     "baselineProjectKind": baseline.project_kind,
-                    "repositoryMode": "existing_project",
-                    "phaseDevelopmentMode": "initial_delivery",
+                    "repositoryMode": repository_lens.repository_mode,
+                    "phaseDevelopmentMode": repository_lens.phase_development_mode,
                     "scanPurpose": "phase_start_repository_snapshot",
                     "primaryConsumer": "phase_brainstorm",
                     "laterConsumers": ["PGC", "AAC", "TaskPlan"]
@@ -348,16 +377,7 @@ fn build_request_root(
                     "required": true,
                     "purpose": "Read the repository scanning purpose and baseline lens before inspecting the repository.",
                     "whenToRead": "Read before any repository inspection.",
-                    "fields": [
-                        "baselineProjectKind",
-                        "repositoryMode",
-                        "phaseDevelopmentMode",
-                        "scanPurpose.scanPurpose",
-                        "scanPurpose.primaryConsumer",
-                        "scanPurpose.laterConsumers",
-                        "source.brainstormContractRef",
-                        "source.technicalBaselineRef"
-                    ]
+                    "fields": scan_contract_fields
                 },
                 {
                     "groupId": "repository_context_generation_rules",
@@ -396,6 +416,80 @@ fn build_request_root(
             ]
         }
     })
+}
+
+#[derive(Debug, Clone)]
+struct RepositoryLens {
+    repository_mode: RepositoryMode,
+    phase_development_mode: PhaseDevelopmentMode,
+    completed_phase_summaries: Vec<Value>,
+}
+
+fn phase_repository_lens(
+    project_root: &Path,
+    delivery: &delivery_core::DeliveryIndex,
+    phase_id: &str,
+    baseline_project_kind: ProjectKind,
+) -> RepositoryLens {
+    let completed_phase_count = delivery
+        .phases
+        .iter()
+        .position(|phase| phase.phase_id == phase_id)
+        .unwrap_or(0);
+    let completed_phase_summaries = delivery
+        .phases
+        .iter()
+        .take(completed_phase_count)
+        .map(|phase| completed_phase_summary(project_root, phase))
+        .collect::<Vec<_>>();
+    if completed_phase_count > 0 {
+        return RepositoryLens {
+            repository_mode: RepositoryMode::ExistingProject,
+            phase_development_mode: PhaseDevelopmentMode::IncrementalDelivery,
+            completed_phase_summaries,
+        };
+    }
+    match baseline_project_kind {
+        ProjectKind::Greenfield => RepositoryLens {
+            repository_mode: RepositoryMode::EmptyProject,
+            phase_development_mode: PhaseDevelopmentMode::InitialDelivery,
+            completed_phase_summaries,
+        },
+        ProjectKind::ExistingProject => RepositoryLens {
+            repository_mode: RepositoryMode::ExistingProject,
+            phase_development_mode: PhaseDevelopmentMode::InitialDelivery,
+            completed_phase_summaries,
+        },
+        ProjectKind::Unknown => RepositoryLens {
+            repository_mode: RepositoryMode::Unknown,
+            phase_development_mode: PhaseDevelopmentMode::Unknown,
+            completed_phase_summaries,
+        },
+    }
+}
+
+fn completed_phase_summary(
+    project_root: &Path,
+    phase: &delivery_core::DeliveryPhaseState,
+) -> Value {
+    let mut summary = Map::new();
+    summary.insert("phaseId".to_string(), json!(phase.phase_id));
+    summary.insert("status".to_string(), json!("completed"));
+    if let Some(brainstorm_ref) = phase.latest_refs.get("brainstormContract") {
+        if let Ok(file) = from_project_relative(project_root, brainstorm_ref) {
+            if let Ok(brainstorm) = state::store::read_json::<BrainstormContract>(&file) {
+                summary.insert(
+                    "title".to_string(),
+                    json!(brainstorm.phase_plan.current.title),
+                );
+                summary.insert(
+                    "goal".to_string(),
+                    json!(brainstorm.phase_plan.current.goal),
+                );
+            }
+        }
+    }
+    Value::Object(summary)
 }
 
 pub fn accept_repository_context_file<D>(

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use contracts::{
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    PlanningGenerationContract, TechnicalBaselineContract,
+    PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     ArtifactKind, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction,
@@ -290,7 +290,13 @@ fn build_request_root(
             }
         },
         "requestReadPlan": {
-            "groups": architecture_read_groups(current_output.section, false)
+            "groups": architecture_read_groups(
+                current_output.section,
+                false,
+                false,
+                &source_refs,
+                frontend_experience_source
+            )
         }
     }))
 }
@@ -298,23 +304,53 @@ fn build_request_root(
 pub(crate) fn architecture_read_groups(
     section: ArchitectureSectionGroup,
     include_repair_context: bool,
+    include_repair_source_ref: bool,
+    source_refs: &Value,
+    frontend_experience_source: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
         "sourceRefs.technicalBaselineRef",
         "sourceRefs.brainstormContractRef",
-        "sourceRefs.repositoryContextRef",
-        "sourceRefs.deliveryConceptGlossaryRef",
-        "sourceRefs.phaseConceptGroundingRef",
-        "sourceRefs.confirmedFrontendExperienceRef",
-        "sourceRefs.currentFrontendExperienceRef",
-        "sourceRefs.previousRuntimeDeliveryRef",
+    ];
+    for ref_key in [
+        "repositoryContextRef",
+        "deliveryConceptGlossaryRef",
+        "phaseConceptGroundingRef",
+        "confirmedFrontendExperienceRef",
+        "currentFrontendExperienceRef",
+        "previousRuntimeDeliveryRef",
+    ] {
+        if has_non_null_key(source_refs, ref_key) {
+            core_fields.push(match ref_key {
+                "repositoryContextRef" => "sourceRefs.repositoryContextRef",
+                "deliveryConceptGlossaryRef" => "sourceRefs.deliveryConceptGlossaryRef",
+                "phaseConceptGroundingRef" => "sourceRefs.phaseConceptGroundingRef",
+                "confirmedFrontendExperienceRef" => "sourceRefs.confirmedFrontendExperienceRef",
+                "currentFrontendExperienceRef" => "sourceRefs.currentFrontendExperienceRef",
+                "previousRuntimeDeliveryRef" => "sourceRefs.previousRuntimeDeliveryRef",
+                _ => unreachable!(),
+            });
+        }
+    }
+    if include_repair_context {
+        core_fields.push("repairContext.sourceArchitectureRequestRef");
+        if include_repair_source_ref {
+            core_fields.push("repairContext.sourceRef");
+        }
+    }
+    core_fields.extend([
         "contextProjection.phaseScope.phaseName",
         "contextProjection.phaseScope.phaseGoal",
-        "contextProjection.phaseScope.included",
-        "contextProjection.phaseScope.deferred",
-        "contextProjection.phaseScope.excluded",
-        "contextProjection.phaseScope.acceptanceCandidates",
+        "contextProjection.phaseScopeSummary.includedIds",
+        "contextProjection.phaseScopeSummary.includedLabels",
+        "contextProjection.phaseScopeSummary.includedItems",
+        "contextProjection.phaseScopeSummary.deferredIds",
+        "contextProjection.phaseScopeSummary.deferredLabels",
+        "contextProjection.phaseScopeSummary.deferredItems",
+        "contextProjection.phaseScopeSummary.excludedIds",
+        "contextProjection.phaseScopeSummary.excludedLabels",
+        "contextProjection.phaseScopeSummary.excludedItems",
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
         "contextProjection.technicalBaseline.technicalBaselineId",
@@ -322,18 +358,25 @@ pub(crate) fn architecture_read_groups(
         "contextProjection.technicalBaseline.scope",
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
-        "contextProjection.requirementDetailTransfer.requirementDetails",
-        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-        "contextProjection.requirementDetailTransfer.businessFlows",
-        "allowedRefs.scopeRefs",
-        "allowedRefs.acceptanceRefs",
-        "allowedRefs.deferredScopeRefs",
-        "allowedRefs.excludedScopeRefs",
-        "allowedRefs.requirementDetailIds",
-    ];
-    if include_repair_context {
-        core_fields.insert(9, "repairContext.sourceArchitectureRequestRef");
-        core_fields.insert(10, "repairContext.sourceRef");
+    ]);
+    if matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+            | ArchitectureSectionGroup::Coverage
+    ) {
+        core_fields.extend([
+            "contextProjection.phaseScope.acceptanceCandidates",
+            "contextProjection.requirementDetailTransfer.requirementDetails",
+            "contextProjection.requirementDetailTransfer.acceptanceDetails",
+            "contextProjection.requirementDetailTransfer.businessFlows",
+            "allowedRefs.scopeRefs",
+            "allowedRefs.acceptanceRefs",
+            "allowedRefs.deferredScopeRefs",
+            "allowedRefs.excludedScopeRefs",
+            "allowedRefs.requirementDetailIds",
+        ]);
     }
     let mut groups = vec![
         json!({
@@ -383,22 +426,59 @@ pub(crate) fn architecture_read_groups(
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+        let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
+        for ref_key in [
+            "confirmedFrontendExperienceRef",
+            "currentFrontendExperienceRef",
+            "repositoryContextRef",
+        ] {
+            if has_non_null_key(frontend_experience_source, ref_key) {
+                frontend_fields.push(match ref_key {
+                    "confirmedFrontendExperienceRef" => {
+                        "frontendExperienceSource.confirmedFrontendExperienceRef"
+                    }
+                    "currentFrontendExperienceRef" => {
+                        "frontendExperienceSource.currentFrontendExperienceRef"
+                    }
+                    "repositoryContextRef" => "frontendExperienceSource.repositoryContextRef",
+                    _ => unreachable!(),
+                });
+            }
+        }
+        frontend_fields.extend([
+            "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
+            "contextProjection.requirementDetailTransfer.userFacingLanguage",
+        ]);
         groups.push(json!({
             "groupId": "architecture_frontend_context",
             "required": true,
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
+            "fields": frontend_fields
+        }));
+    }
+    if matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+    ) {
+        groups.push(json!({
+            "groupId": "architecture_domain_model_context",
+            "required": true,
+            "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture sections.",
+            "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
             "fields": [
-                "frontendExperienceSource.confirmedFrontendExperienceRef",
-                "frontendExperienceSource.currentFrontendExperienceRef",
-                "frontendExperienceSource.repositoryContextRef",
-                "frontendExperienceSource.authorityRule",
-                "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
-                "contextProjection.requirementDetailTransfer.userFacingLanguage"
+                "contextProjection.requirementDetailTransfer.actors",
+                "contextProjection.requirementDetailTransfer.capabilityGroups"
             ]
         }));
     }
     Value::Array(groups)
+}
+
+fn has_non_null_key(value: &Value, key: &str) -> bool {
+    value.get(key).is_some_and(|item| !item.is_null())
 }
 
 fn build_source_refs(
@@ -434,12 +514,19 @@ fn build_source_refs(
 }
 
 fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -> Value {
-    json!({
-        "confirmedFrontendExperienceRef": phase.latest_refs.get("confirmedFrontendExperience"),
-        "currentFrontendExperienceRef": phase.latest_refs.get("currentFrontendExperience"),
-        "repositoryContextRef": phase.latest_refs.get("latestRepositoryContext"),
+    let mut value = json!({
         "authorityRule": "Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."
-    })
+    });
+    if let Some(confirmed_frontend_ref) = phase.latest_refs.get("confirmedFrontendExperience") {
+        value["confirmedFrontendExperienceRef"] = json!(confirmed_frontend_ref);
+    }
+    if let Some(current_frontend_ref) = phase.latest_refs.get("currentFrontendExperience") {
+        value["currentFrontendExperienceRef"] = json!(current_frontend_ref);
+    }
+    if let Some(repository_context_ref) = phase.latest_refs.get("latestRepositoryContext") {
+        value["repositoryContextRef"] = json!(repository_context_ref);
+    }
+    value
 }
 
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
@@ -497,14 +584,77 @@ fn build_context_projection(planning_contract: &PlanningGenerationContract) -> V
         "phaseId": planning_contract.source.phase_id,
         "planningContractId": planning_contract.planning_contract_id,
         "phaseScope": planning_contract.phase_scope,
+        "phaseScopeSummary": phase_scope_summary(planning_contract),
         "technicalBaseline": planning_contract.technical_baseline,
         "requirementDetailTransfer": {
-            "requirementDetails": planning_contract.requirement_details,
+            "requirementDetails": compact_requirement_details_index(planning_contract),
             "acceptanceDetails": planning_contract.phase_scope.acceptance_candidates,
+            "actors": planning_contract.planning_inputs.actors,
+            "capabilityGroups": planning_contract.planning_inputs.capability_groups,
             "frontendExperienceDetails": planning_contract.planning_inputs.frontend_experience,
             "userFacingLanguage": planning_contract.planning_inputs.user_facing_language,
             "businessFlows": planning_contract.planning_inputs.business_flows
         }
+    })
+}
+
+fn phase_scope_summary(planning_contract: &PlanningGenerationContract) -> Value {
+    json!({
+        "includedIds": scope_ids(&planning_contract.phase_scope.included),
+        "includedLabels": scope_labels(&planning_contract.phase_scope.included),
+        "includedItems": scope_items(&planning_contract.phase_scope.included),
+        "deferredIds": scope_ids(&planning_contract.phase_scope.deferred),
+        "deferredLabels": scope_labels(&planning_contract.phase_scope.deferred),
+        "deferredItems": scope_items(&planning_contract.phase_scope.deferred),
+        "excludedIds": scope_ids(&planning_contract.phase_scope.excluded),
+        "excludedLabels": scope_labels(&planning_contract.phase_scope.excluded),
+        "excludedItems": scope_items(&planning_contract.phase_scope.excluded)
+    })
+}
+
+fn scope_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.id.clone()).collect()
+}
+
+fn scope_labels(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.label.clone()).collect()
+}
+
+fn scope_items(items: &[contracts::ScopeItem]) -> Vec<Vec<String>> {
+    items.iter().map(|item| item.items.clone()).collect()
+}
+
+fn compact_requirement_details_index(planning_contract: &PlanningGenerationContract) -> Value {
+    json!({
+        "schemaVersion": planning_contract.requirement_details.schema_version,
+        "authority": planning_contract.requirement_details.authority,
+        "sourceBrainstormContractRef": planning_contract.requirement_details.source_brainstorm_contract_ref,
+        "items": planning_contract
+            .requirement_details
+            .items
+            .iter()
+            .map(|item| {
+                json!({
+                    "detailId": item.detail_id,
+                    "kind": item.kind,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "requiredForCurrentPhase": item.required_for_current_phase,
+                    "priority": item.priority,
+                    "sourceRefs": item.source_refs,
+                    "scopeRefs": item.scope_refs,
+                    "acceptanceRefs": item.acceptance_refs,
+                    "conceptRefs": item.concept_refs,
+                    "frontendRefs": item.frontend_refs,
+                    "impactTags": item.impact_tags,
+                    "lifecycleStage": item.lifecycle_stage,
+                    "quality": item.quality,
+                    "unresolvedNote": item.unresolved_note,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "extractionWarningCount": planning_contract.requirement_details.extraction_warnings.len(),
+        "fullDetailSource": "sourceRefs.planningContractRef#/requirementDetails"
     })
 }
 
@@ -705,11 +855,39 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
     json!({
         "runtimeDelivery": {
             "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
+            "runtimeKind": "string",
+            "deploymentShape": "single-service | frontend-and-backend",
             "basis": Value::Object(basis),
-            "build": "object",
-            "start": "object",
+            "build": {
+                "command": "string",
+                "workingDirectory": "string",
+                "outputs": ["string"],
+                "codeLevelExpectations": ["string"]
+            },
+            "start": {
+                "command": "string",
+                "workingDirectory": "string",
+                "port": "number",
+                "codeLevelExpectations": ["string"]
+            },
             "runtimeSurfaces": ["object"],
-            "taskPlanningGuidance": "object"
+            "httpProbes": {
+                "previewPath": "string",
+                "apiPaths": ["string"],
+                "expectedStatus": "2xx_or_3xx"
+            },
+            "frontend": "optional object when a separate frontend surface exists",
+            "api": "optional object when a separate API/backend surface exists",
+            "environment": {
+                "required": ["string"],
+                "optional": ["string"]
+            },
+            "taskPlanningGuidance": {
+                "requireRuntimeDeliveryRequirementWhenTaskTouches": ["string"],
+                "doNotRequireForTaskKinds": ["string"],
+                "verificationBoundary": "code_level_only",
+                "doNotRequireCleanInstallOrContainerBuild": "boolean"
+            }
         }
     })
 }
@@ -867,7 +1045,6 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
                 "priority": acceptance.priority,
                 "statement": acceptance.statement,
                 "coverageStatus": "covered",
-                "reason": "",
                 "coverage": [acceptance_coverage_artifact_template()],
                 "verificationHints": [{
                     "kind": "manual",
@@ -884,8 +1061,7 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
             json!({
                 "detailId": detail.detail_id,
                 "coverageStatus": "covered",
-                "artifactRefs": detail_coverage_artifact_refs_template(),
-                "reason": ""
+                "artifactRefs": detail_coverage_artifact_refs_template()
             })
         })
         .collect::<Vec<_>>();
@@ -906,7 +1082,7 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
 
 fn acceptance_coverage_artifact_template() -> Value {
     json!({
-        "type": "modules",
+        "type": "module",
         "refs": [],
         "description": ""
     })
@@ -927,14 +1103,19 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
     json!({
         "runtimeDelivery": {
             "status": "modified",
+            "runtimeKind": "",
+            "deploymentShape": "single-service",
             "basis": Value::Object(basis),
             "build": {
                 "command": "",
-                "output": ""
+                "workingDirectory": ".",
+                "outputs": [],
+                "codeLevelExpectations": [""]
             },
             "start": {
                 "command": "",
-                "port": null
+                "workingDirectory": ".",
+                "codeLevelExpectations": [""]
             },
             "runtimeSurfaces": [{
                 "surfaceId": "runtime_surface_1",
@@ -942,9 +1123,30 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
                 "urlPath": "",
                 "purpose": ""
             }],
+            "httpProbes": {
+                "previewPath": "/",
+                "apiPaths": [],
+                "expectedStatus": "2xx_or_3xx"
+            },
+            "environment": {
+                "required": [],
+                "optional": []
+            },
             "taskPlanningGuidance": {
-                "runtimeAffectingTasks": [],
-                "closureRequired": true
+                "requireRuntimeDeliveryRequirementWhenTaskTouches": [
+                    "build_or_packaging",
+                    "runtime_entry",
+                    "serving_or_routing",
+                    "configuration_or_environment",
+                    "generated_artifacts",
+                    "runtime_surface"
+                ],
+                "doNotRequireForTaskKinds": [
+                    "domain_only_validation",
+                    "pure_unit_test_additions"
+                ],
+                "verificationBoundary": "code_level_only",
+                "doNotRequireCleanInstallOrContainerBuild": true
             }
         }
     })
@@ -989,7 +1191,8 @@ fn section_enum_refs(
     match section {
         ArchitectureSectionGroup::Coverage => json!({
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-            "acceptancePriority": ["must", "should", "could"]
+            "acceptancePriority": ["must", "should", "could"],
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
         }),
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
@@ -1034,6 +1237,14 @@ fn section_generation_rules(
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."
                 .to_string(),
             runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
+            "For status=modified, fill build.command, runtimeSurfaces, httpProbes.previewPath, httpProbes.expectedStatus, and taskPlanningGuidance so TaskPlan and Deploy do not guess runtime facts."
+                .to_string(),
+            "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
+                .to_string(),
+            "Omit unknown optional runtime fields instead of writing null; include start.port only when a fixed port is known."
+                .to_string(),
+            "Runtime delivery is a code-level contract. Do not require Docker, clean install, registry access, or deploy success here."
+                .to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -1043,6 +1254,8 @@ fn section_generation_rules(
             "Use requirementDetailTransfer.requirementDetails.items as the canonical detail index."
                 .to_string(),
             "detailCoverage must store detailId plus artifact refs; do not copy full detail summaries."
+                .to_string(),
+            "Omit reason when coverageStatus=covered; write a non-empty reason when coverageStatus is partial, not_applicable, deferred, or uncovered."
                 .to_string(),
             "Record only architecture trade-offs that affect later implementation, verification, or repair routing."
                 .to_string(),

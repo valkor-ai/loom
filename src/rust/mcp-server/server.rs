@@ -11,8 +11,8 @@ use delivery_core::{
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use knowledge::mcp_models::{
     KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
-    KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput, KnowledgeSemanticSubmitInput,
-    KnowledgeUpdateInput,
+    KnowledgeNameInput, KnowledgePendingInput, KnowledgeProjectInput, KnowledgeSearchInput,
+    KnowledgeSemanticSubmitInput, KnowledgeUpdateInput,
 };
 use planning::{accept_repository_context_file, accept_technical_baseline_file};
 use rmcp::{
@@ -196,7 +196,7 @@ fn call_tool(
             ))
         }
         "knowledgePending" => {
-            let input = parse_args::<KnowledgeProjectInput>(request.arguments)?;
+            let input = parse_args::<KnowledgePendingInput>(request.arguments)?;
             let project_root = input.project_root.clone();
             action_result(knowledge_action(
                 &project_root,

@@ -33,6 +33,46 @@ fn knowledge_add_returns_done_summary_with_pending_details() {
 }
 
 #[test]
+fn knowledge_pending_accepts_optional_source_name_filter() {
+    let fixture = Fixture::new("knowledge-pending-filter");
+    fixture.write_file("docs/a.md", "# A\n\n证券账户开户。");
+    fixture.write_file("docs/b.md", "# B\n\n资金账户开户。");
+    let server = LoomMcpServer::default();
+
+    for (name, file) in [("stock-rules", "docs/a.md"), ("fund-rules", "docs/b.md")] {
+        server
+            .invoke_tool(
+                "loom.knowledgeAdd",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "name": name,
+                    "paths": [fixture.root.join(file).to_string_lossy().to_string()]
+                }))),
+            )
+            .expect("knowledgeAdd call");
+    }
+
+    let filtered = structured(
+        server
+            .invoke_tool(
+                "loom.knowledgePending",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "name": "stock-rules"
+                }))),
+            )
+            .expect("knowledgePending filtered call"),
+    );
+
+    assert_eq!(filtered["state"], "done");
+    let sources = filtered["details"]["sources"]
+        .as_array()
+        .expect("pending sources");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["source"]["name"], "stock-rules");
+}
+
+#[test]
 fn knowledge_build_returns_auto_runnable_semantic_next_action() {
     let fixture = Fixture::new("knowledge-build");
     fixture.write_file(

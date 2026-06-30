@@ -9,8 +9,8 @@ use delivery_core::{
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use knowledge::mcp_models::{
     KnowledgeAddInput, KnowledgeBrainstormContextInput, KnowledgeInspectChunkInput,
-    KnowledgeNameInput, KnowledgeProjectInput, KnowledgeSearchInput, KnowledgeSemanticSubmitInput,
-    KnowledgeUpdateInput,
+    KnowledgeNameInput, KnowledgePendingInput, KnowledgeProjectInput, KnowledgeSearchInput,
+    KnowledgeSemanticSubmitInput, KnowledgeUpdateInput,
 };
 use rmcp::{
     handler::server::common::schema_for_type,
@@ -37,6 +37,7 @@ pub enum ToolInputKind {
     KnowledgeAdd,
     KnowledgeUpdate,
     KnowledgeName,
+    KnowledgePending,
     KnowledgeProject,
     KnowledgeSearch,
     KnowledgeBrainstormContext,
@@ -216,7 +217,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         name: "knowledgePending",
         description: "List knowledge sources with pending operations.",
         target_batch: 6,
-        input_kind: ToolInputKind::KnowledgeProject,
+        input_kind: ToolInputKind::KnowledgePending,
         output_kind: ToolOutputKind::ActionResult,
         implemented: true,
     },
@@ -472,6 +473,7 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
         ToolInputKind::KnowledgeAdd => schema_for_type::<KnowledgeAddInput>(),
         ToolInputKind::KnowledgeUpdate => schema_for_type::<KnowledgeUpdateInput>(),
         ToolInputKind::KnowledgeName => schema_for_type::<KnowledgeNameInput>(),
+        ToolInputKind::KnowledgePending => schema_for_type::<KnowledgePendingInput>(),
         ToolInputKind::KnowledgeProject => schema_for_type::<KnowledgeProjectInput>(),
         ToolInputKind::KnowledgeSearch => schema_for_type::<KnowledgeSearchInput>(),
         ToolInputKind::KnowledgeBrainstormContext => {

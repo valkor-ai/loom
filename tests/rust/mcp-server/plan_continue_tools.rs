@@ -85,6 +85,31 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .find(|group| group.group_id == "knowledge_context_plan")
         .expect("knowledge_context_plan group");
     assert!(knowledge_group.required);
+    let conversation_protocol = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        group_id: "conversation_protocol".to_string(),
+    })
+    .expect("read conversation protocol");
+    let current_turn_rule = &conversation_protocol.fields
+        ["clarificationConversationProtocol.currentTurnAnswerRule"]
+        .value;
+    assert_eq!(current_turn_rule["consumeCurrentUserMessage"], true);
+    assert_eq!(current_turn_rule["explicitOnly"], true);
+    assert!(
+        current_turn_rule["meaning"]
+            .as_str()
+            .expect("meaning")
+            .contains("instead of asking again"),
+        "{current_turn_rule:#}"
+    );
+    assert!(
+        current_turn_rule["blockSpecificRule"]
+            .as_str()
+            .expect("block specific rule")
+            .contains("active phase boundary"),
+        "{current_turn_rule:#}"
+    );
     let requirement_context = inspected
         .read_groups
         .iter()
@@ -167,6 +192,22 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .value
         .to_string()
         .contains("do not silently fall back"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("Do not ask the user to choose, name, enable, or manage a knowledge source"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("empty knowledge result is allowed"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("kind:text"));
+    assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("object:证券账户"));
     assert!(
         knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"]
             .value
@@ -333,13 +374,36 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         request_ref: request_ref.to_string(),
     })
     .expect("inspect final summary request");
+    let final_group_ids = final_request
+        .read_groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        final_group_ids,
+        vec![
+            "conversation_protocol",
+            "current_block_rules",
+            "confirmed_clarification_state",
+            "block_confirmation_contract",
+        ]
+    );
     assert!(!final_request
         .read_groups
         .iter()
         .any(|group| group.group_id == "knowledge_context_plan"));
+    assert!(!final_request
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "requirement_context"));
+    assert!(!final_request
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "requirement_full_text"));
     let final_rules = read_block_rules_text(&server, &fixture, &request_ref);
     assert!(final_rules.contains("pre-submit coverage checklist"));
     assert!(final_rules.contains("Do not show internal names such as final_summary"));
+    assert!(!final_rules.contains("requirementSemanticGrounding"));
     assert!(final_rules
         .contains("one user-visible coverage checklist with exactly one confirmation action"));
     assert!(final_rules.contains("current phase to submit"));
@@ -767,16 +831,14 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("confirm brainstorm block"),
     );
-    assert_eq!(result["state"], "failed", "{result:#}");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["kind"], "run_loom_tool");
     assert_eq!(
-        result["error"]["code"],
-        "BRAINSTORM_KNOWLEDGE_CONTEXT_REQUIRED"
-    );
-    assert_eq!(
-        result["error"]["recoveryTool"],
+        result["next"]["toolName"],
         "loom.knowledgeBrainstormContext"
     );
-    assert!(result["error"]["message"]
+    assert_eq!(result["next"]["retryTool"], "loom.brainstormConfirmBlock");
+    assert!(result["agentInstruction"]
         .as_str()
         .unwrap_or_default()
         .contains("Do not ask the user to reconfirm"));
@@ -792,7 +854,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
                     "stepId": "phase_scope_dependency_order",
                     "querySubject": "证券账户模块与后续资金账户、交易客户端的依赖边界",
                     "naturalLanguageQuery": "证券账户 资金账户 交易客户端 依赖 边界",
-                    "semanticFocus": ["证券账户", "资金账户", "交易客户端"]
+                    "semanticFocus": ["object:证券账户", "object:资金账户", "object:交易客户端"]
                 }))),
             )
             .expect("dependency order knowledge context"),
@@ -810,7 +872,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
                     "queryId": "capability_closure_A",
                     "querySubject": "方案A：证券账户模块闭环",
                     "naturalLanguageQuery": "证券账户 开户 挂失补办 销户 闭环",
-                    "semanticFocus": ["证券账户", "开户", "挂失补办", "销户"]
+                    "semanticFocus": ["object:证券账户", "operation:开户", "operation:挂失补办", "operation:销户"]
                 }))),
             )
             .expect("single capability closure knowledge context"),
@@ -840,8 +902,12 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             )
             .expect("confirm brainstorm block with one closure"),
     );
-    assert_eq!(still_missing["state"], "failed", "{still_missing:#}");
-    assert!(still_missing["error"]["message"]
+    assert_eq!(still_missing["state"], "auto_runnable", "{still_missing:#}");
+    assert_eq!(
+        still_missing["next"]["toolName"],
+        "loom.knowledgeBrainstormContext"
+    );
+    assert!(still_missing["agentInstruction"]
         .as_str()
         .unwrap_or_default()
         .contains("distinct queryId"));
@@ -858,7 +924,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
                     "queryId": "capability_closure_B",
                     "querySubject": "方案B：证券账户加工作人员办理页面闭环",
                     "naturalLanguageQuery": "证券账户 工作人员界面 开户 挂失补办 销户",
-                    "semanticFocus": ["证券账户", "工作人员界面", "开户", "销户"]
+                    "semanticFocus": ["object:证券账户", "page:工作人员界面", "operation:开户", "operation:销户"]
                 }))),
             )
             .expect("second capability closure knowledge context"),

@@ -3,12 +3,19 @@ use contracts::{
     PackageManager, RuntimeKind, SourceModelSource, SourceServiceRole,
 };
 
+use crate::code_evidence::DeploymentCodeProbe;
+
 pub fn source_model_from_runtime_contract(
     runtime: &DeploymentRuntimeContract,
+    fallback_probe: &DeploymentCodeProbe,
+    build_context_path: String,
 ) -> DeploymentSourceModel {
     let shape = runtime
         .deployment_shape
         .unwrap_or(DeploymentShape::SingleService);
+    if runtime.source == "heuristic" {
+        return source_model_from_probe(fallback_probe, build_context_path);
+    }
     if shape == DeploymentShape::FrontendAndBackend {
         let frontend_root = service_root_from_refs(&[
             runtime
@@ -54,11 +61,11 @@ pub fn source_model_from_runtime_contract(
             role: SourceServiceRole::Frontend,
             root: frontend_root.clone(),
             working_directory: (frontend_root != ".").then_some(frontend_root.clone()),
-            workspace_package_json_paths: vec![],
+            workspace_package_json_paths: fallback_probe.workspace_package_json_paths.clone(),
             runtime_kind: RuntimeKind::Node,
             package_manager: package_manager_from_command(frontend_build.as_deref())
                 .or(Some(PackageManager::Npm)),
-            has_lockfile: false,
+            has_lockfile: fallback_probe.has_lockfile,
             framework: runtime
                 .frontend
                 .as_ref()
@@ -93,14 +100,14 @@ pub fn source_model_from_runtime_contract(
                     .or(runtime.build_command.as_deref()),
             )
             .or_else(|| default_package_manager(backend_kind)),
-            has_lockfile: false,
+            has_lockfile: fallback_probe.has_lockfile,
             framework: runtime
                 .api
                 .as_ref()
                 .and_then(|item| item.kind.clone())
                 .or_else(|| runtime.runtime_kind.clone()),
-            runtime_version: None,
-            runtime_version_source: None,
+            runtime_version: fallback_probe.runtime_version.clone(),
+            runtime_version_source: fallback_probe.runtime_version_source.clone(),
             build_command: command_for_root(backend_build, &backend_root),
             start_command: command_for_root(runtime.start_command.clone(), &backend_root),
             output_directory: None,
@@ -116,16 +123,16 @@ pub fn source_model_from_runtime_contract(
             shape,
             primary_service_id: backend.service_id.clone(),
             preview_service_id: frontend.service_id.clone(),
-            build_context_path: ".".to_string(),
+            build_context_path,
             services: vec![frontend, backend],
-            dependencies: runtime.dependency_services.clone(),
+            dependencies: dependencies_from_runtime_or_probe(runtime, fallback_probe),
             notes: vec![
                 "Deployment source model was derived from RuntimeDelivery frontend and api services.".to_string(),
             ],
         };
     }
 
-    let runtime_kind = runtime_kind_from_signals(&[
+    let contract_kind = runtime_kind_from_signals(&[
         runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
         runtime.runtime_kind.as_deref(),
         runtime.start_command.as_deref(),
@@ -133,28 +140,51 @@ pub fn source_model_from_runtime_contract(
     let service = DeploymentSourceService {
         service_id: "app".to_string(),
         role: SourceServiceRole::App,
-        root: ".".to_string(),
-        working_directory: None,
-        workspace_package_json_paths: vec![],
-        runtime_kind,
-        package_manager: package_manager_from_command(
-            runtime
-                .build_command
-                .as_deref()
-                .or(runtime.start_command.as_deref()),
-        )
-        .or_else(|| default_package_manager(runtime_kind)),
-        has_lockfile: false,
-        framework: runtime.runtime_kind.clone(),
-        runtime_version: None,
-        runtime_version_source: None,
-        build_command: runtime.build_command.clone(),
-        start_command: runtime.start_command.clone(),
-        output_directory: runtime.frontend_output_dir.clone(),
-        port: runtime.port.unwrap_or(8080),
+        root: fallback_probe
+            .working_directory
+            .clone()
+            .unwrap_or_else(|| ".".to_string()),
+        working_directory: fallback_probe.working_directory.clone(),
+        workspace_package_json_paths: fallback_probe.workspace_package_json_paths.clone(),
+        runtime_kind: if contract_kind == RuntimeKind::Unknown {
+            fallback_probe.kind
+        } else {
+            contract_kind
+        },
+        package_manager: runtime
+            .build_command
+            .as_deref()
+            .or(runtime.start_command.as_deref())
+            .filter(|command| command_is_usable(command))
+            .and_then(|command| package_manager_from_command(Some(command)))
+            .or(fallback_probe.package_manager)
+            .or_else(|| default_package_manager(fallback_probe.kind)),
+        has_lockfile: fallback_probe.has_lockfile,
+        framework: runtime
+            .runtime_kind
+            .clone()
+            .or_else(|| fallback_probe.framework.clone()),
+        runtime_version: fallback_probe.runtime_version.clone(),
+        runtime_version_source: fallback_probe.runtime_version_source.clone(),
+        build_command: runtime
+            .build_command
+            .clone()
+            .filter(|command| command_is_usable(command))
+            .or_else(|| fallback_probe.build_command.clone()),
+        start_command: runtime
+            .start_command
+            .clone()
+            .filter(|command| command_is_usable(command))
+            .or_else(|| fallback_probe.start_command.clone()),
+        output_directory: runtime
+            .frontend_output_dir
+            .clone()
+            .or_else(|| fallback_probe.output_directory.clone()),
+        port: runtime.port.unwrap_or(fallback_probe.port),
         healthcheck_path: runtime
             .health_path
             .clone()
+            .or_else(|| fallback_probe.healthcheck_path.clone())
             .or_else(|| Some(runtime.preview_path.clone())),
     };
     DeploymentSourceModel {
@@ -163,13 +193,69 @@ pub fn source_model_from_runtime_contract(
         shape,
         primary_service_id: service.service_id.clone(),
         preview_service_id: service.service_id.clone(),
-        build_context_path: ".".to_string(),
+        build_context_path,
         services: vec![service],
-        dependencies: runtime.dependency_services.clone(),
+        dependencies: dependencies_from_runtime_or_probe(runtime, fallback_probe),
         notes: vec![
-            "Deployment source model was derived from RuntimeDelivery single service.".to_string(),
+            "Deployment source model was derived from RuntimeDelivery single service and repository code evidence.".to_string(),
         ],
     }
+}
+
+fn source_model_from_probe(
+    probe: &DeploymentCodeProbe,
+    build_context_path: String,
+) -> DeploymentSourceModel {
+    let service = DeploymentSourceService {
+        service_id: "app".to_string(),
+        role: SourceServiceRole::App,
+        root: probe
+            .working_directory
+            .clone()
+            .unwrap_or_else(|| ".".to_string()),
+        working_directory: probe.working_directory.clone(),
+        workspace_package_json_paths: probe.workspace_package_json_paths.clone(),
+        runtime_kind: probe.kind,
+        package_manager: probe.package_manager,
+        has_lockfile: probe.has_lockfile,
+        framework: probe.framework.clone(),
+        runtime_version: probe.runtime_version.clone(),
+        runtime_version_source: probe.runtime_version_source.clone(),
+        build_command: probe.build_command.clone(),
+        start_command: probe.start_command.clone(),
+        output_directory: probe.output_directory.clone(),
+        port: probe.port,
+        healthcheck_path: probe.healthcheck_path.clone(),
+    };
+    DeploymentSourceModel {
+        schema_version: 1,
+        source: SourceModelSource::CodeProbe,
+        shape: DeploymentShape::SingleService,
+        primary_service_id: service.service_id.clone(),
+        preview_service_id: service.service_id.clone(),
+        build_context_path,
+        services: vec![service],
+        dependencies: probe.services.clone(),
+        notes: vec![
+            "Deployment source model was derived from repository code evidence.".to_string(),
+        ],
+    }
+}
+
+fn dependencies_from_runtime_or_probe(
+    runtime: &DeploymentRuntimeContract,
+    probe: &DeploymentCodeProbe,
+) -> Vec<contracts::DependencyService> {
+    if runtime.dependency_services.is_empty() {
+        probe.services.clone()
+    } else {
+        runtime.dependency_services.clone()
+    }
+}
+
+fn command_is_usable(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    !(lower.contains("service:") || lower.contains("web:"))
 }
 
 fn runtime_kind_from_signals(signals: &[Option<&str>]) -> RuntimeKind {

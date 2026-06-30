@@ -4,7 +4,7 @@ use delivery_core::{
     LoomMcpActionResult, LoomMcpActiveOperationResult, LoomMcpAutoRunnableResult,
     LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult,
     LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, PostSubmitAction,
-    ReadGroupRef, RepairIssue, WriteArtifactNext, WriteMode, WriteTarget,
+    ReadGroupRef, RepairIssue, RunLoomToolNext, WriteArtifactNext, WriteMode, WriteTarget,
 };
 use serde_json::Value;
 
@@ -44,7 +44,7 @@ fn action_result_states_have_expected_next_boundaries() {
                 assert!(
                     value["agentInstruction"].as_str().is_some_and(|text| {
                         text.contains("Continue immediately")
-                            && text.contains("submit")
+                            && (text.contains("submit") || text.contains("retryTool"))
                             && text.contains("Do not stop at a progress recap")
                     }),
                     "auto_runnable must include agentInstruction: {value}"
@@ -97,6 +97,7 @@ fn next_action_shapes_are_stable() {
     let actions = vec![
         sample_write_artifact_next(),
         sample_execute_task_next(),
+        sample_run_loom_tool_next(),
         sample_generate_knowledge_semantics_next(),
         sample_deploy_repair_assets_next(),
     ];
@@ -113,6 +114,7 @@ fn next_action_shapes_are_stable() {
         vec![
             "write_artifact",
             "execute_task",
+            "run_loom_tool",
             "generate_knowledge_semantics",
             "deploy_repair_assets",
         ]
@@ -149,6 +151,10 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
             "/tmp/project",
             sample_write_artifact_next(),
         )),
+        LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
+            "/tmp/project",
+            sample_run_loom_tool_next(),
+        )),
         LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
             project_root: "/tmp/project".to_string(),
             prompt: "Confirm scope.".to_string(),
@@ -169,6 +175,8 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
                 expires_at: "2026-06-23T00:10:00Z".to_string(),
             },
             allowed_observation_tools: vec!["loom.status".to_string()],
+            observation_policy: None,
+            forbidden_actions: vec![],
             progress_summary: None,
         }),
         LoomMcpActionResult::Done(LoomMcpDoneResult {
@@ -255,6 +263,20 @@ fn sample_execute_task_next() -> LoomMcpNextAction {
     })
 }
 
+fn sample_run_loom_tool_next() -> LoomMcpNextAction {
+    LoomMcpNextAction::RunLoomTool(RunLoomToolNext {
+        tool_name: "loom.knowledgeBrainstormContext".to_string(),
+        request_ref: "loom://projects/project_1/requests/request_knowledge".to_string(),
+        read_groups: vec![ReadGroupRef::new(
+            "knowledge_context_plan",
+            1,
+            vec!["knowledgeQueryPlan.blocks.phase_scope.executionOrder".to_string()],
+            "loom://projects/project_1/requests/request_knowledge/field-groups/knowledge_context_plan",
+        )],
+        retry_tool: "loom.brainstormConfirmBlock".to_string(),
+    })
+}
+
 fn sample_generate_knowledge_semantics_next() -> LoomMcpNextAction {
     LoomMcpNextAction::GenerateKnowledgeSemantics(GenerateKnowledgeSemanticsNext {
         source_name: "domain".to_string(),
@@ -294,6 +316,15 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
         failure_kind: "runtime".to_string(),
         failure_owner: "deploy".to_string(),
         repair_route: "asset_repair".to_string(),
+        primary_reason: "nginx proxy route is missing".to_string(),
+        diagnostics: vec![delivery_core::DeploymentFailureDiagnostic {
+            code: "api_route_not_verified".to_string(),
+            severity: "error".to_string(),
+            message: "API route did not proxy to the backend service.".to_string(),
+            evidence: vec!["GET /api/health returned HTML fallback".to_string()],
+            suggested_action: "Repair generated nginx proxy route before retrying.".to_string(),
+        }],
+        suggested_actions: vec!["Repair generated deployment assets.".to_string()],
         editable_files: vec!["deploy/nginx.conf".to_string()],
         protected_files: vec!["src".to_string()],
         source_model_ref: Some(".loom/deployment/specs/generated/source-model.json".to_string()),
@@ -301,6 +332,11 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
         generated_file_refs: vec![".loom/deployment/specs/generated/compose.yaml".to_string()],
         diagnostics_ref: None,
         error_window: None,
+        read_policy: delivery_core::DeploymentRepairReadPolicy {
+            first_read: "Use next diagnostics first.".to_string(),
+            diagnostics_ref: "Read diagnosticsRef only if needed.".to_string(),
+            full_log_ref: "Read full logs only if compact evidence is insufficient.".to_string(),
+        },
         retry_tool: "loom.deployUp".to_string(),
     })
 }

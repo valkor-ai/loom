@@ -32,19 +32,19 @@ pub fn semantic_result_template(
         "chunkResults": read_plan.iter().map(|chunk| {
             json!({
                 "chunkId": chunk.chunk_id,
-                "status": "ok",
+                "status": "completed",
                 "summary": "",
                 "semanticLabels": [{
-                    "kind": "object|operation|rule|state|field|flow|page_operation",
+                    "kind": "object|operation|rule|state|field|page|flow|other",
                     "text": "",
+                    "normalizedText": "",
+                    "aliases": [],
                     "confidence": "high|medium|low"
                 }],
-                "semanticAliases": [],
                 "blockAffinity": {
                     "phaseScope": 0.0,
                     "conceptGrounding": 0.0,
-                    "frontendExperience": 0.0,
-                    "businessRules": 0.0
+                    "frontendExperience": 0.0
                 }
             })
         }).collect::<Vec<_>>()
@@ -54,19 +54,31 @@ pub fn semantic_result_template(
 pub fn semantic_generation_rules() -> Value {
     json!({
         "summaryLanguage": "Use the source chunk language. If the chunk is Chinese, summary must be Chinese.",
-        "statusEnum": ["ok", "unreadable"],
-        "semanticLabelKinds": ["object", "operation", "rule", "state", "field", "flow", "page_operation"],
+        "statusEnum": ["completed", "low_signal", "unreadable"],
+        "semanticLabelKinds": ["object", "operation", "rule", "state", "field", "page", "flow", "other"],
         "confidenceEnum": ["high", "medium", "low"],
-        "semanticAnchorRule": "Prefer self-contained anchors. For operation and page_operation labels, use object+operation when the object is explicit in the chunk; keep split object and operation forms in semanticAliases.",
+        "semanticAnchorRule": "Prefer self-contained anchors. For operation labels, use object+operation when the object is explicit in the chunk; keep split object and operation wording in semanticLabels[].aliases.",
+        "semanticLabelFieldRules": [
+            "semanticLabels[].kind must be one of generationRules.semanticLabelKinds.",
+            "semanticLabels[].text is the source-supported label text.",
+            "semanticLabels[].normalizedText is the normalized label text used for retrieval.",
+            "semanticLabels[].aliases is an array; use [] when there are no aliases.",
+            "semanticLabels[].confidence must be one of generationRules.confidenceEnum."
+        ],
         "semanticAliasRules": [
-            "semanticAliases are retrieval anchors derived only from the inspected chunk text and semanticLabels.",
+            "Put retrieval aliases on semanticLabels[].aliases, not a separate top-level semanticAliases field.",
             "Include object+operation aliases when both are present, for example '<object><operation>'.",
             "Include atomic operation aliases for short user wording, for example the operation without its object.",
             "For each rule label, include one short rule or blocker alias of 4-12 source-language characters/words. Prefer the condition, blocker, or required outcome over copying the whole rule sentence.",
             "For each state or flow label, include one short state/flow goal alias that a user might query.",
             "Do not invent business facts that are not in the chunk. Do not include source ids, chunk ids, or file paths."
         ],
-        "blockAffinityFields": ["phaseScope", "conceptGrounding", "frontendExperience", "businessRules"],
+        "blockAffinityFields": ["phaseScope", "conceptGrounding", "frontendExperience"],
+        "blockAffinityGuidance": {
+            "phaseScope": "Score high when the chunk helps decide phase boundaries, included work, excluded work, deferred work, dependency order, or next-phase handoff.",
+            "conceptGrounding": "Score high when the chunk explains objects, operations, fields, states, rules, invariants, preconditions, validation, blocking reasons, outcomes, or misunderstanding boundaries.",
+            "frontendExperience": "Score high when the chunk explains a page or workspace surface, target discovery, query and selection, list or detail view, action entry point, form input, success feedback, error or business-blocking feedback, loading or empty state, or refresh/readback behavior for a user-facing or staff-facing workflow."
+        },
         "noSourceCodeSchemaLookup": true,
         "noScriptRuleExtraction": true
     })
@@ -318,10 +330,10 @@ fn validate_semantic_result(
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !matches!(status, "ok" | "unreadable") {
+        if !matches!(status, "completed" | "low_signal" | "unreadable") {
             issues.push(issue(
                 "STATUS_INVALID",
-                "status must be ok or unreadable.",
+                "status must be completed, low_signal, or unreadable.",
                 Some("status"),
             ));
         }
@@ -329,14 +341,14 @@ fn validate_semantic_result(
             .get("summary")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if status == "ok" && summary.trim().is_empty() {
+        if status == "completed" && summary.trim().is_empty() {
             issues.push(issue(
                 "SUMMARY_REQUIRED",
-                "summary is required for ok chunks.",
+                "summary is required for completed chunks.",
                 Some("summary"),
             ));
         }
-        if status == "ok"
+        if status == "completed"
             && chunk_is_chinese(source_id, build_id, chunk_id)
             && !contains_cjk(summary)
         {
@@ -346,25 +358,60 @@ fn validate_semantic_result(
                 Some("summary"),
             ));
         }
-        if status == "ok"
-            && !chunk
-                .get("semanticLabels")
-                .and_then(Value::as_array)
-                .is_some()
-        {
+        let semantic_labels = chunk.get("semanticLabels").and_then(Value::as_array);
+        if status == "completed" && semantic_labels.is_none() {
             issues.push(issue(
                 "SEMANTIC_LABELS_REQUIRED",
                 "semanticLabels must be an array.",
                 Some("semanticLabels"),
             ));
         }
+        if let Some(labels) = semantic_labels {
+            for (index, label) in labels.iter().enumerate() {
+                let field_path = format!("semanticLabels[{index}]");
+                if label
+                    .get("normalizedText")
+                    .and_then(Value::as_str)
+                    .is_none()
+                {
+                    issues.push(issue(
+                        "SEMANTIC_LABEL_NORMALIZED_TEXT_REQUIRED",
+                        "semanticLabels[].normalizedText must be a string.",
+                        Some(&field_path),
+                    ));
+                }
+                let aliases = label.get("aliases").and_then(Value::as_array);
+                if aliases.map(|items| items.iter().all(|item| item.as_str().is_some()))
+                    != Some(true)
+                {
+                    issues.push(issue(
+                        "SEMANTIC_LABEL_ALIASES_REQUIRED",
+                        "semanticLabels[].aliases must be an array of strings.",
+                        Some(&field_path),
+                    ));
+                }
+            }
+        }
+        if chunk.get("semanticAliases").is_some() {
+            issues.push(issue(
+                "SEMANTIC_ALIASES_NOT_ALLOWED",
+                "semanticAliases is an old duplicate field. Put retrieval aliases on semanticLabels[].aliases.",
+                Some("semanticAliases"),
+            ));
+        }
         let affinity = chunk.get("blockAffinity");
-        for field in [
-            "phaseScope",
-            "conceptGrounding",
-            "frontendExperience",
-            "businessRules",
-        ] {
+        for old_field in ["businessRules", "finalSummary"] {
+            if affinity.and_then(|value| value.get(old_field)).is_some() {
+                issues.push(issue(
+                    "BLOCK_AFFINITY_FIELD_NOT_ALLOWED",
+                    format!(
+                        "blockAffinity.{old_field} is not used by the current MCP knowledge query path."
+                    ),
+                    Some("blockAffinity"),
+                ));
+            }
+        }
+        for field in ["phaseScope", "conceptGrounding", "frontendExperience"] {
             if affinity
                 .and_then(|value| value.get(field))
                 .and_then(Value::as_f64)
@@ -412,17 +459,7 @@ fn publish_build(source_id: &str, build_id: &str) -> KnowledgeResult<()> {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             chunk.semantic_labels = parse_labels(chunk_result.get("semanticLabels"));
-            chunk.semantic_aliases = chunk_result
-                .get("semanticAliases")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default();
+            chunk.semantic_aliases = semantic_aliases_from_result(chunk_result);
             chunk.block_affinity = Some(parse_affinity(chunk_result.get("blockAffinity")));
         }
     }
@@ -446,7 +483,6 @@ fn publish_build(source_id: &str, build_id: &str) -> KnowledgeResult<()> {
                         phase_scope: 0.0,
                         concept_grounding: 0.0,
                         frontend_experience: 0.0,
-                        business_rules: 0.0,
                     }),
                 })
                 .collect(),
@@ -483,9 +519,27 @@ fn parse_labels(value: Option<&Value>) -> Vec<SemanticLabel> {
         .into_iter()
         .flatten()
         .filter_map(|item| {
+            let mut aliases = item
+                .get("aliases")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(normalize_semantic_alias)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            aliases.sort();
+            aliases.dedup();
             Some(SemanticLabel {
-                kind: item.get("kind")?.as_str()?.to_string(),
-                text: item.get("text")?.as_str()?.to_string(),
+                kind: item.get("kind")?.as_str()?.trim().to_string(),
+                text: item.get("text")?.as_str()?.trim().to_string(),
+                normalized_text: item
+                    .get("normalizedText")
+                    .and_then(Value::as_str)
+                    .and_then(normalize_semantic_alias),
+                aliases,
                 confidence: item
                     .get("confidence")
                     .and_then(Value::as_str)
@@ -506,8 +560,37 @@ fn parse_affinity(value: Option<&Value>) -> BlockAffinity {
         phase_scope: get("phaseScope"),
         concept_grounding: get("conceptGrounding"),
         frontend_experience: get("frontendExperience"),
-        business_rules: get("businessRules"),
     }
+}
+
+fn semantic_aliases_from_result(chunk_result: &Value) -> Vec<String> {
+    let mut aliases = Vec::new();
+    if let Some(labels) = chunk_result.get("semanticLabels").and_then(Value::as_array) {
+        for label in labels {
+            if let Some(normalized) = label.get("normalizedText").and_then(Value::as_str) {
+                if let Some(alias) = normalize_semantic_alias(normalized) {
+                    aliases.push(alias);
+                }
+            }
+            if let Some(items) = label.get("aliases").and_then(Value::as_array) {
+                aliases.extend(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(normalize_semantic_alias),
+                );
+            }
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn normalize_semantic_alias(value: &str) -> Option<String> {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = compact.trim().to_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn issue(

@@ -109,7 +109,7 @@ pub(crate) fn runtime_delivery_requirement_template(runtime_delivery: Option<&Va
             "objective": "Verify this task preserves the runtime delivery contract it touches.",
             "acceptableEvidence": ["manual_command_output", "runtime_api_check", "static_check"]
         }],
-        "evidenceExpectedInTaskResult": ["runtimeDeliveryEvidence"],
+        "evidenceExpectedInTaskResult": [],
         "forbiddenActions": []
     })
 }
@@ -151,19 +151,7 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             })
         })
         .collect::<Vec<_>>();
-    let concept_evidence = task
-        .concept_refs
-        .iter()
-        .map(|concept_ref| {
-            json!({
-                "conceptRef": concept_ref,
-                "evidenceType": "code",
-                "refs": [],
-                "summary": ""
-            })
-        })
-        .collect::<Vec<_>>();
-    json!({
+    let mut template = json!({
         "schemaVersion": "1.0",
         "taskResultId": format!("result-{}", task.task_id),
         "taskId": task.task_id,
@@ -185,14 +173,87 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             "notes": []
         },
         "notes": [],
-        "frontendExperienceSelfCheck": frontend_experience_self_check_template(task),
-        "runtimeDeliveryEvidence": runtime_delivery_evidence_template(task),
         "requirementDetailEvidence": requirement_detail_evidence,
-        "conceptEvidence": concept_evidence,
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime",
         "updatedAt": "ISO-8601 datetime"
-    })
+    });
+    let Some(object) = template.as_object_mut() else {
+        return template;
+    };
+    if frontend_self_check_applies(task) {
+        object.insert(
+            "frontendExperienceSelfCheck".to_string(),
+            frontend_experience_self_check_template(task),
+        );
+    }
+    if runtime_delivery_evidence_applies(task) {
+        object.insert(
+            "runtimeDeliveryEvidence".to_string(),
+            runtime_delivery_evidence_template(task),
+        );
+    }
+    if !task.concept_refs.is_empty() {
+        object.insert(
+            "conceptEvidence".to_string(),
+            Value::Array(
+                task.concept_refs
+                    .iter()
+                    .map(|concept_ref| {
+                        json!({
+                            "conceptRef": concept_ref,
+                            "evidenceType": "code",
+                            "refs": [],
+                            "summary": ""
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    template
+}
+
+pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Vec<&'static str> {
+    let mut fields = vec![
+        "schemaVersion",
+        "taskResultId",
+        "taskId",
+        "taskPlanId",
+        "status",
+        "changedFiles",
+        "noChangeReason",
+        "verificationResults",
+        "selfRepairSummary",
+        "failure",
+        "executionContinuity",
+        "notes",
+        "requirementDetailEvidence",
+        "blockedReasons",
+        "createdAt",
+        "updatedAt",
+    ];
+    if frontend_self_check_applies(task) {
+        fields.push("frontendExperienceSelfCheck");
+    }
+    if runtime_delivery_evidence_applies(task) {
+        fields.push("runtimeDeliveryEvidence");
+    }
+    if !task.concept_refs.is_empty() {
+        fields.push("conceptEvidence");
+    }
+    fields
+}
+
+pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
+    task.runtime_delivery_requirement
+        .as_ref()
+        .map(|requirement| requirement.applies_to_this_task)
+        .unwrap_or(false)
+}
+
+pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
+    task.frontend_experience_requirement.is_some() && !runtime_delivery_evidence_applies(task)
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
@@ -228,9 +289,28 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
     if task.frontend_experience_requirement.is_none() {
         return Value::Null;
     }
+    let closure_requirement_ids = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("executionGuidance"))
+        .and_then(|guidance| guidance.get("closureRequirementRefs"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_string).or_else(|| {
+                        item.get("closureId")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     json!({
         "status": "satisfied",
-        "closureRequirementIds": [],
+        "closureRequirementIds": closure_requirement_ids,
         "dataBinding": {
             "mode": "wired",
             "knownGaps": []

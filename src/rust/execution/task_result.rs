@@ -21,9 +21,13 @@ use state::{
 
 use crate::{
     paths::task_result_file,
-    task_execution::{load_current_plan_and_run, save_run},
+    task_execution::{
+        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+    },
     task_plan::update_run_summary,
-    templates::task_result_template,
+    templates::{
+        frontend_self_check_applies, runtime_delivery_evidence_applies, task_result_template,
+    },
 };
 
 pub fn accept_task_result_file<D>(
@@ -119,23 +123,6 @@ where
     })?;
     let root = Path::new(&input.project_root);
     let raw_result = read_project_json_value(root, &target.path)?;
-    let result: TaskResult = match serde_json::from_value(raw_result.clone()) {
-        Ok(result) => result,
-        Err(error) => {
-            return repair_task_result_or_error(
-                input,
-                authorized,
-                target.path.clone(),
-                vec![issue(
-                    "TASK_RESULT_SCHEMA_INVALID",
-                    "$",
-                    &format!("TaskResult JSON has an invalid schema: {error}"),
-                )],
-                repair_submit,
-                None,
-            )
-        }
-    };
     let allowed_read_fields = authorized
         .read_groups
         .iter()
@@ -150,17 +137,32 @@ where
         "task.acceptanceRefs".to_string(),
         "task.requirementDetailRefs".to_string(),
         "task.verificationIntents".to_string(),
-        "task.frontendExperienceRequirement".to_string(),
-        "task.runtimeDeliveryRequirement".to_string(),
         "outputContract.resultFile".to_string(),
         "outputContract.requiredTopLevelFields".to_string(),
     ];
     for optional_field in [
-        "taskConceptGrounding.conceptRefs",
-        "blockedOutput.blockedReasons",
+        "task.conceptRefs",
+        "outputContract.blockedReasonOptions",
+        "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        "task.runtimeDeliveryRequirement",
     ] {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
+        }
+    }
+    for runtime_field in [
+        "task.runtimeDeliveryRequirement.appliesToThisTask",
+        "task.runtimeDeliveryRequirement.reason",
+        "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+        "task.runtimeDeliveryRequirement.affectedContractFields",
+        "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+        "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+        "task.runtimeDeliveryRequirement.forbiddenActions",
+        "task.runtimeDeliveryRequirement.source",
+        "task.runtimeDeliveryRequirement.deploymentFailureRef",
+    ] {
+        if allowed_read_fields.contains(runtime_field) {
+            fields_to_read.push(runtime_field.to_string());
         }
     }
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
@@ -173,6 +175,16 @@ where
     let task_id = string_field(&fields, "source.taskId")?;
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
+    let frontend_experience_requirement = fields
+        .get("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs")
+        .map(|field| {
+            json!({
+                "executionGuidance": {
+                    "closureRequirementRefs": field.value
+                }
+            })
+        })
+        .unwrap_or(Value::Null);
     let task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
@@ -189,25 +201,49 @@ where
             "artifactRefs": {}
         },
         "verificationIntents": array_field(&fields, "task.verificationIntents"),
-        "conceptRefs": array_field(&fields, "taskConceptGrounding.conceptRefs"),
+        "conceptRefs": array_field(&fields, "task.conceptRefs"),
         "conceptResponsibilities": [],
         "conceptVerificationIntents": [],
-        "frontendExperienceRequirement": value_field(&fields, "task.frontendExperienceRequirement"),
-        "runtimeDeliveryRequirement": value_field(&fields, "task.runtimeDeliveryRequirement")
+        "frontendExperienceRequirement": frontend_experience_requirement,
+        "runtimeDeliveryRequirement": runtime_delivery_requirement_from_fields(&fields)
     }))
     .map_err(state::store::StateError::Json)?;
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let blocked_output = json!({
-        "blockedReasons": array_field(&fields, "blockedOutput.blockedReasons")
+        "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
+    let normalized_result = normalize_task_result_machine_fields(
+        raw_result.clone(),
+        &authorized.request_id,
+        &task_plan_id,
+        &task_id,
+        &task,
+    );
+    let result: TaskResult = match serde_json::from_value(normalized_result.clone()) {
+        Ok(result) => result,
+        Err(error) => {
+            return repair_task_result_or_error(
+                input,
+                authorized,
+                target.path.clone(),
+                vec![issue(
+                    "TASK_RESULT_SCHEMA_INVALID",
+                    "$",
+                    &format!("TaskResult JSON has an invalid schema: {error}"),
+                )],
+                repair_submit,
+                None,
+            )
+        }
+    };
     let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
     let issues = validate_result(
-        &raw_result,
+        &normalized_result,
         &result,
         &task,
         &required_top_level_fields,
@@ -232,7 +268,7 @@ where
                 result_file,
                 required_top_level_fields,
                 blocked_output,
-                submitted_result: raw_result.clone(),
+                submitted_result: normalized_result.clone(),
                 previous_changed_files,
             }),
         );
@@ -482,7 +518,364 @@ fn validate_result(
             "Completed TaskResult must not leave agent-owned long-running work as unknown.",
         ));
     }
+    if result.execution_continuity.agent_owned_long_running_work == "unknown"
+        && result.notes.is_empty()
+        && result.execution_continuity.notes.is_empty()
+    {
+        issues.push(issue(
+            "EXECUTION_CONTINUITY_REQUIRED",
+            "executionContinuity.notes",
+            "TaskResult must explain unknown agent-owned long-running work in notes or executionContinuity.notes.",
+        ));
+    }
     issues
+}
+
+fn normalize_task_result_machine_fields(
+    mut raw_result: Value,
+    request_id: &str,
+    task_plan_id: &str,
+    task_id: &str,
+    task: &TaskDefinition,
+) -> Value {
+    let Some(object) = raw_result.as_object_mut() else {
+        return raw_result;
+    };
+
+    let now = state::store::now_string();
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    if !object
+        .get("taskResultId")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
+        object.insert(
+            "taskResultId".to_string(),
+            json!(format!("taskresult-{}", safe_id(request_id))),
+        );
+    }
+    object.insert("taskPlanId".to_string(), json!(task_plan_id));
+    object.insert("taskId".to_string(), json!(task_id));
+    if !object
+        .get("changedFiles")
+        .and_then(Value::as_array)
+        .is_some()
+    {
+        object.insert("changedFiles".to_string(), json!([]));
+    }
+    if !object.contains_key("noChangeReason") {
+        object.insert("noChangeReason".to_string(), Value::Null);
+    }
+    if !object.contains_key("selfRepairSummary") {
+        object.insert(
+            "selfRepairSummary".to_string(),
+            json!({
+                "attempted": false,
+                "attemptCount": 0,
+                "stopReason": "not_attempted",
+                "progressObserved": false
+            }),
+        );
+    }
+    if object
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|status| status != "failed")
+        .unwrap_or(false)
+    {
+        object.insert("failure".to_string(), Value::Null);
+    }
+    if !object.get("notes").and_then(Value::as_array).is_some() {
+        object.insert("notes".to_string(), json!([]));
+    }
+    if object
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|status| status != "blocked")
+        .unwrap_or(false)
+    {
+        object.insert("blockedReasons".to_string(), json!([]));
+    } else if !object
+        .get("blockedReasons")
+        .and_then(Value::as_array)
+        .is_some()
+    {
+        object.insert("blockedReasons".to_string(), json!([]));
+    }
+    if !object
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("createdAt".to_string(), json!(now.clone()));
+    }
+    if !object
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+
+    normalize_verification_result_machine_fields(object, task);
+
+    let detail_ids = required_requirement_detail_ids(task);
+    normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
+
+    if let Some(concepts) = object
+        .get_mut("conceptEvidence")
+        .and_then(Value::as_array_mut)
+    {
+        normalize_indexed_object_string_field(concepts, "conceptRef", &task.concept_refs);
+    }
+
+    if let Some(requirement) = &task.runtime_delivery_requirement {
+        if requirement.applies_to_this_task {
+            normalize_runtime_delivery_evidence(object, requirement);
+        }
+    }
+
+    if let Some(requirement) = &task.frontend_experience_requirement {
+        normalize_frontend_experience_self_check(object, requirement);
+    }
+
+    raw_result
+}
+
+fn is_iso_datetime_string(value: &str) -> bool {
+    value.contains('T')
+        && (value.ends_with('Z') || value.contains('+') || value.rsplit_once('-').is_some())
+        && !value.contains("ISO-8601")
+}
+
+fn normalize_verification_result_machine_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    let raw_items = object
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut used = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for (index, intent) in task.verification_intents.iter().enumerate() {
+        let matching_index = raw_items
+            .iter()
+            .enumerate()
+            .find(|(item_index, item)| {
+                !used.contains(item_index)
+                    && item
+                        .get("verificationId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == intent.verification_id)
+            })
+            .map(|(item_index, _)| item_index)
+            .or_else(|| (index < raw_items.len()).then_some(index));
+        let raw = matching_index
+            .and_then(|item_index| {
+                used.insert(item_index);
+                raw_items.get(item_index).cloned()
+            })
+            .unwrap_or_else(|| json!({}));
+        let mut item = raw.as_object().cloned().unwrap_or_default();
+        item.insert(
+            "verificationId".to_string(),
+            json!(intent.verification_id.clone()),
+        );
+        if !item
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert("status".to_string(), json!("not_run"));
+        }
+        let evidence_type = item
+            .get("evidenceType")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let evidence_allowed = evidence_type.as_ref().is_some_and(|candidate| {
+            intent
+                .acceptable_evidence
+                .iter()
+                .any(|allowed| verification_evidence_name(*allowed) == candidate)
+        });
+        if !evidence_allowed {
+            if let Some(first) = intent.acceptable_evidence.first() {
+                item.insert(
+                    "evidenceType".to_string(),
+                    json!(verification_evidence_name(*first)),
+                );
+            } else {
+                item.remove("evidenceType");
+            }
+        }
+        if !item
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert(
+                "summary".to_string(),
+                json!("Verification result was not reported before TaskResult submission."),
+            );
+        }
+        normalized.push(Value::Object(item));
+    }
+    for (index, item) in raw_items.into_iter().enumerate() {
+        if !used.contains(&index) {
+            normalized.push(item);
+        }
+    }
+    object.insert("verificationResults".to_string(), Value::Array(normalized));
+}
+
+fn normalize_requirement_detail_evidence_machine_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+    detail_ids: &[String],
+) {
+    let raw_items = object
+        .get("requirementDetailEvidence")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut used = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for (index, detail_id) in detail_ids.iter().enumerate() {
+        let matching_index = raw_items
+            .iter()
+            .enumerate()
+            .find(|(item_index, item)| {
+                !used.contains(item_index)
+                    && item
+                        .get("detailId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == detail_id)
+            })
+            .map(|(item_index, _)| item_index)
+            .or_else(|| (index < raw_items.len()).then_some(index));
+        let raw = matching_index
+            .and_then(|item_index| {
+                used.insert(item_index);
+                raw_items.get(item_index).cloned()
+            })
+            .unwrap_or_else(|| json!({}));
+        let mut item = raw.as_object().cloned().unwrap_or_default();
+        item.insert("detailId".to_string(), json!(detail_id));
+        if !item
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert("status".to_string(), json!("not_verified"));
+        }
+        let detail_verification_ids = verification_ids_for_detail(task, detail_id);
+        if !detail_verification_ids.is_empty() {
+            item.insert(
+                "verificationIds".to_string(),
+                json!(detail_verification_ids),
+            );
+        } else if !item
+            .get("verificationIds")
+            .and_then(Value::as_array)
+            .is_some()
+        {
+            item.insert("verificationIds".to_string(), json!([]));
+        }
+        if !item.get("evidenceRefs").and_then(Value::as_array).is_some() {
+            item.insert("evidenceRefs".to_string(), json!([]));
+        }
+        if !item
+            .get("summary")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            item.insert(
+                "summary".to_string(),
+                json!("Requirement detail evidence was not reported before TaskResult submission."),
+            );
+        }
+        normalized.push(Value::Object(item));
+    }
+    for (index, item) in raw_items.into_iter().enumerate() {
+        if !used.contains(&index) {
+            normalized.push(item);
+        }
+    }
+    object.insert(
+        "requirementDetailEvidence".to_string(),
+        Value::Array(normalized),
+    );
+}
+
+fn normalize_indexed_object_string_field(items: &mut [Value], field: &str, values: &[String]) {
+    for (index, item) in items.iter_mut().enumerate() {
+        let Some(value) = values.get(index) else {
+            continue;
+        };
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        object.insert(field.to_string(), json!(value));
+    }
+}
+
+fn normalize_runtime_delivery_evidence(
+    result_object: &mut serde_json::Map<String, Value>,
+    requirement: &contracts::TaskRuntimeDeliveryRequirement,
+) {
+    let Some(evidence) = result_object
+        .get_mut("runtimeDeliveryEvidence")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if let Some(runtime_delivery_ref) = &requirement.runtime_delivery_ref {
+        evidence.insert("requirementRef".to_string(), json!(runtime_delivery_ref));
+    }
+    if !requirement.affected_contract_fields.is_empty() {
+        evidence.insert(
+            "checkedFields".to_string(),
+            json!(requirement.affected_contract_fields),
+        );
+    }
+    let required_checks = &requirement.required_code_level_checks;
+    let Some(checks) = evidence
+        .get_mut("codeLevelChecks")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for (index, check) in checks.iter_mut().enumerate() {
+        let Some(required) = required_checks.get(index) else {
+            continue;
+        };
+        let Some(check_object) = check.as_object_mut() else {
+            continue;
+        };
+        check_object.insert("checkId".to_string(), json!(required.check_id));
+        if let Some(contract_field) = &required.contract_field {
+            check_object.insert("contractField".to_string(), json!(contract_field));
+        }
+    }
+}
+
+fn normalize_frontend_experience_self_check(
+    result_object: &mut serde_json::Map<String, Value>,
+    requirement: &Value,
+) {
+    let Some(self_check) = result_object
+        .get_mut("frontendExperienceSelfCheck")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let closure_ids = workflow_closure_requirement_ids(requirement);
+    if closure_ids.is_empty() {
+        return;
+    }
+    self_check.insert("closureRequirementIds".to_string(), json!(closure_ids));
 }
 
 fn validate_self_repair(result: &TaskResult, issues: &mut Vec<delivery_core::RepairIssue>) {
@@ -600,14 +993,7 @@ fn validate_requirement_detail_evidence(
     task: &TaskDefinition,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let mut required_detail_ids = task.requirement_detail_refs.clone();
-    for intent in &task.verification_intents {
-        for detail_id in &intent.requirement_detail_refs {
-            if !required_detail_ids.contains(detail_id) {
-                required_detail_ids.push(detail_id.clone());
-            }
-        }
-    }
+    let required_detail_ids = required_requirement_detail_ids(task);
     if required_detail_ids.is_empty() {
         return;
     }
@@ -668,6 +1054,31 @@ fn validate_requirement_detail_evidence(
             ));
         }
     }
+}
+
+fn required_requirement_detail_ids(task: &TaskDefinition) -> Vec<String> {
+    let mut required_detail_ids = task.requirement_detail_refs.clone();
+    for intent in &task.verification_intents {
+        for detail_id in &intent.requirement_detail_refs {
+            if !required_detail_ids.contains(detail_id) {
+                required_detail_ids.push(detail_id.clone());
+            }
+        }
+    }
+    required_detail_ids
+}
+
+fn verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
+    task.verification_intents
+        .iter()
+        .filter(|intent| {
+            intent
+                .requirement_detail_refs
+                .iter()
+                .any(|id| id == detail_id)
+        })
+        .map(|intent| intent.verification_id.clone())
+        .collect()
 }
 
 fn validate_concept_evidence(
@@ -762,6 +1173,9 @@ fn validate_frontend_experience_self_check(
     task: &TaskDefinition,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
+    if !frontend_self_check_applies(task) {
+        return;
+    }
     let Some(requirement) = &task.frontend_experience_requirement else {
         return;
     };
@@ -854,7 +1268,7 @@ fn validate_blocked_reasons(
             issues.push(issue(
                 "TASK_RESULT_BLOCKED_MAPPING_INVALID",
                 "blockedReasons",
-                "Blocked reason must match the request blockedOutput mapping.",
+                "Blocked reason must match the request blocked reason options.",
             ));
         }
     }
@@ -1034,7 +1448,7 @@ fn route_action_for_task_result(
                 .find(|state| state.task_id == result.task_id)
                 .map(|state| state.attempts.len())
                 .unwrap_or(0);
-            if attempt_count <= 2 {
+            if attempt_count <= 3 {
                 Ok(Some(RouteAction {
                     kind: RouteActionKind::ExecutionRepair,
                     source: "task_result".to_string(),
@@ -1201,6 +1615,62 @@ fn materialize_task_result_repair(
     let schema_shape = serde_json::to_value(schema_for!(TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let result_template = task_result_repair_template(&context, &issues);
+    let mut context_fields = vec![
+        "source.taskPlanId",
+        "source.taskId",
+        "source.taskPlanRunId",
+        "source.taskExecutionRequestRef",
+        "source.originalResultFile",
+        "task.taskId",
+        "task.groupId",
+        "task.title",
+        "task.taskKind",
+        "task.objective",
+        "task.acceptanceRefs",
+        "task.requirementDetailRefs",
+        "task.verificationIntents",
+        "outputContract.blockedReasonOptions",
+        "repairContract.profile",
+        "repairContract.issueConflicts",
+        "repairContract.minimalRepairRules",
+    ];
+    if !context.task.concept_refs.is_empty() {
+        context_fields.push("task.conceptRefs");
+    }
+    if frontend_self_check_applies(&context.task) {
+        context_fields
+            .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
+    }
+    if runtime_delivery_evidence_applies(&context.task) {
+        context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
+    }
+    let mut write_contract_fields = vec![
+        "outputContract.resultFile",
+        "outputContract.writeTargets",
+        "outputContract.requiredTopLevelFields",
+        "outputContract.resultTemplate",
+        "outputContract.schemaShape.properties.status",
+        "outputContract.schemaShape.properties.changedFiles",
+        "outputContract.schemaShape.properties.noChangeReason",
+        "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.selfRepairSummary",
+        "outputContract.schemaShape.properties.failure",
+        "outputContract.schemaShape.properties.executionContinuity",
+        "outputContract.schemaShape.properties.notes",
+        "outputContract.schemaShape.properties.requirementDetailEvidence",
+        "outputContract.schemaShape.properties.blockedReasons",
+        "outputContract.resultRules",
+    ];
+    if frontend_self_check_applies(&context.task) {
+        write_contract_fields
+            .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if runtime_delivery_evidence_applies(&context.task) {
+        write_contract_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+    if !context.task.concept_refs.is_empty() {
+        write_contract_fields.push("outputContract.schemaShape.properties.conceptEvidence");
+    }
     let root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "task_result_repair",
@@ -1213,16 +1683,13 @@ fn materialize_task_result_repair(
             "taskPlanId": context.task_plan_id,
             "taskId": context.task_id,
             "taskPlanRunId": context.run_id,
-            "originalResultFile": target_file,
-            "issues": issues
+            "originalResultFile": target_file
         },
         "task": context.task.clone(),
-        "taskConceptGrounding": {
-            "conceptRefs": context.task.concept_refs.clone()
-        },
-        "blockedOutput": context.blocked_output,
-        "repairRules": {
-            "rule": "Rewrite the TaskResult JSON so it satisfies the original TaskExecutionRequest output contract. Do not edit source files for this repair."
+        "repairContract": {
+            "profile": "minimal_task_result_repair",
+            "issueConflicts": task_result_issue_conflicts(&context, &issues),
+            "minimalRepairRules": task_result_minimal_repair_rules(&issues)
         },
         "outputContract": {
             "artifactKind": ArtifactKind::TaskResultRepair,
@@ -1236,6 +1703,10 @@ fn materialize_task_result_repair(
                 "description": "Rewrite the TaskResult JSON for the original task execution request."
             }],
             "requiredTopLevelFields": context.required_top_level_fields,
+            "blockedReasonOptions": context.blocked_output
+                .get("blockedReasons")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
             "schemaShape": schema_shape,
             "resultTemplate": result_template,
             "resultRules": [
@@ -1250,53 +1721,14 @@ fn materialize_task_result_repair(
                     "required": true,
                     "purpose": "Read the original TaskResult validation issues and task contract.",
                     "whenToRead": "Read before rewriting TaskResult.",
-                    "fields": [
-                        "source.taskPlanId",
-                        "source.taskId",
-                        "source.taskPlanRunId",
-                        "source.taskExecutionRequestRef",
-                        "source.originalResultFile",
-                        "source.issues",
-                        "task.taskId",
-                        "task.groupId",
-                        "task.title",
-                        "task.taskKind",
-                        "task.objective",
-                        "task.acceptanceRefs",
-                        "task.requirementDetailRefs",
-                        "task.verificationIntents",
-                        "taskConceptGrounding.conceptRefs",
-                        "task.frontendExperienceRequirement",
-                        "task.runtimeDeliveryRequirement",
-                        "blockedOutput.blockedReasons",
-                        "repairRules.rule"
-                    ]
+                    "fields": context_fields
                 },
                 {
                     "groupId": "task_result_repair_write_contract",
                     "required": true,
                     "purpose": "Read the TaskResult replacement output contract.",
                     "whenToRead": "Read before writing replacement TaskResult.",
-                    "fields": [
-                        "outputContract.resultFile",
-                        "outputContract.writeTargets",
-                        "outputContract.requiredTopLevelFields",
-                        "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.status",
-                        "outputContract.schemaShape.properties.changedFiles",
-                        "outputContract.schemaShape.properties.noChangeReason",
-                        "outputContract.schemaShape.properties.verificationResults",
-                        "outputContract.schemaShape.properties.selfRepairSummary",
-                        "outputContract.schemaShape.properties.failure",
-                        "outputContract.schemaShape.properties.executionContinuity",
-                        "outputContract.schemaShape.properties.notes",
-                        "outputContract.schemaShape.properties.frontendExperienceSelfCheck",
-                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
-                        "outputContract.schemaShape.properties.requirementDetailEvidence",
-                        "outputContract.schemaShape.properties.conceptEvidence",
-                        "outputContract.schemaShape.properties.blockedReasons",
-                        "outputContract.resultRules"
-                    ]
+                    "fields": write_contract_fields
                 }
             ]
         }
@@ -1362,12 +1794,126 @@ fn previous_persisted_changed_files(
         .unwrap_or_default()
 }
 
+fn task_result_issue_conflicts(
+    context: &RepairContextInput,
+    issues: &[delivery_core::RepairIssue],
+) -> Vec<Value> {
+    issues
+        .iter()
+        .map(|issue| {
+            let base = json!({
+                "code": issue.code,
+                "fieldPath": issue.field_path,
+                "message": issue.message
+            });
+            if issue.code == "TASK_RESULT_WORKFLOW_CLOSURE_INVALID" {
+                return task_result_workflow_conflict(context, base);
+            }
+            if issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID" {
+                return task_result_runtime_conflict(context, base);
+            }
+            base
+        })
+        .collect()
+}
+
+fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    let self_check = context
+        .submitted_result
+        .get("frontendExperienceSelfCheck")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data_binding = self_check
+        .get("dataBinding")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let known_gaps_count = data_binding
+        .get("knownGaps")
+        .and_then(Value::as_array)
+        .map(|items| items.len());
+    let expected_closure_ids = context
+        .task
+        .frontend_experience_requirement
+        .as_ref()
+        .map(workflow_closure_requirement_ids)
+        .unwrap_or_default();
+    base["current"] = json!({
+        "frontendExperienceSelfCheckStatus": self_check.get("status").and_then(Value::as_str),
+        "dataBindingMode": data_binding.get("mode").and_then(Value::as_str),
+        "knownGapsCount": known_gaps_count
+    });
+    base["expectedForSatisfied"] = json!({
+        "frontendExperienceSelfCheckStatus": "satisfied",
+        "dataBindingMode": "wired",
+        "knownGaps": [],
+        "closureRequirementIds": expected_closure_ids
+    });
+    base["validRepairChoices"] = json!([
+        "If the implementation and evidence are actually wired, repair frontendExperienceSelfCheck.dataBinding.mode to wired, clear knownGaps, and cite evidence.",
+        "If wired evidence is missing, do not claim satisfied; report the remaining gap through frontendExperienceSelfCheck and the normal TaskResult status."
+    ]);
+    base
+}
+
+fn task_result_runtime_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    let required_check_ids = context
+        .task
+        .runtime_delivery_requirement
+        .as_ref()
+        .map(|requirement| {
+            requirement
+                .required_code_level_checks
+                .iter()
+                .map(|check| check.check_id.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let submitted_check_ids = context
+        .submitted_result
+        .get("runtimeDeliveryEvidence")
+        .map(|evidence| object_array_string_field(evidence, "codeLevelChecks", "checkId"))
+        .unwrap_or_default();
+    base["current"] = json!({
+        "runtimeCheckIds": submitted_check_ids
+    });
+    base["expectedRuntimeCheckIds"] = json!(required_check_ids);
+    base["validRepairChoices"] = json!([
+        "Use exactly the task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId values.",
+        "If a code-level check does not apply, record it with status not_applicable and a non-empty reason."
+    ]);
+    base
+}
+
+fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Vec<&'static str> {
+    let mut rules = vec![
+        "Repair the same TaskResult JSON file only.",
+        "Do not edit project source files for TaskResult contract repair.",
+        "Use exact verificationResults[].verificationId values from task.verificationIntents.",
+        "Never combine selfRepairSummary.attempted=false with stopReason verification_passed.",
+    ];
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_WORKFLOW_CLOSURE_INVALID")
+    {
+        rules.push("frontendExperienceSelfCheck.status=satisfied is valid only when dataBinding.mode=wired and knownGaps is empty.");
+        rules.push("If wired evidence is missing, do not claim satisfied; report the remaining gap through frontendExperienceSelfCheck and TaskResult status.");
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID")
+    {
+        rules.push("RuntimeDeliveryEvidence codeLevelChecks must use only required check ids from the request.");
+        rules.push("For passed runtime checks, omit reason; use a non-empty reason only for failed, blocked, or not_applicable checks.");
+    }
+    rules
+}
+
 fn task_result_repair_template(
     context: &RepairContextInput,
     issues: &[delivery_core::RepairIssue],
 ) -> Value {
     let mut template = task_result_template(&context.task_plan_id, &context.task);
-    merge_submitted_task_result_fields(&mut template, &context.submitted_result);
+    merge_submitted_task_result_fields(&mut template, &context.submitted_result, issues);
     if changed_files_issue(issues)
         && context
             .previous_changed_files
@@ -1384,18 +1930,38 @@ fn task_result_repair_template(
     template
 }
 
-fn merge_submitted_task_result_fields(template: &mut Value, submitted: &Value) {
+fn merge_submitted_task_result_fields(
+    template: &mut Value,
+    submitted: &Value,
+    issues: &[delivery_core::RepairIssue],
+) {
     let (Some(template_object), Some(submitted_object)) =
         (template.as_object_mut(), submitted.as_object())
     else {
         return;
     };
+    let conflicted_fields = issue_top_level_fields(issues);
     for (key, submitted_value) in submitted_object {
+        if conflicted_fields.contains(key.as_str()) {
+            continue;
+        }
+        if !template_object.contains_key(key) {
+            continue;
+        }
         if keeps_template_array_shape(template_object.get(key), submitted_value) {
             continue;
         }
         template_object.insert(key.clone(), submitted_value.clone());
     }
+}
+
+fn issue_top_level_fields(issues: &[delivery_core::RepairIssue]) -> BTreeSet<&str> {
+    issues
+        .iter()
+        .filter_map(|issue| issue.field_path.as_deref())
+        .filter_map(|path| path.split(['.', '[']).next())
+        .filter(|field| !field.is_empty())
+        .collect()
 }
 
 fn keeps_template_array_shape(template_value: Option<&Value>, submitted_value: &Value) -> bool {
@@ -1719,6 +2285,43 @@ fn array_field(
         .map(|field| field.value.clone())
         .filter(Value::is_array)
         .unwrap_or_else(|| json!([]))
+}
+
+fn runtime_delivery_requirement_from_fields(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    let whole = value_field(fields, "task.runtimeDeliveryRequirement");
+    if !whole.is_null() {
+        return whole;
+    }
+    if !fields.contains_key("task.runtimeDeliveryRequirement.appliesToThisTask") {
+        return Value::Null;
+    }
+    let mut requirement = json!({
+        "appliesToThisTask": value_field(fields, "task.runtimeDeliveryRequirement.appliesToThisTask"),
+        "reason": value_field(fields, "task.runtimeDeliveryRequirement.reason"),
+        "affectedContractFields": array_field(fields, "task.runtimeDeliveryRequirement.affectedContractFields"),
+        "requiredCodeLevelChecks": array_field(fields, "task.runtimeDeliveryRequirement.requiredCodeLevelChecks"),
+        "evidenceExpectedInTaskResult": array_field(fields, "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult"),
+        "forbiddenActions": array_field(fields, "task.runtimeDeliveryRequirement.forbiddenActions")
+    });
+    for (field, key) in [
+        (
+            "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+            "runtimeDeliveryRef",
+        ),
+        ("task.runtimeDeliveryRequirement.source", "source"),
+        (
+            "task.runtimeDeliveryRequirement.deploymentFailureRef",
+            "deploymentFailureRef",
+        ),
+    ] {
+        let value = value_field(fields, field);
+        if !value.is_null() {
+            requirement[key] = value;
+        }
+    }
+    requirement
 }
 
 fn read_project_json_value(

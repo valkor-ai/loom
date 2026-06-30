@@ -4,11 +4,12 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureArtifactContract, TaskDefinition, TaskGroupRunState, TaskPlan, TaskPlanGroup,
+    AcceptancePriority, ArchitectureArtifactContract, CoverageStatus, ImplementationAction,
+    TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
     TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
     TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
     TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
@@ -236,6 +237,7 @@ fn build_request_root(
     let runtime_requirement_template =
         runtime_delivery_requirement_template(aac.runtime_delivery.as_ref());
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
+    let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
     let group_result_template = taskplan_group_result_template(request_id, delivery_id, phase_id);
@@ -283,13 +285,7 @@ fn build_request_root(
         "deliveryId": delivery_id,
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::TaskPlanCandidate,
-        "sourceRefs": {
-            "technicalBaselineRef": baseline_ref,
-            "planningGenerationContractRef": planning_ref,
-            "architectureArtifactContractRef": architecture_ref,
-            "phaseConceptGroundingRef": pgc.context_refs.phase_concept_grounding_ref,
-            "deliveryConceptGlossaryRef": pgc.context_refs.delivery_concept_glossary_ref
-        },
+        "sourceRefs": source_refs,
         "contextProjection": {
             "phaseId": phase_id,
             "planningContractId": pgc.planning_contract_id,
@@ -299,22 +295,15 @@ fn build_request_root(
                 "projectKind": baseline.project_kind,
                 "stack": baseline.stack
             },
-            "frontendExperienceProjection": aac.frontend_experience,
-            "runtimeDeliveryProjection": aac.runtime_delivery,
             "requirementDetailTransfer": requirement_transfer
         },
         "allowedRefs": allowed_refs(pgc, aac),
         "generationRules": generation_rules(aac),
         "enumRefs": enum_refs(),
         "outputContract": output_contract,
-        "blockedOutput": {
-            "status": "blocked",
-            "blockedReasonCode": "AAC_INSUFFICIENT",
-            "nextNode": "architecture_artifact_repair"
-        },
         "requestReadPlan": {
             "groups": taskplan_read_groups(
-                aac,
+                &source_refs,
                 &runtime_requirement_template,
                 &runtime_closure_template
             )
@@ -322,48 +311,85 @@ fn build_request_root(
     })
 }
 
+fn taskplan_source_refs(
+    baseline_ref: &str,
+    planning_ref: &str,
+    architecture_ref: &str,
+    pgc: &contracts::PlanningGenerationContract,
+) -> Value {
+    let mut value = json!({
+        "technicalBaselineRef": baseline_ref,
+        "planningGenerationContractRef": planning_ref,
+        "architectureArtifactContractRef": architecture_ref,
+    });
+    if let Some(phase_concept_grounding_ref) = &pgc.context_refs.phase_concept_grounding_ref {
+        value["phaseConceptGroundingRef"] = json!(phase_concept_grounding_ref);
+    }
+    if let Some(delivery_concept_glossary_ref) = &pgc.context_refs.delivery_concept_glossary_ref {
+        value["deliveryConceptGlossaryRef"] = json!(delivery_concept_glossary_ref);
+    }
+    if let Some(repository_context_ref) = &pgc.context_refs.repository_context_ref {
+        value["repositoryContextRef"] = json!(repository_context_ref);
+    }
+    value
+}
+
+fn has_non_null_key(value: &Value, key: &str) -> bool {
+    value.get(key).is_some_and(|item| !item.is_null())
+}
+
 fn taskplan_read_groups(
-    aac: &ArchitectureArtifactContract,
+    source_refs: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
 ) -> Value {
-    let mut groups = vec![
+    let mut core_fields = vec![
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.planningGenerationContractRef",
+        "sourceRefs.architectureArtifactContractRef",
+    ];
+    if has_non_null_key(source_refs, "phaseConceptGroundingRef") {
+        core_fields.push("sourceRefs.phaseConceptGroundingRef");
+    }
+    if has_non_null_key(source_refs, "deliveryConceptGlossaryRef") {
+        core_fields.push("sourceRefs.deliveryConceptGlossaryRef");
+    }
+    if has_non_null_key(source_refs, "repositoryContextRef") {
+        core_fields.push("sourceRefs.repositoryContextRef");
+    }
+    core_fields.extend([
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.architectureArtifactContractId",
+        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+        "contextProjection.requirementDetailTransfer.currentPhaseScope",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlowDetails",
+        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+        "contextProjection.requirementDetailTransfer.architectureDetails",
+        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+        "contextProjection.requirementDetailTransfer.conceptRefs",
+        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.deferredScopeRefs",
+        "allowedRefs.excludedScopeRefs",
+        "allowedRefs.requirementDetailIds",
+        "allowedRefs.moduleRefs",
+        "allowedRefs.entityRefs",
+        "allowedRefs.interfaceRefs",
+        "allowedRefs.userFlowRefs",
+        "allowedRefs.stateMachineRefs",
+        "allowedRefs.decisionRefs",
+        "allowedRefs.riskRefs",
+    ]);
+    let groups = vec![
         json!({
             "groupId": "taskplan_core_context",
             "required": true,
             "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
-            "fields": [
-                "sourceRefs.technicalBaselineRef",
-                "sourceRefs.planningGenerationContractRef",
-                "sourceRefs.architectureArtifactContractRef",
-                "sourceRefs.phaseConceptGroundingRef",
-                "sourceRefs.deliveryConceptGlossaryRef",
-                "contextProjection.phaseId",
-                "contextProjection.planningContractId",
-                "contextProjection.architectureArtifactContractId",
-                "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-                "contextProjection.requirementDetailTransfer.currentPhaseScope",
-                "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                "contextProjection.requirementDetailTransfer.businessFlowDetails",
-                "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-                "contextProjection.requirementDetailTransfer.architectureDetails",
-                "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-                "contextProjection.requirementDetailTransfer.conceptRefs",
-                "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
-                "allowedRefs.scopeRefs",
-                "allowedRefs.acceptanceRefs",
-                "allowedRefs.deferredScopeRefs",
-                "allowedRefs.excludedScopeRefs",
-                "allowedRefs.requirementDetailIds",
-                "allowedRefs.moduleRefs",
-                "allowedRefs.entityRefs",
-                "allowedRefs.interfaceRefs",
-                "allowedRefs.userFlowRefs",
-                "allowedRefs.stateMachineRefs",
-                "allowedRefs.decisionRefs",
-                "allowedRefs.riskRefs"
-            ]
+            "fields": core_fields
         }),
         json!({
             "groupId": "taskplan_generation_rules",
@@ -392,16 +418,6 @@ fn taskplan_read_groups(
             )
         }),
     ];
-    let optional_fields = taskplan_optional_projection_fields(aac);
-    if !optional_fields.is_empty() {
-        groups.push(json!({
-            "groupId": "taskplan_optional_projection",
-            "required": false,
-            "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
-            "whenToRead": "Read on demand.",
-            "fields": optional_fields
-        }));
-    }
     Value::Array(groups)
 }
 
@@ -424,17 +440,6 @@ fn taskplan_candidate_contract_fields(
     }
     if !runtime_closure_template.is_null() {
         fields.push("outputContract.runtimeDeliveryClosureTaskTemplate");
-    }
-    fields
-}
-
-fn taskplan_optional_projection_fields(aac: &ArchitectureArtifactContract) -> Vec<&'static str> {
-    let mut fields = Vec::new();
-    if aac.frontend_experience.is_some() {
-        fields.push("contextProjection.frontendExperienceProjection");
-    }
-    if aac.runtime_delivery.is_some() {
-        fields.push("contextProjection.runtimeDeliveryProjection");
     }
     fields
 }
@@ -667,6 +672,7 @@ where
     }
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
+    issues.extend(validate_runtime_delivery_requirements(&tasks));
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
@@ -677,6 +683,19 @@ where
     let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
+    issues.extend(validate_frontend_task_presence(&tasks, &aac));
+    issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
+    issues.extend(validate_workflow_closure_task_assignments(&tasks, &aac));
+    issues.extend(validate_runtime_delivery_closure_task(
+        &groups,
+        &tasks,
+        aac.runtime_delivery.as_ref(),
+    ));
+    if !issues.is_empty() {
+        return Ok(repairable(input, authorized, outline_ref, issues, mode));
+    }
+    normalize_taskplan_write_boundaries(&mut tasks);
     let now = state::store::now_string();
     let task_plan = TaskPlan {
         schema_version: "1.0".to_string(),
@@ -1280,6 +1299,513 @@ fn validate_taskplan_refs(
     issues
 }
 
+fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        task.write_boundary.forbidden_paths = vec![".loom".to_string()];
+    }
+}
+
+fn validate_runtime_delivery_requirements(
+    tasks: &[TaskDefinition],
+) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    for task in tasks {
+        let Some(requirement) = task.runtime_delivery_requirement.as_ref() else {
+            continue;
+        };
+        let target = Some(task.task_id.as_str());
+        if requirement.applies_to_this_task {
+            if requirement
+                .runtime_delivery_ref
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.runtimeDeliveryRef",
+                    "Runtime-affecting tasks must reference the accepted RuntimeDeliveryContract.",
+                    target,
+                ));
+            }
+            if requirement.affected_contract_fields.is_empty() {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.affectedContractFields",
+                    "Runtime-affecting tasks must list affected runtime contract fields.",
+                    target,
+                ));
+            }
+            if requirement.required_code_level_checks.is_empty() {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                    "Runtime-affecting tasks must list required code-level runtime checks.",
+                    target,
+                ));
+            }
+            let boundary_text = format!(
+                "{} {} {}",
+                requirement
+                    .required_code_level_checks
+                    .iter()
+                    .map(|check| format!(
+                        "{} {}",
+                        check.objective,
+                        check.contract_field.as_deref().unwrap_or_default()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                requirement.evidence_expected_in_task_result.join(" "),
+                requirement.forbidden_actions.join(" ")
+            )
+            .to_ascii_lowercase();
+            if boundary_text.contains("require clean install")
+                || boundary_text.contains("required clean install")
+                || boundary_text.contains("require container")
+                || boundary_text.contains("required container")
+                || boundary_text.contains("must run docker")
+                || boundary_text.contains("must run deploy")
+            {
+                issues.push(issue(
+                    "RUNTIME_REQUIREMENT_BOUNDARY_INVALID",
+                    "tasks[].runtimeDeliveryRequirement.verificationBoundary",
+                    "RuntimeDeliveryRequirement must stay at code level and must not require clean install, container build, registry, or deploy success.",
+                    target,
+                ));
+            }
+        } else if requirement.reason.trim().is_empty() {
+            issues.push(issue(
+                "RUNTIME_REQUIREMENT_INVALID",
+                "tasks[].runtimeDeliveryRequirement.reason",
+                "Non-applicable runtimeDeliveryRequirement entries must explain why the task does not affect runtime delivery.",
+                target,
+            ));
+        }
+    }
+    issues
+}
+
+fn validate_must_acceptance_task_coverage(
+    tasks: &[TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    for acceptance in pgc
+        .phase_scope
+        .acceptance_candidates
+        .iter()
+        .filter(|acceptance| matches!(acceptance.priority, AcceptancePriority::Must))
+    {
+        if tasks
+            .iter()
+            .any(|task| task.acceptance_refs.contains(&acceptance.id))
+        {
+            continue;
+        }
+        issues.push(issue(
+            "MUST_ACCEPTANCE_NOT_COVERED",
+            "tasks[].acceptanceRefs",
+            "Every must acceptance candidate must be assigned to at least one TaskPlan task.",
+            Some(&acceptance.id),
+        ));
+    }
+    issues
+}
+
+fn validate_frontend_task_presence(
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    if aac
+        .frontend_experience
+        .as_ref()
+        .and_then(|value| value.get("required"))
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Vec::new();
+    }
+    if tasks.iter().any(|task| {
+        matches!(
+            task.task_kind,
+            TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+        ) || task.frontend_experience_requirement.is_some()
+    }) {
+        return Vec::new();
+    }
+    vec![issue(
+        "FRONTEND_TASK_REQUIRED",
+        "tasks[].frontendExperienceRequirement",
+        "frontendExperience.required=true requires a UI/frontend task or a task with frontendExperienceRequirement.",
+        None,
+    )]
+}
+
+fn validate_requirement_detail_assignments(
+    tasks: &[TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    let covered_detail_ids = aac
+        .detail_coverage
+        .iter()
+        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
+        .map(|entry| entry.detail_id.clone())
+        .collect::<BTreeSet<_>>();
+    if covered_detail_ids.is_empty() {
+        return Vec::new();
+    }
+    let task_detail_ids = tasks
+        .iter()
+        .flat_map(|task| task.requirement_detail_refs.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let verification_detail_ids = tasks
+        .iter()
+        .flat_map(|task| {
+            task.verification_intents
+                .iter()
+                .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
+        })
+        .collect::<BTreeSet<_>>();
+
+    let mut issues = Vec::new();
+    for detail in pgc
+        .requirement_details
+        .items
+        .iter()
+        .filter(|detail| detail.required_for_current_phase)
+    {
+        if !covered_detail_ids.contains(&detail.detail_id) {
+            continue;
+        }
+        if !task_detail_ids.contains(&detail.detail_id) {
+            issues.push(issue(
+                "DETAIL_TASK_ASSIGNMENT_MISSING",
+                "tasks[].requirementDetailRefs",
+                "Every covered current-phase requirement detail must be assigned to at least one task.",
+                Some(&detail.detail_id),
+            ));
+        }
+        if !verification_detail_ids.contains(&detail.detail_id) {
+            issues.push(issue(
+                "DETAIL_TASK_ASSIGNMENT_MISSING",
+                "tasks[].verificationIntents[].requirementDetailRefs",
+                "Every covered current-phase requirement detail must be assigned to at least one verification intent.",
+                Some(&detail.detail_id),
+            ));
+        }
+    }
+    issues
+}
+
+fn validate_workflow_closure_task_assignments(
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    let mut issues = Vec::new();
+    for requirement in workflow_closure_requirements(aac) {
+        let closure_id = requirement
+            .get("closureId")
+            .and_then(Value::as_str)
+            .unwrap_or("workflow_closure");
+        if tasks
+            .iter()
+            .any(|task| task_covers_workflow_closure(task, &requirement))
+        {
+            continue;
+        }
+        issues.push(issue(
+            "WORKFLOW_CLOSURE_NOT_ASSIGNED",
+            "tasks[].frontendExperienceRequirement",
+            "Every workflow closure requirement must be assigned to a task that wires the user flow to every declared interface and verifies it with automated or runtime API evidence.",
+            Some(closure_id),
+        ));
+    }
+    issues
+}
+
+pub(crate) fn task_covers_workflow_closure(task: &TaskDefinition, requirement: &Value) -> bool {
+    let Some(workflow_ref) = requirement.get("workflowRef").and_then(Value::as_str) else {
+        return false;
+    };
+    if !task
+        .write_boundary
+        .artifact_refs
+        .user_flows
+        .iter()
+        .any(|item| item == workflow_ref)
+    {
+        return false;
+    }
+    let required_interfaces = string_array_at(requirement, "interfaceRefs");
+    if !required_interfaces.iter().all(|interface_ref| {
+        task.write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .any(|item| item == interface_ref)
+    }) {
+        return false;
+    }
+    let required_acceptance = string_array_at(requirement, "acceptanceRefs");
+    if !required_acceptance.iter().all(|acceptance_ref| {
+        task.acceptance_refs
+            .iter()
+            .any(|item| item == acceptance_ref)
+    }) {
+        return false;
+    }
+    if task.frontend_experience_requirement.is_none() {
+        return false;
+    }
+    if !task
+        .implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+    {
+        return false;
+    }
+    task.verification_intents.iter().any(|intent| {
+        required_acceptance.iter().all(|acceptance_ref| {
+            intent
+                .acceptance_refs
+                .iter()
+                .any(|item| item == acceptance_ref)
+        }) && intent.acceptable_evidence.iter().any(|evidence| {
+            matches!(
+                evidence,
+                VerificationEvidence::AutomatedTest | VerificationEvidence::RuntimeApiCheck
+            )
+        })
+    })
+}
+
+fn validate_runtime_delivery_closure_task(
+    groups: &[TaskPlanGroup],
+    tasks: &[TaskDefinition],
+    runtime_delivery: Option<&Value>,
+) -> Vec<delivery_core::RepairIssue> {
+    let Some(runtime_delivery) = runtime_delivery else {
+        return Vec::new();
+    };
+    if runtime_delivery.get("status").and_then(Value::as_str) != Some("modified") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    let closure_tasks = tasks
+        .iter()
+        .filter(|task| matches!(task.task_kind, contracts::TaskKind::RuntimeDeliveryClosure))
+        .collect::<Vec<_>>();
+    if closure_tasks.len() != 1 {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_TASK_REQUIRED",
+            "tasks.runtimeDeliveryClosure",
+            "RuntimeDelivery status=modified requires exactly one runtime_delivery_closure task.",
+            None,
+        ));
+        return issues;
+    }
+    let closure = closure_tasks[0];
+    let target = Some(closure.task_id.as_str());
+    let Some(requirement) = closure.runtime_delivery_requirement.as_ref() else {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_REQUIREMENT_INVALID",
+            "tasks[].runtimeDeliveryRequirement",
+            "runtime_delivery_closure task must carry runtimeDeliveryRequirement.",
+            target,
+        ));
+        return issues;
+    };
+    if !requirement.applies_to_this_task {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_REQUIREMENT_INVALID",
+            "tasks[].runtimeDeliveryRequirement.appliesToThisTask",
+            "runtime_delivery_closure task must have runtimeDeliveryRequirement.appliesToThisTask=true.",
+            target,
+        ));
+        return issues;
+    }
+
+    let required_fields = runtime_delivery_closure_fields(runtime_delivery);
+    let required_field_set = required_fields.iter().cloned().collect::<BTreeSet<_>>();
+    let affected_fields = requirement
+        .affected_contract_fields
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for field in &required_fields {
+        if !affected_fields.contains(field) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_FIELD_MISSING",
+                "tasks[].runtimeDeliveryRequirement.affectedContractFields",
+                &format!("runtime_delivery_closure must include affected field {field}."),
+                target,
+            ));
+        }
+    }
+    for field in &requirement.affected_contract_fields {
+        if !required_field_set.contains(field) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_FIELD_INVALID",
+                "tasks[].runtimeDeliveryRequirement.affectedContractFields",
+                &format!("runtime_delivery_closure affected field {field} is not required by RuntimeDeliveryContract."),
+                target,
+            ));
+        }
+    }
+
+    let check_id_by_field = requirement
+        .required_code_level_checks
+        .iter()
+        .filter_map(|check| {
+            check
+                .contract_field
+                .as_ref()
+                .map(|field| (field.clone(), check.check_id.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let required_check_ids = required_fields
+        .iter()
+        .map(|field| (field, runtime_delivery_closure_check_id(field)))
+        .collect::<Vec<_>>();
+    let required_check_id_set = required_check_ids
+        .iter()
+        .map(|(_, check_id)| check_id.clone())
+        .collect::<BTreeSet<_>>();
+    for (field, check_id) in &required_check_ids {
+        if check_id_by_field.get(*field) != Some(check_id) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_CHECK_INVALID",
+                "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                &format!("runtime_delivery_closure must include checkId {check_id} for {field}."),
+                target,
+            ));
+        }
+    }
+    for check in &requirement.required_code_level_checks {
+        let contract_field = check.contract_field.as_deref().unwrap_or_default();
+        if !required_field_set.contains(contract_field)
+            || !required_check_id_set.contains(&check.check_id)
+        {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_CHECK_INVALID",
+                "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                "runtime_delivery_closure checkIds and contractFields must match RuntimeDeliveryContract exactly.",
+                target,
+            ));
+        }
+    }
+
+    let Some(closure_group) = groups
+        .iter()
+        .find(|group| group.group_id == closure.group_id)
+    else {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].groupId",
+            "runtime_delivery_closure group must exist.",
+            target,
+        ));
+        return issues;
+    };
+    if closure_group.task_ids != vec![closure.task_id.clone()] {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].taskIds",
+            "runtime_delivery_closure group must contain exactly the closure task.",
+            Some(&closure_group.group_id),
+        ));
+    }
+    if groups.last().map(|group| group.group_id.as_str()) != Some(closure_group.group_id.as_str()) {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].position",
+            "runtime_delivery_closure group must be the final TaskPlan group.",
+            Some(&closure_group.group_id),
+        ));
+    }
+    for group in groups
+        .iter()
+        .filter(|group| group.depends_on.contains(&closure_group.group_id))
+    {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].dependsOn",
+            "No TaskPlan group may depend on the final runtime_delivery_closure group.",
+            Some(&group.group_id),
+        ));
+    }
+
+    let task_group_by_id = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task.group_id.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for dependency in &closure.depends_on {
+        if let Some(dependency_group) = task_group_by_id.get(dependency.as_str()) {
+            if *dependency_group != closure_group.group_id.as_str() {
+                issues.push(issue(
+                    "RUNTIME_CLOSURE_TASK_DEPENDENCY_INVALID",
+                    "tasks[].dependsOn",
+                    "runtime_delivery_closure task must not depend directly on tasks in other groups; use group dependsOn.",
+                    target,
+                ));
+            }
+        }
+    }
+
+    let closure_group_dependencies = transitive_group_dependencies(groups, &closure_group.group_id);
+    for runtime_task in tasks.iter().filter(|task| {
+        task.task_id != closure.task_id
+            && task
+                .runtime_delivery_requirement
+                .as_ref()
+                .is_some_and(|requirement| requirement.applies_to_this_task)
+    }) {
+        if runtime_task.group_id == closure_group.group_id {
+            if !closure.depends_on.contains(&runtime_task.task_id) {
+                issues.push(issue(
+                    "RUNTIME_CLOSURE_TASK_DEPENDENCY_INVALID",
+                    "tasks[].dependsOn",
+                    "runtime_delivery_closure must depend on runtime-affecting tasks in its own group.",
+                    target,
+                ));
+            }
+        } else if !closure_group_dependencies.contains(&runtime_task.group_id) {
+            issues.push(issue(
+                "RUNTIME_CLOSURE_GROUP_DEPENDENCY_INVALID",
+                "groups[].dependsOn",
+                "runtime_delivery_closure group must depend on every group containing runtime-affecting tasks.",
+                Some(&closure_group.group_id),
+            ));
+        }
+    }
+
+    issues
+}
+
+fn transitive_group_dependencies(groups: &[TaskPlanGroup], group_id: &str) -> BTreeSet<String> {
+    let by_id = groups
+        .iter()
+        .map(|group| (group.group_id.clone(), group))
+        .collect::<BTreeMap<_, _>>();
+    let mut visited = BTreeSet::new();
+    let mut stack = by_id
+        .get(group_id)
+        .map(|group| group.depends_on.clone())
+        .unwrap_or_default();
+    while let Some(dependency) = stack.pop() {
+        if visited.insert(dependency.clone()) {
+            if let Some(group) = by_id.get(&dependency) {
+                stack.extend(group.depends_on.clone());
+            }
+        }
+    }
+    visited
+}
+
 fn validate_ref_list(
     refs: &[String],
     allowed: &BTreeSet<String>,
@@ -1408,6 +1934,7 @@ fn requirement_detail_transfer(
         .iter()
         .filter(|item| item.required_for_current_phase)
         .map(|item| {
+            let coverage = detail_coverage.get(&item.detail_id);
             json!({
                 "detailId": item.detail_id,
                 "kind": item.kind,
@@ -1416,11 +1943,23 @@ fn requirement_detail_transfer(
                 "priority": item.priority,
                 "impactTags": item.impact_tags,
                 "lifecycleStage": item.lifecycle_stage,
+                "quality": item.quality,
                 "scopeRefs": item.scope_refs,
                 "acceptanceRefs": item.acceptance_refs,
                 "conceptRefs": item.concept_refs,
                 "frontendRefs": item.frontend_refs,
-                "coverage": detail_coverage.get(&item.detail_id).cloned().unwrap_or(Value::Null)
+                "coverageStatus": coverage
+                    .and_then(|value| value.get("coverageStatus"))
+                    .cloned()
+                    .unwrap_or_else(|| Value::String("uncovered".to_string())),
+                "artifactRefs": coverage
+                    .and_then(|value| value.get("artifactRefs"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "coverageReason": coverage
+                    .and_then(|value| value.get("reason"))
+                    .cloned()
+                    .unwrap_or(Value::Null)
             })
         })
         .collect::<Vec<_>>();
@@ -1428,7 +1967,9 @@ fn requirement_detail_transfer(
         "authority": "planning_generation_contract_plus_architecture_artifact_contract",
         "requirementDetailAssignment": {
             "items": requirement_items,
-            "assignmentRule": "Every covered current-phase requirement detail must be assigned to task.requirementDetailRefs and verificationIntents[].requirementDetailRefs."
+            "assignmentRule": "Every item with coverageStatus=covered must be assigned to at least one task.requirementDetailRefs entry using its detailId.",
+            "verificationRule": "Every assigned covered detail should be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+            "insufficientAacRule": "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks."
         },
         "currentPhaseScope": {
             "included": pgc.phase_scope.included,
@@ -1449,7 +1990,7 @@ fn requirement_detail_transfer(
             "stateMachines": aac.state_machines,
             "frontendOperationPathDetails": aac.frontend_experience
         },
-        "workflowClosureRequirements": [],
+        "workflowClosureRequirements": workflow_closure_requirements(aac),
         "conceptRefs": {
             "deliveryConceptGlossaryRef": pgc.context_refs.delivery_concept_glossary_ref,
             "phaseConceptGroundingRef": pgc.context_refs.phase_concept_grounding_ref
@@ -1463,6 +2004,169 @@ fn requirement_detail_transfer(
     })
 }
 
+pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return vec![];
+    };
+    if frontend
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        != true
+    {
+        return vec![];
+    }
+
+    let flow_by_id = aac
+        .user_flows
+        .iter()
+        .filter_map(|flow| string_at(flow, "flowId").map(|id| (id, flow)))
+        .collect::<BTreeMap<_, _>>();
+    let interface_by_id = aac
+        .interfaces
+        .iter()
+        .filter_map(|interface| string_at(interface, "interfaceId").map(|id| (id, interface)))
+        .collect::<BTreeMap<_, _>>();
+    let mut surface_refs_by_flow: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for surface in array_at(frontend, "surfaces") {
+        let Some(surface_id) = string_at(surface, "surfaceId") else {
+            continue;
+        };
+        for workflow_ref in string_array_at(surface, "workflowRefs") {
+            surface_refs_by_flow
+                .entry(workflow_ref)
+                .or_default()
+                .push(surface_id.clone());
+        }
+    }
+
+    for operation_path in array_at(frontend, "operationPaths") {
+        let Some(workflow_ref) = string_at(operation_path, "workflowRef") else {
+            continue;
+        };
+        let surface_ref = string_at(operation_path, "surfaceRef");
+        let refs = surface_refs_by_flow.entry(workflow_ref).or_default();
+        if let Some(surface_ref) = surface_ref {
+            refs.push(surface_ref);
+        }
+    }
+
+    let mut requirements = Vec::new();
+    for (workflow_ref, surface_refs) in surface_refs_by_flow {
+        let Some(flow) = flow_by_id.get(workflow_ref.as_str()) else {
+            continue;
+        };
+        if let Some(kind) = string_at(flow, "kind") {
+            if kind != "user_interaction" {
+                continue;
+            }
+        }
+        let steps = array_at(flow, "steps");
+        if steps.is_empty() {
+            continue;
+        }
+
+        let operation_paths = array_at(frontend, "operationPaths")
+            .into_iter()
+            .filter(|operation_path| {
+                string_at(operation_path, "workflowRef").as_deref() == Some(workflow_ref.as_str())
+                    || string_at(operation_path, "surfaceRef")
+                        .map(|surface_ref| surface_refs.iter().any(|id| id == &surface_ref))
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        let operation_path_refs = unique_strings(
+            operation_paths
+                .iter()
+                .filter_map(|operation_path| string_at(operation_path, "pathId"))
+                .collect(),
+        );
+        let data_view_refs = unique_strings(
+            operation_paths
+                .iter()
+                .flat_map(|operation_path| string_array_at(operation_path, "dataViewRefs"))
+                .collect(),
+        );
+        let action_refs = unique_strings(
+            operation_paths
+                .iter()
+                .flat_map(|operation_path| string_array_at(operation_path, "actionRefs"))
+                .collect(),
+        );
+
+        for step in steps {
+            let mut candidate_interface_refs = string_array_at(step, "interfaceRefs");
+            if candidate_interface_refs.is_empty() {
+                candidate_interface_refs = string_array_at(flow, "interfaceRefs");
+            }
+            let executable_interfaces = candidate_interface_refs
+                .iter()
+                .filter_map(|interface_ref| interface_by_id.get(interface_ref.as_str()).copied())
+                .filter(|interface| {
+                    is_executable_interface(interface) && has_interface_shape(interface)
+                })
+                .collect::<Vec<_>>();
+            if executable_interfaces.is_empty() {
+                continue;
+            }
+            let interface_refs = unique_strings(
+                executable_interfaces
+                    .iter()
+                    .filter_map(|interface| string_at(interface, "interfaceId"))
+                    .collect(),
+            );
+            let step_id = string_at(step, "stepId").unwrap_or_else(|| "step".to_string());
+            requirements.push(json!({
+                "closureId": format!("closure:{workflow_ref}:{step_id}"),
+                "workflowRef": workflow_ref.clone(),
+                "workflowName": string_at(flow, "name").unwrap_or_else(|| workflow_ref.clone()),
+                "surfaceRefs": unique_strings(surface_refs.clone()),
+                "operationPathRefs": operation_path_refs.clone(),
+                "dataViewRefs": data_view_refs.clone(),
+                "actionRefs": action_refs.clone(),
+                "moduleRefs": string_array_at(flow, "moduleRefs"),
+                "acceptanceRefs": string_array_at(flow, "acceptanceRefs"),
+                "interfaceRefs": interface_refs,
+                "stateMachineRefs": unique_strings(string_array_at(step, "stateMachineRefs")),
+                "stepRefs": [step_id.clone()],
+                "entry": flow.get("entry").cloned().unwrap_or(Value::Null),
+                "derivation": {
+                    "source": "aac_frontend_surface_userflow_interface",
+                    "rule": "Generated from AAC frontendExperience surfaces or operationPaths, user interaction flow steps, and executable interfaces with request/response shape."
+                },
+                "requiredDataBindingMode": "wired",
+                "satisfiedDataBindingModes": ["wired"],
+                "staticModePolicy": "not_satisfied",
+                "knownGapPolicy": "not_satisfied_when_required_closure",
+                "requiredEvidence": [
+                    "user_action",
+                    "declared_interface_invocation",
+                    "state_or_persistence_change",
+                    "success_or_blocking_feedback"
+                ],
+                "interfaces": executable_interfaces
+                    .iter()
+                    .map(|interface| {
+                        json!({
+                            "interfaceId": string_at(interface, "interfaceId").unwrap_or_default(),
+                            "name": string_at(interface, "name").unwrap_or_default(),
+                            "type": string_at(interface, "type").unwrap_or_default(),
+                            "role": string_at(interface, "role"),
+                            "method": string_at(interface, "method"),
+                            "path": string_at(interface, "path"),
+                            "requestSchema": interface.get("requestSchema").cloned().unwrap_or(Value::Array(vec![])),
+                            "responseSchema": interface.get("responseSchema").cloned().unwrap_or(Value::Array(vec![])),
+                            "errorSchema": interface.get("errorSchema").cloned().unwrap_or(Value::Array(vec![]))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+    }
+    requirements
+}
+
 fn allowed_refs(
     pgc: &contracts::PlanningGenerationContract,
     aac: &ArchitectureArtifactContract,
@@ -1474,7 +2178,9 @@ fn allowed_refs(
         .map(|item| item.detail_id.clone())
         .collect::<Vec<_>>();
     json!({
-        "scopeRefs": pgc.phase_scope.included.iter().chain(pgc.phase_scope.deferred.iter()).chain(pgc.phase_scope.excluded.iter()).map(|item| item.id.clone()).collect::<Vec<_>>(),
+        "scopeRefs": pgc.phase_scope.included.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+        "deferredScopeRefs": pgc.phase_scope.deferred.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+        "excludedScopeRefs": pgc.phase_scope.excluded.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
         "acceptanceRefs": pgc.phase_scope.acceptance_candidates.iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
         "requirementDetailIds": detail_ids,
         "moduleRefs": ids_from_values(&aac.modules, "moduleId"),
@@ -1482,9 +2188,64 @@ fn allowed_refs(
         "interfaceRefs": ids_from_values(&aac.interfaces, "interfaceId"),
         "userFlowRefs": ids_from_values(&aac.user_flows, "flowId"),
         "stateMachineRefs": ids_from_values(&aac.state_machines, "machineId"),
-        "decisionRefs": [],
-        "riskRefs": []
+        "decisionRefs": ids_from_value_array(&aac.risks_and_decisions, "/decisions", "decisionId"),
+        "riskRefs": ids_from_value_array(&aac.risks_and_decisions, "/risks", "riskId")
     })
+}
+
+fn array_at<'a>(value: &'a Value, key: &str) -> Vec<&'a Value> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default()
+}
+
+fn string_at(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+fn string_array_at(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unique_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
+}
+
+fn is_executable_interface(interface: &Value) -> bool {
+    matches!(
+        string_at(interface, "type").as_deref(),
+        Some("http_api" | "service_method" | "cli_command" | "event" | "job" | "external_adapter")
+    )
+}
+
+fn has_interface_shape(interface: &Value) -> bool {
+    interface
+        .get("requestSchema")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false)
+        && interface
+            .get("responseSchema")
+            .and_then(Value::as_array)
+            .map(|items| !items.is_empty())
+            .unwrap_or(false)
 }
 
 fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
@@ -1518,7 +2279,18 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement."
         },
         "workflowClosureRules": {
-            "rule": "When workflow closure requirements exist, assign each to an executable task that owns user action, interface invocation, state/readback, and feedback evidence."
+            "derivationAuthority": "AAC frontendExperience + userFlows + executable interfaces",
+            "requirementSource": "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+            "appliesWhen": "Only when workflowClosureRequirements is non-empty.",
+            "taskAssignmentRule": "Assign each closure requirement to at least one executable task whose artifact refs include workflowRef and every interfaceRef.",
+            "taskCoverageShape": "The task must own the user action, declared interface invocation, state or persistence change, and success or blocking feedback evidence.",
+            "resultExpectation": "TaskResult frontendExperienceSelfCheck must reference closureRequirementIds and cannot mark static or unwired UI as satisfied.",
+            "repairRule": "If a closure requirement is unassigned, repair TaskPlan assignment rather than routing back to AAC when AAC already declares the workflow and interfaces.",
+            "rules": [
+                "Use contextProjection.requirementDetailTransfer.workflowClosureRequirements as the exact workflow closure requirement list.",
+                "Task implementationActions should include wire_reference_in_api_or_ui when the task closes a frontend workflow.",
+                "Verification intents for closure tasks should accept automated_test or runtime_api_check evidence."
+            ]
         },
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
@@ -1528,24 +2300,131 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
 }
 
 fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) -> Value {
-    let status = aac
-        .runtime_delivery
-        .as_ref()
-        .and_then(|value| value.get("status"))
-        .and_then(Value::as_str);
+    let Some(runtime_delivery) = aac.runtime_delivery.as_ref() else {
+        return Value::Null;
+    };
+    let status = runtime_delivery.get("status").and_then(Value::as_str);
     if status != Some("modified") {
         return Value::Null;
     }
+    let affected_contract_fields = runtime_delivery_closure_fields(runtime_delivery);
+    let required_code_level_checks = affected_contract_fields
+        .iter()
+        .map(|field| runtime_delivery_closure_check(field))
+        .collect::<Vec<_>>();
     json!({
         "taskKind": "runtime_delivery_closure",
         "runtimeDeliveryRequirement": {
             "appliesToThisTask": true,
             "reason": "Final code-level closure for the RuntimeDeliveryContract.",
             "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
-            "affectedContractFields": ["build.command", "start.command", "runtimeSurfaces", "deliveryMechanics"],
-            "requiredCodeLevelChecks": []
+            "affectedContractFields": affected_contract_fields,
+            "requiredCodeLevelChecks": required_code_level_checks,
+            "evidenceExpectedInTaskResult": [],
+            "forbiddenActions": []
         }
     })
+}
+
+fn runtime_delivery_closure_fields(runtime_delivery: &Value) -> Vec<String> {
+    let mut fields = Vec::new();
+    if has_non_empty_string(runtime_delivery, "/build/command") {
+        fields.push("build.command".to_string());
+    }
+    if has_non_empty_string(runtime_delivery, "/start/command") {
+        fields.push("start.command".to_string());
+    }
+    if has_non_empty_array(runtime_delivery, "/runtimeSurfaces") {
+        fields.push("runtimeSurfaces".to_string());
+    }
+    if runtime_delivery.get("httpProbes").is_some() {
+        fields.push("httpProbes".to_string());
+    }
+    if runtime_delivery
+        .pointer("/deliveryMechanics/staticAssets")
+        .is_some()
+    {
+        fields.push("deliveryMechanics.staticAssets".to_string());
+    }
+    if runtime_delivery.pointer("/deliveryMechanics/api").is_some() {
+        fields.push("deliveryMechanics.api".to_string());
+    }
+    if runtime_delivery.get("frontend").is_some() {
+        fields.push("frontend".to_string());
+    }
+    if runtime_delivery.get("api").is_some() {
+        fields.push("api".to_string());
+    }
+    if runtime_delivery.get("environment").is_some() {
+        fields.push("environment".to_string());
+    }
+    if runtime_delivery_has_codegen(runtime_delivery) {
+        fields.push("deliveryMechanics.codegen".to_string());
+    }
+    fields
+}
+
+fn runtime_delivery_closure_check(contract_field: &str) -> Value {
+    json!({
+        "checkId": runtime_delivery_closure_check_id(contract_field),
+        "contractField": contract_field,
+        "objective": format!("Confirm {contract_field} is closed at code level against RuntimeDeliveryContract."),
+        "acceptableEvidence": acceptable_evidence_for_runtime_closure_field(contract_field)
+    })
+}
+
+fn runtime_delivery_closure_check_id(contract_field: &str) -> String {
+    let mut id = String::from("rd-closure-");
+    let mut previous_dash = false;
+    for ch in contract_field.chars() {
+        if ch.is_ascii_alphanumeric() {
+            id.push(ch.to_ascii_lowercase());
+            previous_dash = false;
+        } else if !previous_dash {
+            id.push('-');
+            previous_dash = true;
+        }
+    }
+    while id.ends_with('-') {
+        id.pop();
+    }
+    id
+}
+
+fn acceptable_evidence_for_runtime_closure_field(contract_field: &str) -> Vec<&'static str> {
+    if matches!(
+        contract_field,
+        "httpProbes" | "runtimeSurfaces" | "api" | "frontend"
+    ) {
+        return vec!["static_check", "runtime_api_check", "manual_command_output"];
+    }
+    vec!["static_check", "manual_command_output"]
+}
+
+fn runtime_delivery_has_codegen(runtime_delivery: &Value) -> bool {
+    let Some(codegen) = runtime_delivery.pointer("/deliveryMechanics/codegen") else {
+        return false;
+    };
+    codegen
+        .get("required")
+        .and_then(Value::as_str)
+        .is_some_and(|required| required != "no")
+        || has_non_empty_array(codegen, "/commands")
+}
+
+fn has_non_empty_string(value: &Value, pointer: &str) -> bool {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|item| !item.is_empty())
+}
+
+fn has_non_empty_array(value: &Value, pointer: &str) -> bool {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
 }
 
 fn enum_refs() -> Value {

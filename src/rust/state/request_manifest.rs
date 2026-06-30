@@ -52,6 +52,7 @@ const SPLITTABLE_REF_KEYS: &[&str] = &[
     "changeContext",
     "task",
     "taskConceptGrounding",
+    "sectionOutputs",
     "outputContract",
     "blockedOutput",
 ];
@@ -79,6 +80,7 @@ const FORBIDDEN_EXACT_READ_FIELDS: &[&str] = &[
     "reviewSignals",
     "rules",
     "scanPurpose",
+    "sectionOutputs",
     "sourceContext",
     "sourceRefs",
     "task",
@@ -253,7 +255,7 @@ pub fn read_group_refs_from_root(
         .collect()
 }
 
-pub(crate) fn request_storage_ref(
+pub fn request_storage_ref(
     project_root: &Path,
     request_id: &str,
     key: &str,
@@ -582,6 +584,9 @@ fn used_storage_ref_keys(
     if root_object.contains_key("outputContract") {
         used.insert("outputContract".to_string());
     }
+    if root_object.contains_key("sectionOutputs") {
+        used.insert("sectionOutputs".to_string());
+    }
     used
 }
 
@@ -775,6 +780,11 @@ fn validate_read_field_selector(field: &str) -> StateResult<String> {
     if parts[0] == "requestManifest" || parts[0] == "agentAction" {
         return Err(StateError::InvalidArgument(format!(
             "field is not allowed through request read protocol: {field}"
+        )));
+    }
+    if parts[0] == "sectionOutputs" {
+        return Err(StateError::InvalidArgument(format!(
+            "sectionOutputs is private workflow state and must not be exposed through requestReadPlan.groups: {field}"
         )));
     }
     Ok(field.to_string())

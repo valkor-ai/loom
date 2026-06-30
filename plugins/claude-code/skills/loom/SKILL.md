@@ -45,9 +45,11 @@ Delivery planning, design, review, repair, and handoff rules are supplied by the
 
 Write only to returned `writeTargets`. Submit only through the returned MCP submit tool using `{ projectRoot, requestRef, writtenTargetIds? }`.
 
-For knowledge semantic packs, read chunk bodies through `loom.knowledgeInspectChunk`, fill the provided result template, submit, and continue until the build publishes or stops at a real gate.
+For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowledgeInspectChunk`, fill the provided result template, and submit with `loom.knowledgeSemanticSubmitFile`. Continue pack by pack until the build publishes, blocks, or reaches a real user gate.
 
 For task execution, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit before reporting completion.
+
+For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting completion.
 
 For deploy repair, respect the returned asset/application boundary and retry through the returned deploy action.
 

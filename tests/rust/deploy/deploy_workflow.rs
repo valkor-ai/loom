@@ -1,18 +1,28 @@
 use std::{
+    io::{Read, Write},
+    net::TcpListener,
     path::PathBuf,
     sync::{Mutex, MutexGuard, OnceLock},
+    thread,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use contracts::{
-    DeploymentErrorWindow, DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape, DeploymentSpec,
+    DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
+    DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
+    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentShape,
+    DeploymentSpec, PackageManager, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
-    FileSubmitInput, InspectRequestInput, ProjectStatus, ReadRequestFieldsInput,
+    FileSubmitInput, InspectRequestInput, ProjectStatus, ReadFieldGroupInput,
+    ReadRequestFieldsInput,
 };
 use deploy::{
-    accept_deploy_execution_repair_file, deploy_prepare, deploy_repair, deploy_status,
+    accept_deploy_execution_repair_file, deploy_bootstrap, deploy_inspect, deploy_prepare,
+    deploy_repair, deploy_status, deploy_up, deploy_validate, DeployBootstrapInput,
     DeployToolInput,
 };
 use serde_json::{json, Value};
@@ -85,10 +95,522 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     )
     .expect("compose");
     assert!(compose.contains("  frontend:"));
+    assert!(compose.contains("      dockerfile: Dockerfile.frontend"));
+    assert!(compose.contains("      dockerfile: Dockerfile.backend"));
     assert!(compose.contains("  backend:"));
     assert!(compose.contains("  postgres:"));
     assert!(compose.contains("      - backend"));
     assert!(compose.contains("      - postgres"));
+}
+
+#[test]
+fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
+    let fixture = Fixture::new("deploy-gradle-vite");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "spring boot service with vite web",
+        "deploymentShape": "single-service",
+        "build": { "command": "service: ./mvnw test && ./mvnw package; web: npm run build" },
+        "start": { "command": "service: ./mvnw spring-boot:run; web: npm run dev", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "service/build.gradle",
+        "plugins { id 'org.springframework.boot' version '3.5.6' }\n",
+    );
+    fixture.write_text("service/gradlew", "#!/bin/sh\n");
+    fixture.write_text(
+        "service/src/main/resources/application.properties",
+        "server.port=8080\n",
+    );
+    fixture.write_text(
+        "web/package.json",
+        r#"{"scripts":{"build":"vite"},"dependencies":{"react":"latest"}}"#,
+    );
+    fixture.write_text("web/package-lock.json", "{}\n");
+    fixture.write_text("web/vite.config.ts", "export default {}\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("result json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
+        .expect("deployment spec");
+    let service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(spec.source_model.source, SourceModelSource::RuntimeContract);
+    assert_eq!(service.package_manager, Some(PackageManager::Gradle));
+    assert_eq!(
+        service.build_command.as_deref(),
+        Some("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon")
+    );
+    assert_eq!(
+        service.workspace_package_json_paths,
+        vec!["web/package.json"]
+    );
+    assert_eq!(service.output_directory.as_deref(), Some("web/dist"));
+    assert_eq!(spec.source_model.build_context_path, "../../../..");
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(compose.contains("context: ../../../.."), "{compose}");
+    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
+    assert!(
+        !compose.contains("dockerfile: .loom/deployment/specs/generated/Dockerfile.app"),
+        "{compose}"
+    );
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.app"),
+    )
+    .expect("dockerfile");
+    assert!(
+        dockerfile.contains("FROM node:22-bookworm-slim AS web-builder"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("cd service && chmod +x ./gradlew && ./gradlew bootJar --no-daemon"),
+        "{dockerfile}"
+    );
+    assert!(
+        dockerfile.contains("jar --update --file /tmp/app.jar"),
+        "{dockerfile}"
+    );
+    assert!(!dockerfile.contains("./mvnw"), "{dockerfile}");
+
+    let evidence: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/evidence/latest-code-evidence.json"),
+    )
+    .expect("code evidence");
+    assert_eq!(evidence["source"], "code_probe");
+    assert!(serde_json::to_string(&evidence)
+        .unwrap()
+        .contains("service/build.gradle"));
+}
+
+#[test]
+fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections() {
+    let fixture = Fixture::new("deploy-prepare-compact-output");
+    fixture.write_runtime_delivery(runtime_delivery());
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    let details = &value["details"];
+    assert!(details["specRef"].as_str().is_some(), "{value:#}");
+    assert!(details["sourceModelRef"].as_str().is_some(), "{value:#}");
+    assert!(details["topologyRef"].as_str().is_some(), "{value:#}");
+    assert!(details["codeEvidenceRef"].as_str().is_some(), "{value:#}");
+    assert!(details["sourceModelSummary"].is_object(), "{value:#}");
+    assert!(details["topologySummary"].is_object(), "{value:#}");
+    assert!(details["generatedFileRefs"].is_array(), "{value:#}");
+    assert!(
+        details.get("sourceModel").is_none()
+            && details.get("topology").is_none()
+            && details.get("generatedFiles").is_none(),
+        "deploy prepare must not inline full deploy spec sections: {value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_prepare_prefers_existing_compose_without_inlining_or_editing_it() {
+    let fixture = Fixture::new("deploy-compose-existing");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "compose.yaml",
+        "services:\n  web:\n    build: .\n    ports:\n      - \"5555:8080\"\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(
+        value["details"]["provider"], "compose-existing",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["composeSummary"]["selectedService"], "web",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["generatedFileRefs"],
+        json!([]),
+        "{value:#}"
+    );
+    assert_eq!(value["details"]["reusedFileRefs"], json!(["compose.yaml"]));
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::ComposeExisting);
+    assert_eq!(spec.files.compose_path, "compose.yaml");
+    assert_eq!(spec.runtime.host_port, 5555);
+    assert_eq!(spec.runtime.container_port, 8080);
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/specs/generated/compose.yaml")
+        .exists());
+}
+
+#[test]
+fn deploy_prepare_reuses_existing_dockerfile_and_generates_only_wrapper_assets() {
+    let fixture = Fixture::new("deploy-dockerfile-existing");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "Dockerfile",
+        "FROM node:22\nCMD [\"node\", \"server.js\"]\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(
+        value["details"]["provider"], "dockerfile-existing",
+        "{value:#}"
+    );
+    assert_eq!(value["details"]["reusedFileRefs"], json!(["Dockerfile"]));
+    assert!(value["details"]["generatedFileRefs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == ".loom/deployment/specs/generated/compose.yaml"));
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::DockerfileExisting);
+    assert_eq!(spec.files.dockerfile_paths["app"], "Dockerfile");
+    assert!(fixture
+        .root
+        .join(".loom/deployment/specs/generated/compose.yaml")
+        .exists());
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.app")
+        .exists());
+}
+
+#[test]
+fn deploy_prepare_force_generate_ignores_existing_assets() {
+    let fixture = Fixture::new("deploy-force-generated");
+    fixture.write_runtime_delivery(runtime_delivery());
+    fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
+    fixture.write_text("Dockerfile", "FROM nginx\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: Some(DeploymentProviderPolicy {
+            provider: Some(DeployProvider::Generated),
+            reuse_existing: false,
+            force_generate: true,
+        }),
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["provider"], "generated", "{value:#}");
+    assert_eq!(value["details"]["reusedFileRefs"], json!([]));
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::Generated);
+    assert!(fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.frontend")
+        .exists());
+}
+
+#[test]
+fn deploy_prepare_uses_app_path_when_selecting_existing_assets() {
+    let fixture = Fixture::new("deploy-app-path-existing");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text("apps/api/Dockerfile", "FROM node:22\n");
+    fixture.write_text(
+        "apps/api/package.json",
+        r#"{"scripts":{"start":"node server.js"}}"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: Some("apps/api".to_string()),
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(
+        value["details"]["provider"], "dockerfile-existing",
+        "{value:#}"
+    );
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.provider, DeployProvider::DockerfileExisting);
+    assert_eq!(spec.files.reused, vec!["apps/api/Dockerfile"]);
+    assert_eq!(spec.source_model.build_context_path, "../../../../apps/api");
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_auto_falls_back_from_existing_provider_to_generated() {
+    let fixture = Fixture::new("deploy-existing-fallback-generated");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["details"]["provider"], "compose-existing");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
+  echo "compose config failed for $3" >&2
+  exit 2
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(fixture.read_spec().provider, DeployProvider::Generated);
+    let repair = fixture.repair_action_value();
+    assert!(!repair["protectedFiles"]
+        .as_array()
+        .map(|items| items.iter().any(|item| item == "compose.yaml"))
+        .unwrap_or(false));
+    assert!(!repair["editableFiles"]
+        .as_array()
+        .map(|items| items.iter().any(|item| item == "compose.yaml"))
+        .unwrap_or(false));
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_respects_forced_existing_provider_without_fallback() {
+    let fixture = Fixture::new("deploy-forced-existing-no-fallback");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text("compose.yaml", "services:\n  web:\n    image: nginx\n");
+    let policy = DeploymentProviderPolicy {
+        provider: Some(DeployProvider::ComposeExisting),
+        reuse_existing: true,
+        force_generate: false,
+    };
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: Some(policy.clone()),
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["details"]["provider"], "compose-existing");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
+  echo "forced compose config failed" >&2
+  exit 2
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: Some(policy),
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(
+        fixture.read_spec().provider,
+        DeployProvider::ComposeExisting
+    );
+    let repair = fixture.repair_action_value();
+    assert_eq!(repair["repairRoute"], "none");
+    assert!(repair["editableFiles"]
+        .as_array()
+        .map(Vec::is_empty)
+        .unwrap_or(true));
+    assert_eq!(repair["protectedFiles"], json!(["compose.yaml"]));
+    assert_eq!(value["state"], "blocked", "{value:#}");
+}
+
+#[test]
+fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
+    let fixture = Fixture::new("deploy-validate-clears-failure");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "httpProbes": { "previewPath": "/" },
+        "start": { "port": 8080 }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","preview":"vite preview"}}"#,
+    );
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    let spec: DeploymentSpec =
+        read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec");
+    let _server = spawn_one_shot_http_server(spec.runtime.host_port);
+    fixture.write_text(".loom/deployment/state/latest-failure.json", "{}\n");
+    fixture.write_text(".loom/deployment/state/repair-action.json", "{}\n");
+
+    let result = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("validate json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["valid"], true, "{value:#}");
+    assert!(fixture
+        .root
+        .join(".loom/deployment/state/local.json")
+        .exists());
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/state/latest-failure.json")
+        .exists());
+    assert!(!fixture
+        .root
+        .join(".loom/deployment/state/repair-action.json")
+        .exists());
+}
+
+#[test]
+fn deploy_validate_flags_compose_dockerfile_paths_that_do_not_resolve() {
+    let fixture = Fixture::new("deploy-validate-dockerfile-path");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "httpProbes": { "previewPath": "/" },
+        "start": { "port": 8080 }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite","preview":"vite preview"}}"#,
+    );
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    let compose_path = fixture
+        .root
+        .join(".loom/deployment/specs/generated/compose.yaml");
+    let compose = read_text(&compose_path).expect("compose");
+    assert!(compose.contains("dockerfile: Dockerfile.app"), "{compose}");
+    std::fs::write(
+        &compose_path,
+        compose.replace(
+            "dockerfile: Dockerfile.app",
+            "dockerfile: .loom/deployment/specs/generated/Dockerfile.app",
+        ),
+    )
+    .expect("write bad compose");
+
+    let result = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("validate json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["valid"], false, "{value:#}");
+    assert!(value["details"]["assetIssues"]
+        .as_array()
+        .expect("asset issues")
+        .iter()
+        .any(|issue| issue
+            .as_str()
+            .is_some_and(|text| text.contains("compose dockerfile path"))));
 }
 
 #[test]
@@ -123,6 +645,150 @@ fn deploy_status_does_not_echo_project_root_inside_state_details() {
 }
 
 #[test]
+fn deploy_inspect_returns_refs_without_inlining_spec_or_repair_action() {
+    let fixture = Fixture::new("deploy-inspect-compact-output");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_repair_action(
+        DeploymentRepairRoute::DeployRepair,
+        DeploymentFailureOwner::DeploymentAssets,
+    );
+
+    let result = deploy_inspect(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("inspect json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    let details = &value["details"];
+    assert_eq!(details["prepared"], true, "{value:#}");
+    assert!(details["specRef"].as_str().is_some(), "{value:#}");
+    assert!(details["repairRef"].as_str().is_some(), "{value:#}");
+    assert_eq!(
+        details["repairSummary"]["failureKind"], "api_route_not_verified",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["repairRoute"], "deploy_repair",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["nextAction"], "repair_deployment_assets",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["primaryReason"],
+        "api_route_not_verified: Generated API proxy route failed.",
+        "{value:#}"
+    );
+    assert_eq!(
+        details["repairSummary"]["errorWindow"]["lines"],
+        json!(["failed"]),
+        "{value:#}"
+    );
+    assert!(details["repairSummary"]["sourceRefs"]["repairActionRef"]
+        .as_str()
+        .is_some());
+    assert!(details["sourceModelSummary"].is_object(), "{value:#}");
+    assert!(details["topologySummary"].is_object(), "{value:#}");
+    assert!(details["generatedFileRefs"].is_array(), "{value:#}");
+    assert!(
+        details.get("sourceModel").is_none()
+            && details.get("topology").is_none()
+            && details.get("files").is_none()
+            && details.get("repair").is_none(),
+        "deploy inspect must not inline full spec or repair action: {value:#}"
+    );
+    assert!(
+        details["repairSummary"].get("projectRoot").is_none()
+            && details["repairSummary"].get("specRef").is_none()
+            && details["repairSummary"].get("command").is_none(),
+        "deploy inspect repair summary must stay compact: {value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_active_operation_returns_structured_observation_policy() {
+    let fixture = Fixture::new("deploy-active-operation");
+    let state_dir = fixture.root.join(".loom/deployment/state");
+    ensure_dir(&state_dir).expect("state dir");
+    ensure_dir(&fixture.root.join(".loom/deployment/logs")).expect("logs dir");
+    write_json_atomic(
+        &state_dir.join("active-operation.json"),
+        &json!({
+            "schemaVersion": 1,
+            "operationId": "deploy-op-live",
+            "command": "deploy.run",
+            "phase": "building",
+            "pid": 999999,
+            "projectRoot": fixture.root_str(),
+            "startedAt": now_string(),
+            "updatedAt": now_string(),
+            "logRef": ".loom/deployment/logs/local.log",
+            "specRef": ".loom/deployment/specs/local.json",
+            "status": "running"
+        }),
+    )
+    .expect("write active operation");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("active operation json");
+
+    assert_eq!(value["state"], "active_operation", "{value:#}");
+    assert_eq!(
+        value["allowedObservationTools"],
+        json!(["loom.deployStatus", "loom.deployInspect", "loom.deployLogs"]),
+        "{value:#}"
+    );
+    assert_eq!(value["observationPolicy"]["quietMode"], true, "{value:#}");
+    assert_eq!(
+        value["observationPolicy"]["initialQuietWindowMs"], 120_000,
+        "{value:#}"
+    );
+    assert_eq!(
+        value["observationPolicy"]["minNextObservationIntervalMs"], 60_000,
+        "{value:#}"
+    );
+    assert_eq!(
+        value["observationPolicy"]["finalResponsePolicy"], "forbidden_while_operation_active",
+        "{value:#}"
+    );
+    let forbidden_actions = value["forbiddenActions"]
+        .as_array()
+        .expect("forbidden actions")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("another deploy command")));
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("raw Docker")));
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("kill")));
+    assert!(forbidden_actions
+        .iter()
+        .any(|action| action.contains("unchanged logs")));
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
 fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
     let fixture = Fixture::new("deploy-repair-assets");
     fixture.write_runtime_delivery(runtime_delivery());
@@ -147,6 +813,24 @@ fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
     assert_eq!(value["state"], "auto_runnable", "{value:#}");
     assert_eq!(value["next"]["kind"], "deploy_repair_assets");
     assert_eq!(value["next"]["retryTool"], "loom.deployUp");
+    assert_eq!(
+        value["next"]["primaryReason"], "api_route_not_verified: Generated API proxy route failed.",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["next"]["diagnostics"][0]["code"], "api_route_not_verified",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["next"]["suggestedActions"],
+        json!(["Repair generated API proxy route."]),
+        "{value:#}"
+    );
+    assert!(value["next"]["readPolicy"]["firstRead"]
+        .as_str()
+        .unwrap()
+        .contains("next.primaryReason"));
+    assert!(value["next"].get("repairSummary").is_none(), "{value:#}");
     assert!(value["next"]["sourceModelRef"]
         .as_str()
         .unwrap()
@@ -155,6 +839,18 @@ fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
         .as_str()
         .unwrap()
         .ends_with("topology.json"));
+    let generated_refs = value["next"]["generatedFileRefs"]
+        .as_array()
+        .expect("generated file refs");
+    let unique_refs = generated_refs
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        generated_refs.len(),
+        unique_refs.len(),
+        "deploy repair asset refs must not include duplicates: {value:#}"
+    );
     assert_forbidden_cli_fields_absent(&value);
 }
 
@@ -199,6 +895,45 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
         request_ref: request_ref.clone(),
     })
     .expect("inspect deploy repair request");
+    let failure_group = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str(),
+        request_ref: request_ref.clone(),
+        group_id: "deploy_failure_context".to_string(),
+    })
+    .expect("read deploy failure context");
+    assert_eq!(
+        failure_group.fields["repairContext.failedAt"].value,
+        json!("runtime_application_startup")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.failedContract.field"].value,
+        json!("runtime.startup")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.failedContract.command"].value,
+        json!("java -jar app.jar")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.failedContract.workingDirectory"].value,
+        json!("service")
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.deployCommand"].value,
+        json!(["docker", "compose", "up"])
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.exitCode"].value,
+        json!(1)
+    );
+    assert_eq!(
+        failure_group.fields["repairContext.fullLogRef"].value,
+        json!(".loom/deployment/logs/local.log")
+    );
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .any(|field| field == "repairContext"));
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str(),
         request_ref: request_ref.clone(),
@@ -212,6 +947,22 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
         .iter()
         .flat_map(|group| group.fields.iter())
         .any(|field| field == "outputContract.resultTemplate"));
+    assert!(!inspected
+        .read_groups
+        .iter()
+        .flat_map(|group| group.fields.iter())
+        .any(|field| field.starts_with("outputContract.schemaShape")));
+    let second_result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let second_value = serde_json::to_value(second_result).expect("second repair json");
+    assert_eq!(
+        second_value["next"]["requestRef"].as_str(),
+        Some(request_ref.as_str())
+    );
     let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
     write_json_atomic(
         &fixture.root.join(&result_file),
@@ -308,6 +1059,604 @@ fn deploy_execution_repair_invalid_result_returns_repairable_error() {
     );
 }
 
+#[test]
+fn deploy_execution_repair_rejects_invalid_status() {
+    let fixture = Fixture::new("deploy-execution-repair-invalid-status");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": "deploy-repair-1",
+            "status": "done",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": ["package.json"],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["runtime.startup"],
+                "codeLevelChecks": [{
+                    "checkId": "check_runtime_startup",
+                    "status": "passed",
+                    "evidence": "Adjusted application startup wiring."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert!(submitted_value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["code"] == "DEPLOY_REPAIR_STATUS_INVALID" && issue["fieldPath"] == "status"
+        }));
+}
+
+#[test]
+fn deploy_execution_repair_completed_result_requires_changed_files() {
+    let fixture = Fixture::new("deploy-execution-repair-empty-changed-files");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": "deploy-repair-1",
+            "status": "completed",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": [],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["runtime.startup"],
+                "codeLevelChecks": [{
+                    "checkId": "check_runtime_startup",
+                    "status": "passed",
+                    "evidence": "Adjusted application startup wiring."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert!(submitted_value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["code"] == "DEPLOY_REPAIR_CHANGED_FILES_REQUIRED"
+                && issue["fieldPath"] == "changedFiles"
+        }));
+}
+
+#[test]
+fn deploy_execution_repair_completed_result_rejects_failed_code_level_checks() {
+    let fixture = Fixture::new("deploy-execution-repair-failed-check");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": "deploy-repair-1",
+            "status": "completed",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": ["package.json"],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["runtime.startup"],
+                "codeLevelChecks": [{
+                    "checkId": "check_runtime_startup",
+                    "status": "failed",
+                    "evidence": "Startup still fails."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "repairable_error",
+        "{submitted_value:#}"
+    );
+    assert!(submitted_value["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue["code"] == "DEPLOY_REPAIR_RUNTIME_EVIDENCE_INVALID"
+                && issue["fieldPath"] == "runtimeDeliveryEvidence"
+        }));
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_routes_runtime_build_failure_to_execution_repair_and_counts_retry_attempts() {
+    let fixture = Fixture::new("deploy-build-failure-route");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","start":"node dist/server.js"},"dependencies":{"vite":"latest"}}"#,
+    );
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "#13 RUN npm run build"
+  echo "#13 1.262 src/App.tsx(1,1): error TS7006: Parameter 'value' implicitly has an 'any' type." >&2
+  echo "failed to solve: process \"/bin/sh -c npm run build\" did not complete successfully: exit code: 2" >&2
+  exit 1
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+    assert_eq!(value["next"]["executionKind"], "deploy_execution_repair");
+    assert_eq!(
+        value["next"]["repairContext"]["issues"],
+        json!(["build_command_failed"]),
+        "{value:#}"
+    );
+    assert_eq!(
+        fixture.repair_action_value()["failureKind"],
+        "build_command_failed"
+    );
+    assert_eq!(fixture.repair_action_value()["attempts"], 0);
+    let failure_report: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/state/latest-failure.json"),
+    )
+    .expect("latest failure report");
+    assert_eq!(failure_report["failedAt"], json!("runtime_build_command"));
+    assert_eq!(
+        failure_report["failedContract"]["field"],
+        json!("build.command")
+    );
+    assert!(
+        failure_report["failedContract"]["command"]
+            .as_str()
+            .map(|command| command.contains("npm run build"))
+            .unwrap_or(false),
+        "{failure_report:#}"
+    );
+    assert_eq!(
+        failure_report["deployCommand"],
+        json!(["docker", "compose", "up"])
+    );
+    assert_eq!(failure_report["exitCode"], json!(1));
+    assert!(failure_report["fullLogRef"]
+        .as_str()
+        .unwrap()
+        .ends_with("local.log"));
+    assert_forbidden_cli_fields_absent(&value);
+
+    let request_ref = value["next"]["requestRef"].as_str().unwrap().to_string();
+    let result_file = value["next"]["resultFile"].as_str().unwrap().to_string();
+    write_json_atomic(
+        &fixture.root.join(&result_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "repairId": fixture.repair_action_value()["repairId"],
+            "status": "completed",
+            "deploymentFailureRef": ".loom/deployment/state/latest-failure.json",
+            "changedFiles": ["package.json"],
+            "runtimeDeliveryEvidence": {
+                "addressedFailedContractFields": ["build.command"],
+                "codeLevelChecks": [{
+                    "checkId": "check_build_command",
+                    "status": "passed",
+                    "evidence": "Adjusted the runtime build script."
+                }],
+                "commandsRun": [],
+                "unverifiedItems": []
+            },
+            "selfRepairSummary": {
+                "attempted": true,
+                "attemptCount": 1,
+                "stopReason": "verification_passed",
+                "progressObserved": true
+            },
+            "notes": []
+        }),
+    )
+    .expect("write deploy repair result");
+    let submit_input = FileSubmitInput {
+        project_root: fixture.root_str(),
+        request_ref,
+        written_target_ids: None,
+    };
+    let authorized = state::authorize_write_targets(&submit_input, "loom.repairSubmitFile")
+        .expect("authorized deploy repair result");
+    let submitted = accept_deploy_execution_repair_file(&submit_input, &authorized);
+    let submitted_value = serde_json::to_value(submitted).expect("submitted result json");
+
+    assert_eq!(
+        submitted_value["state"], "auto_runnable",
+        "{submitted_value:#}"
+    );
+    assert_eq!(fixture.repair_action_value()["attempts"], 1);
+    assert_eq!(
+        submitted_value["next"]["repairContext"]["issues"],
+        json!(["build_command_failed"]),
+        "{submitted_value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&submitted_value);
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_classifies_registry_network_without_source_repair() {
+    let fixture = Fixture::new("deploy-registry-network");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","start":"node dist/server.js"},"dependencies":{"vite":"latest"}}"#,
+    );
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "failed to fetch oauth token: Get https://auth.docker.io/token: net/http: TLS handshake timeout" >&2
+  exit 1
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    assert_eq!(value["recommendedTool"], "loom.deployStatus");
+    assert_eq!(
+        value["details"]["repairSummary"]["failureKind"], "registry_network",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["failureOwner"], "external_system",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["repairRoute"], "none",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["nextAction"], "fix_external_system_then_retry",
+        "{value:#}"
+    );
+    assert!(value["details"]["repairSummary"]["primaryReason"]
+        .as_str()
+        .unwrap()
+        .contains("registry_network"));
+    assert!(
+        value["details"].get("projectRoot").is_none()
+            && value["details"].get("suggestedActions").is_none()
+            && value["details"].get("errorWindow").is_none(),
+        "blocked output must expose compact repairSummary instead of full repair action: {value:#}"
+    );
+    let repair_action = fixture.repair_action_value();
+    assert_eq!(repair_action["failureKind"], "registry_network");
+    assert_eq!(repair_action["failureOwner"], "external_system");
+    assert_eq!(repair_action["repairRoute"], "none");
+    assert!(repair_action["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "registry_network"));
+    assert!(repair_action["suggestedActions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|action| action.contains("registry_network")));
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_prepare_detects_bootstrap_tasks_without_executing_them() {
+    let fixture = Fixture::new("deploy-bootstrap-detect");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"}}"#,
+    );
+    fixture.write_text(
+        "prisma/schema.prisma",
+        "datasource db { provider = \"sqlite\" }\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    let spec: DeploymentSpec =
+        read_json(&fixture.root.join(".loom/deployment/specs/local.json")).expect("spec");
+    assert_eq!(spec.bootstrap.tasks.len(), 1);
+    assert_eq!(spec.bootstrap.tasks[0].kind, "prisma");
+    assert_eq!(spec.bootstrap.tasks[0].command, "npx prisma migrate deploy");
+    assert!(!spec.bootstrap.tasks[0].automatic);
+    assert!(
+        !fixture.root.join("bootstrap-ran.txt").exists(),
+        "prepare must only detect bootstrap tasks"
+    );
+}
+
+#[test]
+fn deploy_bootstrap_returns_confirmation_gate_with_declared_tasks() {
+    let fixture = Fixture::new("deploy-bootstrap-gate");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"}}"#,
+    );
+    fixture.write_text(
+        "prisma/schema.prisma",
+        "datasource db { provider = \"sqlite\" }\n",
+    );
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+
+    let result = deploy_bootstrap(DeployBootstrapInput {
+        project_root: fixture.root_str(),
+        confirm: false,
+        kind: Some("prisma".to_string()),
+    });
+    let value = serde_json::to_value(result).expect("bootstrap json");
+
+    assert_eq!(value["state"], "user_gate", "{value:#}");
+    assert_eq!(value["gate"]["confirmRequired"], true);
+    assert_eq!(value["gate"]["tasks"][0]["kind"], "prisma");
+    assert_eq!(
+        value["gate"]["tasks"][0]["command"],
+        "npx prisma migrate deploy"
+    );
+    assert_forbidden_cli_fields_absent(&value);
+}
+
+#[test]
+fn deploy_repair_blocks_when_attempt_limit_is_reached() {
+    let fixture = Fixture::new("deploy-repair-attempt-limit");
+    fixture.write_runtime_delivery(runtime_delivery());
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_failure_report();
+    fixture.write_repair_action(
+        DeploymentRepairRoute::ExecutionRepair,
+        DeploymentFailureOwner::ApplicationCode,
+    );
+    let mut action = fixture.repair_action_value();
+    action["attempts"] = json!(2);
+    action["maxAttempts"] = json!(2);
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/deployment/state/repair-action.json"),
+        &action,
+    )
+    .expect("write limited repair action");
+
+    let result = deploy_repair(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("repair result json");
+
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    assert_eq!(value["recommendedTool"], "loom.deployInspect");
+    assert_eq!(value["details"]["repairSummary"]["attempts"], 2);
+    assert_eq!(value["details"]["repairSummary"]["maxAttempts"], 2);
+    assert_eq!(
+        value["details"]["repairSummary"]["nextAction"],
+        "inspect_attempt_limit"
+    );
+    assert!(
+        value["details"].get("projectRoot").is_none()
+            && value["details"].get("suggestedActions").is_none()
+            && value["details"].get("errorWindow").is_none(),
+        "attempt-limit blocker must expose compact repairSummary: {value:#}"
+    );
+    assert_forbidden_cli_fields_absent(&value);
+}
+
 fn runtime_delivery() -> Value {
     json!({
         "status": "modified",
@@ -395,6 +1744,39 @@ impl Fixture {
         self.root.to_string_lossy().into_owned()
     }
 
+    fn write_text(&self, relative: &str, text: &str) {
+        let file = self.root.join(relative);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent).expect("create parent");
+        }
+        std::fs::write(file, text).expect("write text fixture");
+    }
+
+    #[cfg(unix)]
+    fn write_mock_docker(&self, script: &str) {
+        let docker = self.root.join("mock-bin/docker");
+        std::fs::create_dir_all(docker.parent().unwrap()).expect("create mock bin");
+        std::fs::write(&docker, script).expect("write mock docker");
+        let mut permissions = std::fs::metadata(&docker)
+            .expect("mock docker metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&docker, permissions).expect("chmod mock docker");
+    }
+
+    #[cfg(unix)]
+    fn prepend_mock_bin_to_path(&self) -> PathEnvGuard {
+        let previous = std::env::var("PATH").unwrap_or_default();
+        let mock_bin = self.root.join("mock-bin");
+        std::env::set_var("PATH", format!("{}:{previous}", mock_bin.display()));
+        PathEnvGuard { previous }
+    }
+
+    fn repair_action_value(&self) -> Value {
+        read_json(&self.root.join(".loom/deployment/state/repair-action.json"))
+            .expect("repair action")
+    }
+
     fn write_runtime_delivery(&self, runtime_delivery: Value) {
         let delivery_id = "delivery-1";
         let phase_id = "phase-1";
@@ -480,8 +1862,14 @@ impl Fixture {
                     total_line_count: 1,
                     matched_patterns: vec!["error".to_string()],
                 }),
-                diagnostics: vec![],
-                suggested_actions: vec![],
+                diagnostics: vec![DeploymentFailureDiagnostic {
+                    code: "api_route_not_verified".to_string(),
+                    severity: "error".to_string(),
+                    message: "Generated API proxy route failed.".to_string(),
+                    evidence: vec!["GET /api/health returned frontend HTML.".to_string()],
+                    suggested_action: "Repair generated API proxy route.".to_string(),
+                }],
+                suggested_actions: vec!["Repair generated API proxy route.".to_string()],
                 editable_files: vec![
                     spec.files.compose_path,
                     spec.files
@@ -516,6 +1904,19 @@ impl Fixture {
                 repair_route: DeploymentRepairRoute::ExecutionRepair,
                 runtime_delivery_ref: Some(".loom/deliveries/delivery-1/contracts/architecture/phase-1/aac.json#/runtimeDelivery".to_string()),
                 deployment_spec_ref: ".loom/deployment/specs/local.json".to_string(),
+                failed_at: Some("runtime_application_startup".to_string()),
+                failed_contract: Some(DeploymentFailedContract {
+                    field: "runtime.startup".to_string(),
+                    command: Some("java -jar app.jar".to_string()),
+                    working_directory: "service".to_string(),
+                }),
+                deploy_command: vec![
+                    "docker".to_string(),
+                    "compose".to_string(),
+                    "up".to_string(),
+                ],
+                exit_code: Some(1),
+                full_log_ref: Some(".loom/deployment/logs/local.log".to_string()),
                 failed_contract_fields: vec!["runtime.startup".to_string()],
                 required_code_level_checks: vec!["check_runtime_startup".to_string()],
                 error_window: DeploymentErrorWindow {
@@ -535,6 +1936,35 @@ impl Fixture {
         )
         .expect("write failure report");
     }
+}
+
+#[cfg(unix)]
+struct PathEnvGuard {
+    previous: String,
+}
+
+#[cfg(unix)]
+impl Drop for PathEnvGuard {
+    fn drop(&mut self) {
+        std::env::set_var("PATH", &self.previous);
+    }
+}
+
+fn spawn_one_shot_http_server(port: u16) -> thread::JoinHandle<()> {
+    let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind test http server");
+    thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buffer = [0_u8; 512];
+            let _ = stream.read(&mut buffer);
+            let body = "<!doctype html><html><body>Loom deploy test</body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    })
 }
 
 fn test_env_lock() -> &'static Mutex<()> {

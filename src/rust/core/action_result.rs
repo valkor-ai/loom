@@ -79,6 +79,9 @@ fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
         LoomMcpNextAction::ExecuteTask(_) => {
             "Continue immediately: inspect requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress. Do not stop at a progress recap."
         }
+        LoomMcpNextAction::RunLoomTool(_) => {
+            "Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. Do not stop at a progress recap."
+        }
         LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
             "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated. Do not stop at a progress recap."
         }
@@ -111,7 +114,22 @@ pub struct LoomMcpActiveOperationResult {
     pub operation: ActiveOperationRef,
     pub allowed_observation_tools: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation_policy: Option<ActiveOperationObservationPolicy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forbidden_actions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub progress_summary: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveOperationObservationPolicy {
+    pub quiet_mode: bool,
+    pub initial_quiet_window_ms: u32,
+    pub min_next_observation_interval_ms: u32,
+    pub logs_policy: String,
+    pub user_visible_update_policy: String,
+    pub final_response_policy: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

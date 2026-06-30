@@ -4,6 +4,7 @@ use contracts::{
     AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
     ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, ArchitectureSectionStatus,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -219,46 +220,36 @@ where
     }
 
     let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
-    let request_fields = read_request_fields(
-        &input.project_root,
-        &input.request_ref,
-        &[
-            "allowedRefs.scopeRefs",
-            "allowedRefs.acceptanceRefs",
-            "allowedRefs.deferredScopeRefs",
-            "allowedRefs.excludedScopeRefs",
-            "allowedRefs.requirementDetailIds",
-            "sourceRefs.planningContractRef",
-            "sourceRefs.technicalBaselineRef",
-            "sourceRefs.brainstormContractRef",
-            "sourceRefs.repositoryContextRef",
-            "sourceRefs.deliveryConceptGlossaryRef",
-            "sourceRefs.phaseConceptGroundingRef",
-            "sourceRefs.confirmedFrontendExperienceRef",
-            "sourceRefs.currentFrontendExperienceRef",
-            "sourceRefs.previousRuntimeDeliveryRef",
-        ],
-    )?;
+    let source_refs = read_source_refs(&input.project_root, &input.request_ref, &request_root)?;
     let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
-    let section_outputs = parse_section_outputs(&request_root)?;
-    let allowed_refs = json!({
-        "scopeRefs": value_field(&request_fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": value_field(&request_fields, "allowedRefs.acceptanceRefs"),
-        "deferredScopeRefs": value_field(&request_fields, "allowedRefs.deferredScopeRefs"),
-        "excludedScopeRefs": value_field(&request_fields, "allowedRefs.excludedScopeRefs"),
-        "requirementDetailIds": value_field(&request_fields, "allowedRefs.requirementDetailIds")
-    });
-    let source_refs = json!({
-        "planningContractRef": value_field(&request_fields, "sourceRefs.planningContractRef"),
-        "technicalBaselineRef": value_field(&request_fields, "sourceRefs.technicalBaselineRef"),
-        "brainstormContractRef": value_field(&request_fields, "sourceRefs.brainstormContractRef"),
-        "repositoryContextRef": value_field(&request_fields, "sourceRefs.repositoryContextRef"),
-        "deliveryConceptGlossaryRef": value_field(&request_fields, "sourceRefs.deliveryConceptGlossaryRef"),
-        "phaseConceptGroundingRef": value_field(&request_fields, "sourceRefs.phaseConceptGroundingRef"),
-        "confirmedFrontendExperienceRef": value_field(&request_fields, "sourceRefs.confirmedFrontendExperienceRef"),
-        "currentFrontendExperienceRef": value_field(&request_fields, "sourceRefs.currentFrontendExperienceRef"),
-        "previousRuntimeDeliveryRef": value_field(&request_fields, "sourceRefs.previousRuntimeDeliveryRef")
-    });
+    let section_outputs =
+        parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
+    let allowed_refs = if section_uses_allowed_refs(current_section) {
+        let allowed_ref_fields = state::read_request_fields(ReadRequestFieldsInput {
+            project_root: input.project_root.clone(),
+            request_ref: input.request_ref.clone(),
+            fields: [
+                "allowedRefs.scopeRefs",
+                "allowedRefs.acceptanceRefs",
+                "allowedRefs.deferredScopeRefs",
+                "allowedRefs.excludedScopeRefs",
+                "allowedRefs.requirementDetailIds",
+            ]
+            .iter()
+            .map(|field| field.to_string())
+            .collect(),
+        })?
+        .fields;
+        json!({
+            "scopeRefs": field_value(&allowed_ref_fields, "allowedRefs.scopeRefs"),
+            "acceptanceRefs": field_value(&allowed_ref_fields, "allowedRefs.acceptanceRefs"),
+            "deferredScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.deferredScopeRefs"),
+            "excludedScopeRefs": field_value(&allowed_ref_fields, "allowedRefs.excludedScopeRefs"),
+            "requirementDetailIds": field_value(&allowed_ref_fields, "allowedRefs.requirementDetailIds")
+        })
+    } else {
+        json!({})
+    };
     let expected_request_id = request_root
         .get("requestId")
         .and_then(Value::as_str)
@@ -283,7 +274,9 @@ where
         current_section,
     );
     issues.extend(validate_section_content(&candidate));
-    issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
+    if section_uses_allowed_refs(current_section) {
+        issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
+    }
     issues.extend(validate_frontend_rules(&candidate, &request_root));
     issues.extend(validate_runtime_rules(&candidate, &source_refs));
     if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
@@ -324,11 +317,20 @@ where
                     section_name(next_section)
                 ))
             })?;
+        let include_repair_context = matches!(mode, ArchitectureSubmitMode::Repair);
+        let include_repair_source_ref = include_repair_context
+            && repair_context_has_source_ref(
+                &input.project_root,
+                &input.request_ref,
+                &request_root,
+            )?;
         let updated_root = update_request_for_next_section(
             request_root,
             next_section,
             &next_output,
-            matches!(mode, ArchitectureSubmitMode::Repair),
+            include_repair_context,
+            include_repair_source_ref,
+            &source_refs,
         )?;
         update_output_contract_ref(
             &input.project_root,
@@ -513,6 +515,16 @@ fn validate_section_content(
     issues
 }
 
+fn section_uses_allowed_refs(section: ArchitectureSectionGroup) -> bool {
+    matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+            | ArchitectureSectionGroup::Coverage
+    )
+}
+
 fn validate_allowed_refs(content: &Value, allowed_refs: &Value) -> Vec<delivery_core::RepairIssue> {
     let scope_refs = string_set(allowed_refs.pointer("/scopeRefs"));
     let acceptance_refs = string_set(allowed_refs.pointer("/acceptanceRefs"));
@@ -626,7 +638,218 @@ fn validate_runtime_rules(
             ));
         }
     }
+    if status == Some("modified") {
+        let Some(runtime) = candidate.content.get("runtimeDelivery") else {
+            return issues;
+        };
+        require_runtime_string(
+            runtime,
+            "/basis/technicalBaselineRef",
+            "content.runtimeDelivery.basis.technicalBaselineRef",
+            &mut issues,
+        );
+        require_runtime_string(
+            runtime,
+            "/build/command",
+            "content.runtimeDelivery.build.command",
+            &mut issues,
+        );
+        require_runtime_array(
+            runtime,
+            "/build/codeLevelExpectations",
+            "content.runtimeDelivery.build.codeLevelExpectations",
+            &mut issues,
+        );
+        if runtime.get("start").is_some() {
+            require_runtime_array(
+                runtime,
+                "/start/codeLevelExpectations",
+                "content.runtimeDelivery.start.codeLevelExpectations",
+                &mut issues,
+            );
+            if runtime
+                .pointer("/start/port")
+                .is_some_and(|port| !port.is_number())
+            {
+                issues.push(issue(
+                    "RUNTIME_FIELD_INVALID",
+                    "content.runtimeDelivery.start.port",
+                    "runtime_delivery start.port must be a number when present; omit it when unknown.",
+                ));
+            }
+        }
+        if runtime
+            .pointer("/start/command")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+            && runtime
+                .get("runtimeSurfaces")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        {
+            issues.push(issue(
+                "RUNTIME_START_OR_SURFACE_REQUIRED",
+                "content.runtimeDelivery.start.command",
+                "runtime_delivery status=modified requires start.command or at least one runtimeSurfaces entry.",
+            ));
+        }
+        require_runtime_non_empty_array(
+            runtime,
+            "/runtimeSurfaces",
+            "content.runtimeDelivery.runtimeSurfaces",
+            &mut issues,
+        );
+        require_runtime_string(
+            runtime,
+            "/httpProbes/previewPath",
+            "content.runtimeDelivery.httpProbes.previewPath",
+            &mut issues,
+        );
+        require_runtime_array(
+            runtime,
+            "/httpProbes/apiPaths",
+            "content.runtimeDelivery.httpProbes.apiPaths",
+            &mut issues,
+        );
+        if runtime
+            .pointer("/httpProbes/expectedStatus")
+            .and_then(Value::as_str)
+            != Some("2xx_or_3xx")
+        {
+            issues.push(issue(
+                "RUNTIME_HTTP_PROBE_STATUS_INVALID",
+                "content.runtimeDelivery.httpProbes.expectedStatus",
+                "runtime_delivery httpProbes.expectedStatus must be 2xx_or_3xx.",
+            ));
+        }
+        let guidance = runtime.get("taskPlanningGuidance").unwrap_or(&Value::Null);
+        require_runtime_non_empty_array(
+            guidance,
+            "/requireRuntimeDeliveryRequirementWhenTaskTouches",
+            "content.runtimeDelivery.taskPlanningGuidance.requireRuntimeDeliveryRequirementWhenTaskTouches",
+            &mut issues,
+        );
+        if guidance.get("verificationBoundary").and_then(Value::as_str) != Some("code_level_only") {
+            issues.push(issue(
+                "RUNTIME_VERIFICATION_BOUNDARY_INVALID",
+                "content.runtimeDelivery.taskPlanningGuidance.verificationBoundary",
+                "runtime_delivery taskPlanningGuidance.verificationBoundary must be code_level_only.",
+            ));
+        }
+        if guidance
+            .get("doNotRequireCleanInstallOrContainerBuild")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            issues.push(issue(
+                "RUNTIME_CLEAN_INSTALL_BOUNDARY_INVALID",
+                "content.runtimeDelivery.taskPlanningGuidance.doNotRequireCleanInstallOrContainerBuild",
+                "runtime_delivery must keep AAC verification at code level and not require clean install, container build, registry, or deploy success.",
+            ));
+        }
+        if runtime
+            .pointer("/frontend/required")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            require_runtime_string(
+                runtime,
+                "/frontend/outputDir",
+                "content.runtimeDelivery.frontend.outputDir",
+                &mut issues,
+            );
+            require_runtime_string(
+                runtime,
+                "/frontend/servedBy",
+                "content.runtimeDelivery.frontend.servedBy",
+                &mut issues,
+            );
+        }
+        if runtime.pointer("/api/required").and_then(Value::as_bool) == Some(true)
+            && runtime
+                .pointer("/api/entry")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            && runtime
+                .pointer("/api/probePaths")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        {
+            issues.push(issue(
+                "RUNTIME_API_ENTRY_REQUIRED",
+                "content.runtimeDelivery.api",
+                "runtime_delivery api.required=true requires api.entry or at least one api.probePaths entry.",
+            ));
+        }
+        if runtime.pointer("/deliveryMechanics/codegen").is_some() {
+            require_runtime_array(
+                runtime,
+                "/deliveryMechanics/codegen/codeLevelExpectations",
+                "content.runtimeDelivery.deliveryMechanics.codegen.codeLevelExpectations",
+                &mut issues,
+            );
+        }
+    }
     issues
+}
+
+fn require_runtime_string(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if root
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        issues.push(issue(
+            "RUNTIME_FIELD_REQUIRED",
+            field_path,
+            "runtime_delivery status=modified requires this field for TaskPlan, Execution, Deploy, and Repair.",
+        ));
+    }
+}
+
+fn require_runtime_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if root.pointer(pointer).and_then(Value::as_array).is_none() {
+        issues.push(issue(
+            "RUNTIME_FIELD_REQUIRED",
+            field_path,
+            "runtime_delivery status=modified requires this array field for code-level verification planning.",
+        ));
+    }
+}
+
+fn require_runtime_non_empty_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if root
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty)
+    {
+        issues.push(issue(
+            "RUNTIME_FIELD_REQUIRED",
+            field_path,
+            "runtime_delivery status=modified requires at least one item here.",
+        ));
+    }
 }
 
 fn validate_coverage_section(
@@ -644,6 +867,7 @@ fn validate_coverage_section(
     ]);
     let allowed_acceptance_priorities =
         std::collections::BTreeSet::from(["must", "should", "could"]);
+    let allowed_coverage_types = std::collections::BTreeSet::from(COVERAGE_ARTIFACT_TYPES);
     let Some(detail_coverage) = content.get("detailCoverage").and_then(Value::as_array) else {
         issues.push(issue(
             "DETAIL_COVERAGE_REQUIRED",
@@ -715,7 +939,11 @@ fn validate_coverage_section(
                 )),
             }
         }
-        let has_reason = entry.get("reason").and_then(Value::as_str).is_some();
+        let has_reason = entry
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
         if coverage_status == "covered" && total_refs == 0 {
             issues.push(issue(
                 "DETAIL_COVERAGE_INVALID",
@@ -809,17 +1037,22 @@ fn validate_coverage_section(
             continue;
         };
         for (coverage_index, coverage_entry) in coverage.iter().enumerate() {
-            if coverage_entry
+            let coverage_type = coverage_entry
                 .get("type")
                 .and_then(Value::as_str)
                 .map(str::trim)
-                .unwrap_or_default()
-                .is_empty()
-            {
+                .unwrap_or_default();
+            if coverage_type.is_empty() {
                 issues.push(issue(
                     "ACCEPTANCE_MATRIX_INVALID",
                     &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].type"),
                     "acceptanceMatrix.coverage[].type is required.",
+                ));
+            } else if !allowed_coverage_types.contains(coverage_type) {
+                issues.push(issue(
+                    "ACCEPTANCE_MATRIX_INVALID",
+                    &format!("content.acceptanceMatrix[{index}].coverage[{coverage_index}].type"),
+                    "acceptanceMatrix.coverage[].type must be one of currentSectionContract.enumRefs.coverageArtifactType.",
                 ));
             }
             if !coverage_entry
@@ -907,6 +1140,18 @@ fn validate_coverage_section(
                 "acceptanceMatrix.verificationHints must be an array.",
             )),
             None => {}
+        }
+        let has_reason = entry
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if coverage_status != "covered" && !has_reason {
+            issues.push(issue(
+                "ACCEPTANCE_MATRIX_INVALID",
+                &format!("content.acceptanceMatrix[{index}].reason"),
+                "non-covered acceptanceMatrix entries must explain the reason.",
+            ));
         }
         validate_optional_string(
             entry.get("reason"),
@@ -1009,6 +1254,58 @@ fn validate_coverage_handoff(value: Option<&Value>, issues: &mut Vec<delivery_co
     }
 }
 
+fn read_source_refs(
+    project_root: &str,
+    request_ref: &str,
+    request_root: &Value,
+) -> Result<Value, state::store::StateError> {
+    let fields = read_plan_fields(request_root)
+        .into_iter()
+        .filter(|field| field.starts_with("sourceRefs."))
+        .collect::<Vec<_>>();
+    if fields.is_empty() {
+        return Ok(request_root
+            .get("sourceRefs")
+            .cloned()
+            .unwrap_or_else(|| json!({})));
+    }
+    let resolved = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields,
+    })?;
+    let mut source_refs = serde_json::Map::new();
+    for (field, result) in resolved.fields {
+        if let Some(key) = field.strip_prefix("sourceRefs.") {
+            if !result.value.is_null() {
+                source_refs.insert(key.to_string(), result.value);
+            }
+        }
+    }
+    Ok(Value::Object(source_refs))
+}
+
+fn read_plan_fields(request_root: &Value) -> Vec<String> {
+    request_root
+        .pointer("/requestReadPlan/groups")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .flat_map(|group| {
+                    group
+                        .get("fields")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn load_request_root(
     project_root: &str,
     request_id: &str,
@@ -1041,12 +1338,28 @@ fn parse_section(
 }
 
 fn parse_section_outputs(
+    project_root: &str,
+    request_id: &str,
     root: &Value,
 ) -> Result<Vec<SectionStateOutput>, state::store::StateError> {
-    serde_json::from_value(root.get("sectionOutputs").cloned().ok_or_else(|| {
-        state::store::StateError::StateCorrupted("request is missing sectionOutputs".to_string())
-    })?)
-    .map_err(state::store::StateError::Json)
+    let value = if let Some(value) = root.get("sectionOutputs").cloned() {
+        value
+    } else {
+        let paths = state::paths::project_paths(project_root)?;
+        let relative = state::request_manifest::request_storage_ref(
+            &paths.root,
+            request_id,
+            "sectionOutputs",
+        )?
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "request {request_id} is missing private sectionOutputs storage"
+            ))
+        })?;
+        let ref_file = state::paths::from_project_relative(&paths.root, &relative)?;
+        state::store::read_json_value(&ref_file)?
+    };
+    serde_json::from_value(value).map_err(state::store::StateError::Json)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1072,6 +1385,8 @@ fn update_request_for_next_section(
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
     include_repair_context: bool,
+    include_repair_source_ref: bool,
+    source_refs: &Value,
 ) -> Result<Value, state::store::StateError> {
     let completed_section = parse_section(&root, "/sectionState/currentSection")?;
     root["sectionState"]["currentSection"] =
@@ -1093,9 +1408,40 @@ fn update_request_for_next_section(
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
-    root["requestReadPlan"]["groups"] =
-        architecture_read_groups(next_section, include_repair_context);
+    let frontend_experience_source = root
+        .get("frontendExperienceSource")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    root["requestReadPlan"]["groups"] = architecture_read_groups(
+        next_section,
+        include_repair_context,
+        include_repair_source_ref,
+        source_refs,
+        &frontend_experience_source,
+    );
     Ok(root)
+}
+
+fn repair_context_has_source_ref(
+    project_root: &str,
+    request_ref: &str,
+    request_root: &Value,
+) -> Result<bool, state::store::StateError> {
+    if !read_plan_fields(request_root)
+        .iter()
+        .any(|field| field == "repairContext.sourceRef")
+    {
+        return Ok(false);
+    }
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["repairContext.sourceRef".to_string()],
+    })?
+    .fields;
+    Ok(fields
+        .get("repairContext.sourceRef")
+        .is_some_and(|field| !field.value.is_null()))
 }
 
 fn update_output_contract_ref(
@@ -1496,23 +1842,12 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
     state::store::StateError::StateCorrupted(error.to_string())
 }
 
-fn read_request_fields(
-    project_root: &str,
-    request_ref: &str,
-    fields: &[&str],
-) -> Result<std::collections::BTreeMap<String, Value>, state::store::StateError> {
-    let resolved = state::read_request_fields(ReadRequestFieldsInput {
-        project_root: project_root.to_string(),
-        request_ref: request_ref.to_string(),
-        fields: fields.iter().map(|field| field.to_string()).collect(),
-    })?;
-    Ok(resolved
-        .fields
-        .into_iter()
-        .map(|(field, result)| (field, result.value))
-        .collect())
-}
-
-fn value_field(fields: &std::collections::BTreeMap<String, Value>, field: &str) -> Value {
-    fields.get(field).cloned().unwrap_or(Value::Null)
+fn field_value(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    field: &str,
+) -> Value {
+    fields
+        .get(field)
+        .map(|result| result.value.clone())
+        .unwrap_or(Value::Null)
 }

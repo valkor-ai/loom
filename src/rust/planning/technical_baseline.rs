@@ -1,13 +1,14 @@
-use std::path::Path;
+use std::{collections::BTreeSet, fs, path::Path};
 
 use contracts::{
     BrainstormContract, ProjectKind, TechnicalBaselineApprovalType,
     TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
-    ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
-    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    ArtifactKind, DeliveryIndex, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
+    OperationContext, ReadRequestFieldsInput, RouteAction, RouteActionKind, SubmitAcceptedEvent,
+    TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -101,7 +102,6 @@ fn materialize_request_inner(
         })?
         .clone();
     let brainstorm = read_brainstorm_contract(root, &brainstorm_ref)?;
-    let project_kind = infer_project_kind(root);
     let request_id = format!("tbr_{}", state::store::now_millis());
     let candidate_file = to_project_relative(
         root,
@@ -119,7 +119,10 @@ fn materialize_request_inner(
     } else {
         None
     };
+    let project_kind =
+        infer_project_kind_for_baseline(root, &delivery, phase_id, previous_baseline.is_some());
     let request_root = build_request_root(
+        root,
         &brainstorm,
         delivery_id,
         phase_id,
@@ -164,6 +167,7 @@ fn materialize_request_inner(
 }
 
 fn build_request_root(
+    project_root: &Path,
     brainstorm: &BrainstormContract,
     delivery_id: &str,
     phase_id: &str,
@@ -189,13 +193,11 @@ fn build_request_root(
         })
     });
     let selection_guidance = technical_baseline_selection_guidance(project_kind, baseline_exists);
-    let repo_evidence = json!({
-        "detectedProjectKind": project_kind,
-        "baselineExists": baseline_exists,
-        "repositoryContextExists": false
-    });
+    let repo_evidence =
+        technical_baseline_repo_evidence(project_root, project_kind, baseline_exists);
     let baseline_context_fields =
         technical_baseline_context_fields(brainstorm, previous_baseline.is_some());
+    let repo_evidence_fields = technical_baseline_repo_evidence_fields(project_kind);
     json!({
         "schemaVersion": "1.0",
         "requestType": "technical_baseline_request",
@@ -210,15 +212,18 @@ fn build_request_root(
         },
         "brainstormLens": {
             "summary": brainstorm.summary,
-            "scope": {
-                "included": brainstorm.scope.included,
-                "deferred": brainstorm.scope.deferred,
-                "excluded": brainstorm.scope.excluded,
-                "assumptions": brainstorm.scope.assumptions
+            "scopeIndex": {
+                "includedIds": scope_item_ids(&brainstorm.scope.included),
+                "includedLabels": scope_item_labels(&brainstorm.scope.included),
+                "deferredIds": scope_item_ids(&brainstorm.scope.deferred),
+                "deferredLabels": scope_item_labels(&brainstorm.scope.deferred),
+                "excludedIds": scope_item_ids(&brainstorm.scope.excluded),
+                "excludedLabels": scope_item_labels(&brainstorm.scope.excluded),
+                "assumptionTexts": brainstorm.scope.assumptions.iter().map(|item| item.text.clone()).collect::<Vec<_>>()
             },
             "domainModel": brainstorm.domain_model.as_ref().map(|domain_model| json!({
-                "capabilityGroups": domain_model.capability_groups,
-                "businessFlows": domain_model.business_flows
+                "capabilityNames": domain_model.capability_groups.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "businessFlowNames": domain_model.business_flows.iter().map(|item| item.name.clone()).collect::<Vec<_>>()
             })),
             "acceptanceIndex": brainstorm.acceptance.iter().map(|acceptance| json!({
                 "id": acceptance.id,
@@ -226,19 +231,23 @@ fn build_request_root(
                 "capabilityRefs": acceptance.capability_refs,
                 "sourceRefs": acceptance.source_refs
             })).collect::<Vec<_>>(),
-            "frontendExperience": brainstorm.frontend_experience.as_ref().map(|frontend_experience| json!({
+            "frontendTarget": brainstorm.frontend_experience.as_ref().map(|frontend_experience| json!({
                 "required": frontend_experience.required,
                 "kind": frontend_experience.kind,
                 "experienceLevel": frontend_experience.experience_level,
-                "audiences": frontend_experience.audiences,
-                "surfaces": frontend_experience.surfaces,
-                "operationPaths": frontend_experience.operation_paths
+                "audienceNames": frontend_experience.audiences.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "surfaceNames": frontend_experience.surfaces.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "operationNames": frontend_experience.operation_paths.iter().map(|item| item.name.clone()).collect::<Vec<_>>(),
+                "operationGoals": frontend_experience.operation_paths.iter().map(|item| item.user_goal.clone()).collect::<Vec<_>>()
             })),
             "userFacingLanguage": brainstorm.delivery_context.user_facing_language,
-            "roadmap": brainstorm.roadmap,
-            "phasePlan": {
-                "current": brainstorm.phase_plan.current,
-                "nextPhasePreview": brainstorm.phase_plan.next_phase_preview
+            "roadmapSignal": {
+                "required": brainstorm.roadmap.required,
+                "currentPhaseId": brainstorm.roadmap.current_phase_id,
+                "phaseIds": brainstorm.roadmap.phases.iter().map(|phase| phase.phase_id.clone()).collect::<Vec<_>>(),
+                "phaseTitles": brainstorm.roadmap.phases.iter().map(|phase| phase.title.clone().or_else(|| phase.name.clone()).unwrap_or_else(|| phase.phase_id.clone())).collect::<Vec<_>>(),
+                "phaseGoals": brainstorm.roadmap.phases.iter().map(|phase| phase.goal.clone().unwrap_or_default()).collect::<Vec<_>>(),
+                "nextPhasePreview": next_phase_preview_summary(&brainstorm.phase_plan.next_phase_preview)
             },
             "sourceRefs": brainstorm.sources.iter().map(|source| source.source_id.clone()).collect::<Vec<_>>()
         },
@@ -315,12 +324,7 @@ fn build_request_root(
                     "required": false,
                     "purpose": "Read repository evidence before inferring an existing-project baseline or deciding whether reuse applies.",
                     "whenToRead": "Read for existing_project or when repository continuity matters.",
-                    "fields": [
-                        "projectKind",
-                        "repoEvidence.detectedProjectKind",
-                        "repoEvidence.baselineExists",
-                        "repoEvidence.repositoryContextExists"
-                    ]
+                    "fields": repo_evidence_fields
                 },
                 {
                     "groupId": "technical_baseline_selection_guidance",
@@ -353,6 +357,41 @@ fn build_request_root(
     })
 }
 
+fn scope_item_ids(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.id.clone()).collect()
+}
+
+fn scope_item_labels(items: &[contracts::ScopeItem]) -> Vec<String> {
+    items.iter().map(|item| item.label.clone()).collect()
+}
+
+fn next_phase_preview_summary(preview: &contracts::NextPhasePreview) -> Value {
+    match preview {
+        contracts::NextPhasePreview::Candidate {
+            suggested_phase_id,
+            title,
+            goal,
+            scope_preview,
+            reason,
+        } => json!({
+            "kind": "candidate",
+            "suggestedPhaseId": suggested_phase_id,
+            "title": title,
+            "goal": goal,
+            "scopePreview": scope_preview,
+            "reason": reason
+        }),
+        contracts::NextPhasePreview::None { reason } => json!({
+            "kind": "none",
+            "suggestedPhaseId": Value::Null,
+            "title": Value::Null,
+            "goal": Value::Null,
+            "scopePreview": [],
+            "reason": reason
+        }),
+    }
+}
+
 fn technical_baseline_context_fields(
     brainstorm: &BrainstormContract,
     has_previous_baseline: bool,
@@ -361,16 +400,26 @@ fn technical_baseline_context_fields(
         "brainstormLens.summary.title",
         "brainstormLens.summary.oneLine",
         "brainstormLens.summary.complexity",
-        "brainstormLens.scope.included",
-        "brainstormLens.scope.deferred",
-        "brainstormLens.scope.excluded",
-        "brainstormLens.scope.assumptions",
+        "brainstormLens.scopeIndex.includedIds",
+        "brainstormLens.scopeIndex.includedLabels",
+        "brainstormLens.scopeIndex.deferredIds",
+        "brainstormLens.scopeIndex.deferredLabels",
+        "brainstormLens.scopeIndex.excludedIds",
+        "brainstormLens.scopeIndex.excludedLabels",
+        "brainstormLens.scopeIndex.assumptionTexts",
         "brainstormLens.acceptanceIndex",
         "brainstormLens.userFacingLanguage",
-        "brainstormLens.roadmap.required",
-        "brainstormLens.roadmap.currentPhaseId",
-        "brainstormLens.roadmap.phases",
-        "brainstormLens.phasePlan.nextPhasePreview",
+        "brainstormLens.roadmapSignal.required",
+        "brainstormLens.roadmapSignal.currentPhaseId",
+        "brainstormLens.roadmapSignal.phaseIds",
+        "brainstormLens.roadmapSignal.phaseTitles",
+        "brainstormLens.roadmapSignal.phaseGoals",
+        "brainstormLens.roadmapSignal.nextPhasePreview.kind",
+        "brainstormLens.roadmapSignal.nextPhasePreview.suggestedPhaseId",
+        "brainstormLens.roadmapSignal.nextPhasePreview.title",
+        "brainstormLens.roadmapSignal.nextPhasePreview.goal",
+        "brainstormLens.roadmapSignal.nextPhasePreview.scopePreview",
+        "brainstormLens.roadmapSignal.nextPhasePreview.reason",
         "currentPhaseLens.phaseId",
         "currentPhaseLens.title",
         "currentPhaseLens.goal",
@@ -387,18 +436,19 @@ fn technical_baseline_context_fields(
     }
     if brainstorm.domain_model.is_some() {
         fields.extend([
-            "brainstormLens.domainModel.capabilityGroups",
-            "brainstormLens.domainModel.businessFlows",
+            "brainstormLens.domainModel.capabilityNames",
+            "brainstormLens.domainModel.businessFlowNames",
         ]);
     }
     if brainstorm.frontend_experience.is_some() {
         fields.extend([
-            "brainstormLens.frontendExperience.required",
-            "brainstormLens.frontendExperience.kind",
-            "brainstormLens.frontendExperience.experienceLevel",
-            "brainstormLens.frontendExperience.audiences",
-            "brainstormLens.frontendExperience.surfaces",
-            "brainstormLens.frontendExperience.operationPaths",
+            "brainstormLens.frontendTarget.required",
+            "brainstormLens.frontendTarget.kind",
+            "brainstormLens.frontendTarget.experienceLevel",
+            "brainstormLens.frontendTarget.audienceNames",
+            "brainstormLens.frontendTarget.surfaceNames",
+            "brainstormLens.frontendTarget.operationNames",
+            "brainstormLens.frontendTarget.operationGoals",
         ]);
     }
     if has_previous_baseline {
@@ -414,6 +464,209 @@ fn technical_baseline_context_fields(
         ]);
     }
     fields
+}
+
+fn technical_baseline_repo_evidence(
+    project_root: &Path,
+    project_kind: ProjectKind,
+    baseline_exists: bool,
+) -> Value {
+    let mut evidence = json!({
+        "detectedProjectKind": project_kind,
+        "baselineExists": baseline_exists,
+        "repositoryContextExists": false
+    });
+    if matches!(project_kind, ProjectKind::ExistingProject) {
+        evidence["signals"] = compact_repo_signals(project_root);
+    }
+    evidence
+}
+
+fn technical_baseline_repo_evidence_fields(project_kind: ProjectKind) -> Vec<&'static str> {
+    let mut fields = vec![
+        "projectKind",
+        "repoEvidence.detectedProjectKind",
+        "repoEvidence.baselineExists",
+        "repoEvidence.repositoryContextExists",
+    ];
+    if matches!(project_kind, ProjectKind::ExistingProject) {
+        fields.extend([
+            "repoEvidence.signals.manifests",
+            "repoEvidence.signals.packageManagers",
+            "repoEvidence.signals.languages",
+            "repoEvidence.signals.frameworks",
+            "repoEvidence.signals.sourceRoots",
+        ]);
+    }
+    fields
+}
+
+fn compact_repo_signals(project_root: &Path) -> Value {
+    let mut signals = RepoSignalSummary::default();
+    collect_node_signals(project_root, &mut signals);
+    collect_java_signals(project_root, &mut signals);
+    collect_python_signals(project_root, &mut signals);
+    collect_rust_signals(project_root, &mut signals);
+    collect_go_signals(project_root, &mut signals);
+    for path in [
+        "src", "app", "web", "service", "backend", "frontend", "tests",
+    ] {
+        if project_root.join(path).exists() {
+            signals.source_roots.insert(path.to_string());
+        }
+    }
+    signals.to_json()
+}
+
+#[derive(Default)]
+struct RepoSignalSummary {
+    manifests: BTreeSet<String>,
+    package_managers: BTreeSet<String>,
+    languages: BTreeSet<String>,
+    frameworks: BTreeSet<String>,
+    source_roots: BTreeSet<String>,
+}
+
+impl RepoSignalSummary {
+    fn to_json(&self) -> Value {
+        json!({
+            "manifests": sorted_values(&self.manifests),
+            "packageManagers": sorted_values(&self.package_managers),
+            "languages": sorted_values(&self.languages),
+            "frameworks": sorted_values(&self.frameworks),
+            "sourceRoots": sorted_values(&self.source_roots)
+        })
+    }
+}
+
+fn sorted_values(values: &BTreeSet<String>) -> Vec<String> {
+    values.iter().cloned().collect()
+}
+
+fn collect_node_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    let package_file = project_root.join("package.json");
+    if !package_file.exists() {
+        return;
+    }
+    signals.manifests.insert("package.json".to_string());
+    if project_root.join("package-lock.json").exists() {
+        signals.package_managers.insert("npm".to_string());
+    }
+    if project_root.join("pnpm-lock.yaml").exists() {
+        signals.package_managers.insert("pnpm".to_string());
+    }
+    if project_root.join("yarn.lock").exists() {
+        signals.package_managers.insert("yarn".to_string());
+    }
+    if signals.package_managers.is_empty() {
+        signals.package_managers.insert("npm".to_string());
+    }
+    signals.languages.insert("JavaScript".to_string());
+    if project_root.join("tsconfig.json").exists() {
+        signals.languages.insert("TypeScript".to_string());
+        signals.manifests.insert("tsconfig.json".to_string());
+    }
+    let Ok(package) = state::store::read_json_value(&package_file) else {
+        return;
+    };
+    let dependencies = package_dependencies(&package);
+    if dependencies.contains("typescript") {
+        signals.languages.insert("TypeScript".to_string());
+    }
+    for (dependency, framework) in [
+        ("next", "Next.js"),
+        ("react", "React"),
+        ("vue", "Vue"),
+        ("svelte", "Svelte"),
+        ("vite", "Vite"),
+        ("express", "Express"),
+        ("fastify", "Fastify"),
+        ("@nestjs/core", "NestJS"),
+    ] {
+        if dependencies.contains(dependency) {
+            signals.frameworks.insert(framework.to_string());
+        }
+    }
+}
+
+fn package_dependencies(package: &Value) -> BTreeSet<String> {
+    let mut dependencies = BTreeSet::new();
+    for key in ["dependencies", "devDependencies", "peerDependencies"] {
+        if let Some(values) = package.get(key).and_then(Value::as_object) {
+            dependencies.extend(values.keys().cloned());
+        }
+    }
+    dependencies
+}
+
+fn collect_java_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    let pom_file = project_root.join("pom.xml");
+    if pom_file.exists() {
+        signals.manifests.insert("pom.xml".to_string());
+        signals.languages.insert("Java".to_string());
+        signals.package_managers.insert("Maven".to_string());
+        if fs::read_to_string(&pom_file)
+            .map(|content| content.contains("spring-boot"))
+            .unwrap_or(false)
+        {
+            signals.frameworks.insert("Spring Boot".to_string());
+        }
+    }
+    if project_root.join("build.gradle").exists() || project_root.join("build.gradle.kts").exists()
+    {
+        signals.manifests.insert("build.gradle".to_string());
+        signals.languages.insert("Java".to_string());
+        signals.package_managers.insert("Gradle".to_string());
+    }
+}
+
+fn collect_python_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    let has_pyproject = project_root.join("pyproject.toml").exists();
+    let has_requirements = project_root.join("requirements.txt").exists();
+    if !has_pyproject && !has_requirements {
+        return;
+    }
+    signals.languages.insert("Python".to_string());
+    signals.package_managers.insert("pip".to_string());
+    if has_pyproject {
+        signals.manifests.insert("pyproject.toml".to_string());
+    }
+    if has_requirements {
+        signals.manifests.insert("requirements.txt".to_string());
+    }
+    let combined = ["pyproject.toml", "requirements.txt"]
+        .iter()
+        .filter_map(|path| fs::read_to_string(project_root.join(path)).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    for (needle, framework) in [
+        ("fastapi", "FastAPI"),
+        ("django", "Django"),
+        ("flask", "Flask"),
+    ] {
+        if combined.contains(needle) {
+            signals.frameworks.insert(framework.to_string());
+        }
+    }
+}
+
+fn collect_rust_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    if !project_root.join("Cargo.toml").exists() {
+        return;
+    }
+    signals.manifests.insert("Cargo.toml".to_string());
+    signals.languages.insert("Rust".to_string());
+    signals.package_managers.insert("Cargo".to_string());
+}
+
+fn collect_go_signals(project_root: &Path, signals: &mut RepoSignalSummary) {
+    if !project_root.join("go.mod").exists() {
+        return;
+    }
+    signals.manifests.insert("go.mod".to_string());
+    signals.languages.insert("Go".to_string());
+    signals.package_managers.insert("go".to_string());
 }
 
 fn technical_baseline_selection_guidance(
@@ -455,11 +708,11 @@ fn technical_baseline_selection_guidance(
         "recommendationBasis": {
             "authority": "Use the complete BrainstormContract as the product-scope authority for the first greenfield TechnicalBaseline recommendation.",
             "mustRead": [
-                "Brainstorm summary and original requirement context",
-                "scope.included, scope.deferred, scope.excluded, and assumptions",
-                "domainModel capability groups and business flows",
-                "frontendExperience when present",
-                "roadmap phases, deferred scope, and known next-phase previews"
+                "brainstormLens.summary",
+                "brainstormLens.scopeIndex included/deferred/excluded labels and assumptions",
+                "brainstormLens.domainModel capabilityNames and businessFlowNames when present",
+                "brainstormLens.frontendTarget when present",
+                "brainstormLens.roadmapSignal phase titles, phase goals, and next-phase preview"
             ],
             "currentPhaseLensRole": "currentPhaseLens identifies the first implementation slice only. Do not choose the initial technology baseline from the current phase scope alone when the full requirement or roadmap implies later product surfaces, persistence scale, app clients, services, integrations, or operational needs.",
             "recommendationRule": "Recommend a stable baseline for the full confirmed delivery/roadmap horizon; explain when the current phase can start small inside that baseline without hiding later known needs."
@@ -674,7 +927,10 @@ where
     let previous_baseline_file = technical_baseline_file(project_root, &delivery_id);
     if previous_baseline_file.exists() {
         let previous: TechnicalBaselineContract = state::store::read_json(&previous_baseline_file)?;
-        if technical_baseline_conflicts(&previous, &candidate)
+        let stack_or_baseline_changed = technical_baseline_conflicts(&previous, &candidate);
+        let repo_signal_conflicts =
+            repo_signals_conflict_with_previous(project_root, &input.request_ref, &previous)?;
+        if (stack_or_baseline_changed || !repo_signal_conflicts.is_empty())
             && !matches!(
                 candidate.approval.r#type,
                 TechnicalBaselineApprovalType::UserConfirmed
@@ -813,24 +1069,118 @@ fn validate_candidate(
             "A confirmed TechnicalBaseline cannot keep approval.type=none.",
         ));
     }
+    if matches!(candidate.project_kind, ProjectKind::Greenfield) {
+        validate_greenfield_candidate(candidate, &mut issues);
+    }
     issues
+}
+
+const GREENFIELD_CORE_TRACKS: [&str; 6] = [
+    "web",
+    "app",
+    "backend",
+    "persistence",
+    "dataAccess",
+    "externalServices",
+];
+const GREENFIELD_TRACK_STATUSES: [&str; 4] =
+    ["selected", "not_needed", "not_applicable", "user_custom"];
+
+fn validate_greenfield_candidate(
+    candidate: &TechnicalBaselineCandidateAgentWritable,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if matches!(
+        candidate.approval.r#type,
+        TechnicalBaselineApprovalType::UserConfirmed
+    ) && candidate
+        .approval
+        .confirmed_at
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        issues.push(issue(
+            "GREENFIELD_BASELINE_CONFIRMATION_REQUIRED",
+            "approval.confirmedAt",
+            "Greenfield TechnicalBaseline with approval.type=user_confirmed must include the actual user confirmation timestamp.",
+        ));
+    }
+    if !matches!(
+        candidate.status,
+        TechnicalBaselineStatus::Confirmed | TechnicalBaselineStatus::NeedsUserConfirmation
+    ) {
+        issues.push(issue(
+            "GREENFIELD_BASELINE_CONFIRMATION_REQUIRED",
+            "status",
+            "Greenfield TechnicalBaseline must be confirmed before planning, or use status=needs_user_confirmation when user confirmation is still pending.",
+        ));
+    }
+    if !greenfield_stack_tracks_complete(&candidate.stack) {
+        issues.push(issue(
+            "GREENFIELD_BASELINE_TRACKS_INCOMPLETE",
+            "stack.tracks",
+            "Greenfield TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
+        ));
+    }
+}
+
+fn greenfield_stack_tracks_complete(stack: &Value) -> bool {
+    let Some(tracks) = stack.get("tracks").and_then(Value::as_object) else {
+        return false;
+    };
+    GREENFIELD_CORE_TRACKS.iter().all(|track| {
+        let Some(value) = tracks.get(*track).and_then(Value::as_object) else {
+            return false;
+        };
+        let status = value
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let selection = value
+            .get("selection")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        GREENFIELD_TRACK_STATUSES.contains(&status) && !selection.is_empty()
+    })
 }
 
 fn technical_baseline_decision_needs(
     project_kind: ProjectKind,
     baseline_exists: bool,
 ) -> Vec<String> {
-    let mut needs = Vec::new();
     if matches!(project_kind, ProjectKind::Greenfield) {
-        needs.push("confirm_greenfield_stack".to_string());
+        return vec![
+            "web client technology track when applicable".to_string(),
+            "app client technology track when applicable".to_string(),
+            "backend/service technology track".to_string(),
+            "database or persistence technology track".to_string(),
+            "ORM or data access technology track".to_string(),
+            "external services only when required by the confirmed requirement".to_string(),
+        ];
     }
     if baseline_exists {
-        needs.push("check_previous_baseline_reuse".to_string());
+        return vec![
+            "whether the current confirmed scope explicitly adds a new technology surface"
+                .to_string(),
+            "whether the current confirmed scope explicitly replaces a previous technology baseline element"
+                .to_string(),
+            "otherwise reuse the previous TechnicalBaseline unchanged for normal bugfix, repair, optimization, or feature work inside the existing stack"
+                .to_string(),
+        ];
     }
     if matches!(project_kind, ProjectKind::Unknown) {
-        needs.push("confirm_project_kind".to_string());
+        return vec!["confirm_project_kind".to_string()];
     }
-    needs
+    vec![
+        "current repository runtime, language, framework, and package-manager evidence".to_string(),
+        "current repository persistence or data-access evidence when present".to_string(),
+        "confirmed requirement technology preferences, if the user explicitly provided any"
+            .to_string(),
+    ]
 }
 
 fn technical_baseline_conflicts(
@@ -839,11 +1189,218 @@ fn technical_baseline_conflicts(
 ) -> bool {
     previous.project_kind != candidate.project_kind
         || previous.scope != candidate.scope
-        || previous.stack != candidate.stack
+        || !stable_stack_equivalent(&previous.stack, &candidate.stack)
         || previous.constraints != candidate.constraints
 }
 
-fn infer_project_kind(project_root: &Path) -> ProjectKind {
+fn stable_stack_equivalent(left: &Value, right: &Value) -> bool {
+    normalize_stack_for_comparison(left) == normalize_stack_for_comparison(right)
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StableStack {
+    runtimes: BTreeSet<String>,
+    languages: BTreeSet<String>,
+    frameworks: BTreeSet<String>,
+    package_managers: BTreeSet<String>,
+    databases: BTreeSet<String>,
+    tracks: BTreeSet<String>,
+}
+
+fn normalize_stack_for_comparison(stack: &Value) -> StableStack {
+    StableStack {
+        runtimes: values_for_keys(stack, &["runtime", "runtimes", "runtimeKind"]),
+        languages: values_for_keys(stack, &["language", "languages"]),
+        frameworks: values_for_keys(
+            stack,
+            &[
+                "framework",
+                "frameworks",
+                "frontendFramework",
+                "backendFramework",
+            ],
+        ),
+        package_managers: values_for_keys(stack, &["packageManager", "packageManagers"]),
+        databases: values_for_keys(stack, &["database", "databases", "databaseProvider"]),
+        tracks: stack_track_selections_for_comparison(stack),
+    }
+}
+
+fn values_for_keys(value: &Value, keys: &[&str]) -> BTreeSet<String> {
+    let mut values = BTreeSet::new();
+    for key in keys {
+        collect_stack_value(value.get(*key).unwrap_or(&Value::Null), &mut values);
+    }
+    values
+}
+
+fn collect_stack_value(value: &Value, output: &mut BTreeSet<String>) {
+    if let Some(text) = value.as_str() {
+        let normalized = normalize_stack_token(text);
+        if !normalized.is_empty() {
+            output.insert(normalized);
+        }
+        return;
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            collect_stack_value(item, output);
+        }
+    }
+}
+
+fn stack_track_selections_for_comparison(stack: &Value) -> BTreeSet<String> {
+    let Some(tracks) = stack.get("tracks").and_then(Value::as_object) else {
+        return BTreeSet::new();
+    };
+    tracks
+        .iter()
+        .filter_map(|(track_name, track)| {
+            let status = track
+                .get("status")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .unwrap_or_default();
+            let selection = track
+                .get("selection")
+                .and_then(Value::as_str)
+                .map(normalize_stack_token)
+                .unwrap_or_default();
+            if status.is_empty() && selection.is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "{}:{}:{}",
+                    normalize_stack_token(track_name),
+                    status,
+                    selection
+                ))
+            }
+        })
+        .collect()
+}
+
+fn repo_signals_conflict_with_previous(
+    project_root: &Path,
+    request_ref: &str,
+    previous: &TechnicalBaselineContract,
+) -> Result<Vec<String>, state::store::StateError> {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: project_root.to_string_lossy().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "repoEvidence.signals.packageManagers".to_string(),
+            "repoEvidence.signals.frameworks".to_string(),
+            "repoEvidence.signals.languages".to_string(),
+        ],
+    })?;
+    let stack = normalize_stack_for_comparison(&previous.stack);
+    let mut conflicts = Vec::new();
+    push_signal_conflict(
+        &mut conflicts,
+        "packageManagers",
+        &stack.package_managers,
+        field_string_set(&fields.fields, "repoEvidence.signals.packageManagers"),
+    );
+    push_signal_conflict(
+        &mut conflicts,
+        "frameworks",
+        &stack.frameworks,
+        field_string_set(&fields.fields, "repoEvidence.signals.frameworks"),
+    );
+    push_signal_conflict(
+        &mut conflicts,
+        "languages",
+        &stack.languages,
+        field_string_set(&fields.fields, "repoEvidence.signals.languages"),
+    );
+    if stack.runtimes.contains("node") {
+        let mut repo_tokens =
+            field_string_set(&fields.fields, "repoEvidence.signals.packageManagers");
+        repo_tokens.extend(field_string_set(
+            &fields.fields,
+            "repoEvidence.signals.languages",
+        ));
+        let has_node_signal = ["npm", "pnpm", "yarn", "bun", "typescript", "javascript"]
+            .iter()
+            .any(|token| repo_tokens.contains(*token));
+        let has_other_runtime_signal = ["maven", "gradle", "java", "python", "go", "rust"]
+            .iter()
+            .any(|token| repo_tokens.contains(*token));
+        if !has_node_signal && has_other_runtime_signal {
+            conflicts.push("runtime".to_string());
+        }
+    }
+    Ok(conflicts)
+}
+
+fn field_string_set(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    field: &str,
+) -> BTreeSet<String> {
+    fields
+        .get(field)
+        .and_then(|result| result.value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(normalize_stack_token)
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn push_signal_conflict(
+    conflicts: &mut Vec<String>,
+    label: &str,
+    baseline_values: &BTreeSet<String>,
+    signal_values: BTreeSet<String>,
+) {
+    if baseline_values.is_empty() || signal_values.is_empty() {
+        return;
+    }
+    if !baseline_values
+        .iter()
+        .any(|value| signal_values.contains(value))
+    {
+        conflicts.push(label.to_string());
+    }
+}
+
+fn normalize_stack_token(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .trim_end_matches(".js")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn infer_project_kind_for_baseline(
+    project_root: &Path,
+    delivery: &DeliveryIndex,
+    phase_id: &str,
+    has_previous_baseline: bool,
+) -> ProjectKind {
+    if has_previous_baseline || is_after_first_delivery_phase(delivery, phase_id) {
+        return ProjectKind::ExistingProject;
+    }
+    infer_project_kind_from_repo(project_root)
+}
+
+fn is_after_first_delivery_phase(delivery: &DeliveryIndex, phase_id: &str) -> bool {
+    delivery
+        .phases
+        .iter()
+        .position(|phase| phase.phase_id == phase_id)
+        .map(|index| index > 0)
+        .unwrap_or(false)
+}
+
+fn infer_project_kind_from_repo(project_root: &Path) -> ProjectKind {
     let markers = [
         "package.json",
         "tsconfig.json",

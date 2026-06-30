@@ -39,6 +39,14 @@ pub struct KnowledgeProjectInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct KnowledgePendingInput {
+    pub project_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct KnowledgeInspectChunkInput {
     pub project_root: String,
     pub source_name: String,
@@ -107,7 +115,40 @@ pub struct KnowledgeList {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct KnowledgeDiscardSummary {
+    pub name: String,
+    pub discarded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRemoveSummary {
+    pub name: String,
+    pub removed_source: bool,
+    pub removed_pending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeStatusSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<KnowledgeSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<PendingQueue>,
+    pub time_zone: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_local: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_local: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_built_at_local: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct KnowledgeChunkCard {
+    #[serde(default, skip_serializing)]
     pub source_id: String,
     pub source_name: String,
     pub build_id: String,
@@ -115,7 +156,6 @@ pub struct KnowledgeChunkCard {
     pub document_title: String,
     pub heading_path: Vec<String>,
     pub summary: Option<String>,
-    pub semantic_labels: Vec<String>,
     #[serde(default)]
     pub matched_labels: Vec<KnowledgeMatchedLabel>,
     pub score: f64,
@@ -134,7 +174,6 @@ pub struct KnowledgeMatchedLabel {
 pub struct KnowledgeSearchResult {
     pub status: String,
     pub cards: Vec<KnowledgeChunkCard>,
-    pub matched_sources: Vec<KnowledgeMatchedSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -160,9 +199,17 @@ pub struct KnowledgeMatchedSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct KnowledgeContextMatchedSource {
+    pub source_name: String,
+    pub score: f64,
+    pub matched_focus_coverage: f64,
+    pub chunk_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct KnowledgeReadPlanChunk {
     pub source_name: String,
-    pub source_id: String,
     pub build_id: String,
     pub chunk_id: String,
 }
@@ -178,6 +225,6 @@ pub struct KnowledgeReadPlan {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgeBrainstormContextResult {
     pub status: String,
-    pub matched_sources: Vec<KnowledgeMatchedSource>,
+    pub matched_sources: Vec<KnowledgeContextMatchedSource>,
     pub read_plan: KnowledgeReadPlan,
 }

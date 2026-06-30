@@ -1,6 +1,9 @@
 use std::{path::Path, process};
 
-use delivery_core::{ActiveOperationRef, LoomMcpActionResult, LoomMcpActiveOperationResult};
+use delivery_core::{
+    ActiveOperationObservationPolicy, ActiveOperationRef, LoomMcpActionResult,
+    LoomMcpActiveOperationResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use state::{
@@ -69,6 +72,21 @@ pub fn active_operation_result(
             "loom.deployStatus".to_string(),
             "loom.deployInspect".to_string(),
             "loom.deployLogs".to_string(),
+        ],
+        observation_policy: Some(ActiveOperationObservationPolicy {
+            quiet_mode: true,
+            initial_quiet_window_ms: 120_000,
+            min_next_observation_interval_ms: 60_000,
+            logs_policy: "read_only_after_repeated_unchanged_status_or_user_request".to_string(),
+            user_visible_update_policy:
+                "terminal_result_or_phase_change_or_long_threshold_only".to_string(),
+            final_response_policy: "forbidden_while_operation_active".to_string(),
+        }),
+        forbidden_actions: vec![
+            "Do not start another deploy command while this operation is active.".to_string(),
+            "Do not run raw Docker, Docker Compose, build, or container commands as a substitute for Loom deploy observation.".to_string(),
+            "Do not kill, pkill, stop, or take over the deploy process unless the user explicitly asks.".to_string(),
+            "Do not infer failure from unchanged logs before Loom reports a terminal deploy result.".to_string(),
         ],
         progress_summary: Some(json!({
             "phase": operation.phase,

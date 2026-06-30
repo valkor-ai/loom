@@ -534,6 +534,162 @@ fn plugin_templates_do_not_expose_legacy_protocol_terms() {
 }
 
 #[test]
+fn deploy_plugin_templates_obey_active_operation_policy_fields() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    for file in [
+        "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/skills/loom-deploy/SKILL.md",
+        "opencode/.opencode/commands/loom-deploy.md",
+    ] {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        for required in [
+            "observationPolicy",
+            "forbiddenActions",
+            "finalResponsePolicy",
+        ] {
+            assert!(
+                content.contains(required),
+                "{file} must require deploy active_operation policy field {required}"
+            );
+        }
+    }
+}
+
+#[test]
+fn opencode_commands_expose_mcp_result_discipline() {
+    let repo = repo_root();
+    let command_root = repo.join("plugins/opencode/.opencode/commands");
+    let loom = fs::read_to_string(command_root.join("loom.md")).unwrap();
+    let deploy = fs::read_to_string(command_root.join("loom-deploy.md")).unwrap();
+
+    for required in [
+        "loom.inspectRequest",
+        "loom.readFieldGroup",
+        "requestReadPlan.groups",
+        "loom.readRequestFields",
+        "GenerateKnowledgeSemanticsNext",
+        "loom.knowledgeInspectChunk",
+        "ExecuteTaskNext",
+        "RunLoomToolNext",
+        "retryTool",
+        "DeployRepairAssetsNext",
+        "Do not copy field-level contracts",
+    ] {
+        assert!(
+            loom.contains(required),
+            "opencode loom.md missing {required}"
+        );
+    }
+
+    for required in [
+        "../references/loom/uix/core.md",
+        "../references/loom/uix/interaction.md",
+        "../references/loom/uix/system.md",
+        "../references/loom/uix/mobile.md",
+        "../references/loom/uix/frameworks.md",
+        "../references/loom/uix/content.md",
+        "../references/loom/uix/data.md",
+        "../references/loom/uix/verification.md",
+        "writing or reviewing user-visible frontend artifacts",
+        "forms, flows, search/filter, loading, empty, error, or recovery states",
+        "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
+        "Do not load separate delivery reference files",
+    ] {
+        assert!(
+            loom.contains(required),
+            "opencode loom.md missing optional reference guidance {required}"
+        );
+    }
+
+    for required in [
+        "active_operation",
+        "DeployRepairAssetsNext",
+        "deploy execution repair",
+        "loom.inspectRequest",
+        "loom.readFieldGroup",
+        "requestReadPlan.groups",
+        "Do not copy deployment stack rules",
+    ] {
+        assert!(
+            deploy.contains(required),
+            "opencode loom-deploy.md missing {required}"
+        );
+    }
+}
+
+#[test]
+fn agent_templates_expose_knowledge_direct_route_and_semantic_pack_discipline() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    let files = [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/commands/loom.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+    ];
+
+    for file in files {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            content.contains("knowledge"),
+            "{file} must expose knowledge routing"
+        );
+        assert!(
+            content.contains("loom.knowledge*") || content.contains("loom.knowledgeInspectChunk"),
+            "{file} must route knowledge through MCP tools"
+        );
+        if file.contains("SKILL.md") || file.contains("opencode") {
+            for required in [
+                "GenerateKnowledgeSemanticsNext",
+                "loom.knowledgeInspectChunk",
+                "loom.knowledgeSemanticSubmitFile",
+            ] {
+                assert!(content.contains(required), "{file} missing {required}");
+            }
+        }
+    }
+}
+
+#[test]
+fn agent_templates_expose_run_loom_tool_next_discipline() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    let files = [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/commands/loom.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+    ];
+
+    for file in files {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        for required in [
+            "RunLoomToolNext",
+            "inspect the requestRef",
+            "read only the returned readGroups",
+            "call the returned Loom MCP tool",
+            "retry the returned retryTool",
+        ] {
+            assert!(content.contains(required), "{file} missing {required}");
+        }
+    }
+
+    let opencode_plugin =
+        fs::read_to_string(plugin_root.join("opencode/.opencode/plugins/loom.js")).unwrap();
+    for required in [
+        "run_loom_tool",
+        "read only the returned readGroups",
+        "retry the returned retryTool",
+    ] {
+        assert!(
+            opencode_plugin.contains(required),
+            "opencode plugin missing auto-continue prompt discipline {required}"
+        );
+    }
+}
+
+#[test]
 fn product_docs_do_not_expose_legacy_install_or_protocol_paths() {
     let repo = repo_root();
     let files = [

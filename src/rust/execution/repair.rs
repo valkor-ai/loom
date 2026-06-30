@@ -1,9 +1,12 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, TaskDefinition, TaskPlan,
     TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus,
+    TaskRunStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     ArtifactKind, DomainDispatcher, ExecuteEditBoundary, ExecuteTaskNext,
@@ -26,11 +29,15 @@ use crate::{
         task_execution_request_file, task_execution_result_candidate_file, task_plan_group_pattern,
         task_plan_outline_candidate_file,
     },
-    task_execution::{load_current_plan_and_run, save_run},
+    task_execution::{
+        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+        task_execution_rules,
+    },
     task_plan::update_run_summary,
     templates::{
-        runtime_delivery_requirement_template, task_result_template,
-        taskplan_group_result_template, taskplan_outline_result_template,
+        frontend_self_check_applies, runtime_delivery_evidence_applies,
+        runtime_delivery_requirement_template, task_result_required_top_level_fields,
+        task_result_template, taskplan_group_result_template, taskplan_outline_result_template,
     },
 };
 
@@ -107,7 +114,7 @@ pub fn dispatch_repair_route(
             failed(
                 project_root,
                 "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
-                "The active TaskResult repair request is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
+                "The active TaskResult correction action is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
                 "task_result_repair",
             )
         }),
@@ -228,6 +235,7 @@ pub fn materialize_delivery_execution_repair(
     origin: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
+    target_task_ids: Vec<String>,
 ) -> LoomMcpActionResult {
     match materialize_delivery_execution_repair_inner(
         project_root,
@@ -236,6 +244,7 @@ pub fn materialize_delivery_execution_repair(
         origin,
         source_ref,
         finding_refs,
+        target_task_ids,
     ) {
         Ok(result) => result,
         Err(error) => failed(
@@ -254,6 +263,7 @@ fn materialize_delivery_execution_repair_inner(
     origin: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
+    target_task_ids: Vec<String>,
 ) -> Result<LoomMcpActionResult, state::store::StateError> {
     let root = Path::new(project_root);
     let locator = DeliveryPhaseLocator {
@@ -261,10 +271,26 @@ fn materialize_delivery_execution_repair_inner(
         phase_id: phase_id.to_string(),
     };
     let (task_plan, mut run) = load_current_plan_and_run(root, &locator)?;
-    let task = repair_source_task(&task_plan, &run).ok_or_else(|| {
-        state::store::StateError::StateCorrupted(
-            "No task is available for delivery execution repair.".to_string(),
-        )
+    if let Some(existing) = existing_delivery_execution_repair_next_if_current(
+        project_root,
+        delivery_id,
+        phase_id,
+        &task_plan,
+        &run,
+        &target_task_ids,
+    )? {
+        return Ok(existing);
+    }
+    let task = repair_source_task(&task_plan, &run, &target_task_ids).ok_or_else(|| {
+        let message = if target_task_ids.is_empty() {
+            "No task is available for delivery execution repair.".to_string()
+        } else {
+            format!(
+                "Execution repair target task is not in the current task run: {}.",
+                target_task_ids.join(", ")
+            )
+        };
+        state::store::StateError::StateCorrupted(message)
     })?;
     let attempt_count = run
         .task_states
@@ -272,15 +298,6 @@ fn materialize_delivery_execution_repair_inner(
         .find(|state| state.task_id == task.task_id)
         .map(|state| state.attempts.len() as u32)
         .unwrap_or(0);
-    if let Some(existing) = existing_delivery_execution_repair_next_if_current(
-        project_root,
-        delivery_id,
-        phase_id,
-        &task,
-        attempt_count,
-    )? {
-        return Ok(existing);
-    }
     let now = state::store::now_string();
     if let Some(state) = run
         .task_states
@@ -363,8 +380,9 @@ fn existing_delivery_execution_repair_next_if_current(
     project_root: &str,
     delivery_id: &str,
     phase_id: &str,
-    task: &TaskDefinition,
-    attempt_count: u32,
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+    target_task_ids: &[String],
 ) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
     let store = FileTransitionStore;
     let delivery = store
@@ -406,6 +424,38 @@ fn existing_delivery_execution_repair_next_if_current(
     else {
         return Ok(None);
     };
+    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["source.taskId".to_string()],
+    })?
+    .fields;
+    let Some(source_task_id) = fields
+        .get("source.taskId")
+        .and_then(|field| field.value.as_str())
+    else {
+        return Ok(None);
+    };
+    if !target_task_ids.is_empty()
+        && !target_task_ids
+            .iter()
+            .any(|target_task_id| target_task_id == source_task_id)
+    {
+        return Ok(None);
+    }
+    let Some(task) = task_plan
+        .tasks
+        .iter()
+        .find(|task| task.task_id == source_task_id)
+    else {
+        return Ok(None);
+    };
+    let attempt_count = run
+        .task_states
+        .iter()
+        .find(|state| state.task_id == task.task_id)
+        .map(|state| state.attempts.len() as u32)
+        .unwrap_or(0);
     let origin = action
         .details
         .as_ref()
@@ -540,6 +590,177 @@ fn build_repair_execution_request(
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let result_template = task_result_template(&task_plan.task_plan_id, task);
+    let mut execution_rules = task_execution_rules(result_file, task, None);
+    if let Some(object) = execution_rules.as_object_mut() {
+        object.insert(
+            "boundaryRules".to_string(),
+            json!([
+                "Use repairContext as the failure boundary; do not repair unrelated issues.",
+                "Do not edit Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, ReviewResult, ManualReviewResolution, or .loom state.",
+                "Do not expand scope.",
+                "Write TaskResult JSON only to outputContract.resultFile."
+            ]),
+        );
+        if let Some(barrier) = object
+            .get_mut("completionBarrier")
+            .and_then(Value::as_object_mut)
+        {
+            barrier.insert(
+                "rule".to_string(),
+                json!("The repair is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."),
+            );
+        }
+        if let Some(rules) = object
+            .get_mut("verificationCommandSchedulingRules")
+            .and_then(Value::as_array_mut)
+        {
+            rules.push(json!(
+                "Run the verification needed for the repaired task before TaskResult submission."
+            ));
+            rules.push(json!(
+                "When a failing signal is available in repairContext, rerun that signal or the closest stable equivalent after the fix."
+            ));
+        }
+    }
+    let mut repair_core_fields = vec![
+        "source.deliveryId",
+        "source.phaseId",
+        "source.taskPlanId",
+        "source.taskPlanRunId",
+        "source.taskId",
+        "source.groupId",
+        "task.taskId",
+        "task.groupId",
+        "task.title",
+        "task.taskKind",
+        "task.implementationActions",
+        "task.objective",
+        "task.dependsOn",
+        "task.scopeRefs",
+        "task.acceptanceRefs",
+        "task.requirementDetailRefs",
+        "task.writeBoundary.forbiddenPaths",
+        "task.writeBoundary.artifactRefs",
+        "task.verificationIntents",
+        "repairContext.sourceTaskId",
+        "repairContext.repairOrigin",
+        "executionRules.completionBarrier",
+        "executionRules.finalResponseGuard",
+        "executionRules.completionContinuityRequirement",
+        "executionRules.verificationCommandSchedulingRules",
+        "executionRules.boundaryRules",
+    ];
+    if matches!(repair_origin, RepairOrigin::TaskFailure) {
+        repair_core_fields.push("repairContext.attemptCount");
+    }
+    if source_ref.is_some() {
+        repair_core_fields.push("repairContext.sourceRef");
+    }
+    if !finding_refs.is_empty() {
+        repair_core_fields.push("repairContext.findingRefs");
+    }
+    if !task.concept_refs.is_empty() {
+        repair_core_fields.push("task.conceptRefs");
+    }
+    if !task.concept_responsibilities.is_empty() {
+        repair_core_fields.push("task.conceptResponsibilities");
+    }
+    if !task.concept_verification_intents.is_empty() {
+        repair_core_fields.push("task.conceptVerificationIntents");
+    }
+    if frontend_self_check_applies(task) {
+        repair_core_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
+            "task.frontendExperienceRequirement.executionGuidance.purpose",
+            "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
+            "task.frontendExperienceRequirement.executionGuidance.responsibility",
+            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+            "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
+            "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
+            "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
+            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+            "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
+            "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+            "executionRules.frontendImplementationOrganizationRules",
+            "executionRules.interactiveVerificationProbePolicy",
+            "executionRules.controlledRuntimeProbeRules",
+        ]);
+    }
+    if runtime_delivery_evidence_applies(task) {
+        repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
+        repair_core_fields.extend([
+            "executionRules.controlledRuntimeProbeRules",
+            "executionRules.runtimeDeliveryExecutionRules",
+        ]);
+    }
+    if execution_rules
+        .get("frontendImplementationOrganizationRules")
+        .is_some()
+    {
+        repair_core_fields.push("executionRules.frontendImplementationOrganizationRules");
+    }
+    if execution_rules
+        .get("interactiveVerificationProbePolicy")
+        .is_some()
+    {
+        repair_core_fields.push("executionRules.interactiveVerificationProbePolicy");
+    }
+    if execution_rules.get("controlledRuntimeProbeRules").is_some() {
+        repair_core_fields.push("executionRules.controlledRuntimeProbeRules");
+    }
+    if execution_rules
+        .get("runtimeDeliveryExecutionRules")
+        .is_some()
+    {
+        repair_core_fields.push("executionRules.runtimeDeliveryExecutionRules");
+    }
+    let mut seen_repair_core_fields = BTreeSet::new();
+    repair_core_fields.retain(|field| seen_repair_core_fields.insert(*field));
+    let mut repair_result_fields = vec![
+        "enumRefs.taskResultStatus",
+        "enumRefs.verificationStatus",
+        "outputContract.resultFile",
+        "outputContract.requiredTopLevelFields",
+        "outputContract.resultTemplate",
+        "outputContract.schemaShape.properties.status",
+        "outputContract.schemaShape.properties.changedFiles",
+        "outputContract.schemaShape.properties.noChangeReason",
+        "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.selfRepairSummary",
+        "outputContract.schemaShape.properties.failure",
+        "outputContract.schemaShape.properties.executionContinuity",
+        "outputContract.schemaShape.properties.notes",
+        "outputContract.schemaShape.properties.requirementDetailEvidence",
+        "outputContract.schemaShape.properties.blockedReasons",
+        "outputContract.resultRules",
+        "outputContract.blockedReasonOptions",
+        "executionRules.completionBarrier",
+    ];
+    if frontend_self_check_applies(task) {
+        repair_result_fields
+            .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if runtime_delivery_evidence_applies(task) {
+        repair_result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+    if !task.concept_refs.is_empty() {
+        repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
+    }
+    let mut repair_context = json!({
+        "sourceTaskId": task.task_id,
+        "repairOrigin": repair_origin,
+    });
+    if matches!(repair_origin, RepairOrigin::TaskFailure) {
+        repair_context["attemptCount"] = json!(attempt_count);
+    }
+    if let Some(source_ref) = source_ref {
+        repair_context["sourceRef"] = json!(source_ref);
+    }
+    if !finding_refs.is_empty() {
+        repair_context["findingRefs"] = json!(finding_refs);
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "delivery_execution_repair",
@@ -555,45 +776,8 @@ fn build_repair_execution_request(
             "groupId": task.group_id
         },
         "task": task,
-        "taskConceptGrounding": {
-            "conceptRefs": task.concept_refs,
-            "conceptResponsibilities": task.concept_responsibilities,
-            "conceptVerificationIntents": task.concept_verification_intents
-        },
-        "repairContext": {
-            "sourceTaskId": task.task_id,
-            "repairOrigin": repair_origin,
-            "attemptCount": attempt_count,
-            "sourceRef": source_ref,
-            "findingRefs": finding_refs
-        },
-        "executionRules": {
-            "sourceEditPreparationContract": {
-                "rule": "Repair only the execution issue for the current task. Do not modify Loom contracts or protected artifacts."
-            },
-            "completionBarrier": {
-                "resultFile": result_file,
-                "submitTool": "loom.recordTaskResultFile",
-                "rule": "The repair is not complete until TaskResult exists at outputContract.resultFile and loom.recordTaskResultFile succeeds."
-            },
-            "finalResponseGuard": {
-                "mustNotReportProgressBeforeSubmit": true
-            },
-            "completionContinuityRequirement": {
-                "taskResultSubmittedAfterVerification": true,
-                "agentOwnedLongRunningWork": "none | started_and_released | unknown"
-            },
-            "verificationCommandSchedulingRules": [
-                "Run the verification needed for the repaired task before TaskResult submission.",
-                "When a failing signal is available in repairContext, rerun that signal or the closest stable equivalent after the fix."
-            ],
-            "boundaryRules": [
-                "Use repairContext as the failure boundary; do not repair unrelated issues.",
-                "Do not edit Brainstorm, TechnicalBaseline, PGC, AAC, TaskPlan, ReviewResult, ManualReviewResolution, or .loom state.",
-                "Do not expand scope.",
-                "Write TaskResult JSON only to outputContract.resultFile."
-            ]
-        },
+        "repairContext": repair_context,
+        "executionRules": execution_rules,
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
             "verificationStatus": ["passed", "not_run", "failed", "inconclusive"]
@@ -609,25 +793,17 @@ fn build_repair_execution_request(
                 "required": true,
                 "description": "Write the TaskResult JSON for this delivery execution repair."
             }],
-            "requiredTopLevelFields": [
-                "schemaVersion", "taskResultId", "taskId", "taskPlanId", "status",
-                "changedFiles", "noChangeReason", "verificationResults", "selfRepairSummary",
-                "failure", "executionContinuity", "notes", "frontendExperienceSelfCheck",
-                "runtimeDeliveryEvidence", "requirementDetailEvidence", "conceptEvidence",
-                "blockedReasons", "createdAt", "updatedAt"
+            "requiredTopLevelFields": task_result_required_top_level_fields(task),
+            "blockedReasonOptions": [
+                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
+                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
+                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
             "schemaShape": schema_shape,
             "resultTemplate": result_template,
             "resultRules": [
                 "TaskResult must include every requiredTopLevelFields entry.",
                 "If status is completed, evidence must show the repair was verified."
-            ]
-        },
-        "blockedOutput": {
-            "blockedReasons": [
-                {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
-                {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
-                {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ]
         },
         "requestReadPlan": {
@@ -637,71 +813,14 @@ fn build_repair_execution_request(
                     "required": true,
                     "purpose": "Read task, repair context, and execution rules before editing.",
                     "whenToRead": "Read before source edits.",
-                    "fields": [
-                        "source.deliveryId",
-                        "source.phaseId",
-                        "source.taskPlanId",
-                        "source.taskPlanRunId",
-                        "source.taskId",
-                        "source.groupId",
-                        "task.taskId",
-                        "task.groupId",
-                        "task.title",
-                        "task.taskKind",
-                        "task.implementationActions",
-                        "task.objective",
-                        "task.dependsOn",
-                        "task.scopeRefs",
-                        "task.acceptanceRefs",
-                        "task.requirementDetailRefs",
-                        "task.writeBoundary.forbiddenPaths",
-                        "task.writeBoundary.artifactRefs",
-                        "task.verificationIntents",
-                        "taskConceptGrounding.conceptRefs",
-                        "taskConceptGrounding.conceptResponsibilities",
-                        "taskConceptGrounding.conceptVerificationIntents",
-                        "task.frontendExperienceRequirement",
-                        "task.runtimeDeliveryRequirement",
-                        "repairContext.sourceTaskId",
-                        "repairContext.repairOrigin",
-                        "repairContext.attemptCount",
-                        "repairContext.sourceRef",
-                        "repairContext.findingRefs",
-                        "executionRules.completionBarrier",
-                        "executionRules.finalResponseGuard",
-                        "executionRules.completionContinuityRequirement",
-                        "executionRules.verificationCommandSchedulingRules",
-                        "executionRules.boundaryRules"
-                    ]
+                    "fields": repair_core_fields
                 },
                 {
                     "groupId": "repair_result_contract",
                     "required": true,
                     "purpose": "Read TaskResult write contract before submitting repair result.",
                     "whenToRead": "Read before writing TaskResult.",
-                    "fields": [
-                        "enumRefs.taskResultStatus",
-                        "enumRefs.verificationStatus",
-                        "outputContract.resultFile",
-                        "outputContract.requiredTopLevelFields",
-                        "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.status",
-                        "outputContract.schemaShape.properties.changedFiles",
-                        "outputContract.schemaShape.properties.noChangeReason",
-                        "outputContract.schemaShape.properties.verificationResults",
-                        "outputContract.schemaShape.properties.selfRepairSummary",
-                        "outputContract.schemaShape.properties.failure",
-                        "outputContract.schemaShape.properties.executionContinuity",
-                        "outputContract.schemaShape.properties.notes",
-                        "outputContract.schemaShape.properties.frontendExperienceSelfCheck",
-                        "outputContract.schemaShape.properties.runtimeDeliveryEvidence",
-                        "outputContract.schemaShape.properties.requirementDetailEvidence",
-                        "outputContract.schemaShape.properties.conceptEvidence",
-                        "outputContract.schemaShape.properties.blockedReasons",
-                        "outputContract.resultRules",
-                        "blockedOutput.blockedReasons",
-                        "executionRules.completionBarrier"
-                    ]
+                    "fields": repair_result_fields
                 }
             ]
         }
@@ -771,21 +890,41 @@ fn materialize_taskplan_repair_action(
         group_id: "taskplan_candidate_contract".to_string(),
     })?
     .fields;
-    let optional_fields = state::read_field_group(ReadFieldGroupInput {
-        project_root: project_root.to_string(),
-        request_ref: original_request_ref.clone(),
-        group_id: "taskplan_optional_projection".to_string(),
-    })
-    .map(|result| result.fields)
-    .unwrap_or_default();
-
-    let source_refs = json!({
-        "technicalBaselineRef": value_field(&core_fields, "sourceRefs.technicalBaselineRef"),
-        "planningGenerationContractRef": value_field(&core_fields, "sourceRefs.planningGenerationContractRef"),
-        "architectureArtifactContractRef": value_field(&core_fields, "sourceRefs.architectureArtifactContractRef"),
-        "phaseConceptGroundingRef": value_field(&core_fields, "sourceRefs.phaseConceptGroundingRef"),
-        "deliveryConceptGlossaryRef": value_field(&core_fields, "sourceRefs.deliveryConceptGlossaryRef")
-    });
+    let source_refs = repair_source_refs_from_fields(
+        &core_fields,
+        &[
+            (
+                "technicalBaselineRef",
+                "sourceRefs.technicalBaselineRef",
+                true,
+            ),
+            (
+                "planningGenerationContractRef",
+                "sourceRefs.planningGenerationContractRef",
+                true,
+            ),
+            (
+                "architectureArtifactContractRef",
+                "sourceRefs.architectureArtifactContractRef",
+                true,
+            ),
+            (
+                "phaseConceptGroundingRef",
+                "sourceRefs.phaseConceptGroundingRef",
+                false,
+            ),
+            (
+                "deliveryConceptGlossaryRef",
+                "sourceRefs.deliveryConceptGlossaryRef",
+                false,
+            ),
+            (
+                "repositoryContextRef",
+                "sourceRefs.repositoryContextRef",
+                false,
+            ),
+        ],
+    )?;
     let allowed_refs = json!({
         "scopeRefs": value_field(&core_fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": value_field(&core_fields, "allowedRefs.acceptanceRefs"),
@@ -800,7 +939,7 @@ fn materialize_taskplan_repair_action(
         "decisionRefs": value_field(&core_fields, "allowedRefs.decisionRefs"),
         "riskRefs": value_field(&core_fields, "allowedRefs.riskRefs")
     });
-    let mut context_projection = json!({
+    let context_projection = json!({
         "phaseId": field_value(&core_fields, "contextProjection.phaseId")?,
         "planningContractId": field_value(&core_fields, "contextProjection.planningContractId")?,
         "architectureArtifactContractId": field_value(&core_fields, "contextProjection.architectureArtifactContractId")?,
@@ -831,37 +970,86 @@ fn materialize_taskplan_repair_action(
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
         "verificationEvidence": value_field(&contract_fields, "enumRefs.verificationEvidence")
     });
-    let frontend_projection = optional_field_value(
-        &optional_fields,
-        "contextProjection.frontendExperienceProjection",
-        "outputContract.frontendExperienceProjection",
-    );
-    let runtime_projection = optional_field_value(
-        &optional_fields,
-        "contextProjection.runtimeDeliveryProjection",
-        "outputContract.runtimeDeliveryProjection",
-    );
     let mut runtime_requirement_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryRequirementTemplate",
     );
     if runtime_requirement_template.is_null() {
-        runtime_requirement_template = runtime_delivery_requirement_template(
-            (!runtime_projection.is_null()).then_some(&runtime_projection),
-        );
+        let runtime_status =
+            value_field(&rule_fields, "generationRules.runtimeDeliveryRules.status");
+        if runtime_status
+            .as_str()
+            .is_some_and(|status| status != "not_applicable")
+        {
+            runtime_requirement_template =
+                runtime_delivery_requirement_template(Some(&json!({ "status": runtime_status })));
+        }
     }
     let runtime_closure_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryClosureTaskTemplate",
     );
-    context_projection["frontendExperienceProjection"] = frontend_projection.clone();
-    context_projection["runtimeDeliveryProjection"] = runtime_projection.clone();
-    let optional_projection_fields =
-        taskplan_repair_optional_projection_fields(&frontend_projection, &runtime_projection);
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let group_schema = serde_json::to_value(schema_for!(TaskPlanGroupCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+
+    let mut repair_context = json!({
+        "sourceTaskPlanRequestRef": original_request_ref
+    });
+    if let Some(source_ref) = source_ref {
+        repair_context["sourceRef"] = json!(source_ref);
+    }
+    let mut taskplan_core_fields = vec![
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.planningGenerationContractRef",
+        "sourceRefs.architectureArtifactContractRef",
+    ];
+    for (ref_key, field) in [
+        (
+            "phaseConceptGroundingRef",
+            "sourceRefs.phaseConceptGroundingRef",
+        ),
+        (
+            "deliveryConceptGlossaryRef",
+            "sourceRefs.deliveryConceptGlossaryRef",
+        ),
+        ("repositoryContextRef", "sourceRefs.repositoryContextRef"),
+    ] {
+        if has_non_null_key(&source_refs, ref_key) {
+            taskplan_core_fields.push(field);
+        }
+    }
+    taskplan_core_fields.push("repairContext.sourceTaskPlanRequestRef");
+    if has_non_null_key(&repair_context, "sourceRef") {
+        taskplan_core_fields.push("repairContext.sourceRef");
+    }
+    taskplan_core_fields.extend([
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.architectureArtifactContractId",
+        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+        "contextProjection.requirementDetailTransfer.currentPhaseScope",
+        "contextProjection.requirementDetailTransfer.acceptanceDetails",
+        "contextProjection.requirementDetailTransfer.businessFlowDetails",
+        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+        "contextProjection.requirementDetailTransfer.architectureDetails",
+        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+        "contextProjection.requirementDetailTransfer.conceptRefs",
+        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
+        "allowedRefs.scopeRefs",
+        "allowedRefs.acceptanceRefs",
+        "allowedRefs.deferredScopeRefs",
+        "allowedRefs.excludedScopeRefs",
+        "allowedRefs.requirementDetailIds",
+        "allowedRefs.moduleRefs",
+        "allowedRefs.entityRefs",
+        "allowedRefs.interfaceRefs",
+        "allowedRefs.userFlowRefs",
+        "allowedRefs.stateMachineRefs",
+        "allowedRefs.decisionRefs",
+        "allowedRefs.riskRefs",
+    ]);
 
     let mut request_root = json!({
         "schemaVersion": "1.0",
@@ -871,10 +1059,7 @@ fn materialize_taskplan_repair_action(
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::TaskplanRepair,
         "sourceRefs": source_refs,
-        "repairContext": {
-            "sourceTaskPlanRequestRef": original_request_ref,
-            "sourceRef": source_ref
-        },
+        "repairContext": repair_context,
         "contextProjection": context_projection,
         "allowedRefs": allowed_refs,
         "generationRules": generation_rules,
@@ -916,39 +1101,7 @@ fn materialize_taskplan_repair_action(
                     "required": true,
                     "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the replacement TaskPlan outline.",
                     "whenToRead": "Read first.",
-                    "fields": [
-                        "sourceRefs.technicalBaselineRef",
-                        "sourceRefs.planningGenerationContractRef",
-                        "sourceRefs.architectureArtifactContractRef",
-                        "sourceRefs.phaseConceptGroundingRef",
-                        "sourceRefs.deliveryConceptGlossaryRef",
-                        "repairContext.sourceTaskPlanRequestRef",
-                        "repairContext.sourceRef",
-                        "contextProjection.phaseId",
-                        "contextProjection.planningContractId",
-                        "contextProjection.architectureArtifactContractId",
-                        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-                        "contextProjection.requirementDetailTransfer.currentPhaseScope",
-                        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                        "contextProjection.requirementDetailTransfer.businessFlowDetails",
-                        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-                        "contextProjection.requirementDetailTransfer.architectureDetails",
-                        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-                        "contextProjection.requirementDetailTransfer.conceptRefs",
-                        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
-                        "allowedRefs.scopeRefs",
-                        "allowedRefs.acceptanceRefs",
-                        "allowedRefs.deferredScopeRefs",
-                        "allowedRefs.excludedScopeRefs",
-                        "allowedRefs.requirementDetailIds",
-                        "allowedRefs.moduleRefs",
-                        "allowedRefs.entityRefs",
-                        "allowedRefs.interfaceRefs",
-                        "allowedRefs.userFlowRefs",
-                        "allowedRefs.stateMachineRefs",
-                        "allowedRefs.decisionRefs",
-                        "allowedRefs.riskRefs"
-                    ]
+                    "fields": taskplan_core_fields
                 },
                 {
                     "groupId": "taskplan_generation_rules",
@@ -1014,19 +1167,6 @@ fn materialize_taskplan_repair_action(
             .and_then(Value::as_array_mut)
             .expect("taskplan repair write contract fields")
             .push(json!("outputContract.runtimeDeliveryClosureTaskTemplate"));
-    }
-    if !optional_projection_fields.is_empty() {
-        request_root
-            .pointer_mut("/requestReadPlan/groups")
-            .and_then(Value::as_array_mut)
-            .expect("taskplan repair action requestReadPlan groups")
-            .push(json!({
-                "groupId": "taskplan_optional_projection",
-                "required": false,
-                "purpose": "Read full frontend/runtime projections only when core projection is insufficient.",
-                "whenToRead": "Read on demand.",
-                "fields": optional_projection_fields
-            }));
     }
     let stored = state::write_native_request(
         project_root,
@@ -1113,17 +1253,56 @@ fn materialize_architecture_repair_action(
     })
     .map(|result| result.fields)
     .unwrap_or_default();
-    let source_refs = json!({
-        "planningContractRef": value_field(&core_fields, "sourceRefs.planningContractRef"),
-        "technicalBaselineRef": value_field(&core_fields, "sourceRefs.technicalBaselineRef"),
-        "brainstormContractRef": value_field(&core_fields, "sourceRefs.brainstormContractRef"),
-        "repositoryContextRef": value_field(&core_fields, "sourceRefs.repositoryContextRef"),
-        "deliveryConceptGlossaryRef": value_field(&core_fields, "sourceRefs.deliveryConceptGlossaryRef"),
-        "phaseConceptGroundingRef": value_field(&core_fields, "sourceRefs.phaseConceptGroundingRef"),
-        "confirmedFrontendExperienceRef": value_field(&core_fields, "sourceRefs.confirmedFrontendExperienceRef"),
-        "currentFrontendExperienceRef": value_field(&core_fields, "sourceRefs.currentFrontendExperienceRef"),
-        "previousRuntimeDeliveryRef": value_field(&core_fields, "sourceRefs.previousRuntimeDeliveryRef")
-    });
+    let source_refs = repair_source_refs_from_fields(
+        &core_fields,
+        &[
+            (
+                "planningContractRef",
+                "sourceRefs.planningContractRef",
+                true,
+            ),
+            (
+                "technicalBaselineRef",
+                "sourceRefs.technicalBaselineRef",
+                true,
+            ),
+            (
+                "brainstormContractRef",
+                "sourceRefs.brainstormContractRef",
+                true,
+            ),
+            (
+                "repositoryContextRef",
+                "sourceRefs.repositoryContextRef",
+                false,
+            ),
+            (
+                "deliveryConceptGlossaryRef",
+                "sourceRefs.deliveryConceptGlossaryRef",
+                false,
+            ),
+            (
+                "phaseConceptGroundingRef",
+                "sourceRefs.phaseConceptGroundingRef",
+                false,
+            ),
+            (
+                "confirmedFrontendExperienceRef",
+                "sourceRefs.confirmedFrontendExperienceRef",
+                false,
+            ),
+            (
+                "currentFrontendExperienceRef",
+                "sourceRefs.currentFrontendExperienceRef",
+                false,
+            ),
+            (
+                "previousRuntimeDeliveryRef",
+                "sourceRefs.previousRuntimeDeliveryRef",
+                false,
+            ),
+        ],
+    )?;
     let allowed_refs = json!({
         "scopeRefs": value_field(&core_fields, "allowedRefs.scopeRefs"),
         "acceptanceRefs": value_field(&core_fields, "allowedRefs.acceptanceRefs"),
@@ -1160,10 +1339,18 @@ fn materialize_architecture_repair_action(
         "phaseScope": {
             "phaseName": value_field(&core_fields, "contextProjection.phaseScope.phaseName"),
             "phaseGoal": value_field(&core_fields, "contextProjection.phaseScope.phaseGoal"),
-            "included": value_field(&core_fields, "contextProjection.phaseScope.included"),
-            "deferred": value_field(&core_fields, "contextProjection.phaseScope.deferred"),
-            "excluded": value_field(&core_fields, "contextProjection.phaseScope.excluded"),
             "acceptanceCandidates": value_field(&core_fields, "contextProjection.phaseScope.acceptanceCandidates")
+        },
+        "phaseScopeSummary": {
+            "includedIds": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedIds"),
+            "includedLabels": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedLabels"),
+            "includedItems": value_field(&core_fields, "contextProjection.phaseScopeSummary.includedItems"),
+            "deferredIds": value_field(&core_fields, "contextProjection.phaseScopeSummary.deferredIds"),
+            "deferredLabels": value_field(&core_fields, "contextProjection.phaseScopeSummary.deferredLabels"),
+            "deferredItems": value_field(&core_fields, "contextProjection.phaseScopeSummary.deferredItems"),
+            "excludedIds": value_field(&core_fields, "contextProjection.phaseScopeSummary.excludedIds"),
+            "excludedLabels": value_field(&core_fields, "contextProjection.phaseScopeSummary.excludedLabels"),
+            "excludedItems": value_field(&core_fields, "contextProjection.phaseScopeSummary.excludedItems")
         },
         "phaseId": field_value(&core_fields, "contextProjection.phaseId")?,
         "planningContractId": field_value(&core_fields, "contextProjection.planningContractId")?,
@@ -1178,6 +1365,8 @@ fn materialize_architecture_repair_action(
             "requirementDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.requirementDetails")?,
             "acceptanceDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.acceptanceDetails")?,
             "businessFlows": field_value(&core_fields, "contextProjection.requirementDetailTransfer.businessFlows")?,
+            "actors": value_field(&core_fields, "contextProjection.requirementDetailTransfer.actors"),
+            "capabilityGroups": value_field(&core_fields, "contextProjection.requirementDetailTransfer.capabilityGroups"),
             "frontendExperienceDetails": frontend_experience_details,
             "userFacingLanguage": user_facing_language
         }
@@ -1185,12 +1374,7 @@ fn materialize_architecture_repair_action(
     let frontend_experience_source = if frontend_fields.is_empty() {
         frontend_experience_source_from_source_refs(&source_refs)
     } else {
-        json!({
-            "confirmedFrontendExperienceRef": value_field(&frontend_fields, "frontendExperienceSource.confirmedFrontendExperienceRef"),
-            "currentFrontendExperienceRef": value_field(&frontend_fields, "frontendExperienceSource.currentFrontendExperienceRef"),
-            "repositoryContextRef": value_field(&frontend_fields, "frontendExperienceSource.repositoryContextRef"),
-            "authorityRule": value_field(&frontend_fields, "frontendExperienceSource.authorityRule")
-        })
+        frontend_experience_source_from_fields(&frontend_fields)?
     };
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
@@ -1226,6 +1410,13 @@ fn materialize_architecture_repair_action(
     let candidate_schema =
         serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
             .unwrap_or_else(|_| json!({ "type": "object" }));
+    let mut repair_context = json!({
+        "sourceArchitectureRequestRef": original_request_ref
+    });
+    if let Some(source_ref) = source_ref {
+        repair_context["sourceRef"] = json!(source_ref);
+    }
+    let include_repair_source_ref = has_non_null_key(&repair_context, "sourceRef");
     let request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_artifact_repair",
@@ -1234,10 +1425,7 @@ fn materialize_architecture_repair_action(
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::ArchitectureArtifactRepair,
         "sourceRefs": source_refs,
-        "repairContext": {
-            "sourceArchitectureRequestRef": original_request_ref,
-            "sourceRef": source_ref
-        },
+        "repairContext": repair_context,
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
         "allowedRefs": allowed_refs,
@@ -1252,7 +1440,8 @@ fn materialize_architecture_repair_action(
             "section": ARCHITECTURE_SECTION_ORDER,
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-            "acceptancePriority": ["must", "should", "could"]
+            "acceptancePriority": ["must", "should", "could"],
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -1301,7 +1490,12 @@ fn materialize_architecture_repair_action(
             }
         },
         "requestReadPlan": {
-            "groups": architecture_repair_read_groups(ArchitectureSectionGroup::Foundation)
+            "groups": architecture_repair_read_groups(
+                ArchitectureSectionGroup::Foundation,
+                &source_refs,
+                &frontend_experience_source,
+                include_repair_source_ref
+            )
         }
     });
     let stored = state::write_native_request(
@@ -1393,6 +1587,24 @@ fn value_field(fields: &BTreeMap<String, delivery_core::FieldReadResult>, field:
         .unwrap_or(Value::Null)
 }
 
+fn repair_source_refs_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+    refs: &[(&str, &str, bool)],
+) -> Result<Value, state::store::StateError> {
+    let mut object = serde_json::Map::new();
+    for (key, field, required) in refs {
+        let value = if *required {
+            field_value(fields, field)?
+        } else {
+            value_field(fields, field)
+        };
+        if !value.is_null() {
+            object.insert((*key).to_string(), value);
+        }
+    }
+    Ok(Value::Object(object))
+}
+
 fn frontend_experience_source_from_source_refs(source_refs: &Value) -> Value {
     let mut object = serde_json::Map::new();
     for key in [
@@ -1409,6 +1621,36 @@ fn frontend_experience_source_from_source_refs(source_refs: &Value) -> Value {
         json!("Use confirmed/current frontend refs as the frontend_experience authority. RepositoryContext and TechnicalBaseline are implementation facts only."),
     );
     Value::Object(object)
+}
+
+fn frontend_experience_source_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Result<Value, state::store::StateError> {
+    let mut object = serde_json::Map::new();
+    for (key, field) in [
+        (
+            "confirmedFrontendExperienceRef",
+            "frontendExperienceSource.confirmedFrontendExperienceRef",
+        ),
+        (
+            "currentFrontendExperienceRef",
+            "frontendExperienceSource.currentFrontendExperienceRef",
+        ),
+        (
+            "repositoryContextRef",
+            "frontendExperienceSource.repositoryContextRef",
+        ),
+    ] {
+        let value = value_field(fields, field);
+        if !value.is_null() {
+            object.insert(key.to_string(), value);
+        }
+    }
+    object.insert(
+        "authorityRule".to_string(),
+        field_value(fields, "frontendExperienceSource.authorityRule")?,
+    );
+    Ok(Value::Object(object))
 }
 
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
@@ -1433,73 +1675,85 @@ fn read_project_json_value(
     state::store::read_json_value(&from_project_relative(project_root, relative)?)
 }
 
-fn optional_field_value(
-    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
-    primary: &str,
-    migration_fallback: &str,
+fn architecture_repair_read_groups(
+    section: ArchitectureSectionGroup,
+    source_refs: &Value,
+    frontend_experience_source: &Value,
+    include_source_ref: bool,
 ) -> Value {
-    fields
-        .get(primary)
-        .or_else(|| fields.get(migration_fallback))
-        .map(|field| field.value.clone())
-        .unwrap_or(Value::Null)
-}
-
-fn taskplan_repair_optional_projection_fields(
-    frontend_projection: &Value,
-    runtime_projection: &Value,
-) -> Vec<&'static str> {
-    let mut fields = Vec::new();
-    if !frontend_projection.is_null() {
-        fields.push("contextProjection.frontendExperienceProjection");
+    let mut core_fields = vec![
+        "sourceRefs.planningContractRef",
+        "sourceRefs.technicalBaselineRef",
+        "sourceRefs.brainstormContractRef",
+    ];
+    for ref_key in [
+        "repositoryContextRef",
+        "deliveryConceptGlossaryRef",
+        "phaseConceptGroundingRef",
+        "confirmedFrontendExperienceRef",
+        "currentFrontendExperienceRef",
+        "previousRuntimeDeliveryRef",
+    ] {
+        if has_non_null_key(source_refs, ref_key) {
+            core_fields.push(match ref_key {
+                "repositoryContextRef" => "sourceRefs.repositoryContextRef",
+                "deliveryConceptGlossaryRef" => "sourceRefs.deliveryConceptGlossaryRef",
+                "phaseConceptGroundingRef" => "sourceRefs.phaseConceptGroundingRef",
+                "confirmedFrontendExperienceRef" => "sourceRefs.confirmedFrontendExperienceRef",
+                "currentFrontendExperienceRef" => "sourceRefs.currentFrontendExperienceRef",
+                "previousRuntimeDeliveryRef" => "sourceRefs.previousRuntimeDeliveryRef",
+                _ => unreachable!(),
+            });
+        }
     }
-    if !runtime_projection.is_null() {
-        fields.push("contextProjection.runtimeDeliveryProjection");
+    core_fields.extend([
+        "repairContext.sourceArchitectureRequestRef",
+        "contextProjection.phaseScope.phaseName",
+        "contextProjection.phaseScope.phaseGoal",
+        "contextProjection.phaseScopeSummary.includedIds",
+        "contextProjection.phaseScopeSummary.includedLabels",
+        "contextProjection.phaseScopeSummary.includedItems",
+        "contextProjection.phaseScopeSummary.deferredIds",
+        "contextProjection.phaseScopeSummary.deferredLabels",
+        "contextProjection.phaseScopeSummary.deferredItems",
+        "contextProjection.phaseScopeSummary.excludedIds",
+        "contextProjection.phaseScopeSummary.excludedLabels",
+        "contextProjection.phaseScopeSummary.excludedItems",
+        "contextProjection.phaseId",
+        "contextProjection.planningContractId",
+        "contextProjection.technicalBaseline.technicalBaselineId",
+        "contextProjection.technicalBaseline.status",
+        "contextProjection.technicalBaseline.scope",
+        "contextProjection.technicalBaseline.summary",
+        "contextProjection.technicalBaseline.mustFollow",
+    ]);
+    if include_source_ref {
+        core_fields.insert(9, "repairContext.sourceRef");
     }
-    fields
-}
-
-fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
+    if architecture_section_uses_detail_refs(section) {
+        core_fields.extend([
+            "contextProjection.phaseScope.acceptanceCandidates",
+            "contextProjection.requirementDetailTransfer.requirementDetails",
+            "contextProjection.requirementDetailTransfer.acceptanceDetails",
+            "contextProjection.requirementDetailTransfer.businessFlows",
+            "allowedRefs.scopeRefs",
+            "allowedRefs.acceptanceRefs",
+            "allowedRefs.deferredScopeRefs",
+            "allowedRefs.excludedScopeRefs",
+            "allowedRefs.requirementDetailIds",
+        ]);
+    }
     let mut groups = vec![
         json!({
             "groupId": "architecture_core_context",
             "required": true,
-            "purpose": "Read the current-phase planning authority, repair context, and allowed refs before generating the replacement Architecture section.",
+            "purpose": if architecture_section_uses_detail_refs(section) {
+                "Read the current-phase planning authority, repair context, and allowed refs before generating the replacement Architecture section."
+            } else {
+                "Read the current-phase planning authority and repair context before generating the replacement Architecture section."
+            },
             "whenToRead": "Read before drafting any replacement Architecture section candidate.",
-            "fields": [
-                "sourceRefs.planningContractRef",
-                "sourceRefs.technicalBaselineRef",
-                "sourceRefs.brainstormContractRef",
-                "sourceRefs.repositoryContextRef",
-                "sourceRefs.deliveryConceptGlossaryRef",
-                "sourceRefs.phaseConceptGroundingRef",
-                "sourceRefs.confirmedFrontendExperienceRef",
-                "sourceRefs.currentFrontendExperienceRef",
-                "sourceRefs.previousRuntimeDeliveryRef",
-                "repairContext.sourceArchitectureRequestRef",
-                "repairContext.sourceRef",
-                "contextProjection.phaseScope.phaseName",
-                "contextProjection.phaseScope.phaseGoal",
-                "contextProjection.phaseScope.included",
-                "contextProjection.phaseScope.deferred",
-                "contextProjection.phaseScope.excluded",
-                "contextProjection.phaseScope.acceptanceCandidates",
-                "contextProjection.phaseId",
-                "contextProjection.planningContractId",
-                "contextProjection.technicalBaseline.technicalBaselineId",
-                "contextProjection.technicalBaseline.status",
-                "contextProjection.technicalBaseline.scope",
-                "contextProjection.technicalBaseline.summary",
-                "contextProjection.technicalBaseline.mustFollow",
-                "contextProjection.requirementDetailTransfer.requirementDetails",
-                "contextProjection.requirementDetailTransfer.acceptanceDetails",
-                "contextProjection.requirementDetailTransfer.businessFlows",
-                "allowedRefs.scopeRefs",
-                "allowedRefs.acceptanceRefs",
-                "allowedRefs.deferredScopeRefs",
-                "allowedRefs.excludedScopeRefs",
-                "allowedRefs.requirementDetailIds"
-            ]
+            "fields": core_fields
         }),
         json!({
             "groupId": "architecture_section_contract",
@@ -1525,22 +1779,69 @@ fn architecture_repair_read_groups(section: ArchitectureSectionGroup) -> Value {
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+        let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
+        for ref_key in [
+            "confirmedFrontendExperienceRef",
+            "currentFrontendExperienceRef",
+            "repositoryContextRef",
+        ] {
+            if has_non_null_key(frontend_experience_source, ref_key) {
+                frontend_fields.push(match ref_key {
+                    "confirmedFrontendExperienceRef" => {
+                        "frontendExperienceSource.confirmedFrontendExperienceRef"
+                    }
+                    "currentFrontendExperienceRef" => {
+                        "frontendExperienceSource.currentFrontendExperienceRef"
+                    }
+                    "repositoryContextRef" => "frontendExperienceSource.repositoryContextRef",
+                    _ => unreachable!(),
+                });
+            }
+        }
+        frontend_fields.extend([
+            "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
+            "contextProjection.requirementDetailTransfer.userFacingLanguage",
+        ]);
         groups.push(json!({
             "groupId": "architecture_frontend_context",
             "required": true,
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
+            "fields": frontend_fields
+        }));
+    }
+    if matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+    ) {
+        groups.push(json!({
+            "groupId": "architecture_domain_model_context",
+            "required": true,
+            "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture repair sections.",
+            "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
             "fields": [
-                "frontendExperienceSource.confirmedFrontendExperienceRef",
-                "frontendExperienceSource.currentFrontendExperienceRef",
-                "frontendExperienceSource.repositoryContextRef",
-                "frontendExperienceSource.authorityRule",
-                "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
-                "contextProjection.requirementDetailTransfer.userFacingLanguage"
+                "contextProjection.requirementDetailTransfer.actors",
+                "contextProjection.requirementDetailTransfer.capabilityGroups"
             ]
         }));
     }
     Value::Array(groups)
+}
+
+fn architecture_section_uses_detail_refs(section: ArchitectureSectionGroup) -> bool {
+    matches!(
+        section,
+        ArchitectureSectionGroup::Foundation
+            | ArchitectureSectionGroup::DomainContract
+            | ArchitectureSectionGroup::Behavior
+            | ArchitectureSectionGroup::Coverage
+    )
+}
+
+fn has_non_null_key(value: &Value, key: &str) -> bool {
+    value.get(key).is_some_and(|item| !item.is_null())
 }
 
 fn build_architecture_repair_section_outputs(
@@ -1578,7 +1879,8 @@ fn build_architecture_repair_section_outputs(
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
                     "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-                    "acceptancePriority": ["must", "should", "could"]
+                    "acceptancePriority": ["must", "should", "could"],
+                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
                 },
                 "generationRules": [
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
@@ -1724,16 +2026,21 @@ fn architecture_repair_section_content_template(
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDelivery": {
                 "status": "modified",
+                "runtimeKind": "",
+                "deploymentShape": "single-service",
                 "basis": {
                     "technicalBaselineRef": ""
                 },
                 "build": {
                     "command": "",
-                    "output": ""
+                    "workingDirectory": ".",
+                    "outputs": [],
+                    "codeLevelExpectations": [""]
                 },
                 "start": {
                     "command": "",
-                    "port": null
+                    "workingDirectory": ".",
+                    "codeLevelExpectations": [""]
                 },
                 "runtimeSurfaces": [{
                     "surfaceId": "runtime_surface_1",
@@ -1741,9 +2048,30 @@ fn architecture_repair_section_content_template(
                     "urlPath": "",
                     "purpose": ""
                 }],
+                "httpProbes": {
+                    "previewPath": "/",
+                    "apiPaths": [],
+                    "expectedStatus": "2xx_or_3xx"
+                },
+                "environment": {
+                    "required": [],
+                    "optional": []
+                },
                 "taskPlanningGuidance": {
-                    "runtimeAffectingTasks": [],
-                    "closureRequired": true
+                    "requireRuntimeDeliveryRequirementWhenTaskTouches": [
+                        "build_or_packaging",
+                        "runtime_entry",
+                        "serving_or_routing",
+                        "configuration_or_environment",
+                        "generated_artifacts",
+                        "runtime_surface"
+                    ],
+                    "doNotRequireForTaskKinds": [
+                        "domain_only_validation",
+                        "pure_unit_test_additions"
+                    ],
+                    "verificationBoundary": "code_level_only",
+                    "doNotRequireCleanInstallOrContainerBuild": true
                 }
             }
         }),
@@ -1764,7 +2092,6 @@ fn coverage_content_template(context_projection: &Value) -> Value {
                         "priority": acceptance.get("priority").cloned().unwrap_or_else(|| json!("must")),
                         "statement": acceptance.get("statement").cloned().unwrap_or(Value::Null),
                         "coverageStatus": "covered",
-                        "reason": "",
                         "coverage": [acceptance_coverage_artifact_template()],
                         "verificationHints": [{
                             "kind": "manual",
@@ -1785,8 +2112,7 @@ fn coverage_content_template(context_projection: &Value) -> Value {
                     json!({
                         "detailId": detail.get("detailId").cloned().unwrap_or(Value::Null),
                         "coverageStatus": "covered",
-                        "artifactRefs": detail_coverage_artifact_refs_template(),
-                        "reason": ""
+                        "artifactRefs": detail_coverage_artifact_refs_template()
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1809,7 +2135,7 @@ fn coverage_content_template(context_projection: &Value) -> Value {
 
 fn acceptance_coverage_artifact_template() -> Value {
     json!({
-        "type": "modules",
+        "type": "module",
         "refs": [],
         "description": ""
     })
@@ -1860,7 +2186,27 @@ fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<
     }
 }
 
-fn repair_source_task(task_plan: &TaskPlan, run: &TaskPlanRun) -> Option<TaskDefinition> {
+fn repair_source_task(
+    task_plan: &TaskPlan,
+    run: &TaskPlanRun,
+    target_task_ids: &[String],
+) -> Option<TaskDefinition> {
+    if !target_task_ids.is_empty() {
+        return target_task_ids.iter().find_map(|target_task_id| {
+            let in_current_run = run
+                .task_states
+                .iter()
+                .any(|state| state.task_id == *target_task_id);
+            if !in_current_run {
+                return None;
+            }
+            task_plan
+                .tasks
+                .iter()
+                .find(|task| task.task_id == *target_task_id)
+                .cloned()
+        });
+    }
     let preferred = run
         .task_states
         .iter()
@@ -1905,6 +2251,16 @@ fn update_latest_execution_request(
             "taskExecutionResultFile".to_string(),
             result_file.to_string(),
         );
+        let mut details = json!({
+            "resultFile": result_file,
+            "origin": origin
+        });
+        if let Some(source_ref) = source_ref {
+            details["sourceRef"] = json!(source_ref);
+        }
+        if !finding_refs.is_empty() {
+            details["findingRefs"] = json!(finding_refs);
+        }
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ExecutionRepair,
             source: "delivery_execution_repair".to_string(),
@@ -1912,12 +2268,7 @@ fn update_latest_execution_request(
             prompt: None,
             accepted_responses: vec![],
             request_ref: Some(request_ref.to_string()),
-            details: Some(json!({
-                "resultFile": result_file,
-                "origin": origin,
-                "sourceRef": source_ref,
-                "findingRefs": finding_refs
-            })),
+            details: Some(details),
             target_phase_id: None,
         });
     }

@@ -9,8 +9,8 @@ use algorithm_client::AlgorithmClient;
 use crate::{
     mcp_models::{
         KnowledgeBrainstormContextInput, KnowledgeBrainstormContextResult, KnowledgeChunkCard,
-        KnowledgeMatchedLabel, KnowledgeMatchedSource, KnowledgeReadPlan, KnowledgeReadPlanChunk,
-        KnowledgeSearchInput, KnowledgeSearchResult,
+        KnowledgeContextMatchedSource, KnowledgeMatchedLabel, KnowledgeMatchedSource,
+        KnowledgeReadPlan, KnowledgeReadPlanChunk, KnowledgeSearchInput, KnowledgeSearchResult,
     },
     models::{BlockAffinity, ChunksFile, KnowledgeChunk, LexicalIndex},
     paths,
@@ -21,6 +21,13 @@ const DEFAULT_SEARCH_LIMIT: usize = 8;
 const DEFAULT_CONTEXT_SOURCE_LIMIT: usize = 2;
 const DEFAULT_CONTEXT_CHUNK_LIMIT_PER_SOURCE: usize = 5;
 const MAX_CONTEXT_CHUNKS_PER_BLOCK: usize = 5;
+
+const PHASE_SCOPE_RETRIEVAL_INTENT: &str =
+    "phase scope boundary include exclude defer dependency ordering next phase 阶段范围 边界 纳入 排除 延后 递延 依赖 顺序 下一阶段";
+const CONCEPT_GROUNDING_RETRIEVAL_INTENT: &str =
+    "business object operation field state rule invariant precondition validation blocking outcome feedback 业务对象 操作 字段 状态 规则 不变量 前置条件 校验 阻断 成功结果 反馈";
+const FRONTEND_EXPERIENCE_RETRIEVAL_INTENT: &str =
+    "page operation path workspace entry target discovery query filter pagination selection list detail action entry form input success feedback failure feedback business blocking loading empty state refresh readback 页面办理路径 页面操作路径 工作台 入口 目标定位 查询 筛选 分页 选择 列表 详情 操作入口 表单 输入 成功反馈 失败提示 业务阻断 加载中 空状态 刷新 回读";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BrainstormKnowledgeStepRequirement {
@@ -35,12 +42,6 @@ pub fn search_knowledge(input: KnowledgeSearchInput) -> KnowledgeResult<Knowledg
         input.block.as_deref(),
         input.limit.unwrap_or(DEFAULT_SEARCH_LIMIT),
     )?;
-    let matched_sources = aggregate_sources(
-        &cards,
-        &input.semantic_focus,
-        DEFAULT_CONTEXT_CHUNK_LIMIT_PER_SOURCE,
-        usize::MAX,
-    );
     Ok(KnowledgeSearchResult {
         status: if cards.is_empty() {
             "empty".to_string()
@@ -48,7 +49,6 @@ pub fn search_knowledge(input: KnowledgeSearchInput) -> KnowledgeResult<Knowledg
             "available".to_string()
         },
         cards,
-        matched_sources,
     })
 }
 
@@ -79,8 +79,10 @@ pub fn brainstorm_context(
     )?;
     validate_brainstorm_query_id(&input, &step_requirement)?;
     let request_scope = resolve_brainstorm_request_scope(&input.project_root, &input.request_ref)?;
+    let natural_query = format!("{} {}", input.query_subject, input.natural_language_query);
+    let contextual_query = with_block_retrieval_intent(&natural_query, &input.block);
     let cards = search_cards(
-        &format!("{} {}", input.query_subject, input.natural_language_query),
+        &contextual_query,
         &input.semantic_focus,
         &[],
         Some(&input.block),
@@ -102,7 +104,6 @@ pub fn brainstorm_context(
                     .iter()
                     .map(|chunk| KnowledgeReadPlanChunk {
                         source_name: source.source_name.clone(),
-                        source_id: source.source_id.clone(),
                         build_id: source.build_id.clone(),
                         chunk_id: chunk.chunk_id.clone(),
                     })
@@ -115,11 +116,48 @@ pub fn brainstorm_context(
         } else {
             "available".to_string()
         },
-        matched_sources,
+        matched_sources: context_source_summaries(&matched_sources),
         read_plan,
     };
     persist_brainstorm_context(&input, &request_scope, &result)?;
     Ok(result)
+}
+
+fn context_source_summaries(
+    matched_sources: &[KnowledgeMatchedSource],
+) -> Vec<KnowledgeContextMatchedSource> {
+    matched_sources
+        .iter()
+        .map(|source| KnowledgeContextMatchedSource {
+            source_name: source.source_name.clone(),
+            score: source.score,
+            matched_focus_coverage: source.matched_focus_coverage,
+            chunk_count: source.top_chunks.len(),
+        })
+        .collect()
+}
+
+fn with_block_retrieval_intent(query: &str, block: &str) -> String {
+    let Some(intent) = block_retrieval_intent(block) else {
+        return query.to_string();
+    };
+    if query.contains(intent) {
+        return query.to_string();
+    }
+    [query.trim(), intent]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn block_retrieval_intent(block: &str) -> Option<&'static str> {
+    match block {
+        "phase_scope" => Some(PHASE_SCOPE_RETRIEVAL_INTENT),
+        "concept_grounding" => Some(CONCEPT_GROUNDING_RETRIEVAL_INTENT),
+        "frontend_experience" => Some(FRONTEND_EXPERIENCE_RETRIEVAL_INTENT),
+        _ => None,
+    }
 }
 
 fn search_cards(
@@ -170,6 +208,7 @@ fn search_cards(
         }
     }
     let lexical_scores = global_lexical_scores(&client, query, bm25_documents, limit)?;
+    let semantic_focus = parse_semantic_focuses(semantic_focus);
     let mut candidates = Vec::new();
     for candidate in chunk_candidates {
         let document_id = lexical_document_id(
@@ -178,7 +217,7 @@ fn search_cards(
             &candidate.chunk.chunk_id,
         );
         let lexical = *lexical_scores.get(&document_id).unwrap_or(&0.0);
-        let semantic = semantic_match(&candidate.chunk, semantic_focus);
+        let semantic = semantic_match(&candidate.chunk, &semantic_focus);
         let affinity = block_affinity_score(candidate.chunk.block_affinity.as_ref(), block);
         let score =
             lexical * 0.40 + semantic.score * 0.25 + semantic.completeness * 0.20 + affinity * 0.15;
@@ -193,17 +232,11 @@ fn search_cards(
             document_title: candidate.chunk.document_title.clone(),
             heading_path: candidate.chunk.heading_path.clone(),
             summary: candidate.chunk.summary.clone(),
-            semantic_labels: candidate
-                .chunk
-                .semantic_labels
-                .iter()
-                .map(|label| format!("{}: {}", label.kind, label.text))
-                .collect(),
             matched_labels: semantic.matched_labels,
             score: round_score(score),
         });
     }
-    Ok(rank_chunk_cards(candidates, semantic_focus, limit))
+    Ok(rank_chunk_cards(candidates, &semantic_focus, limit))
 }
 
 #[derive(Debug, Clone)]
@@ -355,6 +388,7 @@ fn aggregate_sources(
     per_source_chunk_limit: usize,
     total_chunk_limit: usize,
 ) -> Vec<KnowledgeMatchedSource> {
+    let semantic_focus = parse_semantic_focuses(semantic_focus);
     let mut grouped: BTreeMap<(String, String, String), Vec<KnowledgeChunkCard>> = BTreeMap::new();
     for card in cards {
         grouped
@@ -371,7 +405,7 @@ fn aggregate_sources(
         .into_iter()
         .map(|((source_id, source_name, build_id), source_cards)| {
             let limited_cards =
-                rank_chunk_cards(source_cards, semantic_focus, per_source_chunk_limit);
+                rank_chunk_cards(source_cards, &semantic_focus, per_source_chunk_limit);
             let best_chunk_score = limited_cards.first().map(|card| card.score).unwrap_or(0.0);
             let average_top3_chunk_score = {
                 let top3 = limited_cards.iter().take(3).collect::<Vec<_>>();
@@ -381,7 +415,7 @@ fn aggregate_sources(
                     top3.iter().map(|card| card.score).sum::<f64>() / top3.len() as f64
                 }
             };
-            let matched_focus_coverage = focus_coverage(&limited_cards, semantic_focus);
+            let matched_focus_coverage = focus_coverage(&limited_cards, &semantic_focus);
             let score = best_chunk_score * 0.55
                 + average_top3_chunk_score * 0.25
                 + matched_focus_coverage * 0.20;
@@ -431,7 +465,7 @@ fn aggregate_sources(
                 / source.top_chunks.len().min(3) as f64,
         );
         source.matched_focus_coverage =
-            round_score(focus_coverage(&source.top_chunks, semantic_focus));
+            round_score(focus_coverage(&source.top_chunks, &semantic_focus));
         source.score = round_score(
             source.best_chunk_score * 0.55
                 + source.average_top3_chunk_score * 0.25
@@ -443,10 +477,10 @@ fn aggregate_sources(
     selected
 }
 
-fn semantic_match(chunk: &KnowledgeChunk, semantic_focus: &[String]) -> SemanticChunkMatch {
+fn semantic_match(chunk: &KnowledgeChunk, semantic_focus: &[SemanticFocus]) -> SemanticChunkMatch {
     let expanded_focus = semantic_focus
         .iter()
-        .flat_map(|focus| expand_focus(focus))
+        .flat_map(SemanticFocus::expanded)
         .collect::<Vec<_>>();
     if expanded_focus.is_empty() {
         return SemanticChunkMatch::empty();
@@ -459,7 +493,10 @@ fn semantic_match(chunk: &KnowledgeChunk, semantic_focus: &[String]) -> Semantic
         let mut best_score = 0.0f64;
         let mut best_entry: Option<&SemanticEntry> = None;
         for entry in &entries {
-            let score = entry.match_score(focus);
+            if !focus.matches_kind(&entry.kind) {
+                continue;
+            }
+            let score = entry.match_score(&focus.term);
             if score > best_score {
                 best_score = score;
                 best_entry = Some(entry);
@@ -467,7 +504,7 @@ fn semantic_match(chunk: &KnowledgeChunk, semantic_focus: &[String]) -> Semantic
         }
         if let Some(entry) = best_entry {
             if best_score > 0.0 {
-                focus_scores.insert(focus.clone(), best_score);
+                focus_scores.insert(focus.key(), best_score);
                 let matched = KnowledgeMatchedLabel {
                     kind: entry.kind.clone(),
                     text: entry.text.clone(),
@@ -503,8 +540,7 @@ fn block_affinity_score(affinity: Option<&BlockAffinity>, block: Option<&str>) -
         _ => affinity
             .phase_scope
             .max(affinity.concept_grounding)
-            .max(affinity.frontend_experience)
-            .max(affinity.business_rules),
+            .max(affinity.frontend_experience),
     }
 }
 
@@ -518,6 +554,14 @@ fn semantic_entries(chunk: &KnowledgeChunk) -> Vec<SemanticEntry> {
     let mut entries = Vec::new();
     for label in &chunk.semantic_labels {
         let mut terms = expand_focus(&label.text);
+        if let Some(normalized) = label.normalized_text.as_deref() {
+            terms.extend(expand_focus(normalized));
+            terms.push(normalize_focus(normalized));
+        }
+        for alias in &label.aliases {
+            terms.extend(expand_focus(alias));
+            terms.push(normalize_focus(alias));
+        }
         terms.push(normalize_focus(&format!("{}:{}", label.kind, label.text)));
         if matches!(
             label.kind.as_str(),
@@ -575,10 +619,10 @@ fn semantic_entries(chunk: &KnowledgeChunk) -> Vec<SemanticEntry> {
     entries
 }
 
-fn focus_coverage(cards: &[KnowledgeChunkCard], semantic_focus: &[String]) -> f64 {
+fn focus_coverage(cards: &[KnowledgeChunkCard], semantic_focus: &[SemanticFocus]) -> f64 {
     let focus_count = semantic_focus
         .iter()
-        .filter(|focus| !focus.trim().is_empty())
+        .filter(|focus| !focus.text.trim().is_empty())
         .count();
     if focus_count == 0 {
         return 0.0;
@@ -592,11 +636,14 @@ fn focus_coverage(cards: &[KnowledgeChunkCard], semantic_focus: &[String]) -> f6
 
 fn rank_chunk_cards(
     mut cards: Vec<KnowledgeChunkCard>,
-    semantic_focus: &[String],
+    semantic_focus: &[SemanticFocus],
     limit: usize,
 ) -> Vec<KnowledgeChunkCard> {
     cards.sort_by(compare_chunk_cards);
-    if semantic_focus.iter().all(|focus| focus.trim().is_empty()) {
+    if semantic_focus
+        .iter()
+        .all(|focus| focus.text.trim().is_empty())
+    {
         cards.truncate(limit);
         return cards;
     }
@@ -657,7 +704,7 @@ fn rank_chunk_cards(
     selected
 }
 
-fn card_focus_hits(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> BTreeSet<usize> {
+fn card_focus_hits(card: &KnowledgeChunkCard, semantic_focus: &[SemanticFocus]) -> BTreeSet<usize> {
     let mut hits = BTreeSet::new();
     for (index, focus) in semantic_focus.iter().enumerate() {
         if best_label_focus_hit(card, focus).covers_focus() {
@@ -670,7 +717,7 @@ fn card_focus_hits(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> BTre
 fn compare_focused_chunk_cards(
     left: &KnowledgeChunkCard,
     right: &KnowledgeChunkCard,
-    semantic_focus: &[String],
+    semantic_focus: &[SemanticFocus],
 ) -> Ordering {
     let left_quality = card_focus_quality(left, semantic_focus);
     let right_quality = card_focus_quality(right, semantic_focus);
@@ -686,7 +733,7 @@ fn compare_focused_chunk_cards(
         .then_with(|| compare_chunk_cards(left, right))
 }
 
-fn card_focus_quality(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> FocusQuality {
+fn card_focus_quality(card: &KnowledgeChunkCard, semantic_focus: &[SemanticFocus]) -> FocusQuality {
     let mut quality = FocusQuality::default();
     for focus in semantic_focus {
         match best_label_focus_hit(card, focus) {
@@ -699,7 +746,7 @@ fn card_focus_quality(card: &KnowledgeChunkCard, semantic_focus: &[String]) -> F
     quality
 }
 
-fn best_label_focus_hit(card: &KnowledgeChunkCard, focus: &str) -> FocusHitKind {
+fn best_label_focus_hit(card: &KnowledgeChunkCard, focus: &SemanticFocus) -> FocusHitKind {
     card.matched_labels
         .iter()
         .map(|label| label_focus_hit(label, focus))
@@ -707,8 +754,12 @@ fn best_label_focus_hit(card: &KnowledgeChunkCard, focus: &str) -> FocusHitKind 
         .unwrap_or(FocusHitKind::None)
 }
 
-fn label_focus_hit(label: &KnowledgeMatchedLabel, focus: &str) -> FocusHitKind {
-    let focus_terms = expand_focus(focus)
+fn label_focus_hit(label: &KnowledgeMatchedLabel, focus: &SemanticFocus) -> FocusHitKind {
+    if !focus.matches_kind(&label.kind) {
+        return FocusHitKind::None;
+    }
+    let focus_terms = focus
+        .expanded_terms()
         .into_iter()
         .filter(|term| !term.is_empty())
         .collect::<Vec<_>>();
@@ -762,6 +813,13 @@ fn is_focus_covering_kind(kind: &str) -> bool {
 
 fn is_compact_focus_covering_kind(kind: &str) -> bool {
     matches!(kind, "operation" | "page_operation" | "rule" | "flow")
+}
+
+fn parse_semantic_focuses(values: &[String]) -> Vec<SemanticFocus> {
+    values
+        .iter()
+        .filter_map(|value| SemanticFocus::parse(value))
+        .collect()
 }
 
 fn validate_brainstorm_request_scope(
@@ -1047,6 +1105,102 @@ struct BrainstormRequestScope {
     request_id: String,
     delivery_id: String,
     phase_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticFocus {
+    kind: Option<String>,
+    text: String,
+}
+
+impl SemanticFocus {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.is_empty() {
+            return None;
+        }
+        let Some((kind, text)) = value.split_once(':') else {
+            return Some(Self {
+                kind: None,
+                text: value.to_string(),
+            });
+        };
+        let kind = normalize_focus_kind(kind)?;
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        Some(Self {
+            kind: Some(kind),
+            text: text.to_string(),
+        })
+    }
+
+    fn expanded_terms(&self) -> Vec<String> {
+        let mut values = expand_focus(&self.text);
+        if let Some(kind) = &self.kind {
+            values.push(normalize_focus(&format!("{kind}:{}", self.text)));
+        }
+        values.sort();
+        values.dedup();
+        values
+    }
+
+    fn expanded(&self) -> Vec<ExpandedSemanticFocus> {
+        self.expanded_terms()
+            .into_iter()
+            .map(|term| ExpandedSemanticFocus {
+                kind: self.kind.clone(),
+                term,
+            })
+            .collect()
+    }
+
+    fn matches_kind(&self, label_kind: &str) -> bool {
+        let Some(focus_kind) = self.kind.as_deref() else {
+            return true;
+        };
+        semantic_focus_kind_matches(label_kind, focus_kind)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExpandedSemanticFocus {
+    kind: Option<String>,
+    term: String,
+}
+
+impl ExpandedSemanticFocus {
+    fn key(&self) -> String {
+        match &self.kind {
+            Some(kind) => format!("{kind}:{}", self.term),
+            None => self.term.clone(),
+        }
+    }
+
+    fn matches_kind(&self, label_kind: &str) -> bool {
+        let Some(focus_kind) = self.kind.as_deref() else {
+            return true;
+        };
+        semantic_focus_kind_matches(label_kind, focus_kind)
+    }
+}
+
+fn normalize_focus_kind(kind: &str) -> Option<String> {
+    match kind.trim() {
+        "object" | "operation" | "state" | "rule" | "field" | "page" | "flow" | "other" => {
+            Some(kind.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+fn semantic_focus_kind_matches(label_kind: &str, focus_kind: &str) -> bool {
+    label_kind == focus_kind
+        || (matches!(label_kind, "flow" | "page_operation") && focus_kind == "operation")
+        || (label_kind == "operation" && focus_kind == "flow")
+        || (label_kind == "state" && focus_kind == "rule")
+        || (label_kind == "rule" && focus_kind == "state")
 }
 
 #[derive(Debug, Clone)]

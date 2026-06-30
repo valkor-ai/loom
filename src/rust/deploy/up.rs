@@ -1,14 +1,16 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::Duration,
 };
 
-use contracts::DeploymentFailureKind;
+use contracts::{DeployProvider, DeploymentFailureKind, DeploymentProviderPolicy};
 use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult};
 use serde_json::json;
 use state::{
     paths::from_project_relative,
-    store::{now_string, path_exists, write_json_atomic},
+    store::{path_exists, StateResult},
 };
 
 use crate::{
@@ -16,9 +18,13 @@ use crate::{
     paths::deployment_paths,
     prepare::{deploy_prepare_inner, read_spec},
     repair::write_repair_action,
+    runtime_state::write_success_state,
     validate::{deploy_validate_inner, DeploymentValidationResult},
     DeployToolInput,
 };
+
+const DEPLOY_STARTUP_VALIDATION_ATTEMPTS: usize = 24;
+const DEPLOY_STARTUP_VALIDATION_INTERVAL: Duration = Duration::from_millis(1500);
 
 pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
     let project_root_buf = PathBuf::from(&input.project_root);
@@ -93,6 +99,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     match compose_config {
         Ok(output) if output.status.success() => {}
         Ok(output) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing Compose config failed",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -109,6 +122,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
         Err(error) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing Compose config could not run",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -135,7 +155,14 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let kind = classify_compose_up_failure(&stdout, &stderr);
+            let kind = classify_compose_up_failure(&spec, &stdout, &stderr);
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing deployment provider failed",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -152,6 +179,13 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
         Err(error) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing deployment provider could not run",
+                );
+            }
             return write_repair_action(
                 project_root,
                 &spec,
@@ -168,7 +202,7 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             .unwrap_or_else(|error| failed(project_root, error.to_string()));
         }
     }
-    let validation = match deploy_validate_inner(project_root) {
+    let validation = match wait_for_valid_deployment(project_root) {
         Ok(validation) => validation,
         Err(error) => {
             return write_repair_action(
@@ -184,34 +218,36 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
         }
     };
     if !validation.valid {
-        let kind = validation_failure_kind(&validation);
+        let logs = compose_logs(&compose_file).unwrap_or_default();
+        let kind = validation_failure_kind(&spec, &validation, &logs);
+        let stdout = serde_json::to_string_pretty(&validation).unwrap_or_default();
+        let stderr = if logs.trim().is_empty() {
+            String::new()
+        } else {
+            format!("docker compose logs --tail=120\n{logs}")
+        };
+        if should_fallback_to_generated(&spec) {
+            return fallback_to_generated(
+                project_root,
+                input,
+                "existing deployment validation failed",
+            );
+        }
         return write_repair_action(
             project_root,
             &spec,
             kind,
             vec!["loom.deployValidate".to_string()],
             1,
-            &serde_json::to_string_pretty(&validation).unwrap_or_default(),
-            "",
+            &stdout,
+            &stderr,
         )
         .unwrap_or_else(|error| failed(project_root, error.to_string()));
     }
-    let _ = write_json_atomic(
-        &paths.state_file,
-        &json!({
-            "schemaVersion": 1,
-            "provider": spec.provider,
-            "serviceName": spec.service_name,
-            "projectRoot": spec.project_root,
-            "specRef": state::paths::to_project_relative(project_root, &paths.spec_file).ok(),
-            "composePath": spec.files.compose_path,
-            "running": true,
-            "url": spec.runtime.url,
-            "preview": validation.preview,
-            "apiRoutes": validation.api_routes,
-            "updatedAt": now_string()
-        }),
-    );
+    let state_ref = match write_success_state(project_root, &spec, &validation) {
+        Ok(state_ref) => state_ref,
+        Err(error) => return failed(project_root, error.to_string()),
+    };
     LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: project_root.to_string_lossy().into_owned(),
         summary: "Deployment is running and validation passed.".to_string(),
@@ -219,10 +255,75 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
             "url": spec.runtime.url,
             "preview": validation.preview,
             "apiRoutes": validation.api_routes,
-            "stateRef": state::paths::to_project_relative(project_root, &paths.state_file).ok()
+            "stateRef": state_ref
         })),
         warnings: vec![],
     })
+}
+
+fn should_fallback_to_generated(spec: &contracts::DeploymentSpec) -> bool {
+    matches!(
+        spec.provider,
+        DeployProvider::ComposeExisting | DeployProvider::DockerfileExisting
+    ) && !spec.provider_policy.force_generate
+        && spec.provider_policy.provider.is_none()
+}
+
+fn fallback_to_generated(
+    project_root: &Path,
+    mut input: DeployToolInput,
+    _reason: &str,
+) -> LoomMcpActionResult {
+    input.provider_policy = Some(DeploymentProviderPolicy {
+        provider: Some(DeployProvider::Generated),
+        reuse_existing: false,
+        force_generate: true,
+    });
+    match deploy_prepare_inner(project_root, input.clone()) {
+        Ok(LoomMcpActionResult::Done(_)) => deploy_up_inner(project_root, input),
+        Ok(result) => result,
+        Err(error) => failed(project_root, error.to_string()),
+    }
+}
+
+fn wait_for_valid_deployment(project_root: &Path) -> StateResult<DeploymentValidationResult> {
+    let mut last = deploy_validate_inner(project_root)?;
+    if last.valid {
+        return Ok(last);
+    }
+    for _ in 1..DEPLOY_STARTUP_VALIDATION_ATTEMPTS {
+        if !validation_is_retryable_startup(&last) {
+            return Ok(last);
+        }
+        thread::sleep(DEPLOY_STARTUP_VALIDATION_INTERVAL);
+        last = deploy_validate_inner(project_root)?;
+        if last.valid {
+            return Ok(last);
+        }
+    }
+    Ok(last)
+}
+
+fn validation_is_retryable_startup(validation: &DeploymentValidationResult) -> bool {
+    validation.asset_issues.is_empty()
+        && validation
+            .preview
+            .iter()
+            .chain(validation.api_routes.iter())
+            .any(|probe| {
+                probe.status == "unreachable"
+                    || probe
+                        .error
+                        .as_deref()
+                        .map(|error| {
+                            let lower = error.to_ascii_lowercase();
+                            lower.contains("connection reset")
+                                || lower.contains("connection refused")
+                                || lower.contains("timed out")
+                                || lower.contains("eof")
+                        })
+                        .unwrap_or(false)
+            })
 }
 
 fn docker_available(
@@ -255,10 +356,16 @@ fn docker_available(
     }
 }
 
-fn classify_compose_up_failure(stdout: &str, stderr: &str) -> DeploymentFailureKind {
+fn classify_compose_up_failure(
+    spec: &contracts::DeploymentSpec,
+    stdout: &str,
+    stderr: &str,
+) -> DeploymentFailureKind {
     let text = format!("{stdout}\n{stderr}").to_ascii_lowercase();
-    if text.contains("network") || text.contains("no such host") || text.contains("tls handshake") {
+    if looks_like_registry_network_failure(&text) {
         DeploymentFailureKind::RegistryNetwork
+    } else if is_runtime_build_command_failure(spec, &text) {
+        DeploymentFailureKind::BuildCommandFailed
     } else if text.contains("failed to solve")
         || text.contains("build")
         || text.contains("dockerfile")
@@ -269,9 +376,37 @@ fn classify_compose_up_failure(stdout: &str, stderr: &str) -> DeploymentFailureK
     }
 }
 
-fn validation_failure_kind(validation: &DeploymentValidationResult) -> DeploymentFailureKind {
+fn looks_like_registry_network_failure(text: &str) -> bool {
+    [
+        "failed to fetch oauth token",
+        "failed to authorize",
+        "deadlineexceeded",
+        "i/o timeout",
+        "tls handshake timeout",
+        "temporary failure in name resolution",
+        "no such host",
+        "connection timed out",
+        "network is unreachable",
+        "registry-1.docker.io",
+        "auth.docker.io",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+fn validation_failure_kind(
+    spec: &contracts::DeploymentSpec,
+    validation: &DeploymentValidationResult,
+    logs: &str,
+) -> DeploymentFailureKind {
     if !validation.asset_issues.is_empty() {
         return DeploymentFailureKind::DeployAssetInvalid;
+    }
+    if validation.preview.iter().any(|probe| probe.status != "ok") {
+        if let Some(kind) = classify_startup_log_failure(spec, logs) {
+            return kind;
+        }
+        return DeploymentFailureKind::PreviewNotVerified;
     }
     if validation
         .api_routes
@@ -281,6 +416,147 @@ fn validation_failure_kind(validation: &DeploymentValidationResult) -> Deploymen
         return DeploymentFailureKind::ApiRouteNotVerified;
     }
     DeploymentFailureKind::PreviewNotVerified
+}
+
+fn compose_logs(compose_file: &Path) -> Option<String> {
+    let output = Command::new("docker")
+        .args(["compose", "-f"])
+        .arg(compose_file)
+        .args(["logs", "--tail=120"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    (!combined.trim().is_empty()).then_some(combined)
+}
+
+fn is_runtime_build_command_failure(spec: &contracts::DeploymentSpec, text: &str) -> bool {
+    let build_command = spec
+        .runtime_contract
+        .build_command
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let build_command_seen = !build_command.is_empty() && text.contains(&build_command);
+    let known_build_step_seen = text.contains("npm run build")
+        || text.contains("pnpm run build")
+        || text.contains("yarn build")
+        || text.contains("vite build")
+        || text.contains("tsc -p")
+        || text.contains("gradle")
+        || text.contains("./gradlew")
+        || text.contains("mvn ")
+        || text.contains("maven");
+    let compile_signal = text.contains("error ts")
+        || text.contains("typescript")
+        || text.contains("failed to compile")
+        || text.contains("compilation failed")
+        || text.contains("compilation failure")
+        || text.contains("test failed")
+        || text.contains("build failed");
+    (build_command_seen || known_build_step_seen) && compile_signal
+}
+
+fn classify_startup_log_failure(
+    spec: &contracts::DeploymentSpec,
+    logs: &str,
+) -> Option<DeploymentFailureKind> {
+    let text = logs.to_ascii_lowercase();
+    if text.trim().is_empty() {
+        return None;
+    }
+    let start_command = spec.runtime_contract.start_command.as_deref().or_else(|| {
+        spec.source_model
+            .services
+            .iter()
+            .find(|service| service.service_id == spec.source_model.primary_service_id)
+            .and_then(|service| service.start_command.as_deref())
+    });
+    let script_name = start_command.and_then(package_script_name_from_command);
+    let missing_script = missing_script_name(&text);
+    if start_command.is_some()
+        && (text.contains("npm error missing script")
+            || text.contains("npm err! missing script")
+            || script_name
+                .as_deref()
+                .zip(missing_script.as_deref())
+                .map(|(expected, actual)| expected == actual)
+                .unwrap_or(false))
+    {
+        return Some(DeploymentFailureKind::StartCommandFailed);
+    }
+    if is_application_startup_failure(&text) {
+        return Some(DeploymentFailureKind::ApplicationStartupFailed);
+    }
+    None
+}
+
+fn package_script_name_from_command(command: &str) -> Option<String> {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    for (index, part) in parts.iter().enumerate() {
+        if matches!(*part, "npm" | "pnpm" | "bun") {
+            let next = parts.get(index + 1).copied();
+            let script = if next == Some("run") {
+                parts.get(index + 2).copied()
+            } else {
+                next
+            };
+            return valid_script_name(script);
+        }
+        if *part == "yarn" {
+            return valid_script_name(parts.get(index + 1).copied());
+        }
+    }
+    None
+}
+
+fn valid_script_name(script: Option<&str>) -> Option<String> {
+    let script = script?;
+    if script == "--" || script == "run" || script.starts_with('-') {
+        return None;
+    }
+    Some(
+        script
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_ascii_lowercase(),
+    )
+}
+
+fn missing_script_name(text: &str) -> Option<String> {
+    let marker = "missing script:";
+    let start = text.find(marker)? + marker.len();
+    let value = text[start..]
+        .trim_start()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .split(|ch: char| ch.is_whitespace() || ch == '"' || ch == '\'')
+        .next()?;
+    (!value.is_empty()).then(|| value.to_ascii_lowercase())
+}
+
+fn is_application_startup_failure(text: &str) -> bool {
+    [
+        "application failed to start",
+        "beancreationexception",
+        "unsatisfieddependencyexception",
+        "applicationcontextexception",
+        "webserverexception",
+        "flywayexception",
+        "liquibaseexception",
+        "hibernateexception",
+        "schemamanagementexception",
+        "psqlexception",
+        "communications link failure",
+        "unable to obtain jdbc connection",
+        "prisma",
+        "django.db.utils",
+        "improperlyconfigured",
+        "sqlstate[",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 fn failed(project_root: &Path, message: String) -> LoomMcpActionResult {
