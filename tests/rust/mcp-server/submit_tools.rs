@@ -2380,9 +2380,17 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .fields
         .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
     assert!(core_group.fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
+            .to_string()
     ));
     assert!(core_group.fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
+            .to_string()
+    ));
+    assert!(!core_group.fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
+    ));
+    assert!(!core_group.fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string()
     ));
     assert!(core_group
@@ -2408,8 +2416,14 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
                 .to_string(),
             "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
+                .to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode"
+                .to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
+                .to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy"
+                .to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
             "executionRules.frontendImplementationOrganizationRules".to_string(),
             "executionRules.interactiveVerificationProbePolicy".to_string(),
@@ -2460,16 +2474,15 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["selfCheckField"],
         json!("frontendQualitySelfCheck")
     );
-    assert!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile"].value
-            ["referenceIds"]
-            .as_array()
-            .expect("ui quality reference ids")
-            .contains(&json!("uix.tokens.spacing"))
-    );
+    assert!(fields
+        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"]
+        .value
+        .as_array()
+        .expect("ui quality reference ids")
+        .contains(&json!("uix.tokens.spacing")));
     assert_eq!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"].value
-            ["templateId"],
+        fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
+            .value,
         json!("uix.templates.tokens-css")
     );
     assert_eq!(
@@ -2615,9 +2628,14 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         .collect::<BTreeSet<_>>();
     assert!(repair_read_fields
         .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
+    assert!(repair_read_fields.contains(
+        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
+    ));
     assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"));
+    assert!(!repair_read_fields
         .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile"));
-    assert!(repair_read_fields
+    assert!(!repair_read_fields
         .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"));
     assert!(repair_read_fields
         .contains("outputContract.schemaShape.properties.frontendQualitySelfCheck"));
@@ -2627,8 +2645,10 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         fields: vec![
             "repairContract.issueConflicts".to_string(),
             "repairContract.minimalRepairRules".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
+                .to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
+                .to_string(),
             "outputContract.resultTemplate".to_string(),
             "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
         ],
@@ -2646,16 +2666,16 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
             .expect("serialize rules")
             .contains("frontendQualitySelfCheck")
     );
-    assert!(
-        repair_fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile"]
-            .value["referenceIds"]
-            .as_array()
-            .expect("reference ids")
-            .contains(&json!("uix.tokens.spacing"))
-    );
+    assert!(repair_fields
+        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"]
+        .value
+        .as_array()
+        .expect("reference ids")
+        .contains(&json!("uix.tokens.spacing")));
     assert_eq!(
-        repair_fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"]
-            .value["templateId"],
+        repair_fields
+            ["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
+            .value,
         json!("uix.templates.tokens-css")
     );
     assert!(repair_fields["outputContract.resultTemplate"]

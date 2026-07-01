@@ -41,6 +41,7 @@ use crate::{
         runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
         task_result_required_top_level_fields, task_result_template,
         taskplan_group_result_template, taskplan_outline_result_template,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -695,18 +696,8 @@ fn build_repair_execution_request(
         repair_core_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.uiQuality",
             "task.frontendExperienceRequirement.uiQualityContractRef",
-            "task.frontendExperienceRequirement.uiQualityContract.scenario",
-            "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
-            "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
-            "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
-            "task.frontendExperienceRequirement.uiQualityContract.density",
-            "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
-            "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
-            "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
-            "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
         ]);
+        repair_core_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if runtime_delivery_evidence_applies(task) {
         repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));

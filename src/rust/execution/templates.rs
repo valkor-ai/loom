@@ -1,6 +1,30 @@
 use contracts::TaskDefinition;
 use serde_json::{json, Value};
 
+pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 21] = [
+    "task.frontendExperienceRequirement.uiQualityContract.scenario",
+    "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+    "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
+    "task.frontendExperienceRequirement.uiQualityContract.density",
+    "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds",
+    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tailwindConfigRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tokenFileRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.globalStyleRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.componentThemeRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.mergePolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.duplicationPolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
+    "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
+    "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+];
+
 pub(crate) fn taskplan_outline_result_template(
     request_id: &str,
     delivery_id: &str,

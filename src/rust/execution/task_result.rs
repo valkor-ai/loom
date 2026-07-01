@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     TaskDefinition, TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult,
@@ -28,6 +31,7 @@ use crate::{
     templates::{
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, task_result_template,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -145,14 +149,12 @@ where
         "task.conceptRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-        "task.frontendExperienceRequirement.uiQualityContract.scenario",
-        "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
-        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
-        "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
-        "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
-        "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
-        "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
     ] {
+        if allowed_read_fields.contains(optional_field) {
+            fields_to_read.push(optional_field.to_string());
+        }
+    }
+    for optional_field in FRONTEND_QUALITY_CONTRACT_READ_FIELDS {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
         }
@@ -176,12 +178,8 @@ where
             }
         }
     }
-    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
-        project_root: input.project_root.clone(),
-        request_ref: input.request_ref.clone(),
-        fields: fields_to_read,
-    })?
-    .fields;
+    let fields =
+        read_request_fields_chunked(&input.project_root, &input.request_ref, fields_to_read)?;
     let task_plan_id = string_field(&fields, "source.taskPlanId")?;
     let task_id = string_field(&fields, "source.taskId")?;
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
@@ -1867,18 +1865,8 @@ fn materialize_task_result_repair(
         context_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.uiQuality",
             "task.frontendExperienceRequirement.uiQualityContractRef",
-            "task.frontendExperienceRequirement.uiQualityContract.scenario",
-            "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
-            "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
-            "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
-            "task.frontendExperienceRequirement.uiQualityContract.density",
-            "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
-            "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
-            "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
-            "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
         ]);
+        context_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if runtime_delivery_evidence_applies(&context.task) {
         context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
@@ -2526,6 +2514,25 @@ fn value_to_write_target(value: &Value) -> Result<WriteTarget, state::store::Sta
     })
 }
 
+fn read_request_fields_chunked(
+    project_root: &str,
+    request_ref: &str,
+    mut fields: Vec<String>,
+) -> Result<BTreeMap<String, delivery_core::FieldReadResult>, state::store::StateError> {
+    let mut seen = BTreeSet::new();
+    fields.retain(|field| seen.insert(field.clone()));
+    let mut merged = BTreeMap::new();
+    for chunk in fields.chunks(20) {
+        let read = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+            project_root: project_root.to_string(),
+            request_ref: request_ref.to_string(),
+            fields: chunk.to_vec(),
+        })?;
+        merged.extend(read.fields);
+    }
+    Ok(merged)
+}
+
 fn safe_id(value: &str) -> String {
     value
         .chars()
@@ -2670,8 +2677,24 @@ fn frontend_experience_requirement_from_fields(
             "layoutBaseline": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline"),
             "density": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.density"),
             "semanticTokenPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy"),
-            "referenceProfile": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile"),
-            "designTokenAssetPlan": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"),
+            "referenceProfile": {
+                "referenceIds": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"),
+                "loadMode": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode")
+            },
+            "designTokenAssetPlan": {
+                "strategy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy"),
+                "templateId": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"),
+                "targetFiles": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles"),
+                "existingStyleEvidence": {
+                    "tailwindConfigRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tailwindConfigRefs"),
+                    "tokenFileRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tokenFileRefs"),
+                    "globalStyleRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.globalStyleRefs"),
+                    "componentThemeRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.componentThemeRefs"),
+                    "summary": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary")
+                },
+                "mergePolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.mergePolicy"),
+                "duplicationPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.duplicationPolicy")
+            },
             "requiredUiStates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates"),
             "businessUiRules": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.businessUiRules"),
             "forbiddenUserVisibleContent": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent")

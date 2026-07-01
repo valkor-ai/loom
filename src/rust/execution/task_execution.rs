@@ -27,7 +27,7 @@ use crate::{
     templates::{
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_template,
+        task_result_template, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -595,18 +595,8 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         core_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.uiQuality",
             "task.frontendExperienceRequirement.uiQualityContractRef",
-            "task.frontendExperienceRequirement.uiQualityContract.scenario",
-            "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
-            "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
-            "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
-            "task.frontendExperienceRequirement.uiQualityContract.density",
-            "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
-            "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
-            "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
-            "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
         ]);
+        core_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if has_frontend_execution {
         if !runtime_delivery_evidence_applies(task) {
