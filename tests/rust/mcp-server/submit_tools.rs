@@ -1006,6 +1006,46 @@ fn greenfield_technical_baseline_needing_confirmation_uses_user_gate() {
 }
 
 #[test]
+fn greenfield_technical_baseline_autofills_confirmed_at() {
+    let fixture = Fixture::new("technical-baseline-greenfield-confirmed-at");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = greenfield_technical_baseline_candidate_json();
+    candidate["approval"]
+        .as_object_mut()
+        .expect("approval object")
+        .remove("confirmedAt");
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &baseline_request_ref);
+    let baseline_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "technicalBaseline");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(baseline_ref)).unwrap())
+            .expect("parse technical baseline");
+    assert_eq!(persisted["approval"]["type"], json!("user_confirmed"));
+    assert!(persisted["approval"]["confirmedAt"]
+        .as_str()
+        .is_some_and(|value| !value.trim().is_empty()));
+}
+
+#[test]
 fn greenfield_technical_baseline_requires_complete_track_model() {
     let fixture = Fixture::new("technical-baseline-greenfield-tracks");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
@@ -3397,9 +3437,8 @@ fn taskplan_accept_normalizes_forbidden_paths_before_execution() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["writeBoundary"]["forbiddenPaths"] =
-        json!([".loom", "node_modules", "dist"]);
-    write_json_atomic(&group_path, &group_value).expect("write noisy forbidden paths");
+    group_value["tasks"][0]["writeBoundary"]["forbiddenPaths"] = json!(["node_modules", "dist"]);
+    write_json_atomic(&group_path, &group_value).expect("write incomplete forbidden paths");
 
     let execution_result = call_submit(
         "loom.taskPlanAcceptFile",
@@ -3435,6 +3474,136 @@ fn taskplan_accept_normalizes_forbidden_paths_before_execution() {
         .expect("tasks")
         .iter()
         .all(|task| task["writeBoundary"]["forbiddenPaths"] == json!([".loom"])));
+}
+
+#[test]
+fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
+    let fixture = Fixture::new("taskplan-normalizes-runtime-closure-group");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec![
+            "outputContract.outlineFile".to_string(),
+            "outputContract.groupFilePattern".to_string(),
+        ],
+    })
+    .expect("read taskplan file fields")
+    .fields;
+    let outline_file = fields["outputContract.outlineFile"]
+        .value
+        .as_str()
+        .expect("outline file")
+        .to_string();
+    let group_pattern = fields["outputContract.groupFilePattern"]
+        .value
+        .as_str()
+        .expect("group pattern")
+        .to_string();
+    let outline_path = fixture.root.join(&outline_file);
+    let mut outline: Value =
+        serde_json::from_str(&std::fs::read_to_string(&outline_path).expect("read outline"))
+            .expect("parse outline");
+    let groups = outline["groups"].as_array().expect("outline groups");
+    assert!(
+        groups.len() >= 2,
+        "runtime closure fixture should create separate groups"
+    );
+    let implementation_group_id = groups[0]["groupId"]
+        .as_str()
+        .expect("implementation group id")
+        .to_string();
+    let closure_group_id = groups
+        .iter()
+        .find_map(|group| {
+            let group_id = group["groupId"].as_str()?;
+            let group_file = group_pattern.replace("{groupId}", group_id);
+            let group_value: Value =
+                serde_json::from_str(&std::fs::read_to_string(fixture.root.join(group_file)).ok()?)
+                    .ok()?;
+            group_value["tasks"]
+                .as_array()
+                .is_some_and(|tasks| {
+                    tasks
+                        .iter()
+                        .any(|task| task["taskKind"] == json!("runtime_delivery_closure"))
+                })
+                .then_some(group_id.to_string())
+        })
+        .expect("closure group id");
+    let closure_group_file = group_pattern.replace("{groupId}", &closure_group_id);
+    let closure_group_value: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(&closure_group_file))
+            .expect("read closure group"),
+    )
+    .expect("parse closure group");
+    let mut closure_task = closure_group_value["tasks"][0].clone();
+    let closure_task_id = closure_task["taskId"]
+        .as_str()
+        .expect("closure task id")
+        .to_string();
+    closure_task["groupId"] = json!(implementation_group_id);
+
+    let implementation_group_file = group_pattern.replace("{groupId}", &implementation_group_id);
+    let implementation_group_path = fixture.root.join(&implementation_group_file);
+    let mut implementation_group_value: Value = serde_json::from_str(
+        &std::fs::read_to_string(&implementation_group_path).expect("read implementation group"),
+    )
+    .expect("parse implementation group");
+    implementation_group_value["group"]["taskIds"]
+        .as_array_mut()
+        .expect("implementation group task ids")
+        .push(json!(closure_task_id.clone()));
+    implementation_group_value["tasks"]
+        .as_array_mut()
+        .expect("implementation group tasks")
+        .push(closure_task);
+    write_json_atomic(&implementation_group_path, &implementation_group_value)
+        .expect("write mixed implementation group");
+    outline["groups"] = json!([implementation_group_value["group"].clone()]);
+    write_json_atomic(&outline_path, &outline).expect("write outline with mixed closure group");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    let persisted_groups = persisted["groups"].as_array().expect("persisted groups");
+    let final_group = persisted_groups.last().expect("final group");
+    assert_eq!(final_group["taskIds"], json!([closure_task_id]));
+    assert_eq!(
+        final_group["groupId"],
+        json!("group-runtime-delivery-closure")
+    );
+    assert!(final_group["dependsOn"]
+        .as_array()
+        .expect("final group dependencies")
+        .iter()
+        .any(|item| item == &json!(implementation_group_id)));
+    let closure_task = persisted["tasks"]
+        .as_array()
+        .expect("persisted tasks")
+        .iter()
+        .find(|task| task["taskKind"] == json!("runtime_delivery_closure"))
+        .expect("persisted closure task");
+    assert_eq!(closure_task["groupId"], final_group["groupId"]);
+    assert!(closure_task["dependsOn"]
+        .as_array()
+        .map_or(true, |items| items.is_empty()));
 }
 
 #[test]
@@ -5464,6 +5633,106 @@ fn taskplan_submit_requires_covered_requirement_detail_assignment() {
         issue["code"] == "DETAIL_TASK_ASSIGNMENT_MISSING"
             && issue["fieldPath"] == "tasks[].verificationIntents[].requirementDetailRefs"
     }));
+}
+
+#[test]
+fn taskplan_submit_normalizes_verification_detail_parent_refs() {
+    let fixture = Fixture::new("taskplan-normalizes-verification-detail-parent");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    let detail_ref = group_value["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"][0]
+        .as_str()
+        .expect("detail ref")
+        .to_string();
+    group_value["tasks"][0]["requirementDetailRefs"] = json!([]);
+    write_json_atomic(&group_path, &group_value).expect("write group with parent detail gap");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    assert!(persisted["tasks"][0]["requirementDetailRefs"]
+        .as_array()
+        .expect("task detail refs")
+        .iter()
+        .any(|item| item == &json!(detail_ref)));
+}
+
+#[test]
+fn taskplan_submit_normalizes_missing_verification_detail_refs() {
+    let fixture = Fixture::new("taskplan-normalizes-verification-detail");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    let detail_ref = group_value["tasks"][0]["requirementDetailRefs"][0]
+        .as_str()
+        .expect("detail ref")
+        .to_string();
+    group_value["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"] = json!([]);
+    write_json_atomic(&group_path, &group_value).expect("write group with verification detail gap");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    assert!(
+        persisted["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"]
+            .as_array()
+            .expect("verification detail refs")
+            .iter()
+            .any(|item| item == &json!(detail_ref))
+    );
 }
 
 #[test]

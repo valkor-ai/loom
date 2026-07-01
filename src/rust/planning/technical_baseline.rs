@@ -872,7 +872,7 @@ where
     let project_root = Path::new(&input.project_root);
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let raw = state::store::read_json_value(&candidate_file)?;
-    let candidate: TechnicalBaselineCandidateAgentWritable =
+    let mut candidate: TechnicalBaselineCandidateAgentWritable =
         match serde_json::from_value(raw.clone()) {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -889,6 +889,8 @@ where
             }
         };
 
+    let now = state::store::now_string();
+    normalize_user_confirmed_approval(&mut candidate, &now);
     let issues = validate_candidate(&candidate);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
@@ -946,7 +948,6 @@ where
         }
     }
 
-    let now = state::store::now_string();
     let persisted = TechnicalBaselineContract {
         schema_version: "1.0".to_string(),
         technical_baseline_id: format!("tb_{}_{}", phase_id, state::store::now_millis()),
@@ -1047,6 +1048,25 @@ where
             },
         )
         .map_err(to_state_error)
+}
+
+fn normalize_user_confirmed_approval(
+    candidate: &mut TechnicalBaselineCandidateAgentWritable,
+    confirmed_at: &str,
+) {
+    if candidate.approval.r#type != TechnicalBaselineApprovalType::UserConfirmed {
+        return;
+    }
+    if candidate
+        .approval
+        .confirmed_at
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        candidate.approval.confirmed_at = Some(confirmed_at.to_string());
+    }
 }
 
 fn validate_candidate(

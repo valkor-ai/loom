@@ -662,7 +662,7 @@ where
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let group_value = read_project_json_value(root, &group_file)?;
-        let candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
+        let mut candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
             group_value,
             "group",
             "TASKPLAN_GROUP_SCHEMA_INVALID",
@@ -673,6 +673,7 @@ where
                 return Ok(repairable(input, authorized, group_file, vec![issue], mode));
             }
         };
+        normalize_taskplan_write_boundaries(&mut candidate.tasks);
         issues.extend(validate_group_candidate(
             &candidate,
             group,
@@ -683,6 +684,13 @@ where
         groups.push(candidate.group.clone());
         tasks.extend(candidate.tasks);
     }
+    let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
+    let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
+    let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
+    let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
+    let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
+    let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -690,12 +698,6 @@ where
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
-    let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
-    let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
-    let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
-    let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
-    let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
-    let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
     issues.extend(validate_frontend_task_presence(&tasks, &aac));
     issues.extend(validate_frontend_quality_requirements(&tasks, &aac));
@@ -1316,6 +1318,232 @@ fn validate_taskplan_refs(
 fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition]) {
     for task in tasks {
         task.write_boundary.forbidden_paths = vec![".loom".to_string()];
+    }
+}
+
+fn normalize_taskplan_candidate_relationships(
+    groups: &mut Vec<TaskPlanGroup>,
+    tasks: &mut Vec<TaskDefinition>,
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) {
+    normalize_verification_detail_parent_refs(tasks);
+    normalize_task_verification_detail_refs(tasks, pgc, aac);
+    normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
+}
+
+fn normalize_verification_detail_parent_refs(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        let intent_detail_refs = task
+            .verification_intents
+            .iter()
+            .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
+            .collect::<Vec<_>>();
+        for detail_ref in intent_detail_refs {
+            push_unique(&mut task.requirement_detail_refs, detail_ref);
+        }
+    }
+}
+
+fn normalize_task_verification_detail_refs(
+    tasks: &mut [TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) {
+    let detail_acceptance_refs = current_phase_covered_detail_acceptance_refs(pgc, aac);
+    if detail_acceptance_refs.is_empty() {
+        return;
+    }
+    for task in tasks {
+        let task_detail_refs = task.requirement_detail_refs.clone();
+        for detail_ref in task_detail_refs {
+            let Some(acceptance_refs) = detail_acceptance_refs.get(&detail_ref) else {
+                continue;
+            };
+            if task.verification_intents.iter().any(|intent| {
+                intent
+                    .requirement_detail_refs
+                    .iter()
+                    .any(|item| item == &detail_ref)
+            }) {
+                continue;
+            }
+            if let Some(intent_index) = verification_intent_for_detail(task, acceptance_refs) {
+                push_unique(
+                    &mut task.verification_intents[intent_index].requirement_detail_refs,
+                    detail_ref,
+                );
+            }
+        }
+    }
+}
+
+fn current_phase_covered_detail_acceptance_refs(
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let covered_detail_ids = aac
+        .detail_coverage
+        .iter()
+        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
+        .map(|entry| entry.detail_id.as_str())
+        .collect::<BTreeSet<_>>();
+    pgc.requirement_details
+        .items
+        .iter()
+        .filter(|detail| {
+            detail.required_for_current_phase
+                && covered_detail_ids.contains(detail.detail_id.as_str())
+        })
+        .map(|detail| {
+            (
+                detail.detail_id.clone(),
+                detail
+                    .acceptance_refs
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect()
+}
+
+fn verification_intent_for_detail(
+    task: &TaskDefinition,
+    acceptance_refs: &BTreeSet<String>,
+) -> Option<usize> {
+    if task.verification_intents.len() == 1 {
+        return Some(0);
+    }
+    if acceptance_refs.is_empty() {
+        return None;
+    }
+    let matches = task
+        .verification_intents
+        .iter()
+        .enumerate()
+        .filter_map(|(index, intent)| {
+            intent
+                .acceptance_refs
+                .iter()
+                .any(|item| acceptance_refs.contains(item))
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        matches.first().copied()
+    } else {
+        None
+    }
+}
+
+fn normalize_runtime_delivery_closure_group(
+    groups: &mut Vec<TaskPlanGroup>,
+    tasks: &mut [TaskDefinition],
+    runtime_delivery: Option<&Value>,
+) {
+    let Some(runtime_delivery) = runtime_delivery else {
+        return;
+    };
+    if runtime_delivery.get("status").and_then(Value::as_str) != Some("modified") {
+        return;
+    }
+    let closure_task_indices = tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, task)| {
+            matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if closure_task_indices.len() != 1 {
+        return;
+    }
+
+    let closure_task_index = closure_task_indices[0];
+    let closure_task_id = tasks[closure_task_index].task_id.clone();
+    let current_group_id = tasks[closure_task_index].group_id.clone();
+    let current_group_has_only_closure = groups
+        .iter()
+        .find(|group| group.group_id == current_group_id)
+        .is_some_and(|group| group.task_ids == vec![closure_task_id.clone()]);
+    let closure_group_id = if current_group_has_only_closure {
+        current_group_id
+    } else {
+        next_runtime_closure_group_id(groups)
+    };
+
+    for group in groups.iter_mut() {
+        group.task_ids.retain(|task_id| task_id != &closure_task_id);
+        group
+            .depends_on
+            .retain(|group_id| group_id != &closure_group_id);
+    }
+
+    tasks[closure_task_index].group_id = closure_group_id.clone();
+    tasks[closure_task_index].depends_on.clear();
+    if !groups
+        .iter()
+        .any(|group| group.group_id == closure_group_id)
+    {
+        groups.push(TaskPlanGroup {
+            group_id: closure_group_id.clone(),
+            title: "Runtime delivery closure".to_string(),
+            objective: "Verify the final RuntimeDeliveryContract code-level closure.".to_string(),
+            depends_on: vec![],
+            scope_refs: tasks[closure_task_index].scope_refs.clone(),
+            acceptance_refs: tasks[closure_task_index].acceptance_refs.clone(),
+            task_ids: vec![],
+        });
+    }
+
+    let dependency_group_ids = groups
+        .iter()
+        .filter(|group| group.group_id != closure_group_id && !group.task_ids.is_empty())
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    if let Some(group) = groups
+        .iter_mut()
+        .find(|group| group.group_id == closure_group_id)
+    {
+        group.task_ids = vec![closure_task_id];
+        if group.scope_refs.is_empty() {
+            group.scope_refs = tasks[closure_task_index].scope_refs.clone();
+        }
+        if group.acceptance_refs.is_empty() {
+            group.acceptance_refs = tasks[closure_task_index].acceptance_refs.clone();
+        }
+        group.depends_on = dependency_group_ids;
+    }
+    if let Some(index) = groups
+        .iter()
+        .position(|group| group.group_id == closure_group_id)
+    {
+        let closure_group = groups.remove(index);
+        groups.push(closure_group);
+    }
+}
+
+fn next_runtime_closure_group_id(groups: &[TaskPlanGroup]) -> String {
+    const PREFERRED: &str = "group-runtime-delivery-closure";
+    let existing = groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if !existing.contains(PREFERRED) {
+        return PREFERRED.to_string();
+    }
+    for suffix in 2.. {
+        let candidate = format!("{PREFERRED}-{suffix}");
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded runtime closure group id suffix search should always return")
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|item| item == &value) {
+        values.push(value);
     }
 }
 
