@@ -1,35 +1,30 @@
-# Data UIX
+# UIX Focus: Data
 
-Load this file for dashboards, tables, analytics, finance, research, charts, maps, metrics, reports, or visualization-heavy screens.
+Load this when the frontend shows lists, tables, details, charts, logs, metrics, account records, transactions, or query results.
 
-## Chart Selection
+## Data Surface Rules
 
-- Choose the simplest view that communicates the decision: bars for categorical comparison, lines for trends, scatter for relationships, histogram or box plot for distribution, heat map for dense matrix patterns.
-- Avoid pie or donut charts except for a few categories where exact comparison is not critical.
-- Use tables when users need lookup, audit, export, exact values, or dense comparison.
-- For mobile, consider summary cards, prioritized tables, or drill-down views instead of shrinking full desktop charts.
+- Show the data object, status, and available action in the same scan path.
+- Provide filters/search/sort/pagination when data volume requires them.
+- Preserve current filters and selected record after mutations.
+- Use tabular numbers for aligned numeric columns.
+- Show units, currency, dates, and timestamps explicitly.
+- Distinguish stale, pending, failed, blocked, and completed states.
 
-## Encoding
+## Tables And Lists
 
-- Keep color encoding consistent across related views.
-- Use sequential scales for ordered values, diverging scales for above/below midpoint, and categorical palettes for unrelated groups.
-- Do not rely on color alone. Add labels, patterns, shapes, annotations, or direct values where needed.
-- Start bar-chart axes at zero unless there is a clear, labeled reason not to.
+- Tables need headers, row identity, overflow behavior, empty/loading/error states, and pagination or virtual/infinite loading when relevant.
+- Lists/cards need enough metadata to support selection without opening every item.
+- Detail views need source context: selected record id/name/status and back/close route.
+- Row actions should not be hidden behind hover only.
 
-## Interaction
+## Charts And Metrics
 
-- Interactive charts need keyboard-accessible controls, visible focus, touch-friendly targets, and usable tooltip alternatives.
-- Filters, date ranges, legends, and drill-downs should show applied state and provide a clear reset path.
-- Loading, empty, stale, partial-data, and error states must be visible for every data surface.
-- For real-time or finance-like views, show refresh timing, data source, units, and stale-data warnings when relevant.
+- Charts need labels, legends, axes or equivalent context, empty/loading/error states, and accessible summaries when practical.
+- Metrics must include context: period, unit, comparison, or source.
+- Avoid decorative charts that do not support a user decision.
 
-## Accessibility And Trust
+## Business Feedback
 
-- Provide text alternatives or summaries for charts that carry important information.
-- Label axes, units, currency, date ranges, sample size, benchmark, or target clearly.
-- Do not decorate data in ways that obscure comparison or imply false precision.
-- Test with realistic data, outliers, zero values, missing data, long labels, and dense series.
-
-## Evidence
-
-- Record chart/table choices, data states covered, responsive behavior, accessibility alternatives, and any manual-review assumptions in TaskResult.
+- Business-blocking rules should attach to the affected row, detail, or action region.
+- Technical errors should be recoverable and separate from domain restrictions.

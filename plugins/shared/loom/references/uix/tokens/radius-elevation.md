@@ -1,14 +1,46 @@
-# Radius And Elevation Tokens
+# UIX Token: Radius And Elevation
 
-Use when adding or reviewing rounded corners, borders, shadows, z-index, and layers.
+Load this file when styling cards, panels, inputs, buttons, modals, drawers, menus, popovers, charts, or layered surfaces.
 
-## Rules
+## Radius
 
-- Use a small radius scale. Avoid many unrelated radii in one surface.
-- Cards and panels in operational tools should feel quiet and structured, not inflated or decorative.
-- Use elevation to express layering: dropdown, popover, modal, drawer, sticky header, tooltip. Do not use heavy shadows as decoration.
-- Avoid nested card-on-card layouts unless the inner frame is a real repeated item, modal, or tool.
+Use radius as a system:
 
-## Evidence
+- `radius-none`: tables, sharp enterprise surfaces, code/log panels when appropriate.
+- `radius-sm`: 4px for dense inputs, table chips, compact controls.
+- `radius-md`: 6-8px for buttons, cards, fields, panels.
+- `radius-lg`: 10-12px for modals, drawers, mobile cards.
+- Larger radii only when the brand or mobile-native platform expects it.
 
-TaskResult evidence should mention whether the existing elevation/radius system was reused or a small new scale was introduced.
+Cards should usually be 8px or less unless an existing design system says otherwise.
+
+## Elevation
+
+Prefer borders and surface contrast for normal workbench hierarchy. Use shadow/elevation for true layering:
+
+- Base surface: no shadow.
+- Raised panel/card: subtle border or very soft shadow.
+- Sticky topbar/sidebar: border plus surface.
+- Dropdown/popover/menu: shadow + border.
+- Modal/drawer: scrim plus clear elevation.
+- Toast/notification: elevated, but never blocks core workflow longer than necessary.
+
+## Layering Rules
+
+- A card inside a card is usually a layout mistake. Use sections, tables, rows, or panels instead.
+- Modals and drawers must have a clear close route and focus behavior.
+- Floating controls must not cover table rows, form submit buttons, chart legends, or mobile safe areas.
+- Elevation must communicate interaction depth, not decoration.
+
+## Implementation
+
+- Define radius and shadow tokens once.
+- Keep border color tied to color tokens.
+- Avoid random shadow values per component.
+- Use z-index tokens for dropdown, sticky, fixed, modal, popover, tooltip, and notification layers.
+
+## Self-Check
+
+- Radius and elevation are consistent across controls.
+- Layered surfaces remain readable on light and dark backgrounds.
+- Modals, drawers, and popovers do not create hidden scroll traps.

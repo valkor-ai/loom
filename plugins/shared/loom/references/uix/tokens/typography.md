@@ -1,11 +1,45 @@
-# Typography Tokens
+# UIX Token: Typography
 
-Use when adding or reviewing type scale, font families, line height, numeric alignment, or long text.
+Load this file when creating or changing headings, tables, forms, dashboards, marketing copy, docs, code views, or mobile text.
 
-## Rules
+## Font Stack
 
-- Use a coherent type scale with clear body, label, heading, and data-number roles.
-- Body text should remain readable at common viewport sizes. Avoid hero-scale headings inside compact panels, cards, tables, and modals.
-- Use tabular numbers for tables, account balances, amounts, quantities, and log-like timestamps when alignment matters.
-- Keep line length appropriate for the content: narrower for prose, denser but still readable for operational UI.
-- Use existing fonts when the project has a system. Add a new font only when it is part of a deliberate product style and loading cost is acceptable.
+- Use the existing project font system when present.
+- For Chinese business software, prefer reliable CJK stacks such as `Noto Sans SC`, `PingFang SC`, `Microsoft YaHei`, and system fallbacks.
+- For code, numeric tables, logs, or developer tools, include a monospace stack with tabular figures when supported.
+- Avoid making Inter, Roboto, Arial, or `system-ui` the only design decision in a new product unless the existing repo already standardizes on it.
+- Do not load remote fonts when the environment or product constraints make that risky; local/system fallbacks are acceptable when chosen intentionally.
+
+## Scale
+
+Use a small, stable type scale. Suggested web baseline:
+
+- `xs`: 12px for metadata, table hints, compact labels.
+- `sm`: 13-14px for dense table cells, secondary controls.
+- `base`: 15-16px for body, form inputs, standard controls.
+- `lg`: 18px for section intros or important row titles.
+- `xl`: 20px for panel titles.
+- `2xl`: 24px for page titles inside workbench UI.
+- Larger sizes are reserved for true landing/editorial/immersive hero contexts.
+
+## Surface Rules
+
+- Workbench/admin/table UI: compact headings, dense but readable rows, tabular numbers, stable line height.
+- Forms: labels and helper text must remain readable; error text should not shift unrelated layout.
+- Docs: readable prose width, clear heading hierarchy, code block typography.
+- Marketing: expressive headline scale is allowed, but supporting copy must stay readable and responsive.
+- Mobile: text must not depend on desktop line length; controls and labels must wrap cleanly.
+
+## Implementation
+
+- Keep letter spacing at `0` for normal text. Use uppercase tracking only for small section labels when the style already supports it.
+- Use line-height around 1.45-1.65 for body/prose, tighter for headings, and comfortable for table rows.
+- Use font weight before color when emphasizing text in dense UI.
+- Keep heading levels semantic; do not skip levels to force visual size.
+
+## Self-Check
+
+- Long Chinese labels, long English words, account ids, and numeric values fit without overlap.
+- Page titles do not look like marketing heroes inside internal tools.
+- Tables align numbers and statuses.
+- Error/help text is readable at the smallest supported viewport.

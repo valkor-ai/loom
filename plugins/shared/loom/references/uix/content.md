@@ -1,34 +1,33 @@
-# UX Content
+# UIX Focus: Content
 
-Load this file for UX writing, microcopy, error messages, empty states, CTAs, onboarding copy, terminology, or localization-sensitive copy.
+Load this when visible product copy, labels, empty states, validation, status, or help text are created or changed.
 
-## Principles
+## Product Copy Rules
 
-- Write copy that helps users complete tasks, understand status, and recover from problems.
-- Prefer clear over clever, concise over comprehensive, helpful over promotional, consistent over novel, and inclusive over casual.
-- Keep terminology consistent with the product domain and existing UI.
-- Avoid jargon, abbreviations, idioms, blame, and unexplained internal system terms.
+- Use the user's product language and locale.
+- Write labels around user tasks and business objects, not implementation structures.
+- Avoid Loom/MCP/internal workflow terms in product UI.
+- Avoid explaining runtime commands, verification steps, or technical stack unless the product is a developer tool and the user task requires it.
+- Keep page headings concrete: name the product area or business task.
 
-## Controls And Microcopy
+## State Copy
 
-- Button labels should be action-oriented and specific. Prefer "Create report" over "Submit" when the result is known.
-- Form labels should describe the field, not the desired action. Placeholder text should show an example format, not replace a label.
-- Tooltips should clarify unfamiliar controls or constraints, not hide critical instructions.
-- Destructive actions need explicit labels and confirmation when the consequence is costly.
+- Loading: short and scoped to the region.
+- Empty: explain the business state and next action.
+- Validation: tell the user what to fix and where.
+- Error: explain recovery, not stack traces.
+- Business-blocking: state the domain rule and affected object.
+- Success: confirm what changed and show the new status when useful.
 
-## Empty, Loading, And Error Copy
+## Controls
 
-- Empty states should explain what belongs there, why it is empty when useful, and the next available action.
-- Loading copy should set expectation only when the wait is noticeable or the operation has meaningful steps.
-- Error messages should include what happened, why if helpful, and what to do next.
-- Confirmation messages should say what changed and offer undo or next steps when relevant.
+- Button labels should be verbs or clear commands.
+- Destructive labels should name the destructive action.
+- Icon-only controls require accessible labels.
+- Avoid generic labels such as "Submit" when the business action is known.
 
-## Onboarding
+## Dense UI
 
-- Introduce one concept at a time and move users toward a real first value moment.
-- Allow skip, later completion, or resume when onboarding is not mandatory.
-- Avoid tutorial copy that describes obvious UI controls.
-
-## Evidence
-
-- For frontend tasks, record any changed UI copy, error/empty/loading states covered, terminology choices, and unresolved product-copy risks.
+- Tables and badges need short, consistent status labels.
+- Tooltips should clarify controls, not contain critical information that mobile users cannot access.
+- Long help text belongs in a side panel, detail section, or docs route rather than inside every row.

@@ -1,15 +1,37 @@
-# Immersive 3D UIX
+# UIX Scenario: Immersive 3D
 
-Use for Three.js, WebGL, canvas-heavy experiences, 3D product views, simulations, games, and immersive visual tools.
+Use for Three.js/WebGL/canvas scenes, product configurators, spatial tools, games, simulations, and immersive interactive visuals.
 
 ## Baseline
 
-- The primary scene should be visible, nonblank, framed correctly, and interactive when interaction is part of the product.
-- UI controls should not obscure essential scene content and should remain usable across desktop and mobile.
-- Loading, asset failure, reduced-motion, and low-performance fallback states are product requirements, not optional polish.
+- The primary scene is full-bleed or dominant, not trapped inside a decorative card.
+- The scene must render nonblank, be correctly framed, and respond to expected interaction.
+- Density is `immersive`.
+- Controls must support the scene task without covering critical visual content.
 
 ## Required Patterns
 
-- Verify scene render with screenshot or pixel-level evidence when possible.
-- Provide camera/reset controls or predictable navigation when the scene can move.
-- Use progressive loading or clear progress for heavy assets.
+- Stable canvas sizing and resize handling.
+- Loading and fallback state for assets/shaders/WebGL support.
+- Scene controls: camera, zoom, rotate, reset, selection, mode toggle, or inspector as required.
+- Overlay UI with readable contrast and safe placement.
+- Reduced-motion or performance fallback when practical.
+
+## Layout
+
+- Use full viewport or dominant scene area with docked controls.
+- Keep menus/panels collapsible or positioned outside the core focal area.
+- Mobile: test touch gestures and avoid tiny overlay controls.
+
+## Verification
+
+- Verify canvas pixels are nonblank.
+- Check desktop and mobile framing.
+- Confirm referenced assets load.
+- Confirm animation/interaction continues after initial render.
+
+## Avoid
+
+- Static placeholder canvas.
+- Dark blurred background with no inspectable object.
+- Controls that occlude the subject or cannot be used by touch.

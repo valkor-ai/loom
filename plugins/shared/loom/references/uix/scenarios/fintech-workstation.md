@@ -1,16 +1,39 @@
-# Fintech Workstation UIX
+# UIX Scenario: Fintech Workstation
 
-Use for financial, trading, banking, payment, insurance, or account-operation tools used by staff or operators.
+Use for staff-facing finance, securities, account, risk, compliance, and transaction operations. The UI must support accuracy, auditability, and business-rule clarity.
 
 ## Baseline
 
-- Trust, traceability, and business blocking are more important than promotional polish.
-- Favor staff-console patterns: searchable lists, account/detail panels, status badges, audit events, validation feedback, and reversible context.
-- Numeric data should use tabular figures, explicit currency/unit labels, and clear precision.
+- First viewport is an operational workstation: queue/list, filters, detail, and action path.
+- Density is usually `workbench_dense` with clear visual grouping.
+- Business states and blocking rules must be more prominent than decorative branding.
+- Numeric data uses tabular alignment and clear units/currency/date formats.
 
 ## Required Patterns
 
-- Risky money/account/security actions need visible preconditions, confirmation when appropriate, and readback of the final state.
-- Business-blocking feedback must say which rule blocked the action and what the operator can do next.
-- Sensitive fields should be masked or grouped when the product context requires it.
-- Account, order, balance, status, and lifecycle changes need stable before/after evidence in the UI.
+- Record search and filtering by business identifiers.
+- List/detail workflow with state, risk, eligibility, and latest event visible.
+- Business actions tied to the current record: open, approve, reject, freeze, close, reissue, bind, deposit, withdraw, etc. as applicable.
+- Rule feedback near the action: why blocked, what condition must change, and whether retry is possible.
+- Audit trail or event history when the domain requires traceability.
+- Staff-facing Chinese copy or project language for all visible labels.
+
+## Layout
+
+- Desktop: sidebar/topbar shell, list/table main region, right detail/action panel.
+- Forms should group identity, account, authorization, money/security, and status sections.
+- Mobile or narrow views use record cards plus full-screen detail/actions; never squeeze critical financial tables into unreadable columns.
+
+## States
+
+- Loading: scoped skeleton for list/detail/action panel.
+- Empty: distinguish no records, no search results, and not yet configured.
+- Error: recoverable and free of stack traces or internal tool names.
+- Business-blocking: explicit rule message and affected field/object.
+- Success: refresh list/detail and show new status/event.
+
+## Avoid
+
+- Generic "finance" visual cliches that reduce readability.
+- Hiding risk or eligibility behind tooltips only.
+- Treating business-rule blocks as generic errors.

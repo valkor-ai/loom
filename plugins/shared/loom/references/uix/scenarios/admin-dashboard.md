@@ -1,23 +1,39 @@
-# Admin Dashboard UIX
+# UIX Scenario: Admin Dashboard
 
-Use for staff consoles, back-office systems, ERP/CRM screens, review tools, account operations, internal workbenches, and business management surfaces.
+Use for internal operations, staff consoles, CRM/ERP/CMS back offices, SaaS control panels, and management tools. Efficiency, scanability, and workflow completion matter more than visual spectacle.
 
 ## Baseline
 
-- Efficiency and scanability matter more than spectacle.
-- The first screen should be the work surface: navigation, page title, filters or primary actions, data list/table, detail panel, and task feedback.
-- Use an app shell when the product has more than one business surface: sidebar or top navigation, page header, content region, and contextual actions.
-- Keep density appropriate for repeated staff work. Prefer compact tables, grouped forms, drawers, tabs, and stable detail panels over oversized cards.
+- First viewport is the working console, not a landing page.
+- Typical shell: sidebar navigation, topbar with page context/search/actions, main content, optional right detail drawer.
+- Density is usually `workbench_dense` or `balanced`.
+- Visual style is restrained: quiet surfaces, strong information hierarchy, semantic status colors, and predictable controls.
 
 ## Required Patterns
 
-- Lists need toolbar/search/filter, pagination or virtual scrolling, selected-row state, empty/loading/error states, and row-level actions.
-- Detail views need identity summary, current status, key fields, lifecycle or audit context when relevant, and actions close to the object.
-- Forms need sections, labels, inline validation, submit loading, success feedback, business-blocking feedback, and preserved input on failure.
-- Destructive or irreversible operations need confirmation, clear consequence copy, and post-action readback.
+- Navigation: active section, grouped nav items, stable page title, breadcrumbs when depth is greater than one.
+- Data: table/list with filters, search, sort, pagination or infinite scroll, empty/loading/error states.
+- Detail: row selection opens side panel, route detail, or inline expansion without losing list context.
+- Forms: grouped sections, field validation, disabled/submitting state, business-blocking feedback.
+- Actions: primary action visible near the relevant region; destructive actions require confirmation or recovery.
+- Feedback: success updates affected row/detail and appears near the changed object.
 
-## Must Not
+## Layout
 
-- Do not show runtime commands, stack descriptions, delivery notes, or verification instructions in the staff UI.
-- Do not start with a marketing hero or "capability overview" cards.
-- Do not mix unrelated future modules into the current phase navigation unless they are disabled and clearly out of scope.
+- Desktop: sidebar 220-280px, topbar 52-64px, content region with min-width handling.
+- Tablet: sidebar collapses to drawer or rail; filters may move into drawer.
+- Mobile: convert table-heavy views to list/detail cards or full-screen detail routes; do not depend on hover.
+- Use sticky table headers or action bars only when they do not hide content.
+
+## States
+
+- Loading: table skeleton or row skeleton, not a full-page spinner after shell loads.
+- Empty: explain the business reason and next action.
+- Error: show retry and preserve filters/form inputs.
+- Business-blocking: message must reference the rule and affected object.
+
+## Avoid
+
+- Hero sections, marketing footers, feature-explainer cards, decorative metrics, or long implementation notes.
+- Modal-only workflows that make users lose list context.
+- Tables without overflow, pagination, or responsive fallback.

@@ -1,37 +1,30 @@
-# Frontend Framework UIX
+# UIX Focus: Frameworks
 
-Load this file when a framework, component library, design system, or frontend stack is named.
+Load this when choosing how to apply a UI contract in a specific frontend stack. For MCP-driven work, prefer stack references from `uiQualityContract.referenceProfile.referenceIds`.
 
-## Shared Rules
+## Rule
 
-- Follow the existing routing, component, styling, data-fetching, form, and test conventions before adding new patterns.
-- Use the existing design tokens and component primitives where they exist. If none exist, keep the new system small and coherent.
-- Keep visual behavior close to framework idioms: server/client boundaries, hydration, Suspense/loading paths, route transitions, and error boundaries should match the stack.
+Frameworks implement the UI contract; they do not redefine the product surface. Keep scenario, quality level, states, and forbidden user-visible content aligned with the MCP artifact.
 
-## Focused Stack References
+## Component Architecture
 
-Load a focused stack reference when the MCP `referenceIds` asks for it or the task clearly uses that stack.
+- Use existing routing, data fetching, component, styling, and test conventions.
+- Separate app shell, feature screens, shared primitives, API/data modules, and utilities.
+- Avoid one giant component once the workflow includes table/list, form, modal/drawer, and async states.
+- Keep design tokens in the framework's normal location: CSS variables, Tailwind config, theme provider, app CSS, or native theme.
 
-- `uix.stacks.react` -> `references/uix/stacks/react.md`
-- `uix.stacks.vue` -> `references/uix/stacks/vue.md`
-- `uix.stacks.plain-html` -> `references/uix/stacks/plain-html.md`
-- `uix.stacks.native-mobile` -> `references/uix/stacks/native-mobile.md`
-- `uix.stacks.threejs` -> `references/uix/stacks/threejs.md`
+## Framework-Specific References
 
-## Web Frameworks
+- React/Next/Vite React: `references/uix/stacks/react.md`.
+- Vue/Nuxt: `references/uix/stacks/vue.md`.
+- Plain HTML/Tailwind/static/server template: `references/uix/stacks/plain-html.md`.
+- Native mobile/React Native/Flutter/Swift/Kotlin: `references/uix/stacks/native-mobile.md`.
+- Three.js/WebGL/canvas: `references/uix/stacks/threejs.md`.
+- Svelte/SvelteKit: `references/uix/stacks/svelte.md`.
+- UniApp/mini-app: `references/uix/stacks/uniapp.md`.
 
-- React/Next.js/Remix: preserve component boundaries, accessible semantics, loading/error routes, and client/server data ownership.
-- Vue/Nuxt: follow composition patterns, route-level loading/error behavior, and existing store conventions.
-- Svelte/SvelteKit: keep state local where possible, use route data and progressive enhancement when present.
-- Angular: follow module/standalone component conventions, reactive forms, and service boundaries.
+## Verification
 
-## UI Libraries
-
-- Tailwind: use project tokens and utility composition consistently; avoid one-off arbitrary values when a token exists.
-- shadcn/Radix/Headless UI: preserve accessible primitives and do not remove keyboard/focus behavior while restyling.
-- MUI/Ant/Chakra: use theme overrides and library variants before hand-rolling replacements.
-
-## Native And Cross-Platform
-
-- React Native/Expo and Flutter work should honor platform navigation, safe areas, input behavior, gestures, and offline/loading states.
-- Record any framework-specific manual checks that cannot be automated in the TaskResult.
+- Run focused build/type/lint tests available in the repo.
+- Render the changed screen when possible.
+- Include only implementation evidence in TaskResult; do not put framework setup notes in product UI.

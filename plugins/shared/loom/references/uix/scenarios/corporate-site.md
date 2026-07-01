@@ -1,15 +1,30 @@
-# Corporate Site UIX
+# UIX Scenario: Corporate Site
 
-Use for corporate websites, institutional sites, service companies, portfolios, and brand presence.
+Use for company, organization, venue, portfolio, institution, or brand information sites.
 
 ## Baseline
 
-- Prioritize credibility, information architecture, navigation, clear service/product descriptions, and contact or conversion paths.
-- The first viewport should make the organization or offer clear without relying only on nav text.
-- Avoid over-marketing internal tools or operational software as if they were corporate sites.
+- The brand, organization, place, or object must be a first-viewport signal.
+- Navigation should make key stakeholder tasks obvious: overview, products/services, cases, news, contact, careers, docs, or support.
+- Visual tone should fit the organization without falling into category-reflex palettes.
+- Density is `comfortable`.
 
 ## Required Patterns
 
-- Navigation, hero, offerings, proof, about, contact, and legal/footer content need clear hierarchy.
-- Long-form content should use readable line length and accessible headings.
-- Visual assets should reflect the real organization, product, or service context.
+- Clear identity and primary audience path.
+- Structured content sections with real proof: capabilities, cases, locations, people, history, media, or resources.
+- Contact/conversion paths that are visible and accessible.
+- Responsive media that remains inspectable.
+- Footer with useful navigation, not filler.
+
+## Layout
+
+- Use editorial hierarchy, section bands, and media composition.
+- Keep prose readable and avoid stretching paragraphs on wide screens.
+- Use cards only for repeated content such as cases, people, articles, or resources.
+
+## Avoid
+
+- Generic corporate hero with abstract gradients and no concrete identity.
+- Overloaded nav that hides primary actions.
+- Stock-like imagery that does not reveal the actual organization or offering.

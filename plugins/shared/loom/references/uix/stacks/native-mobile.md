@@ -1,11 +1,29 @@
-# Native Mobile UIX Stack
+# UIX Stack: Native Mobile
 
-Use for iOS, Android, React Native, Expo, Flutter, or cross-platform native app work.
+Use for React Native, Flutter, SwiftUI/UIKit, Jetpack Compose, Kotlin/Android, and native-like mobile apps.
 
-## Rules
+## Structure
 
-- Follow platform navigation, safe areas, permissions, keyboard behavior, and gesture norms.
-- Use platform-equivalent semantic tokens and component primitives when present.
-- Screens should have explicit loading, empty, error, validation, success, disabled, and interrupted states when relevant.
-- Keep touch targets platform-appropriate and avoid hover-only affordances.
-- Record device or simulator checks when the task changes native UI behavior.
+- Follow platform navigation and state conventions.
+- Separate screens, reusable components, domain hooks/services, and navigation configuration.
+- Respect safe areas, keyboard avoidance, and platform back behavior.
+
+## Implementation Rules
+
+- Touch targets must be comfortable and spaced.
+- Use platform text, color, spacing, and elevation conventions unless a design system exists.
+- Forms need input types, validation, loading/submitting, and error recovery.
+- Lists need empty/loading/error states and stable item identity.
+- Sensitive financial or destructive actions need explicit confirmation/review.
+
+## Cross-Platform Notes
+
+- React Native: keep presentational components separate from screen orchestration when workflows grow.
+- Flutter: keep widgets focused and use theme tokens consistently.
+- Native iOS/Android: use platform controls unless custom controls are justified.
+- UniApp or mini-app targets should also load the UniApp stack reference when selected.
+
+## Verification
+
+- Use simulator/device or framework preview when available.
+- Check safe areas, keyboard behavior, scroll, and touch targets.

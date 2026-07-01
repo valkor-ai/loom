@@ -1,36 +1,42 @@
-# Interaction UIX
+# UIX Focus: Interaction
 
-Load this file for complex flows, forms, search, loading, feedback, state machines, gestures, onboarding, or error recovery.
+Load this when the task creates or changes user actions, forms, navigation, tables, modals, drawers, command surfaces, or feedback behavior.
 
-## State Model
+## Action Design
 
-- Model complex UI as states, events, transitions, guards, and actions before implementation.
-- Cover idle, editing, validating, loading, success, empty, partial failure, error, retrying, disabled, and complete states when relevant.
-- Every visible state needs a way out. Avoid dead ends such as an error screen with no retry, back, or alternate path.
-- Prevent impossible states, such as showing loading and final error at the same time, or enabling submit while validation is unresolved.
+- Primary action is visible where the user makes the decision.
+- Secondary actions are available but visually quieter.
+- Destructive actions need confirmation, undo, or a clear recovery path based on severity.
+- Disabled actions should explain why when the user can do something to unlock them.
+- Repeated row actions should keep row identity stable and visible.
 
-## Errors And Recovery
+## Forms
 
-- Prefer prevention first: constraints, smart defaults, inline validation, confirmation for destructive actions, autosave for risky inputs.
-- Place field errors near the field, page errors near the failed region, and global errors only when scope is truly global.
-- Error copy must say what happened, why if useful, and the next action. Do not expose raw stack traces or vague "Something went wrong" copy.
-- Preserve user input on failure, offer retry for transient failures, and provide undo for reversible destructive actions.
+- Use visible labels, not placeholder-only labels.
+- Group related fields and explain business requirements near the field.
+- Validate before submit when rules are known locally.
+- Preserve user input after validation or server failure.
+- Show submitting state and prevent accidental double-submit.
+- Place business-blocking feedback near the affected field/object and in the form summary when useful.
 
-## Loading And Feedback
+## Navigation
 
-- Show something immediately. Use skeletons for known layout, subtle indicators for short waits, progress for measurable long work, and background options for very long work.
-- Avoid layout shift when content loads. Keep scroll position stable during refresh.
-- Feedback should appear in the same flow as the action: saving, success, retry, undo, destructive confirmation, optimistic rollback, or permission failure.
-- Respect reduced-motion for shimmer, slide, scale, and looping effects.
+- Keep current section/page visible.
+- Use breadcrumbs for deep management flows.
+- Use tabs only for peer sections of the same object, not unrelated pages.
+- Use drawers/sheets when they preserve list context; use full routes when the detail has deep workflow.
+- Mobile navigation must not depend on hover.
 
-## Forms, Search, And Navigation
+## Feedback
 
-- Forms need labels, validation timing, error association, keyboard order, disabled/loading states, and submit/retry paths.
-- Search needs query entry, suggestions or history when useful, loading, results, no results, spelling/refinement hints, and clear filters.
-- Navigation should match product structure and user tasks; active state, back behavior, breadcrumbs, tabs, drawers, and deep links must be predictable.
-- Onboarding should get users to value quickly, one concept at a time, with skip or resume paths when appropriate.
+- Success updates the affected object and gives a short confirmation.
+- Error explains recovery without exposing stack traces or internal tool names.
+- Loading is scoped to the region that is waiting.
+- Toasts are for transient confirmation, not the only place for critical rules.
 
-## Evidence
+## Keyboard And Pointer
 
-- Record flow/state coverage in TaskResult for frontend work.
-- Cite screenshots, Playwright traces, state diagrams, or manual checks when complex interactions cannot be fully automated.
+- Focus order follows task order.
+- Icon-only controls have labels and tooltips when meaning is not universal.
+- Touch targets are large enough and separated.
+- Hover states must have focus/touch equivalents.

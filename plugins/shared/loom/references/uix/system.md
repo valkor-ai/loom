@@ -1,42 +1,37 @@
-# Design System UIX
+# UIX Focus: System
 
-Load this file for design systems, tokens, component specs, theming, dark mode, localization, icon systems, motion systems, or design-system audits.
+Load this when creating or changing a visual system, app shell, shared components, tokens, or component foundations.
 
-## Tokens
+## System Baseline
 
-- Prefer existing design tokens over raw values. If tokens exist, components should consume semantic or component tokens, not hard-coded colors, spacing, type, radius, elevation, or motion values.
-- Token tiers should stay clear: global raw values, semantic aliases, and component-scoped tokens.
-- Token names should describe purpose, not visual accident. Prefer `color-action-primary` over `blue-500` in component code.
-- If adding tokens, document usage context and keep them compatible with theming and future platform mapping.
+- Start from existing project conventions. Extend them instead of inventing a parallel design system.
+- Define semantic tokens for color, type, spacing, radius, elevation, focus, state, and motion.
+- Create primitives only when they remove repeated implementation: Button, Input, Select, Textarea, Checkbox/Switch, Badge, Alert, Table, Card/Panel, Modal/Dialog, Drawer/Sheet, Tabs, Tooltip, Toast, Pagination, Skeleton.
+- Keep component props semantic. Prefer `variant="danger"` over `color="#ef4444"`.
 
-## Components
+## Shell
 
-- Component work should cover overview, anatomy, variants, props/API, states, behavior, accessibility, and usage rules.
-- Required states usually include default, hover, focus, active, disabled, loading, error, and selected/current when relevant.
-- Specify behavior, not just appearance: keyboard interaction, pointer/touch behavior, responsive behavior, motion, truncation, and edge cases.
-- Reuse existing components and primitives before introducing new ones.
+- Operational apps need stable navigation, page title/context, primary action region, content region, and feedback region.
+- Docs need nav/content/TOC/search.
+- Marketing sites need product/offer signal, proof sections, and conversion routes.
+- Mobile/native surfaces need safe areas and platform navigation.
 
-## Theming And Modes
+## States
 
-- Dark mode, high-contrast mode, and brand variants should emerge from semantic tokens, not per-component one-off overrides.
-- Do not rely on color alone for semantic state. Pair color with label, icon, shape, pattern, or position.
-- Check contrast for body text, large text, UI boundaries, focus rings, data marks, and disabled states.
+Every reusable component that can wait, fail, validate, or disable must expose those states. Avoid forcing feature code to hand-roll inconsistent variants.
 
-## Motion
+Required common states:
 
-- Use a small motion vocabulary: duration tokens, easing tokens, and clear choreography rules.
-- Motion must communicate state, relationship, or feedback. Avoid decorative movement that slows repeated workflows.
-- Respect `prefers-reduced-motion` or platform-equivalent settings globally.
-- Loading spinners and progress indicators may remain when they convey essential state, but sliding, scaling, parallax, and rotation should reduce or disappear.
+- default, hover, focus, active, disabled.
+- loading/submitting.
+- success, warning, danger/error, info.
+- empty and skeleton for data surfaces.
+- business-blocking for domain-rule stops.
 
-## Localization
+## Quality Bar
 
-- Design flexible containers for text expansion. Do not size controls to English copy only.
-- Use logical layout properties when possible: inline/block, start/end, and `text-align: start` instead of left/right assumptions.
-- Directional icons mirror in RTL; non-directional icons, logos, numerals, clocks, and brand marks usually do not.
-- Test at least one long-expansion locale and one RTL-like layout when localization is required.
-
-## Handoff
-
-- Handoff-ready UI evidence should name token usage, component reuse, responsive behavior, state coverage, accessibility requirements, asset handling, and edge cases.
-- When design-system compliance is uncertain, record it as a manual-review risk instead of silently inventing a parallel system.
+- Component dimensions are stable across state changes.
+- Focus ring is visible and consistent.
+- Text and icons align cleanly.
+- Tokens are reusable and documented through names, not comments only.
+- Components do not encode delivery process language.

@@ -1,15 +1,30 @@
-# Mobile Native UIX
+# UIX Scenario: Mobile Native
 
-Use for native or cross-platform mobile applications: iOS, Android, React Native, Expo, Flutter, or native-shell app work.
+Use for iOS, Android, React Native, Flutter, Swift, Kotlin, or native-like mobile app surfaces.
 
 ## Baseline
 
-- Respect platform navigation, safe areas, gestures, keyboard behavior, permission flows, and offline/interrupted states.
-- Use platform-appropriate controls and touch targets instead of shrinking desktop controls.
-- Preserve state across app lifecycle interruptions when the workflow is risky or long.
+- Respect platform navigation, safe areas, touch targets, and system conventions.
+- Density is `comfortable`.
+- Screens should support one clear user task and preserve navigation context.
+- Native UI must not look like a desktop web table squeezed into a phone.
 
 ## Required Patterns
 
-- Screens need navigation title, back/close behavior, loading/error/empty states, and accessible labels.
-- Inputs must account for virtual keyboard and validation timing.
-- Sheets, pickers, tabs, and gestures need escape/recovery paths and reduced-motion behavior where supported.
+- Stack/tab navigation matching platform expectations.
+- Safe-area-aware headers, bottom bars, sheets, and actions.
+- Large enough touch targets and reachable primary actions.
+- Offline/loading/error/permission states when relevant.
+- Form inputs with mobile keyboards, validation, and preserved values.
+
+## Layout
+
+- Use lists, cards, grouped forms, sheets, and drill-down details.
+- Use platform typography and spacing conventions unless the app already has tokens.
+- Keep destructive or financial actions separated from routine navigation.
+
+## Avoid
+
+- Web-only hover interactions.
+- Tiny table cells, cramped toolbars, and desktop sidebars.
+- Ignoring platform back behavior or safe areas.

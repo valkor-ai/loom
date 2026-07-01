@@ -62,13 +62,15 @@ pub const UI_FORBIDDEN_USER_VISIBLE_CONTENT: [&str; 5] = [
 pub const UI_REQUIRED_STATES: [&str; 5] =
     ["loading", "success", "error", "empty", "business_blocking"];
 
-pub const UI_CORE_REFERENCE_IDS: [&str; 6] = [
+pub const UI_CORE_REFERENCE_IDS: [&str; 8] = [
     "uix.core",
     "uix.anti-patterns",
     "uix.tokens.color-system",
     "uix.tokens.typography",
     "uix.tokens.spacing",
     "uix.tokens.layout-grid",
+    "uix.tokens.motion",
+    "uix.tokens.radius-elevation",
 ];
 
 pub const UI_SCENARIO_REFERENCE_IDS: [&str; 13] = [
@@ -87,12 +89,14 @@ pub const UI_SCENARIO_REFERENCE_IDS: [&str; 13] = [
     "uix.core",
 ];
 
-pub const UI_STACK_REFERENCE_IDS: [&str; 5] = [
+pub const UI_STACK_REFERENCE_IDS: [&str; 7] = [
     "uix.stacks.react",
     "uix.stacks.vue",
     "uix.stacks.plain-html",
     "uix.stacks.native-mobile",
     "uix.stacks.threejs",
+    "uix.stacks.svelte",
+    "uix.stacks.uniapp",
 ];
 
 pub fn ui_quality_enum_refs() -> Value {
@@ -591,6 +595,9 @@ fn infer_stack_reference_ids(baseline: Option<&TechnicalBaselineContract>) -> Ve
     if contains_any(&stack, &["vue", "nuxt"]) {
         refs.push("uix.stacks.vue".to_string());
     }
+    if contains_any(&stack, &["svelte", "sveltekit"]) {
+        refs.push("uix.stacks.svelte".to_string());
+    }
     if contains_any(&stack, &["html", "vanilla", "plain"]) {
         refs.push("uix.stacks.plain-html".to_string());
     }
@@ -609,6 +616,21 @@ fn infer_stack_reference_ids(baseline: Option<&TechnicalBaselineContract>) -> Ve
     }
     if contains_any(&stack, &["three", "webgl", "3d"]) {
         refs.push("uix.stacks.threejs".to_string());
+    }
+    if contains_any(
+        &stack,
+        &[
+            "uniapp",
+            "uni-app",
+            "miniapp",
+            "mini app",
+            "mini-program",
+            "wechat",
+            "weixin",
+            "小程序",
+        ],
+    ) {
+        refs.push("uix.stacks.uniapp".to_string());
     }
     refs.sort();
     refs.dedup();
@@ -714,20 +736,15 @@ fn validate_reference_ids(
         }
         actual.insert(id.to_string());
     }
-    for required in [
-        "uix.core",
-        "uix.anti-patterns",
-        "uix.tokens.color-system",
-        "uix.tokens.typography",
-        "uix.tokens.spacing",
-        "uix.tokens.layout-grid",
-        expected_scenario_ref,
-    ] {
+    for required in UI_CORE_REFERENCE_IDS
+        .into_iter()
+        .chain(std::iter::once(expected_scenario_ref))
+    {
         if !actual.contains(required) {
             issues.push(issue(
                 "UI_QUALITY_REFERENCE_ID_REQUIRED",
                 "content.frontendExperience.uiQualityContract.referenceProfile.referenceIds",
-                "referenceProfile.referenceIds must include core, anti-pattern, token, and selected scenario UIX references.",
+                "referenceProfile.referenceIds must include core, anti-pattern, all core token, and selected scenario UIX references.",
             ));
             break;
         }
@@ -908,7 +925,7 @@ fn issue(code: &str, field_path: &str, message: &str) -> RepairIssue {
 mod tests {
     use std::path::PathBuf;
 
-    use super::known_ui_reference_ids;
+    use super::{build_ui_quality_seed, known_ui_reference_ids, UI_CORE_REFERENCE_IDS};
 
     #[test]
     fn known_ui_reference_ids_resolve_to_shared_reference_files() {
@@ -922,6 +939,25 @@ mod tests {
                 path.exists(),
                 "UIX reference id {reference_id} must resolve to {}",
                 path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn ui_quality_seed_includes_all_core_reference_ids() {
+        let seed = build_ui_quality_seed(None, None);
+        let reference_ids = seed
+            .get("requiredReferenceIds")
+            .and_then(serde_json::Value::as_array)
+            .expect("seed must include requiredReferenceIds")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for reference_id in UI_CORE_REFERENCE_IDS {
+            assert!(
+                reference_ids.contains(reference_id),
+                "uiQualitySeed.requiredReferenceIds must include {reference_id}"
             );
         }
     }
