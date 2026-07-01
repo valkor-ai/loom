@@ -626,7 +626,7 @@ fn knowledge_query_plan() -> Value {
             "If any knowledge tool returns state failed or an error object, stop the clarification block and report the failure; do not silently fall back to a knowledge-free answer.",
             "Do not ask the user to choose, name, enable, or manage a knowledge source inside Brainstorm clarification. Loom selects enabled request-relevant knowledge automatically, and an empty knowledge result is allowed after the required knowledge calls have run.",
             "Use knowledge only to improve clarification quality. Do not write knowledge source ids, chunk ids, inspect output, or knowledge paths into the Brainstorm candidate.",
-            "semanticFocus is a compact string array. Prefer typed entries in kind:text form, such as object:证券账户, operation:开户, rule:持仓清空后方可销户, page:账户管理页面, or flow:挂失补办流程. Use plain strings only when the kind is genuinely unclear."
+            "semanticFocus is a compact string array. Prefer typed entries in kind:text form, such as object:core business object, operation:submit request, rule:required approval before completion, page:management workspace, or flow:approval workflow. Use plain strings only when the kind is genuinely unclear."
         ],
         "toolContract": {
             "contextTool": "loom.knowledgeBrainstormContext",

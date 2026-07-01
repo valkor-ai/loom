@@ -21,6 +21,7 @@ const DEFAULT_SEARCH_LIMIT: usize = 8;
 const DEFAULT_CONTEXT_SOURCE_LIMIT: usize = 2;
 const DEFAULT_CONTEXT_CHUNK_LIMIT_PER_SOURCE: usize = 5;
 const MAX_CONTEXT_CHUNKS_PER_BLOCK: usize = 5;
+const MIN_CONTEXT_FOCUS_COVERAGE: f64 = 0.01;
 
 const PHASE_SCOPE_RETRIEVAL_INTENT: &str =
     "phase scope boundary include exclude defer dependency ordering next phase 阶段范围 边界 纳入 排除 延后 递延 依赖 顺序 下一阶段";
@@ -389,6 +390,9 @@ fn aggregate_sources(
     total_chunk_limit: usize,
 ) -> Vec<KnowledgeMatchedSource> {
     let semantic_focus = parse_semantic_focuses(semantic_focus);
+    let require_focus_match = semantic_focus
+        .iter()
+        .any(|focus| !focus.text.trim().is_empty());
     let mut grouped: BTreeMap<(String, String, String), Vec<KnowledgeChunkCard>> = BTreeMap::new();
     for card in cards {
         grouped
@@ -440,12 +444,18 @@ fn aggregate_sources(
             .then_with(|| left.source_id.cmp(&right.source_id))
     });
     if total_chunk_limit == usize::MAX {
+        if require_focus_match {
+            sources.retain(|source| source.matched_focus_coverage >= MIN_CONTEXT_FOCUS_COVERAGE);
+        }
         return sources;
     }
 
     let mut selected = Vec::new();
     let mut remaining = total_chunk_limit;
     for mut source in sources {
+        if require_focus_match && source.matched_focus_coverage < MIN_CONTEXT_FOCUS_COVERAGE {
+            continue;
+        }
         if selected.len() >= DEFAULT_CONTEXT_SOURCE_LIMIT || remaining == 0 {
             break;
         }

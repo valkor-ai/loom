@@ -199,6 +199,10 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
         .value
         .to_string()
+        .contains("object:core business object"));
+    assert!(!knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
         .contains("object:证券账户"));
     assert!(
         knowledge_fields.fields["knowledgeQueryPlan.blocks.phase_scope.executionOrder"]
@@ -277,7 +281,7 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         "clarification request must not expose candidate_write_contract"
     );
 
-    request_ref = confirm_block(
+    let phase_scope_confirmed = confirm_block(
         &server,
         &fixture,
         &request_ref,
@@ -292,12 +296,32 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             "recommendation": {
                 "label": "证券账户模块闭环",
                 "reason": "证券账户是交易身份和持仓归属的上游基础对象。"
-            }
+            },
+            "nextPhasePreview": "下一步确认证券账户规则和页面路径。}}"
         }),
-    )["requestRef"]
+    );
+    assert_eq!(
+        phase_scope_confirmed["gate"]["alreadyConfirmedBlocks"],
+        json!(["phase_scope"])
+    );
+    request_ref = phase_scope_confirmed["requestRef"]
         .as_str()
         .expect("concept request ref")
         .to_string();
+    let clarification_state_ref = latest_ref_for_phase(
+        fixture.root_str(),
+        planned["deliveryId"].as_str().unwrap(),
+        "brainstormClarificationState",
+    );
+    let clarification_state: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(clarification_state_ref))
+            .expect("read clarification state"),
+    )
+    .expect("parse clarification state");
+    assert_eq!(
+        clarification_state["blocks"][0]["confirmedData"]["nextPhasePreview"],
+        "下一步确认证券账户规则和页面路径。"
+    );
     assert_eq!(
         state::inspect_request(InspectRequestInput {
             project_root: fixture.root_str().to_string(),
@@ -1131,6 +1155,25 @@ fn populate_confirmed_brainstorm_candidate(candidate: &mut Value) {
         json!("确认证券账户业务规则、状态和边界。");
     candidate["clarificationProgress"]["confirmedBlocks"][2]["summary"] =
         json!("确认工作人员后台证券账户管理页面路径。");
+}
+
+fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {
+    let index_path = std::path::Path::new(project_root)
+        .join(".loom/deliveries")
+        .join(delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let active_phase = index["activePhaseId"].as_str().expect("active phase id");
+    index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .find(|phase| phase["phaseId"] == active_phase)
+        .and_then(|phase| phase["latestRefs"][key].as_str())
+        .unwrap_or_else(|| panic!("missing latest ref {key}"))
+        .to_string()
 }
 
 struct Fixture {
