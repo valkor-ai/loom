@@ -56,6 +56,7 @@ UIX references:
 - `../references/loom/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
 - `../references/loom/uix/anti-patterns.md`: product-boundary failures, demo-looking UI, and forbidden delivery/process content in product screens.
 - `../references/loom/uix/scenarios/*.md`, `../references/loom/uix/tokens/*.md`, and `../references/loom/uix/stacks/*.md`: load only when the MCP `referenceProfile.referenceIds` asks for a matching scenario, token, or stack reference.
+- `../references/loom/uix/templates/tokens.css.tpl` or `../references/loom/uix/templates/tokens.tailwind.tpl`: load only when the MCP `uiQualityContract.designTokenAssetPlan.templateId` selects the matching template id. Use it as a baseline to merge into the project's existing token/theme system; do not paste template text into Loom artifacts or create a parallel token system.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 
