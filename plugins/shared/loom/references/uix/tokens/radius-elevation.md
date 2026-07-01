@@ -14,6 +14,22 @@ Use radius as a system:
 
 Cards should usually be 8px or less unless an existing design system says otherwise.
 
+## CSS Token Skeleton
+
+```css
+:root {
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-raised: 0 1px 2px rgb(16 24 40 / 0.08);
+  --shadow-popover: 0 8px 24px rgb(16 24 40 / 0.14);
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-modal: 50;
+  --z-tooltip: 70;
+}
+```
+
 ## Elevation
 
 Prefer borders and surface contrast for normal workbench hierarchy. Use shadow/elevation for true layering:

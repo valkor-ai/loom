@@ -7,7 +7,48 @@ Use for Three.js/WebGL/canvas scenes, product configurators, spatial tools, game
 - The primary scene is full-bleed or dominant, not trapped inside a decorative card.
 - The scene must render nonblank, be correctly framed, and respond to expected interaction.
 - Density is `immersive`.
-- Controls must support the scene task without covering critical visual content.
+- Controls support the scene task without covering critical visual content.
+
+## Scene Layout
+
+```html
+<main data-region="scene-page">
+  <canvas data-region="scene-canvas"></canvas>
+  <section data-region="hud">
+    <header data-region="hud-top"></header>
+    <aside data-region="scene-inspector"></aside>
+    <footer data-region="scene-controls"></footer>
+  </section>
+</main>
+```
+
+```css
+.scene-page {
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.scene-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.scene-hud {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: var(--space-6);
+  pointer-events: none;
+}
+
+.scene-hud > * {
+  pointer-events: auto;
+}
+```
 
 ## Required Patterns
 
@@ -17,18 +58,13 @@ Use for Three.js/WebGL/canvas scenes, product configurators, spatial tools, game
 - Overlay UI with readable contrast and safe placement.
 - Reduced-motion or performance fallback when practical.
 
-## Layout
-
-- Use full viewport or dominant scene area with docked controls.
-- Keep menus/panels collapsible or positioned outside the core focal area.
-- Mobile: test touch gestures and avoid tiny overlay controls.
-
 ## Verification
 
 - Verify canvas pixels are nonblank.
 - Check desktop and mobile framing.
 - Confirm referenced assets load.
 - Confirm animation/interaction continues after initial render.
+- Check controls do not occlude the subject.
 
 ## Avoid
 

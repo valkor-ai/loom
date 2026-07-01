@@ -29,6 +29,27 @@ Avoid motion for:
 - Route or large panel transition: 220-360ms.
 - Loading skeleton shimmer: subtle and optional; prefer stable skeleton blocks.
 
+## CSS Token Skeleton
+
+```css
+:root {
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 280ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+```
+
 ## Implementation
 
 - Animate `transform` and `opacity` first.

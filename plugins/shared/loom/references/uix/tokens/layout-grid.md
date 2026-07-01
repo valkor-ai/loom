@@ -14,6 +14,28 @@ Use mobile-first breakpoints unless the repo already has a system:
 
 Do not scale font size directly with viewport width. Use breakpoint-specific layout changes and stable type tokens.
 
+## CSS Token Skeleton
+
+```css
+:root {
+  --container-sm: 640px;
+  --container-md: 768px;
+  --container-lg: 1024px;
+  --container-xl: 1280px;
+  --container-prose: 72ch;
+}
+
+.container {
+  width: min(100%, var(--container-xl));
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
+@media (min-width: 768px) {
+  .container { padding-inline: var(--space-6); }
+}
+```
+
 ## Containers
 
 - Workbench/admin: full-width shell with constrained internal panels where needed; avoid marketing-style centered containers.

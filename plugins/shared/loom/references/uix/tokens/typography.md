@@ -22,6 +22,26 @@ Use a small, stable type scale. Suggested web baseline:
 - `2xl`: 24px for page titles inside workbench UI.
 - Larger sizes are reserved for true landing/editorial/immersive hero contexts.
 
+## CSS Token Skeleton
+
+```css
+:root {
+  --font-sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-readable: 1.65;
+}
+```
+
+Use tabular numeric variants for finance, tables, metrics, and logs when the stack supports it.
+
 ## Surface Rules
 
 - Workbench/admin/table UI: compact headings, dense but readable rows, tabular numbers, stable line height.

@@ -9,6 +9,30 @@ Use for IDE-like tools, API explorers, SDK consoles, build/deploy tools, logs, d
 - Density is usually `workbench_dense`.
 - Monospace, code blocks, logs, command snippets, and structured metadata need careful hierarchy.
 
+## Workspace Layout
+
+```css
+.devtool-shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  background: var(--surface);
+}
+
+.devtool-workspace {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.devtool-output {
+  min-width: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+}
+```
+
 ## Required Patterns
 
 - Workspace shell with navigation, command/action region, output/result region, and detail/error panel.
@@ -17,11 +41,12 @@ Use for IDE-like tools, API explorers, SDK consoles, build/deploy tools, logs, d
 - Code/log formatting with wrapping or horizontal scroll.
 - Empty states that help the developer start.
 
-## Layout
+## Interaction
 
-- Split panes are acceptable when both panes are actively used.
-- Terminal/log panels must not dominate unrelated workflows.
-- Mobile support may be limited if the product is desktop-first, but narrow view should not break.
+- Copy/download/destructive runtime controls must be visually distinct.
+- Logs need filtering, search, and timestamp/source context when volume is high.
+- Errors should separate user configuration problems, environment failures, and tool failures.
+- Keyboard shortcuts may be shown only when implemented and useful.
 
 ## Avoid
 

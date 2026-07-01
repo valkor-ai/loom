@@ -4,10 +4,41 @@ Use for customer-facing web apps, portals, booking, commerce, content, learning,
 
 ## Baseline
 
-- First viewport should let the user start or continue the product task.
+- First viewport lets the user start or continue the product task.
 - Density is usually `comfortable` or `balanced`.
-- Navigation should be simple, task-oriented, and recoverable.
+- Navigation is task-oriented and recoverable.
 - Visual design may be expressive, but workflow clarity wins.
+
+## App Structure
+
+```html
+<main data-region="consumer-app">
+  <header data-region="app-header"></header>
+  <section data-region="current-task"></section>
+  <section data-region="object-list-or-feed"></section>
+  <section data-region="detail-or-checkout"></section>
+</main>
+```
+
+```css
+.consumer-shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.consumer-content {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: var(--space-4);
+}
+
+@media (min-width: 768px) {
+  .consumer-content {
+    padding: var(--space-6);
+  }
+}
+```
 
 ## Required Patterns
 
@@ -18,11 +49,12 @@ Use for customer-facing web apps, portals, booking, commerce, content, learning,
 - Responsive behavior that supports touch and narrow content.
 - Consistent cards/lists/details when browsing objects.
 
-## Layout
+## Workflow Rules
 
-- Desktop: content regions can combine overview, list, details, and recommendations.
-- Mobile: one-column task flow, bottom navigation or compact topbar when useful.
-- Detail pages should expose primary action without hiding supporting information.
+- Multi-step flows need progress and back/cancel behavior.
+- Detail pages expose primary action without hiding supporting information.
+- Recommendations or related content must not hide the user's current task.
+- Notifications and toasts should not be the only record of a completed action.
 
 ## Avoid
 

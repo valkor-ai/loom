@@ -8,6 +8,18 @@ Use for React Native, Flutter, SwiftUI/UIKit, Jetpack Compose, Kotlin/Android, a
 - Separate screens, reusable components, domain hooks/services, and navigation configuration.
 - Respect safe areas, keyboard avoidance, and platform back behavior.
 
+## Screen Composition
+
+```text
+NavigationContainer
+  Tab or Stack Navigator
+    Screen
+      SafeArea
+      Header
+      Scroll/List Content
+      Sticky Action or Sheet
+```
+
 ## Implementation Rules
 
 - Touch targets must be comfortable and spaced.

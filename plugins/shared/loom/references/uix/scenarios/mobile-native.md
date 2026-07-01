@@ -6,8 +6,19 @@ Use for iOS, Android, React Native, Flutter, Swift, Kotlin, or native-like mobil
 
 - Respect platform navigation, safe areas, touch targets, and system conventions.
 - Density is `comfortable`.
-- Screens should support one clear user task and preserve navigation context.
+- Screens support one clear user task and preserve navigation context.
 - Native UI must not look like a desktop web table squeezed into a phone.
+
+## Screen Anatomy
+
+```text
+Root navigation
+  -> tab/stack/shell
+    -> screen header
+    -> scrollable content
+    -> sticky or contextual action area
+    -> sheet/dialog only for focused secondary work
+```
 
 ## Required Patterns
 
@@ -17,14 +28,23 @@ Use for iOS, Android, React Native, Flutter, Swift, Kotlin, or native-like mobil
 - Offline/loading/error/permission states when relevant.
 - Form inputs with mobile keyboards, validation, and preserved values.
 
-## Layout
+## Component Guidance
 
-- Use lists, cards, grouped forms, sheets, and drill-down details.
-- Use platform typography and spacing conventions unless the app already has tokens.
-- Keep destructive or financial actions separated from routine navigation.
+- Lists use native list/card patterns with clear row identity and status.
+- Forms use grouped sections, visible labels, and input-specific keyboards.
+- Bottom sheets are for short choices or confirmations; complex flows get full screens.
+- Destructive or financial actions need confirmation, review, or undo based on severity.
+- Empty states should offer the next native action.
+
+## Verification
+
+- Use simulator/device or framework preview when available.
+- Check safe areas, keyboard behavior, scroll, and touch targets.
+- Check platform back behavior and focus/voiceover labels when possible.
 
 ## Avoid
 
 - Web-only hover interactions.
 - Tiny table cells, cramped toolbars, and desktop sidebars.
 - Ignoring platform back behavior or safe areas.
+- Hiding critical action state in transient toast only.

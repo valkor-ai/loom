@@ -923,6 +923,7 @@ fn issue(code: &str, field_path: &str, message: &str) -> RepairIssue {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use super::{build_ui_quality_seed, known_ui_reference_ids, UI_CORE_REFERENCE_IDS};
@@ -958,6 +959,33 @@ mod tests {
             assert!(
                 reference_ids.contains(reference_id),
                 "uiQualitySeed.requiredReferenceIds must include {reference_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn focused_uix_references_keep_operational_depth() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        for reference_id in known_ui_reference_ids() {
+            if !reference_id.starts_with("uix.scenarios.")
+                && !reference_id.starts_with("uix.tokens.")
+                && !reference_id.starts_with("uix.stacks.")
+            {
+                continue;
+            }
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(reference_file_for_id(reference_id));
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+            let line_count = content.lines().count();
+            assert!(
+                line_count >= 40,
+                "UIX reference {reference_id} is too thin ({line_count} lines)"
+            );
+            assert!(
+                content.contains("```"),
+                "UIX reference {reference_id} should include a concrete structure or token example"
             );
         }
     }

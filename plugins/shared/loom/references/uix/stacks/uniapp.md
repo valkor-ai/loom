@@ -8,6 +8,17 @@ Use for UniApp, WeChat/Alipay mini-programs, H5/mobile hybrid targets, and simil
 - Keep platform-specific capabilities behind small adapters when multiple targets are in scope.
 - Design for mobile task flows first; desktop web patterns should not leak into mini-app screens.
 
+## Suggested Split
+
+```text
+pages/
+components/
+stores/
+services/
+styles/
+  tokens
+```
+
 ## Implementation Rules
 
 - Respect safe areas, native navigation bars, tab bars, and platform gesture expectations.
@@ -15,6 +26,18 @@ Use for UniApp, WeChat/Alipay mini-programs, H5/mobile hybrid targets, and simil
 - Keep forms single-column, touch-friendly, and explicit about validation.
 - Avoid hover-only interactions and tiny table layouts.
 - Handle loading, empty, error, permission, and business-blocking states on the page that triggers them.
+
+## Page Pattern
+
+```html
+<view class="page">
+  <view class="page-header"></view>
+  <scroll-view class="page-content"></scroll-view>
+  <view class="page-actionbar"></view>
+</view>
+```
+
+Use project-native syntax and components; the pattern is about regions, not exact markup.
 
 ## Verification
 

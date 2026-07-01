@@ -18,6 +18,24 @@ Use a consistent spacing scale. Suggested baseline:
 | `space-10` | 40 | Large section separation. |
 | `space-12` | 48 | Editorial/marketing rhythm. |
 
+## CSS Token Skeleton
+
+```css
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+}
+```
+
+Use these tokens in layout primitives and component padding before introducing one-off values.
+
 ## Density Rules
 
 - `workbench_dense`: 8-16px component gaps, 36-44px row/control height, compact page padding.

@@ -18,6 +18,44 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 - Detail views need source context: selected record id/name/status and back/close route.
 - Row actions should not be hidden behind hover only.
 
+## Table Anatomy
+
+```html
+<section data-region="data-surface">
+  <header data-region="data-toolbar"></header>
+  <div data-region="data-feedback" aria-live="polite"></div>
+  <div data-region="data-scroll">
+    <table>
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <footer data-region="pagination-or-selection"></footer>
+</section>
+```
+
+```css
+.data-scroll {
+  min-width: 0;
+  overflow: auto;
+}
+
+.data-scroll table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.data-scroll th,
+.data-scroll td {
+  height: 44px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+```
+
+Mobile record-management flows should prefer cards or drill-down details. Use horizontal table scroll only when users must compare columns.
+
 ## Charts And Metrics
 
 - Charts need labels, legends, axes or equivalent context, empty/loading/error states, and accessible summaries when practical.
@@ -28,3 +66,4 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 
 - Business-blocking rules should attach to the affected row, detail, or action region.
 - Technical errors should be recoverable and separate from domain restrictions.
+- Success should update the row/detail state, not only show a toast.

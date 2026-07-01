@@ -13,6 +13,20 @@ Frameworks implement the UI contract; they do not redefine the product surface. 
 - Avoid one giant component once the workflow includes table/list, form, modal/drawer, and async states.
 - Keep design tokens in the framework's normal location: CSS variables, Tailwind config, theme provider, app CSS, or native theme.
 
+## Minimum Split For Real Screens
+
+```text
+layout shell
+page route/view
+feature components
+shared UI primitives
+data/API module
+formatters/validators
+state-specific components
+```
+
+If a task creates table/list + detail + form/action in one surface, it should not remain as one large component unless the existing project explicitly uses that pattern for small screens.
+
 ## Framework-Specific References
 
 - React/Next/Vite React: `references/uix/stacks/react.md`.
@@ -28,3 +42,4 @@ Frameworks implement the UI contract; they do not redefine the product surface. 
 - Run focused build/type/lint tests available in the repo.
 - Render the changed screen when possible.
 - Include only implementation evidence in TaskResult; do not put framework setup notes in product UI.
+- Check that framework-specific client/server boundaries, hydration, routing, and state ownership do not break the UI contract.

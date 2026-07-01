@@ -14,6 +14,33 @@ Define roles, not raw colors:
 - `success`, `warning`, `danger`, `info`, each with background, border, text, and icon roles.
 - `focus-ring`, `selection`, `scrim`.
 
+## CSS Token Skeleton
+
+Use project naming when it already exists. For a new web surface, this shape is acceptable:
+
+```css
+:root {
+  --surface: #ffffff;
+  --surface-muted: #f7f8fa;
+  --surface-raised: #ffffff;
+  --text: #111827;
+  --text-muted: #4b5563;
+  --border: #d9dee7;
+  --primary: #1f6feb;
+  --primary-hover: #185abc;
+  --primary-contrast: #ffffff;
+  --success-surface: #ecfdf3;
+  --success-text: #067647;
+  --warning-surface: #fffaeb;
+  --warning-text: #b54708;
+  --danger-surface: #fef3f2;
+  --danger-text: #b42318;
+  --focus-ring: #2563eb;
+}
+```
+
+The exact values may change, but components should consume roles rather than hard-coded values.
+
 ## Selection Rules
 
 - Choose a palette for the scenario, not the category stereotype. Finance is not automatically dark blue/gold; dashboards are not automatically dark slate.

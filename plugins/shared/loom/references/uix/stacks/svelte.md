@@ -8,6 +8,16 @@ Use for Svelte, SvelteKit, and related component-driven projects.
 - Keep page orchestration, business components, reusable UI primitives, and data modules separated.
 - Use SvelteKit load/actions or the repo's data approach consistently.
 
+## Suggested Split
+
+```text
+src/routes/
+src/lib/components/ui/
+src/lib/components/feature-name/
+src/lib/server|services/
+src/lib/styles/tokens.css
+```
+
 ## Implementation Rules
 
 - Represent loading, empty, error, validation, success, and business-blocking states directly in the template.
@@ -15,6 +25,20 @@ Use for Svelte, SvelteKit, and related component-driven projects.
 - Use semantic tokens in CSS variables, app CSS, Tailwind, or the existing styling system.
 - Keep transitions purposeful and respect reduced motion.
 - Avoid hiding product behavior inside overly clever reactive statements.
+
+## Template Pattern
+
+```svelte
+{#if state.status === 'loading'}
+  <SkeletonRows />
+{:else if state.status === 'error'}
+  <ErrorState message={state.message} />
+{:else if state.status === 'empty'}
+  <EmptyState />
+{:else}
+  <DataTable rows={state.data} />
+{/if}
+```
 
 ## Verification
 

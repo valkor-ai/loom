@@ -8,6 +8,31 @@ Use for static HTML, vanilla JavaScript, simple Tailwind/CDN pages, server-rende
 - Use CSS variables for tokens when no design system exists.
 - Split CSS and JavaScript if the project already has separate files; avoid massive inline style/script blocks for non-trivial products.
 
+## Minimal Layout Skeleton
+
+```html
+<body>
+  <div class="app-shell">
+    <aside class="app-nav"></aside>
+    <main class="app-main">
+      <header class="page-header"></header>
+      <section class="page-feedback" aria-live="polite"></section>
+      <section class="page-content"></section>
+    </main>
+  </div>
+</body>
+```
+
+```css
+:root {
+  --surface: #fff;
+  --text: #111;
+  --border: #ddd;
+  --space-4: 16px;
+  --radius-md: 8px;
+}
+```
+
 ## Implementation Rules
 
 - Progressive enhancement: core content and forms should remain understandable without complex JavaScript when possible.
