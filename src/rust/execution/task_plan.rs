@@ -4,8 +4,8 @@ use std::{
 };
 
 use contracts::{
-    AcceptancePriority, ArchitectureArtifactContract, CoverageStatus, ImplementationAction,
-    TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
+    ui_quality_enum_refs, AcceptancePriority, ArchitectureArtifactContract, CoverageStatus,
+    ImplementationAction, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
     TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
     TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
     TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
@@ -237,6 +237,7 @@ fn build_request_root(
     let runtime_requirement_template =
         runtime_delivery_requirement_template(aac.runtime_delivery.as_ref());
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
+    let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
@@ -278,6 +279,10 @@ fn build_request_root(
     if !runtime_closure_template.is_null() {
         output_contract["runtimeDeliveryClosureTaskTemplate"] = runtime_closure_template.clone();
     }
+    if !frontend_requirement_template.is_null() {
+        output_contract["frontendExperienceRequirementTemplate"] =
+            frontend_requirement_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -304,6 +309,7 @@ fn build_request_root(
         "requestReadPlan": {
             "groups": taskplan_read_groups(
                 &source_refs,
+                &frontend_requirement_template,
                 &runtime_requirement_template,
                 &runtime_closure_template
             )
@@ -340,6 +346,7 @@ fn has_non_null_key(value: &Value, key: &str) -> bool {
 
 fn taskplan_read_groups(
     source_refs: &Value,
+    frontend_requirement_template: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
 ) -> Value {
@@ -413,6 +420,7 @@ fn taskplan_read_groups(
             "purpose": "Read output paths, schema shapes, and enum refs before writing candidates.",
             "whenToRead": "Read before writing output files.",
             "fields": taskplan_candidate_contract_fields(
+                frontend_requirement_template,
                 runtime_requirement_template,
                 runtime_closure_template
             )
@@ -422,6 +430,7 @@ fn taskplan_read_groups(
 }
 
 fn taskplan_candidate_contract_fields(
+    frontend_requirement_template: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
 ) -> Vec<&'static str> {
@@ -429,12 +438,16 @@ fn taskplan_candidate_contract_fields(
         "enumRefs.taskKind",
         "enumRefs.implementationAction",
         "enumRefs.verificationEvidence",
+        "enumRefs.uiQuality",
         "outputContract.outlineFile",
         "outputContract.groupFilePattern",
         "outputContract.pathAuthority",
         "outputContract.outlineResultTemplate",
         "outputContract.groupResultTemplate",
     ];
+    if !frontend_requirement_template.is_null() {
+        fields.push("outputContract.frontendExperienceRequirementTemplate");
+    }
     if !runtime_requirement_template.is_null() {
         fields.push("outputContract.runtimeDeliveryRequirementTemplate");
     }
@@ -685,6 +698,7 @@ where
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
     issues.extend(validate_frontend_task_presence(&tasks, &aac));
+    issues.extend(validate_frontend_quality_requirements(&tasks, &aac));
     issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
     issues.extend(validate_workflow_closure_task_assignments(&tasks, &aac));
     issues.extend(validate_runtime_delivery_closure_task(
@@ -1418,13 +1432,7 @@ fn validate_frontend_task_presence(
     tasks: &[TaskDefinition],
     aac: &ArchitectureArtifactContract,
 ) -> Vec<delivery_core::RepairIssue> {
-    if aac
-        .frontend_experience
-        .as_ref()
-        .and_then(|value| value.get("required"))
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    if !frontend_experience_required(aac) {
         return Vec::new();
     }
     if tasks.iter().any(|task| {
@@ -1441,6 +1449,73 @@ fn validate_frontend_task_presence(
         "frontendExperience.required=true requires a UI/frontend task or a task with frontendExperienceRequirement.",
         None,
     )]
+}
+
+fn validate_frontend_quality_requirements(
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    if !frontend_experience_required(aac) {
+        return Vec::new();
+    }
+    let expected_ui_quality = frontend_ui_quality_contract(aac);
+    let mut issues = Vec::new();
+    for task in tasks {
+        let owns_frontend = matches!(
+            task.task_kind,
+            TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+        ) || task.frontend_experience_requirement.is_some();
+        if !owns_frontend {
+            continue;
+        }
+        let Some(requirement) = task.frontend_experience_requirement.as_ref() else {
+            issues.push(issue(
+                "FRONTEND_REQUIREMENT_REQUIRED",
+                "tasks[].frontendExperienceRequirement",
+                "UI/frontend tasks must carry frontendExperienceRequirement.",
+                Some(&task.task_id),
+            ));
+            continue;
+        };
+        if requirement
+            .get("frontendExperienceRef")
+            .and_then(Value::as_str)
+            != Some("sourceRefs.architectureArtifactContractRef#/frontendExperience")
+        {
+            issues.push(issue(
+                "FRONTEND_REQUIREMENT_REF_INVALID",
+                "tasks[].frontendExperienceRequirement.frontendExperienceRef",
+                "frontendExperienceRequirement.frontendExperienceRef must point to the AAC frontendExperience.",
+                Some(&task.task_id),
+            ));
+        }
+        if expected_ui_quality.is_some()
+            && requirement
+                .get("uiQualityContractRef")
+                .and_then(Value::as_str)
+                != Some(
+                    "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract",
+                )
+        {
+            issues.push(issue(
+                "FRONTEND_UI_QUALITY_REF_REQUIRED",
+                "tasks[].frontendExperienceRequirement.uiQualityContractRef",
+                "frontendExperienceRequirement must carry the AAC uiQualityContract ref.",
+                Some(&task.task_id),
+            ));
+        }
+        if let Some(expected) = expected_ui_quality {
+            if requirement.get("uiQualityContract") != Some(expected) {
+                issues.push(issue(
+                    "FRONTEND_UI_QUALITY_CONTRACT_REQUIRED",
+                    "tasks[].frontendExperienceRequirement.uiQualityContract",
+                    "frontendExperienceRequirement must copy the AAC uiQualityContract exactly instead of redefining UI quality.",
+                    Some(&task.task_id),
+                ));
+            }
+        }
+    }
+    issues
 }
 
 fn validate_requirement_detail_assignments(
@@ -1988,7 +2063,7 @@ fn requirement_detail_transfer(
             "interfaces": aac.interfaces,
             "userFlows": aac.user_flows,
             "stateMachines": aac.state_machines,
-            "frontendOperationPathDetails": aac.frontend_experience
+            "frontendOperationPathDetails": frontend_operation_path_details(aac)
         },
         "workflowClosureRequirements": workflow_closure_requirements(aac),
         "conceptRefs": {
@@ -2001,6 +2076,59 @@ fn requirement_detail_transfer(
             "frontendExperienceRequirement": "Use when the task owns UI surfaces, workflows, states, bindings, or operation paths.",
             "runtimeDeliveryRequirement": "Use when the task touches build, start, runtime entry, static serving, generated artifacts, or runtime surface."
         }
+    })
+}
+
+fn frontend_experience_required(aac: &ArchitectureArtifactContract) -> bool {
+    aac.frontend_experience
+        .as_ref()
+        .and_then(|value| value.get("required"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+fn frontend_ui_quality_contract(aac: &ArchitectureArtifactContract) -> Option<&Value> {
+    aac.frontend_experience
+        .as_ref()
+        .and_then(|frontend| frontend.get("uiQualityContract"))
+}
+
+fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
+    if !frontend_experience_required(aac) {
+        return Value::Null;
+    }
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return Value::Null;
+    };
+    let mut requirement = json!({
+        "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
+        "experienceLevel": frontend
+            .get("experienceLevel")
+            .and_then(Value::as_str)
+            .unwrap_or("production_internal_product"),
+        "mustSatisfy": true
+    });
+    if let Some(ui_quality_contract) = frontend.get("uiQualityContract") {
+        requirement["uiQualityContractRef"] = json!(
+            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
+        );
+        requirement["uiQualityContract"] = ui_quality_contract.clone();
+    }
+    requirement
+}
+
+fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return Value::Null;
+    };
+    json!({
+        "required": frontend.get("required").cloned().unwrap_or(Value::Bool(false)),
+        "experienceLevel": frontend.get("experienceLevel").cloned().unwrap_or(Value::Null),
+        "surfaces": frontend.get("surfaces").cloned().unwrap_or(Value::Array(vec![])),
+        "dataViews": frontend.get("dataViews").cloned().unwrap_or(Value::Array(vec![])),
+        "actions": frontend.get("actions").cloned().unwrap_or(Value::Array(vec![])),
+        "operationPaths": frontend.get("operationPaths").cloned().unwrap_or(Value::Array(vec![])),
+        "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -2276,7 +2404,10 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         },
         "frontendExperienceRules": {
             "required": aac.frontend_experience.as_ref().and_then(|value| value.get("required")).and_then(Value::as_bool).unwrap_or(false),
-            "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement."
+            "requirementTemplate": "outputContract.frontendExperienceRequirementTemplate",
+            "uiQualityContractSource": "outputContract.frontendExperienceRequirementTemplate.uiQualityContract",
+            "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement.",
+            "uiQualityRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must copy outputContract.frontendExperienceRequirementTemplate.uiQualityContract into frontendExperienceRequirement; do not reinterpret scenario, qualityLevel, referenceProfile, or forbidden user-visible content."
         },
         "workflowClosureRules": {
             "derivationAuthority": "AAC frontendExperience + userFlows + executable interfaces",
@@ -2431,7 +2562,8 @@ fn enum_refs() -> Value {
     json!({
         "taskKind": TASK_KIND_VALUES,
         "implementationAction": IMPLEMENTATION_ACTION_VALUES,
-        "verificationEvidence": VERIFICATION_EVIDENCE_VALUES
+        "verificationEvidence": VERIFICATION_EVIDENCE_VALUES,
+        "uiQuality": ui_quality_enum_refs()
     })
 }
 

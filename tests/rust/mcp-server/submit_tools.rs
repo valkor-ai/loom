@@ -2124,6 +2124,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         fields: vec![
             "outputContract.outlineResultTemplate".to_string(),
             "outputContract.groupResultTemplate".to_string(),
+            "outputContract.frontendExperienceRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryClosureTaskTemplate".to_string(),
         ],
@@ -2150,6 +2151,18 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         taskplan_contract_fields["outputContract.groupResultTemplate"].value["tasks"][0]
             ["conceptVerificationIntents"][0]
             .is_object()
+    );
+    let frontend_requirement_template =
+        &taskplan_contract_fields["outputContract.frontendExperienceRequirementTemplate"].value;
+    assert_eq!(
+        frontend_requirement_template["uiQualityContract"]["semanticTokenPolicy"],
+        json!("semantic_tokens_required")
+    );
+    assert!(
+        frontend_requirement_template["uiQualityContract"]["referenceProfile"]["referenceIds"]
+            .as_array()
+            .expect("ui quality refs")
+            .contains(&json!("uix.tokens.spacing"))
     );
     let runtime_requirement_template =
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
@@ -2477,11 +2490,8 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
         "manual_command_output"
     ]);
     group_value["tasks"][0]["conceptRefs"] = json!(["concept-account-ui"]);
-    group_value["tasks"][0]["frontendExperienceRequirement"] = json!({
-        "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
-        "experienceLevel": "usable_internal_product",
-        "mustSatisfy": true
-    });
+    group_value["tasks"][0]["frontendExperienceRequirement"] =
+        frontend_requirement_template_from_taskplan_request(&fixture, taskplan_request_ref);
     write_json_atomic(&group_path, &group_value).expect("write enriched group file");
 
     let accepted = call_submit(
@@ -5145,6 +5155,42 @@ fn taskplan_submit_requires_frontend_task_when_frontend_required() {
 }
 
 #[test]
+fn taskplan_submit_requires_frontend_ui_quality_contract_on_ui_tasks() {
+    let fixture = Fixture::new("taskplan-frontend-ui-quality-required");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["frontendExperienceRequirement"]
+        .as_object_mut()
+        .expect("frontend requirement object")
+        .remove("uiQualityContract");
+    write_json_atomic(&group_path, &group_value)
+        .expect("write frontend requirement without ui quality");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "FRONTEND_UI_QUALITY_CONTRACT_REQUIRED"
+            && issue["fieldPath"] == "tasks[].frontendExperienceRequirement.uiQualityContract"
+    }));
+}
+
+#[test]
 fn taskplan_submit_requires_workflow_closure_assignment() {
     let fixture = Fixture::new("taskplan-workflow-closure-assignment");
     let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
@@ -6471,6 +6517,8 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     )
     .expect("write taskplan outline");
     let group_file = group_pattern.replace("{groupId}", group_id);
+    let frontend_requirement_template =
+        frontend_requirement_template_from_taskplan_request(fixture, request_ref);
     write_json_atomic(
         &fixture.root.join(group_file),
         &json!({
@@ -6519,11 +6567,7 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
                     "preferredEvidence": ["static_check"],
                     "acceptableEvidence": ["static_check", "manual_command_output"]
                 }],
-                "frontendExperienceRequirement": {
-                    "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
-                    "experienceLevel": "usable_internal_product",
-                    "mustSatisfy": true
-                },
+                "frontendExperienceRequirement": frontend_requirement_template,
                 "conceptRefs": [],
                 "conceptResponsibilities": [],
                 "conceptVerificationIntents": []
@@ -6674,6 +6718,8 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
     )
     .expect("write taskplan outline");
     let group_file = group_pattern.replace("{groupId}", group_id);
+    let frontend_requirement_template =
+        frontend_requirement_template_from_taskplan_request(fixture, request_ref);
     write_json_atomic(
         &fixture.root.join(group_file),
         &json!({
@@ -6722,11 +6768,7 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
                     "preferredEvidence": ["runtime_api_check"],
                     "acceptableEvidence": ["automated_test", "runtime_api_check", "manual_command_output"]
                 }],
-                "frontendExperienceRequirement": {
-                    "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
-                    "experienceLevel": "usable_internal_product",
-                    "mustSatisfy": true
-                },
+                "frontendExperienceRequirement": frontend_requirement_template,
                 "conceptRefs": [],
                 "conceptResponsibilities": [],
                 "conceptVerificationIntents": []
@@ -6742,6 +6784,22 @@ fn first_taskplan_group_file(fixture: &Fixture, request_ref: &str) -> String {
         .into_iter()
         .next()
         .expect("first taskplan group file")
+}
+
+fn frontend_requirement_template_from_taskplan_request(
+    fixture: &Fixture,
+    request_ref: &str,
+) -> Value {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["outputContract.frontendExperienceRequirementTemplate".to_string()],
+    })
+    .expect("read frontend requirement template")
+    .fields;
+    fields["outputContract.frontendExperienceRequirementTemplate"]
+        .value
+        .clone()
 }
 
 fn taskplan_group_files(fixture: &Fixture, request_ref: &str) -> Vec<String> {
@@ -7990,6 +8048,8 @@ fn architecture_section_candidate_with_workflow_closure_json(
         }
         "frontend_experience" => {
             let refs = candidate["content"]["frontendExperience"]["sourceRefs"].clone();
+            let ui_quality_contract =
+                candidate["content"]["frontendExperience"]["uiQualityContract"].clone();
             candidate["content"]["frontendExperience"] = json!({
                 "required": true,
                 "kind": "staff_console",
@@ -8016,6 +8076,7 @@ fn architecture_section_candidate_with_workflow_closure_json(
                     "dataViewRefs": ["view_account_list"],
                     "actionRefs": ["action_open_account"]
                 }],
+                "uiQualityContract": ui_quality_contract,
                 "sourceRefs": refs
             });
         }
