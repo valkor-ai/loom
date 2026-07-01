@@ -2180,6 +2180,8 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             "outputContract.frontendExperienceRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryClosureTaskTemplate".to_string(),
+            "generationRules.runtimeDeliveryRules".to_string(),
+            "generationRules.verificationEvidenceRules".to_string(),
         ],
     })
     .expect("read taskplan contract fields")
@@ -2236,6 +2238,13 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     );
     let runtime_closure_template =
         &taskplan_contract_fields["outputContract.runtimeDeliveryClosureTaskTemplate"].value;
+    assert_eq!(
+        runtime_closure_template["groupPlacement"]["position"],
+        json!("final_group")
+    );
+    assert!(runtime_closure_template["groupPlacement"]["taskIdsRule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("exactly this one runtime_delivery_closure task")));
     let closure_requirement = &runtime_closure_template["runtimeDeliveryRequirement"];
     assert!(closure_requirement["affectedContractFields"]
         .as_array()
@@ -2260,6 +2269,17 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             .len(),
         "{closure_requirement:#}"
     );
+    let runtime_rules = &taskplan_contract_fields["generationRules.runtimeDeliveryRules"].value;
+    assert!(runtime_rules["closureGroupRule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("only task in its group")
+            && rule.contains("final outline.groups entry")));
+    let verification_rules =
+        &taskplan_contract_fields["generationRules.verificationEvidenceRules"].value;
+    let verification_rules_text =
+        serde_json::to_string(verification_rules).expect("serialize verification rules");
+    assert!(verification_rules_text.contains("Every covered current-phase detailId"));
+    assert!(verification_rules_text.contains("same parent task.requirementDetailRefs"));
     assert!(inspected
         .read_groups
         .iter()
@@ -2314,6 +2334,12 @@ fn taskplan_request_keeps_deferred_scope_out_of_current_scope_refs() {
     assert!(item["coverageStatus"].is_string());
     assert!(item["artifactRefs"].is_object() || item["artifactRefs"].is_null());
     assert!(item["coverageReason"].is_null() || item["coverageReason"].is_string());
+    assert!(assignment["verificationRule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("must be referenced")));
+    assert!(assignment["verificationSubsetRule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("same parent task.requirementDetailRefs")));
 }
 
 #[test]

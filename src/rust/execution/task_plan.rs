@@ -2271,7 +2271,8 @@ fn requirement_detail_transfer(
         "requirementDetailAssignment": {
             "items": requirement_items,
             "assignmentRule": "Every item with coverageStatus=covered must be assigned to at least one task.requirementDetailRefs entry using its detailId.",
-            "verificationRule": "Every assigned covered detail should be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+            "verificationRule": "Every assigned covered detail must be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+            "verificationSubsetRule": "Every verificationIntents[].requirementDetailRefs entry must also be present in the same parent task.requirementDetailRefs.",
             "insufficientAacRule": "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks."
         },
         "currentPhaseScope": {
@@ -2623,6 +2624,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         "verificationEvidenceRules": [
             "verificationIntents must use enumRefs.verificationEvidence.",
             "Each implementation task must have at least one verification intent.",
+            "Every covered current-phase detailId from contextProjection.requirementDetailTransfer.requirementDetailAssignment.items must appear in at least one task.requirementDetailRefs.",
+            "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
+            "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
             "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
             "Avoid broad snapshots or weak no-op checks as the primary verification evidence."
         ],
@@ -2653,7 +2657,10 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         },
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
-            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified."
+            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified.",
+            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement exactly from that template.",
+            "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
+            "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
         }
     })
 }
@@ -2673,6 +2680,13 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
         .collect::<Vec<_>>();
     json!({
         "taskKind": "runtime_delivery_closure",
+        "groupPlacement": {
+            "groupKind": "runtime_delivery_closure",
+            "position": "final_group",
+            "taskIdsRule": "The closure group taskIds array must contain exactly this one runtime_delivery_closure task.",
+            "dependsOnRule": "Use group dependsOn to reference the previous group or groups that make runtime-affecting work transitively complete; no other group may depend on the closure group.",
+            "taskDependsOnRule": "Keep the closure task dependsOn empty unless another task is in the same closure group; the closure group itself should carry cross-group dependencies."
+        },
         "runtimeDeliveryRequirement": {
             "appliesToThisTask": true,
             "reason": "Final code-level closure for the RuntimeDeliveryContract.",
