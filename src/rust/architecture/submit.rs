@@ -1296,13 +1296,14 @@ fn read_plan_fields(request_root: &Value) -> Vec<String> {
             groups
                 .iter()
                 .flat_map(|group| {
-                    group
-                        .get("fields")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
+                    serde_json::from_value::<Vec<delivery_core::ReadSelector>>(
+                        group
+                            .get("selectors")
+                            .cloned()
+                            .unwrap_or_else(|| Value::Array(vec![])),
+                    )
+                    .map(|selectors| delivery_core::expand_read_selectors(&selectors))
+                    .unwrap_or_default()
                 })
                 .collect()
         })

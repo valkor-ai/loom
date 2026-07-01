@@ -8,8 +8,9 @@ use contracts::{
     TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, DeliveryLifecycleStatus, LoomMcpActionResult, LoomMcpFailure,
-    LoomMcpFailureResult, RouteAction, RouteActionKind, TransitionStore,
+    apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
+    LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction, RouteActionKind,
+    TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -669,14 +670,14 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "required": true,
             "purpose": "Read task identity, task-scoped architecture context, and execution rules before editing.",
             "whenToRead": "Read before any source edit.",
-            "fields": core_fields
+            "selectors": read_selectors_value_from_paths(core_fields)
         }),
         json!({
             "groupId": "task_execution_result_contract",
             "required": true,
             "purpose": "Read TaskResult output file, schema fields, enum values, and completion barrier.",
             "whenToRead": "Read before writing TaskResult.",
-            "fields": result_fields
+            "selectors": read_selectors_value_from_paths(result_fields)
         }),
     ])
 }

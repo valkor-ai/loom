@@ -11,12 +11,13 @@ use contracts::{
     COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
-    ArtifactKind, DomainDispatcher, ExecuteEditBoundary, ExecuteTaskNext,
-    ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
-    LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction, ReadFieldGroupInput,
-    RepairContext, RepairOrigin, RouteAction, RouteActionKind, SubmitAcceptedEvent,
-    TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
+    ExecuteTaskNext, ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction,
+    ReadFieldGroupInput, RepairContext, RepairOrigin, RouteAction, RouteActionKind,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode,
+    WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -827,14 +828,14 @@ fn build_repair_execution_request(
                     "required": true,
                     "purpose": "Read task, repair context, and execution rules before editing.",
                     "whenToRead": "Read before source edits.",
-                    "fields": repair_core_fields
+                    "selectors": read_selectors_value_from_paths(repair_core_fields)
                 },
                 {
                     "groupId": "repair_result_contract",
                     "required": true,
                     "purpose": "Read TaskResult write contract before submitting repair result.",
                     "whenToRead": "Read before writing TaskResult.",
-                    "fields": repair_result_fields
+                    "selectors": read_selectors_value_from_paths(repair_result_fields)
                 }
             ]
         }
@@ -886,19 +887,19 @@ fn materialize_taskplan_repair_action(
             .join(format!("{request_id}.json")),
     )?;
 
-    let core_fields = state::read_field_group(ReadFieldGroupInput {
+    let core_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_core_context".to_string(),
     })?
     .fields;
-    let rule_fields = state::read_field_group(ReadFieldGroupInput {
+    let rule_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_generation_rules".to_string(),
     })?
     .fields;
-    let contract_fields = state::read_field_group(ReadFieldGroupInput {
+    let contract_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_candidate_contract".to_string(),
@@ -982,8 +983,13 @@ fn materialize_taskplan_repair_action(
     let enum_refs = json!({
         "taskKind": value_field(&contract_fields, "enumRefs.taskKind"),
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
-        "verificationEvidence": value_field(&contract_fields, "enumRefs.verificationEvidence")
+        "verificationEvidence": value_field(&contract_fields, "enumRefs.verificationEvidence"),
+        "uiQuality": value_field(&contract_fields, "enumRefs.uiQuality")
     });
+    let frontend_requirement_template = value_field(
+        &contract_fields,
+        "outputContract.frontendExperienceRequirementTemplate",
+    );
     let mut runtime_requirement_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryRequirementTemplate",
@@ -1065,6 +1071,30 @@ fn materialize_taskplan_repair_action(
         "allowedRefs.riskRefs",
     ]);
 
+    let mut taskplan_repair_write_contract_fields = vec![
+        "enumRefs.taskKind",
+        "enumRefs.implementationAction",
+        "enumRefs.verificationEvidence",
+        "enumRefs.uiQuality",
+        "outputContract.outlineFile",
+        "outputContract.groupFilePattern",
+        "outputContract.pathAuthority",
+        "outputContract.outlineResultTemplate",
+        "outputContract.groupResultTemplate",
+    ];
+    if !frontend_requirement_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.frontendExperienceRequirementTemplate");
+    }
+    if !runtime_requirement_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.runtimeDeliveryRequirementTemplate");
+    }
+    if !runtime_closure_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.runtimeDeliveryClosureTaskTemplate");
+    }
+
     let mut request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_repair",
@@ -1115,14 +1145,14 @@ fn materialize_taskplan_repair_action(
                     "required": true,
                     "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the replacement TaskPlan outline.",
                     "whenToRead": "Read first.",
-                    "fields": taskplan_core_fields
+                    "selectors": read_selectors_value_from_paths(taskplan_core_fields)
                 },
                 {
                     "groupId": "taskplan_generation_rules",
                     "required": true,
                     "purpose": "Read grouping, reference, verification, frontend, workflow, and runtime rules.",
                     "whenToRead": "Read after core context and before writing group files.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "generationRules.groupedOutputRules",
                         "generationRules.scopeAndReferenceRules",
                         "generationRules.writeBoundaryRules",
@@ -1131,27 +1161,28 @@ fn materialize_taskplan_repair_action(
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",
                         "generationRules.runtimeDeliveryRules"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "taskplan_repair_write_contract",
                     "required": true,
                     "purpose": "Read output paths, schema shapes, and enum refs before writing replacement candidates.",
                     "whenToRead": "Read before writing output files.",
-                    "fields": [
-                        "enumRefs.taskKind",
-                        "enumRefs.implementationAction",
-                        "enumRefs.verificationEvidence",
-                        "outputContract.outlineFile",
-                        "outputContract.groupFilePattern",
-                        "outputContract.pathAuthority",
-                        "outputContract.outlineResultTemplate",
-                        "outputContract.groupResultTemplate"
-                    ]
+                    "selectors": read_selectors_value_from_paths(taskplan_repair_write_contract_fields)
                 }
             ]
         }
     });
+    if !frontend_requirement_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "frontendExperienceRequirementTemplate".to_string(),
+                frontend_requirement_template,
+            );
+    }
     if !runtime_requirement_template.is_null() {
         request_root
             .pointer_mut("/outputContract")
@@ -1161,11 +1192,6 @@ fn materialize_taskplan_repair_action(
                 "runtimeDeliveryRequirementTemplate".to_string(),
                 runtime_requirement_template,
             );
-        request_root
-            .pointer_mut("/requestReadPlan/groups/2/fields")
-            .and_then(Value::as_array_mut)
-            .expect("taskplan repair write contract fields")
-            .push(json!("outputContract.runtimeDeliveryRequirementTemplate"));
     }
     if !runtime_closure_template.is_null() {
         request_root
@@ -1176,11 +1202,6 @@ fn materialize_taskplan_repair_action(
                 "runtimeDeliveryClosureTaskTemplate".to_string(),
                 runtime_closure_template,
             );
-        request_root
-            .pointer_mut("/requestReadPlan/groups/2/fields")
-            .and_then(Value::as_array_mut)
-            .expect("taskplan repair write contract fields")
-            .push(json!("outputContract.runtimeDeliveryClosureTaskTemplate"));
     }
     let stored = state::write_native_request(
         project_root,
@@ -1254,13 +1275,13 @@ fn materialize_architecture_repair_action(
             .join("requests")
             .join(format!("{request_id}.json")),
     )?;
-    let core_fields = state::read_field_group(ReadFieldGroupInput {
+    let core_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "architecture_core_context".to_string(),
     })?
     .fields;
-    let frontend_fields = state::read_field_group(ReadFieldGroupInput {
+    let frontend_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "architecture_frontend_context".to_string(),
@@ -1815,14 +1836,14 @@ fn architecture_repair_read_groups(
                 "Read the current-phase planning authority and repair context before generating the replacement Architecture section."
             },
             "whenToRead": "Read before drafting any replacement Architecture section candidate.",
-            "fields": core_fields
+            "selectors": read_selectors_value_from_paths(core_fields)
         }),
         json!({
             "groupId": "architecture_section_contract",
             "required": true,
             "purpose": "Read the current section contract, schema projection, and write target before writing the replacement section candidate.",
             "whenToRead": "Read immediately before writing the current replacement Architecture section candidate.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "sectionState.currentSection",
                 "currentSectionContract.section",
                 "currentSectionContract.candidateFile",
@@ -1837,7 +1858,7 @@ fn architecture_repair_read_groups(
                 "enumRefs.status",
                 "enumRefs.coverageStatus",
                 "enumRefs.acceptancePriority"
-            ]
+            ])
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
@@ -1882,7 +1903,7 @@ fn architecture_repair_read_groups(
             "required": true,
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
-            "fields": frontend_fields
+            "selectors": read_selectors_value_from_paths(frontend_fields)
         }));
     }
     if matches!(
@@ -1896,10 +1917,10 @@ fn architecture_repair_read_groups(
             "required": true,
             "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture repair sections.",
             "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "contextProjection.requirementDetailTransfer.actors",
                 "contextProjection.requirementDetailTransfer.capabilityGroups"
-            ]
+            ])
         }));
     }
     Value::Array(groups)

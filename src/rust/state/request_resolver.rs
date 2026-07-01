@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use delivery_core::{
-    FieldReadResult, InspectRequestInput, InspectRequestResult, ReadFieldGroupInput,
-    ReadFieldGroupResult, ReadGroupRef, ReadRequestFieldsInput, ReadRequestFieldsResult,
+    FieldReadResult, InspectRequestInput, InspectRequestResult, ReadFieldGroupFields,
+    ReadFieldGroupInput, ReadFieldGroupResult, ReadGroupRef, ReadRequestFieldsInput,
+    ReadRequestFieldsResult,
 };
 use serde_json::Value;
 
@@ -50,6 +51,13 @@ pub fn inspect_request(input: InspectRequestInput) -> StateResult<InspectRequest
 }
 
 pub fn read_field_group(input: ReadFieldGroupInput) -> StateResult<ReadFieldGroupResult> {
+    let flat = read_field_group_flat(input)?;
+    Ok(ReadFieldGroupResult {
+        fields: ReadFieldGroupFields::from_flat(flat.fields),
+    })
+}
+
+pub fn read_field_group_flat(input: ReadFieldGroupInput) -> StateResult<ReadRequestFieldsResult> {
     let request = load_request(&input.project_root, &input.request_ref)?;
     let group = request
         .read_groups
@@ -68,18 +76,19 @@ pub fn read_field_group(input: ReadFieldGroupInput) -> StateResult<ReadFieldGrou
             ))
         })?
         .clone();
-    let fields = resolve_fields(&input.project_root, &request, &group.fields)?;
+    let expanded_fields = group.expanded_fields();
+    let fields = resolve_fields(&input.project_root, &request, &expanded_fields)?;
     record_field_read_audit(
         &input.project_root,
         FieldReadAudit {
             request_ref: &request.request_ref,
             request_id: &request.request_id,
-            fields: &group.fields,
+            fields: &expanded_fields,
             source: "readFieldGroup",
             recorded_at: now_for_audit(),
         },
     );
-    Ok(ReadFieldGroupResult { fields })
+    Ok(ReadRequestFieldsResult { fields })
 }
 
 pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadRequestFieldsResult> {
@@ -120,7 +129,7 @@ pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadReq
             request_ref: &request.request_ref,
             request_id: &request.request_id,
             fields: &fields,
-            source: "readRequestFields",
+            source: "internalReadRequestFields",
             recorded_at: now_for_audit(),
         },
     );
@@ -134,16 +143,6 @@ pub fn read_field_group_by_resource_uri(uri: &str) -> StateResult<ReadFieldGroup
         project_root: project_root.to_string_lossy().into_owned(),
         request_ref: crate::request_manifest::request_ref(&parsed.project_id, &parsed.request_id),
         group_id: parsed.group_id,
-    })
-}
-
-pub fn read_field_by_resource_uri(uri: &str) -> StateResult<ReadRequestFieldsResult> {
-    let parsed = parse_field_resource(uri)?;
-    let project_root = crate::project::project_root_for_project_id(&parsed.project_id)?;
-    read_request_fields(ReadRequestFieldsInput {
-        project_root: project_root.to_string_lossy().into_owned(),
-        request_ref: crate::request_manifest::request_ref(&parsed.project_id, &parsed.request_id),
-        fields: vec![parsed.field_path],
     })
 }
 
@@ -349,12 +348,6 @@ struct ParsedGroupResource {
     group_id: String,
 }
 
-struct ParsedFieldResource {
-    project_id: String,
-    request_id: String,
-    field_path: String,
-}
-
 fn parse_field_group_resource(uri: &str) -> StateResult<ParsedGroupResource> {
     let prefix = "loom://projects/";
     let rest = uri.strip_prefix(prefix).ok_or_else(|| {
@@ -370,24 +363,6 @@ fn parse_field_group_resource(uri: &str) -> StateResult<ParsedGroupResource> {
         project_id: project_id.to_string(),
         request_id: request_id.to_string(),
         group_id: decode_component(group_id)?,
-    })
-}
-
-fn parse_field_resource(uri: &str) -> StateResult<ParsedFieldResource> {
-    let prefix = "loom://projects/";
-    let rest = uri.strip_prefix(prefix).ok_or_else(|| {
-        StateError::InvalidArgument("resource URI must start with loom://projects/".to_string())
-    })?;
-    let (project_id, rest) = rest.split_once("/requests/").ok_or_else(|| {
-        StateError::InvalidArgument("resource URI must include /requests/".to_string())
-    })?;
-    let (request_id, field_path) = rest.split_once("/fields/").ok_or_else(|| {
-        StateError::InvalidArgument("resource URI must include /fields/".to_string())
-    })?;
-    Ok(ParsedFieldResource {
-        project_id: project_id.to_string(),
-        request_id: request_id.to_string(),
-        field_path: decode_component(field_path)?,
     })
 }
 
@@ -421,7 +396,7 @@ fn decode_component(value: &str) -> StateResult<String> {
 fn allowed_fields(groups: &[ReadGroupRef]) -> BTreeSet<String> {
     groups
         .iter()
-        .flat_map(|group| group.fields.iter().cloned())
+        .flat_map(ReadGroupRef::expanded_fields)
         .collect()
 }
 

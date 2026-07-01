@@ -5,10 +5,10 @@ use contracts::{
     TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
-    ArtifactKind, DeliveryIndex, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
-    OperationContext, ReadRequestFieldsInput, RouteAction, RouteActionKind, SubmitAcceptedEvent,
-    TransitionEngine, TransitionStore,
+    read_selectors_value_from_paths, ArtifactKind, DeliveryIndex, DomainDispatcher,
+    FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, ReadRequestFieldsInput,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -317,30 +317,30 @@ fn build_request_root(
                     "required": true,
                     "purpose": "Read the confirmed Brainstorm scope, acceptance ids, frontend target, current phase lens, and baseline decision needs before drafting the baseline.",
                     "whenToRead": "Read before producing any TechnicalBaseline recommendation.",
-                    "fields": baseline_context_fields
+                    "selectors": read_selectors_value_from_paths(baseline_context_fields)
                 },
                 {
                     "groupId": "technical_baseline_repo_evidence",
                     "required": false,
                     "purpose": "Read repository evidence before inferring an existing-project baseline or deciding whether reuse applies.",
                     "whenToRead": "Read for existing_project or when repository continuity matters.",
-                    "fields": repo_evidence_fields
+                    "selectors": read_selectors_value_from_paths(repo_evidence_fields)
                 },
                 {
                     "groupId": "technical_baseline_selection_guidance",
                     "required": selection_guidance.is_some(),
                     "purpose": "Read the greenfield confirmation discipline before asking the user to confirm the baseline.",
                     "whenToRead": "Read only when the projectKind is greenfield or the baseline still needs explicit user confirmation.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "selectionGuidance"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "technical_baseline_write_contract",
                     "required": true,
                     "purpose": "Read the candidate schema and write target before writing the TechnicalBaseline candidate.",
                     "whenToRead": "Read only when ready to write the candidate file.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
                         "outputContract.schemaProjection",
@@ -350,7 +350,7 @@ fn build_request_root(
                         "enumRefs.scope",
                         "enumRefs.approvalType",
                         "enumRefs.confidence"
-                    ]
+                    ])
                 }
             ]
         }

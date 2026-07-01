@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -77,9 +79,26 @@ pub struct ReadGroupRef {
     pub order: u32,
     pub purpose: String,
     pub when_to_read: String,
-    pub fields: Vec<String>,
+    pub selectors: Vec<ReadSelector>,
     pub read_tool: String,
     pub resource_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSelector {
+    pub base: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<ReadSelectorField>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub include_base: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ReadSelectorField {
+    Field(String),
+    Nested(ReadSelector),
 }
 
 impl ReadGroupRef {
@@ -95,11 +114,130 @@ impl ReadGroupRef {
             order,
             purpose: "Read the request fields needed for the current action.".to_string(),
             when_to_read: "Before writing the requested artifact.".to_string(),
-            fields,
+            selectors: read_selectors_from_paths(fields),
             read_tool: "loom.readFieldGroup".to_string(),
             resource_uri: resource_uri.into(),
         }
     }
+
+    pub fn expanded_fields(&self) -> Vec<String> {
+        expand_read_selectors(&self.selectors)
+    }
+}
+
+pub fn read_selectors_from_paths<I, S>(paths: I) -> Vec<ReadSelector>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut root = BTreeMap::<String, SelectorNode>::new();
+    let mut seen = BTreeSet::new();
+    for path in paths {
+        let path = path.as_ref().trim();
+        if path.is_empty() || !seen.insert(path.to_string()) {
+            continue;
+        }
+        let parts = path
+            .split('.')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
+            continue;
+        }
+        insert_selector_path(&mut root, &parts);
+    }
+    root.into_iter()
+        .map(|(base, node)| selector_from_node(base, node))
+        .collect()
+}
+
+pub fn read_selectors_value_from_paths<I, S>(paths: I) -> serde_json::Value
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    serde_json::to_value(read_selectors_from_paths(paths))
+        .unwrap_or_else(|_| serde_json::Value::Array(vec![]))
+}
+
+pub fn expand_read_selectors(selectors: &[ReadSelector]) -> Vec<String> {
+    let mut fields = Vec::new();
+    for selector in selectors {
+        expand_selector("", selector, &mut fields);
+    }
+    let mut seen = BTreeSet::new();
+    fields
+        .into_iter()
+        .filter(|field| seen.insert(field.clone()))
+        .collect()
+}
+
+fn expand_selector(prefix: &str, selector: &ReadSelector, fields: &mut Vec<String>) {
+    let base = selector.base.trim();
+    if base.is_empty() {
+        return;
+    }
+    let full_base = join_selector_path(prefix, base);
+    if selector.include_base {
+        fields.push(full_base.clone());
+    }
+    for field in &selector.fields {
+        match field {
+            ReadSelectorField::Field(name) => {
+                let name = name.trim();
+                if !name.is_empty() {
+                    fields.push(join_selector_path(&full_base, name));
+                }
+            }
+            ReadSelectorField::Nested(nested) => expand_selector(&full_base, nested, fields),
+        }
+    }
+}
+
+fn join_selector_path(prefix: &str, suffix: &str) -> String {
+    if prefix.is_empty() {
+        suffix.to_string()
+    } else {
+        format!("{prefix}.{suffix}")
+    }
+}
+
+#[derive(Default)]
+struct SelectorNode {
+    include_self: bool,
+    children: BTreeMap<String, SelectorNode>,
+}
+
+fn insert_selector_path(root: &mut BTreeMap<String, SelectorNode>, parts: &[&str]) {
+    let mut node = root.entry(parts[0].to_string()).or_default();
+    for part in &parts[1..] {
+        node = node.children.entry((*part).to_string()).or_default();
+    }
+    node.include_self = true;
+}
+
+fn selector_from_node(base: String, node: SelectorNode) -> ReadSelector {
+    let fields = node
+        .children
+        .into_iter()
+        .map(|(name, child)| {
+            if child.include_self && child.children.is_empty() {
+                ReadSelectorField::Field(name)
+            } else {
+                ReadSelectorField::Nested(selector_from_node(name, child))
+            }
+        })
+        .collect();
+    ReadSelector {
+        base,
+        fields,
+        include_base: node.include_self,
+    }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -3,7 +3,9 @@ use std::path::Path;
 use contracts::{
     BrainstormCandidateAgentWritable, ClarificationBlockName, UserFacingLanguageConstraint,
 };
-use delivery_core::{ArtifactKind, RouteAction, RouteActionKind, WriteMode};
+use delivery_core::{
+    read_selectors_value_from_paths, ArtifactKind, RouteAction, RouteActionKind, WriteMode,
+};
 use schemars::schema_for;
 use serde_json::{json, Map, Value};
 use state::paths::to_project_relative;
@@ -53,7 +55,7 @@ pub fn build_brainstorm_clarification_request_root(
         "required": true,
         "purpose": "Read the current Brainstorm block protocol before presenting anything to the user.",
         "whenToRead": "Read at the beginning of this Brainstorm block.",
-        "fields": [
+        "selectors": read_selectors_value_from_paths([
             "userFacingLanguage",
             "clarificationConversationProtocol.currentBlock",
             "clarificationConversationProtocol.userVisibleBlockTitle",
@@ -61,7 +63,7 @@ pub fn build_brainstorm_clarification_request_root(
             "clarificationConversationProtocol.currentTurnAnswerRule",
             "clarificationConversationProtocol.blockRule",
             "clarificationConversationProtocol.confirmToolRule"
-        ]
+        ])
     })];
     if current_block != ClarificationBlockName::FinalSummary {
         groups.push(json!({
@@ -69,19 +71,19 @@ pub fn build_brainstorm_clarification_request_root(
             "required": true,
             "purpose": "Read compact source metadata and requirement hints for the current Brainstorm block.",
             "whenToRead": "Read before forming the current block response.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "requirementContext.sourceItems",
                 "keywordHints.compact"
-            ]
+            ])
         }));
         groups.push(json!({
             "groupId": "requirement_full_text",
             "required": false,
             "purpose": "Read the full normalized requirement text only when compact context and request-scoped knowledge are insufficient.",
             "whenToRead": "Read on demand for the current block only.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "requirementContext.normalizedText"
-            ]
+            ])
         }));
     }
     groups.push(json!({
@@ -89,7 +91,7 @@ pub fn build_brainstorm_clarification_request_root(
         "required": true,
         "purpose": "Read only the rules for the current Brainstorm confirmation block.",
         "whenToRead": "Read before presenting the current block.",
-        "fields": rule_group_fields
+        "selectors": read_selectors_value_from_paths(rule_group_fields)
     }));
     if current_block != ClarificationBlockName::PhaseScope {
         groups.push(json!({
@@ -97,10 +99,10 @@ pub fn build_brainstorm_clarification_request_root(
             "required": true,
             "purpose": "Read the already user-confirmed Brainstorm blocks as the authority for the current block.",
             "whenToRead": "Read before forming the current block response.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "confirmedClarificationState.blocks",
                 "confirmedClarificationState.finalSummaryConfirmed"
-            ]
+            ])
         }));
     }
     if current_block != ClarificationBlockName::FinalSummary {
@@ -109,11 +111,11 @@ pub fn build_brainstorm_clarification_request_root(
             "required": true,
             "purpose": "Read the request-scoped knowledge query plan and call loom.knowledgeBrainstormContext for the current Brainstorm block before presenting it.",
             "whenToRead": "Read before forming the current block response; call loom.knowledgeBrainstormContext for every listed executionOrder step, and for repeatMode steps run the required query set.",
-            "fields": [
-                "knowledgeQueryPlan.sharedRules",
-                "knowledgeQueryPlan.toolContract",
+            "selectors": read_selectors_value_from_paths(vec![
+                "knowledgeQueryPlan.sharedRules".to_string(),
+                "knowledgeQueryPlan.toolContract".to_string(),
                 format!("knowledgeQueryPlan.blocks.{}.executionOrder", block_id(&current_block))
-            ]
+            ])
         }));
     }
     groups.push(json!({
@@ -121,12 +123,12 @@ pub fn build_brainstorm_clarification_request_root(
         "required": true,
         "purpose": "Read the current block confirmation submit shape after the user visibly confirms this block.",
         "whenToRead": "Read only after the user confirms the current block in chat.",
-        "fields": [
+        "selectors": read_selectors_value_from_paths([
             "blockConfirmationContract.tool",
             "blockConfirmationContract.currentBlock",
             "blockConfirmationContract.summary",
             "blockConfirmationContract.confirmedDataShape"
-        ]
+        ])
     }));
 
     json!({
@@ -226,27 +228,27 @@ pub fn build_brainstorm_candidate_write_request_root(
                     "required": true,
                     "purpose": "Read the confirmed Brainstorm blocks that must be structurally preserved in the candidate.",
                     "whenToRead": "Read before writing the Brainstorm candidate.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "confirmedClarificationState.blocks",
                         "confirmedClarificationState.skippedBlocks",
                         "confirmedClarificationState.finalSummaryConfirmed"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "source_ref_registry",
                     "required": true,
                     "purpose": "Read only legal requirement source ids for candidate sourceRefs; do not reinterpret requirements from this registry.",
                     "whenToRead": "Read before filling candidate sourceRefs.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "sourceRefRegistry.sources"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "candidate_write_contract",
                     "required": true,
                     "purpose": "Read the compact write contract for the final Brainstorm candidate.",
                     "whenToRead": "Read immediately before writing the Brainstorm candidate.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
                         "outputContract.resultTemplate",
@@ -270,7 +272,7 @@ pub fn build_brainstorm_candidate_write_request_root(
                         "enumRefs.frontendResultObservationMode",
                         "enumRefs.frontendInteractionState",
                         "rules.candidateWrite"
-                    ]
+                    ])
                 }
             ]
         }

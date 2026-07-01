@@ -6,8 +6,8 @@ use contracts::{
     PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
-    ArtifactKind, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction,
-    RouteActionKind, TransitionStore,
+    read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
+    LoomMcpFailureResult, RouteAction, RouteActionKind, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -403,7 +403,7 @@ pub(crate) fn architecture_read_groups(
             } else {
                 "Read before drafting any Architecture section candidate."
             },
-            "fields": core_fields
+            "selectors": read_selectors_value_from_paths(core_fields)
         }),
         json!({
             "groupId": "architecture_section_contract",
@@ -418,7 +418,7 @@ pub(crate) fn architecture_read_groups(
             } else {
                 "Read immediately before writing the current Architecture section candidate."
             },
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "sectionState.currentSection",
                 "currentSectionContract.section",
                 "currentSectionContract.candidateFile",
@@ -433,7 +433,7 @@ pub(crate) fn architecture_read_groups(
                 "enumRefs.status",
                 "enumRefs.coverageStatus",
                 "enumRefs.acceptancePriority"
-            ]
+            ])
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
@@ -478,7 +478,7 @@ pub(crate) fn architecture_read_groups(
             "required": true,
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
-            "fields": frontend_fields
+            "selectors": read_selectors_value_from_paths(frontend_fields)
         }));
     }
     if matches!(
@@ -492,10 +492,10 @@ pub(crate) fn architecture_read_groups(
             "required": true,
             "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture sections.",
             "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "contextProjection.requirementDetailTransfer.actors",
                 "contextProjection.requirementDetailTransfer.capabilityGroups"
-            ]
+            ])
         }));
     }
     Value::Array(groups)

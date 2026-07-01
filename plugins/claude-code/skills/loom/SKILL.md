@@ -21,7 +21,7 @@ Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. A tas
 
 ## Request Reading
 
-When a result contains `requestRef`, use `loom.inspectRequest` and `loom.readFieldGroup`. `requestReadPlan.groups` is the only read contract. Use `loom.readRequestFields` only for declared fields.
+When a result contains `requestRef`, use `loom.inspectRequest` and `loom.readFieldGroup`. `requestReadPlan.groups` is the only read contract. Do not request individual field paths.
 
 Do not search `.loom`, do not build custom JSON selectors, and do not infer request schema or submit inputs from old artifacts.
 

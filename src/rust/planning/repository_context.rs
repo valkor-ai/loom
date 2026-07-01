@@ -6,9 +6,10 @@ use contracts::{
     RepositoryMode, TechnicalBaselineContract,
 };
 use delivery_core::{
-    ArtifactKind, DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
-    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult,
+    LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
+    TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Map, Value};
@@ -377,14 +378,14 @@ fn build_request_root(
                     "required": true,
                     "purpose": "Read the repository scanning purpose and baseline lens before inspecting the repository.",
                     "whenToRead": "Read before any repository inspection.",
-                    "fields": scan_contract_fields
+                    "selectors": read_selectors_value_from_paths(scan_contract_fields)
                 },
                 {
                     "groupId": "repository_context_generation_rules",
                     "required": true,
                     "purpose": "Read the hard safety rules and enum sets before writing RepositoryContext.",
                     "whenToRead": "Read before drafting the candidate.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "generationRules",
                         "enumRefs.projectKind",
                         "enumRefs.repositoryMode",
@@ -398,20 +399,20 @@ fn build_request_root(
                         "enumRefs.readPriority",
                         "enumRefs.contextCoverage",
                         "enumRefs.confidence"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "repository_context_write_contract",
                     "required": true,
                     "purpose": "Read the write target and schema projection before writing the candidate.",
                     "whenToRead": "Read only when ready to write RepositoryContext.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
                         "outputContract.bindingRules",
                         "outputContract.schemaProjection",
                         "outputContract.resultTemplate"
-                    ]
+                    ])
                 }
             ]
         }

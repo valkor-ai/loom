@@ -5,8 +5,8 @@ use delivery_core::{
     is_submit_tool, normalize_project_root, status_details, submit_tool_spec, validate_plan_input,
     DomainDispatcher, FileSubmitInput, InspectRequestInput, LoomMcpActionResult, LoomMcpDoneResult,
     LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpRuntimeContext,
-    OperationContext, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, ReadRequestFieldsInput,
-    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    OperationContext, PlanToolInput, ProjectToolInput, ReadFieldGroupInput, SubmitAcceptedEvent,
+    TransitionEngine, TransitionStore,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use knowledge::mcp_models::{
@@ -174,9 +174,6 @@ fn call_tool(
         "readFieldGroup" => structured(state::read_field_group(parse_args::<ReadFieldGroupInput>(
             request.arguments,
         )?)),
-        "readRequestFields" => structured(state::read_request_fields(parse_args::<
-            ReadRequestFieldsInput,
-        >(request.arguments)?)),
         "knowledgeAdd" => {
             let input = parse_args::<KnowledgeAddInput>(request.arguments)?;
             let project_root = input.project_root.clone();
@@ -723,11 +720,6 @@ fn read_resource(server: &LoomMcpServer, uri: &str) -> Result<ReadResourceResult
     if uri.contains("/field-groups/") {
         let result =
             state::request_resolver::read_field_group_by_resource_uri(uri).map_err(state_error)?;
-        return json_resource(uri, &result);
-    }
-    if uri.contains("/fields/") {
-        let result =
-            state::request_resolver::read_field_by_resource_uri(uri).map_err(state_error)?;
         return json_resource(uri, &result);
     }
     Ok(server.resources.read_placeholder(uri))

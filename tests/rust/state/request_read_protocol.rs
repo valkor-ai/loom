@@ -4,7 +4,7 @@ use state::{
         delivery_dir, delivery_index_file, operation_lease_file, phase_tmp_dir, project_paths,
         task_run_file, workspace_dir, DeliveryPhaseLocator, DeliveryPhaseRunLocator,
     },
-    request_resolver::{read_field_by_resource_uri, read_field_group_by_resource_uri},
+    request_resolver::read_field_group_by_resource_uri,
     store::{read_json_value, write_json_atomic, write_text_atomic},
     write_native_request, NativeRequestInput,
 };
@@ -144,14 +144,14 @@ fn native_request_read_protocol_resolves_declared_fields() {
                             "required": true,
                             "purpose": "Read core fields.",
                             "whenToRead": "Before execution.",
-                            "fields": [
+                            "selectors": selectors([
                                 "task.title",
                                 "task.items.0.name",
                                 "outputContract.schemaShape.summary",
                                 "requirementContext.normalizedText",
                                 "keywordHints.compact",
                                 "rules.requirementSemanticGrounding.compactRules"
-                            ]
+                            ])
                         }
                     ]
                 }
@@ -232,46 +232,54 @@ fn native_request_read_protocol_resolves_declared_fields() {
         vec!["fields".to_string()]
     );
     assert_eq!(
-        group_json["fields"]["task.title"],
-        json!("实现证券账户开户")
+        field(&group.fields, "task.title"),
+        &json!("实现证券账户开户")
     );
     let group_text = group_json.to_string();
     assert!(!group_text.contains("sourceRef"));
     assert!(!group_text.contains("sourceKind"));
     assert!(!group_text.contains("selector"));
     assert!(!group_text.contains("\"status\":\"resolved\""));
-    assert_eq!(group.fields["task.title"].value, "实现证券账户开户");
-    assert_eq!(group.fields["task.items.0.name"].value, "开户");
     assert_eq!(
-        group.fields["outputContract.schemaShape.summary"].value,
-        "string"
+        field(&group.fields, "task.title"),
+        &json!("实现证券账户开户")
+    );
+    assert_eq!(field(&group.fields, "task.items.0.name"), &json!("开户"));
+    assert_eq!(
+        field(&group.fields, "outputContract.schemaShape.summary"),
+        &json!("string")
     );
     assert_eq!(
-        group.fields["requirementContext.normalizedText"].value,
-        "证券账户开户需求"
+        field(&group.fields, "requirementContext.normalizedText"),
+        &json!("证券账户开户需求")
     );
     assert_eq!(
-        group.fields["keywordHints.compact"].value["status"],
-        "completed"
+        field(&group.fields, "keywordHints.compact.status"),
+        &json!("completed")
     );
     assert_eq!(
-        group.fields["keywordHints.compact"].value["topKeywords"][0],
-        "证券账户"
+        field(&group.fields, "keywordHints.compact.topKeywords.0"),
+        &json!("证券账户")
     );
     assert_eq!(
-        group.fields["keywordHints.compact"].value["sectionKeywords"][0]["keywords"],
-        json!(["开户", "销户"])
+        field(
+            &group.fields,
+            "keywordHints.compact.sectionKeywords.0.keywords"
+        ),
+        &json!(["开户", "销户"])
     );
     assert!(
-        !group.fields["keywordHints.compact"]
-            .value
+        !field(&group.fields, "keywordHints.compact")
             .to_string()
             .contains("\"keyword\""),
         "compact keyword hints must expose keyword arrays as strings"
     );
     assert_eq!(
-        group.fields["rules.requirementSemanticGrounding.compactRules"].value,
-        json!(["rule_1", "rule_2", "rule_3", "rule_4", "rule_5", "rule_6", "rule_7"])
+        field(
+            &group.fields,
+            "rules.requirementSemanticGrounding.compactRules"
+        ),
+        &json!(["rule_1", "rule_2", "rule_3", "rule_4", "rule_5", "rule_6", "rule_7"])
     );
 
     let selected = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
@@ -302,16 +310,9 @@ fn native_request_read_protocol_resolves_declared_fields() {
 
     let by_resource = read_field_group_by_resource_uri(&stored.read_groups[0].resource_uri)
         .expect("resource field group read");
-    assert_eq!(by_resource.fields["task.title"].value, "实现证券账户开户");
-
-    let field_uri = format!(
-        "loom://projects/{}/requests/{}/fields/task.title",
-        stored.project_id, stored.request_id
-    );
-    let by_field_resource = read_field_by_resource_uri(&field_uri).expect("resource field read");
     assert_eq!(
-        by_field_resource.fields["task.title"].value,
-        "实现证券账户开户"
+        field(&by_resource.fields, "task.title"),
+        &json!("实现证券账户开户")
     );
 
     let paths = state::paths::project_paths(fixture.root_str()).expect("project paths");
@@ -321,7 +322,7 @@ fn native_request_read_protocol_resolves_declared_fields() {
 
     let field_audit = read_to_string(paths.field_read_audit_file).expect("field read audit");
     assert!(field_audit.contains("\"source\":\"readFieldGroup\""));
-    assert!(field_audit.contains("\"source\":\"readRequestFields\""));
+    assert!(field_audit.contains("\"source\":\"internalReadRequestFields\""));
 }
 
 #[test]
@@ -347,7 +348,7 @@ fn native_request_size_thresholds_are_audit_warnings_not_flow_blockers() {
                         "required": true,
                         "purpose": "Read a large but valid field.",
                         "whenToRead": "Before writing.",
-                        "fields": ["context.largeField"]
+                        "selectors": selectors(["context.largeField"])
                     }]
                 }
             }),
@@ -361,8 +362,7 @@ fn native_request_size_thresholds_are_audit_warnings_not_flow_blockers() {
         group_id: "large_context".to_string(),
     })
     .expect("read large field group");
-    assert!(group.fields["context.largeField"]
-        .value
+    assert!(field(&group.fields, "context.largeField")
         .as_str()
         .expect("large field text")
         .contains("证券账户开户规则"));
@@ -397,7 +397,7 @@ fn native_request_rejects_legacy_agent_action_authority() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "core",
-                        "fields": ["task.title"]
+                        "selectors": selectors(["task.title"])
                     }]
                 },
                 "task": { "title": "x" }
@@ -424,7 +424,7 @@ fn native_request_omits_missing_read_fields_and_rejects_broad_fields() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "core",
-                        "fields": ["task.missing"]
+                        "selectors": selectors(["task.missing"])
                     }]
                 }
             }),
@@ -437,7 +437,10 @@ fn native_request_omits_missing_read_fields_and_rejects_broad_fields() {
         group_id: "core".to_string(),
     })
     .expect("read missing group");
-    assert!(missing_group.fields.is_empty());
+    assert!(missing_group
+        .fields
+        .as_object()
+        .is_some_and(serde_json::Map::is_empty));
     let missing_fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: missing.request_ref,
@@ -459,7 +462,7 @@ fn native_request_omits_missing_read_fields_and_rejects_broad_fields() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "core",
-                        "fields": ["rules"]
+                        "selectors": selectors(["rules"])
                     }]
                 }
             }),
@@ -481,7 +484,7 @@ fn native_request_omits_missing_read_fields_and_rejects_broad_fields() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "core",
-                        "fields": ["sectionOutputs.0.section"]
+                        "selectors": selectors(["sectionOutputs.0.section"])
                     }]
                 }
             }),
@@ -570,11 +573,11 @@ fn native_request_protocol_snapshot_covers_delivery_request_kinds() {
                     "required": true,
                     "purpose": "Read the native MCP write contract.",
                     "whenToRead": "Before writing the result file.",
-                    "fields": [
+                    "selectors": selectors([
                         "protocolPurpose",
                         "outputContract.submitTool",
                         "outputContract.writeTargets"
-                    ]
+                    ])
                 }]
             }
         });
@@ -634,12 +637,15 @@ fn native_request_protocol_snapshot_covers_delivery_request_kinds() {
             group_id: "write_contract".to_string(),
         })
         .expect("read snapshot write contract");
-        assert_eq!(group.fields["protocolPurpose"].value, json!(request_kind));
         assert_eq!(
-            group.fields["outputContract.submitTool"].value,
-            json!(submit_tool)
+            field(&group.fields, "protocolPurpose"),
+            &json!(request_kind)
         );
-        assert!(group.fields["outputContract.writeTargets"].value.is_array());
+        assert_eq!(
+            field(&group.fields, "outputContract.submitTool"),
+            &json!(submit_tool)
+        );
+        assert!(field(&group.fields, "outputContract.writeTargets").is_array());
     }
 }
 
@@ -727,7 +733,7 @@ fn native_submit_authorizes_declared_write_targets() {
                         "required": true,
                         "purpose": "Read core fields.",
                         "whenToRead": "Before writing.",
-                        "fields": ["outputContract.writeTargets"]
+                        "selectors": selectors(["outputContract.writeTargets"])
                     }]
                 }
             }),
@@ -861,4 +867,25 @@ fn has_duplicate_context_ref_path(value: &serde_json::Value) -> bool {
         }
     }
     false
+}
+
+fn selectors<const N: usize>(fields: [&str; N]) -> serde_json::Value {
+    delivery_core::read_selectors_value_from_paths(fields)
+}
+
+fn field<'a>(value: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    let mut current = value;
+    for part in path.split('.') {
+        current = if let Ok(index) = part.parse::<usize>() {
+            current
+                .as_array()
+                .and_then(|items| items.get(index))
+                .unwrap_or_else(|| panic!("missing array path segment {part} in {path}"))
+        } else {
+            current
+                .get(part)
+                .unwrap_or_else(|| panic!("missing object path segment {part} in {path}"))
+        };
+    }
+    current
 }

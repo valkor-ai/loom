@@ -7,11 +7,11 @@ use contracts::{
     DeploymentSpec,
 };
 use delivery_core::{
-    ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
-    ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult, PostSubmitAction,
-    ReadRequestFieldsResult, RepairContext, RepairIssue, RepairOrigin, WriteMode,
+    read_selectors_value_from_paths, ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary,
+    ExecuteTaskNext, ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpBlockedResult, LoomMcpDoneResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult,
+    PostSubmitAction, ReadRequestFieldsResult, RepairContext, RepairIssue, RepairOrigin, WriteMode,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -568,21 +568,21 @@ fn materialize_deploy_execution_repair(
                     "required": true,
                     "purpose": "Read deploy failure report and edit boundary before editing application code.",
                     "whenToRead": "Read before source edits.",
-                    "fields": deploy_failure_fields
+                    "selectors": read_selectors_value_from_paths(deploy_failure_fields)
                 },
                 {
                     "groupId": "deploy_repair_result_contract",
                     "required": true,
                     "purpose": "Read result path, schema shape, and submit rules before writing repair result.",
                     "whenToRead": "Read before writing the result file.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.repairId",
                         "outputContract.deploymentFailureRef",
                         "outputContract.resultFile",
                         "outputContract.resultTemplate",
                         "outputContract.resultRules",
                         "executionRules.completionBarrier"
-                    ]
+                    ])
                 }
             ]
         }

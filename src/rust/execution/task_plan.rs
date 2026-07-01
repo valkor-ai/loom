@@ -12,11 +12,11 @@ use contracts::{
     TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
-    ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
-    LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction, RouteAction, RouteActionKind,
-    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
+    DomainDispatcher, ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -396,14 +396,14 @@ fn taskplan_read_groups(
             "required": true,
             "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
-            "fields": core_fields
+            "selectors": read_selectors_value_from_paths(core_fields)
         }),
         json!({
             "groupId": "taskplan_generation_rules",
             "required": true,
             "purpose": "Read grouping, reference, verification, frontend, workflow, and runtime rules.",
             "whenToRead": "Read after core context and before writing group files.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "generationRules.groupedOutputRules",
                 "generationRules.scopeAndReferenceRules",
                 "generationRules.writeBoundaryRules",
@@ -412,18 +412,18 @@ fn taskplan_read_groups(
                 "generationRules.frontendExperienceRules",
                 "generationRules.workflowClosureRules",
                 "generationRules.runtimeDeliveryRules"
-            ]
+            ])
         }),
         json!({
             "groupId": "taskplan_candidate_contract",
             "required": true,
             "purpose": "Read output paths, schema shapes, and enum refs before writing candidates.",
             "whenToRead": "Read before writing output files.",
-            "fields": taskplan_candidate_contract_fields(
+            "selectors": read_selectors_value_from_paths(taskplan_candidate_contract_fields(
                 frontend_requirement_template,
                 runtime_requirement_template,
                 runtime_closure_template
-            )
+            ))
         }),
     ];
     Value::Array(groups)

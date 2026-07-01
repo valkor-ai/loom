@@ -1224,7 +1224,7 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
     assert!(!inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "repairContext"));
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str(),
@@ -1237,12 +1237,12 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
     assert!(inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "outputContract.resultTemplate"));
     assert!(!inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field.starts_with("outputContract.schemaShape")));
     let second_result = deploy_repair(DeployToolInput {
         project_root: fixture.root_str(),

@@ -11,11 +11,11 @@ use contracts::{
     TaskResult,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher, FileSubmitInput,
-    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpNextAction, LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext,
-    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
-    WriteArtifactNext, WriteMode, WriteTarget,
+    apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
+    DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult,
+    LoomMcpUserGateResult, OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent,
+    TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -331,7 +331,7 @@ fn build_review_request(
                     "required": true,
                     "purpose": "Read review source identity and phase run scope.",
                     "whenToRead": "Read first.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "source.phaseId",
                         "source.taskPlanId",
                         "source.taskPlanRunId",
@@ -349,50 +349,50 @@ fn build_review_request(
                         "reviewScope.nextPhasePreview.reason",
                         "reviewScope.runStatus",
                         "reviewScope.runSummary"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "review_packets",
                     "required": true,
                     "purpose": "Read task plan and task results.",
                     "whenToRead": "Read before judging implementation quality.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "reviewPacket.taskPlanId",
                         "reviewPacket.taskPlanRunId",
                         "reviewPacket.groupSummaries",
                         "reviewPacket.taskSummaries",
                         "reviewPacket.taskResultSummaries"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "change_context",
                     "required": true,
                     "purpose": "Read changed file context.",
                     "whenToRead": "Read before judging implementation quality.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "changeContext.mode",
                         "changeContext.changedFiles",
                         "outputContract.changeContextMode"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "review_matrices",
                     "required": true,
                     "purpose": "Read concept, requirement detail, frontend, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "conceptReviewMatrix",
                         "detailReviewMatrix",
                         "frontendQualityReviewMatrix",
                         "outputContract.reviewSignals.items"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "review_rules",
                     "required": true,
                     "purpose": "Read review enums and routing rules.",
                     "whenToRead": "Read before writing findings and nextAction.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "enumRefs.decision",
                         "enumRefs.findingSeverity",
                         "enumRefs.severityClass",
@@ -408,14 +408,14 @@ fn build_review_request(
                         "outputContract.routingRules",
                         "outputContract.severityPolicy",
                         "outputContract.validatorRules"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "review_write_contract",
                     "required": true,
                     "purpose": "Read ReviewResult output path and precise schema fields.",
                     "whenToRead": "Read before writing ReviewResult.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.resultFile",
                         "outputContract.writeTargets",
                         "outputContract.allowedRefs.taskIds",
@@ -435,7 +435,7 @@ fn build_review_request(
                         "outputContract.schemaShape.properties.limitations",
                         "outputContract.schemaShape.properties.pendingActions",
                         "outputContract.schemaShape.properties.nextAction"
-                    ]
+                    ])
                 }
             ]
         }
@@ -1740,7 +1740,7 @@ fn build_manual_review_request(
                     "required": true,
                     "purpose": "Read the review issue and allowed user decision protocol.",
                     "whenToRead": "Read after the user answers the manual review gate.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "source.reviewId",
                         "source.reviewResultRef",
                         "source.decision",
@@ -1753,14 +1753,14 @@ fn build_manual_review_request(
                         "enumRefs.decision",
                         "enumRefs.changeRequestRoute",
                         "enumRefs.nextActionType"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "manual_review_write_contract",
                     "required": true,
                     "purpose": "Read the authorized resolution output path and schema fields.",
                     "whenToRead": "Read before writing ManualReviewResolution.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.resultFile",
                         "outputContract.writeTargets",
                         "outputContract.requiredFields",
@@ -1769,7 +1769,7 @@ fn build_manual_review_request(
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.changeRequest",
                         "outputContract.schemaShape.properties.nextAction"
-                    ]
+                    ])
                 }
             ]
         }

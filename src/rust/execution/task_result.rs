@@ -8,11 +8,11 @@ use contracts::{
     TaskResultStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher, FileSubmitInput,
-    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, RouteAction,
-    RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore, WriteArtifactNext,
-    WriteMode, WriteTarget,
+    apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
+    DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpAutoRunnableResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult,
+    OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
+    TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -131,7 +131,7 @@ where
     let allowed_read_fields = authorized
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter().cloned())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .collect::<BTreeSet<_>>();
     let mut fields_to_read = vec![
         "source.taskPlanId".to_string(),
@@ -427,7 +427,9 @@ fn validate_result(
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     for field in required_top_level_fields {
-        if raw_result.get(field).is_none() {
+        if raw_result.get(field).is_none()
+            && task_result_required_field_applies_to_status(field, &result.status)
+        {
             issues.push(issue(
                 "TASK_RESULT_REQUIRED_FIELD_MISSING",
                 field,
@@ -530,6 +532,20 @@ fn validate_result(
         ));
     }
     issues
+}
+
+fn task_result_required_field_applies_to_status(field: &str, status: &TaskResultStatus) -> bool {
+    if !matches!(status, TaskResultStatus::Failed | TaskResultStatus::Blocked) {
+        return true;
+    }
+    !matches!(
+        field,
+        "frontendExperienceSelfCheck"
+            | "frontendQualitySelfCheck"
+            | "runtimeDeliveryEvidence"
+            | "conceptEvidence"
+            | "requirementDetailEvidence"
+    )
 }
 
 fn normalize_task_result_machine_fields(
@@ -1952,14 +1968,14 @@ fn materialize_task_result_repair(
                     "required": true,
                     "purpose": "Read the original TaskResult validation issues and task contract.",
                     "whenToRead": "Read before rewriting TaskResult.",
-                    "fields": context_fields
+                    "selectors": read_selectors_value_from_paths(context_fields)
                 },
                 {
                     "groupId": "task_result_repair_write_contract",
                     "required": true,
                     "purpose": "Read the TaskResult replacement output contract.",
                     "whenToRead": "Read before writing replacement TaskResult.",
-                    "fields": write_contract_fields
+                    "selectors": read_selectors_value_from_paths(write_contract_fields)
                 }
             ]
         }

@@ -12,9 +12,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use contracts::{BrainstormContract, NextPhasePreview};
 use delivery_core::{
-    apply_delivery_index, DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState,
-    DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind, TransitionStore,
-    ValidatedPlanInput,
+    apply_delivery_index, read_selectors_value_from_paths, DeliveryIndex, DeliveryLifecycleStatus,
+    DeliveryPhaseState, DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind,
+    TransitionStore, ValidatedPlanInput,
 };
 use serde_json::{json, Value};
 use state::{
@@ -518,7 +518,7 @@ fn attach_next_phase_seed(root: &mut Value, source_phase_id: &str, handoff: &Nex
                     "required": true,
                     "purpose": "Read the next phase seed before composing phase continuation options.",
                     "whenToRead": "Read after the conversation protocol and compact requirement context, before querying knowledge or presenting phase_scope options.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "nextPhaseSeed.fromPhaseId",
                         "nextPhaseSeed.phaseId",
                         "nextPhaseSeed.title",
@@ -526,7 +526,7 @@ fn attach_next_phase_seed(root: &mut Value, source_phase_id: &str, handoff: &Nex
                         "nextPhaseSeed.scopePreview",
                         "nextPhaseSeed.reason",
                         "nextPhaseSeed.usageRule"
-                    ]
+                    ])
                 }),
             );
         }
@@ -643,7 +643,7 @@ fn attach_phase_continuation_context(
                     "required": true,
                     "purpose": "Read phase continuation context before presenting the current phase scope.",
                     "whenToRead": "Read before knowledge queries and before presenting phase_scope options.",
-                    "fields": fields
+                    "selectors": read_selectors_value_from_paths(fields)
                 }),
             );
         }

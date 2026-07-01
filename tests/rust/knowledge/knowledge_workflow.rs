@@ -943,7 +943,9 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "knowledge_context_protocol",
-                        "fields": ["knowledgeQueryPlan"]
+                        "selectors": delivery_core::read_selectors_value_from_paths([
+                            "knowledgeQueryPlan"
+                        ])
                     }]
                 }
             }),
@@ -1179,7 +1181,9 @@ fn brainstorm_context_adds_block_retrieval_intent_without_agent_facing_bloat() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "knowledge_context_protocol",
-                        "fields": ["knowledgeQueryPlan.blocks.frontend_experience.executionOrder"]
+                        "selectors": delivery_core::read_selectors_value_from_paths([
+                            "knowledgeQueryPlan.blocks.frontend_experience.executionOrder"
+                        ])
                     }]
                 }
             }),

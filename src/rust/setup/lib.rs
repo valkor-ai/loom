@@ -1697,7 +1697,6 @@ fn check_mcp_surface() -> DoctorCheck {
         "plan",
         "continue",
         "readFieldGroup",
-        "readRequestFields",
         "knowledgeAdd",
         "knowledgeBuild",
         "knowledgeBrainstormContext",

@@ -21,12 +21,6 @@ pub const BATCH_2_RESOURCE_TEMPLATES: &[ResourceTemplateRegistration] = &[
         target_batch: 3,
     },
     ResourceTemplateRegistration {
-        uri_template: "loom://projects/{projectId}/requests/{requestId}/fields/{encodedFieldPath}",
-        name: "request-field",
-        description: "Read declared request fields by path.",
-        target_batch: 3,
-    },
-    ResourceTemplateRegistration {
         uri_template: "loom://knowledge/{sourceId}/builds/{buildId}/chunks/{chunkId}",
         name: "knowledge-chunk",
         description: "Inspect a built knowledge chunk.",

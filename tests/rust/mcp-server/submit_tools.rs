@@ -355,7 +355,7 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .expect("technical baseline selection guidance group");
     assert!(selection_group.required);
     assert_eq!(
-        selection_group.fields,
+        selection_group.expanded_fields(),
         vec!["selectionGuidance".to_string()]
     );
     let selection = state::read_field_group(ReadFieldGroupInput {
@@ -491,7 +491,7 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         .find(|group| group.group_id == "technical_baseline_repo_evidence")
         .expect("technical baseline repo evidence group");
     assert!(!repo_evidence_group
-        .fields
+        .expanded_fields()
         .contains(&"repoEvidence".to_string()));
     for field in [
         "repoEvidence.signals.manifests",
@@ -500,7 +500,9 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         "repoEvidence.signals.frameworks",
     ] {
         assert!(
-            repo_evidence_group.fields.contains(&field.to_string()),
+            repo_evidence_group
+                .expanded_fields()
+                .contains(&field.to_string()),
             "missing compact repo signal field {field}"
         );
     }
@@ -1387,8 +1389,7 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
         .iter()
         .find(|group| group.group_id == "architecture_core_context")
         .expect("architecture core read group")
-        .fields
-        .clone();
+        .expanded_fields();
     assert!(!inspect_core_fields.contains(&"sourceRefs.previousRuntimeDeliveryRef".to_string()));
 }
 
@@ -1506,8 +1507,7 @@ fn architecture_request_exposes_previous_runtime_only_when_available() {
         .iter()
         .find(|group| group.group_id == "architecture_core_context")
         .expect("architecture core read group")
-        .fields
-        .clone();
+        .expanded_fields();
     assert!(inspect_core_fields.contains(&"sourceRefs.previousRuntimeDeliveryRef".to_string()));
 }
 
@@ -1845,18 +1845,16 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
         .iter()
         .find(|group| group["groupId"] == json!("architecture_core_context"))
         .expect("architecture core group");
-    let core_fields = core_group["fields"].as_array().expect("core fields");
-    assert!(core_fields.contains(&json!(
-        "contextProjection.requirementDetailTransfer.requirementDetails"
-    )));
-    assert!(core_fields.contains(&json!(
-        "contextProjection.requirementDetailTransfer.businessFlows"
-    )));
-    assert!(!core_fields.contains(&json!("contextProjection")));
-    assert!(!core_fields.contains(&json!("contextProjection.requirementDetailTransfer")));
-    assert!(!core_fields.contains(&json!(
-        "contextProjection.requirementDetailTransfer.frontendExperienceDetails"
-    )));
+    let core_fields = read_group_fields_from_json(core_group);
+    assert!(core_fields
+        .contains(&"contextProjection.requirementDetailTransfer.requirementDetails".to_string()));
+    assert!(core_fields
+        .contains(&"contextProjection.requirementDetailTransfer.businessFlows".to_string()));
+    assert!(!core_fields.contains(&"contextProjection".to_string()));
+    assert!(!core_fields.contains(&"contextProjection.requirementDetailTransfer".to_string()));
+    assert!(!core_fields.contains(
+        &"contextProjection.requirementDetailTransfer.frontendExperienceDetails".to_string()
+    ));
     let domain_group = architecture_root["requestReadPlan"]["groups"]
         .as_array()
         .expect("read groups")
@@ -1864,11 +1862,11 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
         .find(|group| group["groupId"] == json!("architecture_domain_model_context"))
         .expect("domain model group");
     assert_eq!(
-        domain_group["fields"],
-        json!([
+        read_group_fields_from_json(domain_group),
+        vec![
             "contextProjection.requirementDetailTransfer.actors",
             "contextProjection.requirementDetailTransfer.capabilityGroups"
-        ])
+        ]
     );
     let projected_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
@@ -2093,7 +2091,9 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         "sourceRefs.deliveryConceptGlossaryRef",
     ] {
         assert_eq!(
-            taskplan_core_group.fields.contains(&field.to_string()),
+            taskplan_core_group
+                .expanded_fields()
+                .contains(&field.to_string()),
             taskplan_core_fields.contains_key(field)
         );
     }
@@ -2126,7 +2126,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert!(inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .all(
             |field| field != "contextProjection.frontendExperienceProjection"
                 && field != "contextProjection.runtimeDeliveryProjection"
@@ -2227,7 +2227,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert!(inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .all(|field| field != "outputContract.outlineSchemaShape"
             && field != "outputContract.groupSchemaShape"));
 }
@@ -2373,37 +2373,32 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .iter()
         .find(|group| group.group_id == "task_execution_core")
         .expect("core group");
-    assert!(core_group.fields.contains(
+    let core_fields = core_group.expanded_fields();
+    assert!(core_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs".to_string()
     ));
-    assert!(core_group
-        .fields
+    assert!(core_fields
         .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
-    assert!(core_group.fields.contains(
+    assert!(core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
             .to_string()
     ));
-    assert!(core_group.fields.contains(
+    assert!(core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
             .to_string()
     ));
-    assert!(!core_group.fields.contains(
+    assert!(!core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
     ));
-    assert!(!core_group.fields.contains(
+    assert!(!core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string()
     ));
-    assert!(core_group
-        .fields
-        .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
-    assert!(core_group
-        .fields
-        .contains(&"executionRules.interactiveVerificationProbePolicy".to_string()));
-    assert!(core_group
-        .fields
-        .contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
-    assert!(!core_group
-        .fields
+    assert!(
+        core_fields.contains(&"executionRules.frontendImplementationOrganizationRules".to_string())
+    );
+    assert!(core_fields.contains(&"executionRules.interactiveVerificationProbePolicy".to_string()));
+    assert!(core_fields.contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
+    assert!(!core_fields
         .contains(&"sourceContext.architectureArtifactProjection.frontendExperience".to_string()));
 
     let fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -2623,16 +2618,16 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         .as_array()
         .expect("repair read groups")
         .iter()
-        .flat_map(|group| group["fields"].as_array().into_iter().flatten())
-        .filter_map(Value::as_str)
+        .flat_map(read_group_fields_from_json)
         .collect::<BTreeSet<_>>();
     assert!(repair_read_fields
         .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
     assert!(repair_read_fields.contains(
         "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
     ));
-    assert!(repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"));
+    assert!(repair_read_fields.contains(
+        "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
+    ));
     assert!(!repair_read_fields
         .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile"));
     assert!(!repair_read_fields
@@ -3014,19 +3009,19 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .all(|field| field != "outputContract.schemaShape"));
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .all(
             |field| !field.starts_with("sourceRefs.") && field != "sourceContext.dependencyResults"
         ));
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .all(
             |field| field != "executionRules.runtimeDeliveryExecutionRules"
                 && field != "task.runtimeDeliveryRequirement"
@@ -3036,22 +3031,22 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "executionRules.frontendImplementationOrganizationRules"));
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "executionRules.interactiveVerificationProbePolicy"));
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "executionRules.controlledRuntimeProbeRules"));
     assert!(execution_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "outputContract.schemaShape.properties.frontendExperienceSelfCheck"));
 
     write_task_result_candidate_without_requirement_detail_evidence(
@@ -3122,13 +3117,17 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .as_array()
         .expect("repair read groups")
         .iter()
-        .flat_map(|group| group["fields"].as_array().into_iter().flatten())
-        .filter_map(Value::as_str)
+        .flat_map(read_group_fields_from_json)
         .collect::<Vec<_>>();
-    assert!(task_result_repair_read_plan_fields.contains(&"outputContract.resultTemplate"));
-    assert!(task_result_repair_read_plan_fields.contains(&"repairContract.issueConflicts"));
-    assert!(task_result_repair_read_plan_fields.contains(&"repairContract.minimalRepairRules"));
-    assert!(!task_result_repair_read_plan_fields.contains(&"source.issues"));
+    assert!(
+        task_result_repair_read_plan_fields.contains(&"outputContract.resultTemplate".to_string())
+    );
+    assert!(
+        task_result_repair_read_plan_fields.contains(&"repairContract.issueConflicts".to_string())
+    );
+    assert!(task_result_repair_read_plan_fields
+        .contains(&"repairContract.minimalRepairRules".to_string()));
+    assert!(!task_result_repair_read_plan_fields.contains(&"source.issues".to_string()));
     let repair_contract = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: task_result_repair_action_ref.clone(),
@@ -3264,28 +3263,23 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .iter()
         .find(|group| group.group_id == "review_packets")
         .expect("review_packets group");
-    assert!(review_packet_group
-        .fields
+    let review_packet_fields = review_packet_group.expanded_fields();
+    assert!(review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.groupSummaries"));
-    assert!(review_packet_group
-        .fields
+    assert!(review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.taskSummaries"));
-    assert!(review_packet_group
-        .fields
+    assert!(review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.taskResultSummaries"));
-    assert!(!review_packet_group
-        .fields
+    assert!(!review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.groups"));
-    assert!(!review_packet_group
-        .fields
+    assert!(!review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.tasks"));
-    assert!(!review_packet_group
-        .fields
+    assert!(!review_packet_fields
         .iter()
         .any(|field| field == "reviewPacket.taskResults"));
     let review_matrices_group = review_inspected
@@ -3293,15 +3287,14 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .iter()
         .find(|group| group.group_id == "review_matrices")
         .expect("review_matrices group");
-    assert!(review_matrices_group
-        .fields
+    let review_matrices_fields = review_matrices_group.expanded_fields();
+    assert!(review_matrices_fields
         .iter()
         .any(|field| field == "outputContract.reviewSignals.items"));
-    assert!(!review_matrices_group
-        .fields
+    assert!(!review_matrices_fields
         .iter()
         .any(|field| field.starts_with("reviewSignals.")));
-    assert!(!review_matrices_group.fields.iter().any(|field| {
+    assert!(!review_matrices_fields.iter().any(|field| {
         field == "outputContract.reviewSignals.requirementDetailEvidence"
             || field == "outputContract.reviewSignals.frontendWorkflowClosure"
     }));
@@ -3493,8 +3486,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     let read_fields = inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
-        .cloned()
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .collect::<Vec<_>>();
     assert!(read_fields.contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
     assert!(read_fields.contains(&"executionRules.runtimeDeliveryExecutionRules".to_string()));
@@ -3769,7 +3761,7 @@ fn taskplan_request_omits_null_optional_projection_reads() {
         .iter()
         .any(|group| group.group_id == "taskplan_optional_projection"));
     assert!(!inspected.read_groups.iter().any(|group| group
-        .fields
+        .expanded_fields()
         .iter()
         .any(|field| field == "outputContract.runtimeDeliveryClosureTaskTemplate")));
 }
@@ -3849,12 +3841,9 @@ fn failed_task_result_routes_to_delivery_execution_repair_before_review() {
         .iter()
         .find(|group| group.group_id == "repair_execution_core")
         .expect("repair execution core group");
-    assert!(repair_core
-        .fields
-        .contains(&"repairContext.attemptCount".to_string()));
-    assert!(!repair_core
-        .fields
-        .contains(&"repairContext.findingRefs".to_string()));
+    let repair_core_fields = repair_core.expanded_fields();
+    assert!(repair_core_fields.contains(&"repairContext.attemptCount".to_string()));
+    assert!(!repair_core_fields.contains(&"repairContext.findingRefs".to_string()));
     remove_task_result_optional_validation_fields(&fixture, repair_request_ref);
     write_task_result_candidate(&fixture, repair_request_ref);
     let repaired_result = call_submit(
@@ -4310,8 +4299,10 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         .find(|group| group["groupId"] == "next_phase_seed")
         .expect("next phase seed group");
     assert_eq!(
-        next_phase_seed_group["fields"],
-        json!([
+        read_group_fields_from_json(next_phase_seed_group)
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        [
             "nextPhaseSeed.fromPhaseId",
             "nextPhaseSeed.phaseId",
             "nextPhaseSeed.title",
@@ -4319,15 +4310,16 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
             "nextPhaseSeed.scopePreview",
             "nextPhaseSeed.reason",
             "nextPhaseSeed.usageRule"
-        ])
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
     );
     let phase_continuation_group = phase_2_read_groups
         .iter()
         .find(|group| group["groupId"] == "phase_continuation_context")
         .expect("phase continuation context group");
-    let phase_continuation_fields = phase_continuation_group["fields"]
-        .as_array()
-        .expect("phase continuation fields");
+    let phase_continuation_fields = read_group_fields_from_json(phase_continuation_group);
     for broad_field in [
         "phaseContinuationContext.activePhase",
         "deliveryContext.scope.deferred",
@@ -4336,9 +4328,7 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         "confirmedRequirementDecisionsIndex.decisions",
     ] {
         assert!(
-            !phase_continuation_fields
-                .iter()
-                .any(|field| field.as_str() == Some(broad_field)),
+            !phase_continuation_fields.contains(&broad_field.to_string()),
             "broad read field leaked into phase continuation group: {broad_field}"
         );
     }
@@ -4350,8 +4340,7 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
     ] {
         assert!(
             !phase_continuation_fields.iter().any(|field| field
-                .as_str()
-                .is_some_and(|field| field.starts_with(stale_or_duplicate_prefix))),
+                .starts_with(stale_or_duplicate_prefix)),
             "stale or duplicate phase read leaked into phase continuation group: {stale_or_duplicate_prefix}"
         );
     }
@@ -4366,7 +4355,7 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         assert!(
             phase_continuation_fields
                 .iter()
-                .any(|field| field.as_str() == Some(required_field)),
+                .any(|field| field == required_field),
             "missing field-level phase continuation read: {required_field}"
         );
     }
@@ -5205,12 +5194,9 @@ fn review_execution_repair_materializes_repair_task() {
         .iter()
         .find(|group| group.group_id == "repair_execution_core")
         .expect("repair execution core group");
-    assert!(!repair_core
-        .fields
-        .contains(&"repairContext.attemptCount".to_string()));
-    assert!(repair_core
-        .fields
-        .contains(&"repairContext.findingRefs".to_string()));
+    let repair_core_fields = repair_core.expanded_fields();
+    assert!(!repair_core_fields.contains(&"repairContext.attemptCount".to_string()));
+    assert!(repair_core_fields.contains(&"repairContext.findingRefs".to_string()));
 }
 
 #[test]
@@ -5808,14 +5794,13 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         .iter()
         .find(|group| group.group_id == "taskplan_core_context")
         .expect("taskplan repair core group")
-        .fields
-        .clone();
+        .expanded_fields();
     assert!(taskplan_repair_core_fields.contains(&"sourceRefs.repositoryContextRef".to_string()));
     assert!(!taskplan_repair_core_fields.contains(&"repairContext.sourceRef".to_string()));
     assert!(repair_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "outputContract.runtimeDeliveryRequirementTemplate"));
     assert!(!repair_inspected
         .read_groups
@@ -5824,7 +5809,7 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
     assert!(repair_inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .all(
             |field| field != "contextProjection.frontendExperienceProjection"
                 && field != "contextProjection.runtimeDeliveryProjection"
@@ -6165,7 +6150,9 @@ fn write_brainstorm_request(
                         "required": true,
                         "purpose": "Read core fields.",
                         "whenToRead": "Before writing.",
-                        "fields": ["outputContract.writeTargets"]
+                        "selectors": delivery_core::read_selectors_value_from_paths([
+                            "outputContract.writeTargets"
+                        ])
                     }]
                 }
             }),
@@ -6462,8 +6449,7 @@ fn run_knowledge_context(
         .expect("read knowledge context plan")
         .structured_content
         .expect("structured content");
-    let field_name = format!("knowledgeQueryPlan.blocks.{block}.executionOrder");
-    let steps = knowledge_plan["fields"][field_name]
+    let steps = knowledge_plan["fields"]["knowledgeQueryPlan"]["blocks"][block]["executionOrder"]
         .as_array()
         .expect("knowledge executionOrder");
     for step in steps {
@@ -6736,8 +6722,7 @@ fn architecture_group_fields(fixture: &Fixture, request_ref: &str, group_id: &st
         .iter()
         .find(|group| group.group_id == group_id)
         .unwrap_or_else(|| panic!("missing architecture read group {group_id}"))
-        .fields
-        .clone()
+        .expanded_fields()
 }
 
 fn assert_architecture_scope_summary_fields(fields: &[String]) {
@@ -6782,7 +6767,7 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     let allowed_read_fields = inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter().cloned())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .collect::<BTreeSet<_>>();
     let mut fields_to_read = vec![
         "allowedRefs.scopeRefs".to_string(),
@@ -7020,7 +7005,7 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
     let allowed_read_fields = inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter().cloned())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .collect::<BTreeSet<_>>();
     let mut fields_to_read = vec![
         "allowedRefs.scopeRefs".to_string(),
@@ -8066,7 +8051,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     let readable_fields = inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter().cloned())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .collect::<Vec<_>>();
     let requested_fields = [
         "allowedRefs.scopeRefs",
@@ -8506,6 +8491,13 @@ fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
         .expect("parse request file")
 }
 
+fn read_group_fields_from_json(group: &Value) -> Vec<String> {
+    let selectors =
+        serde_json::from_value::<Vec<delivery_core::ReadSelector>>(group["selectors"].clone())
+            .expect("read group selectors");
+    delivery_core::expand_read_selectors(&selectors)
+}
+
 fn remove_task_result_optional_validation_fields(fixture: &Fixture, request_ref: &str) {
     let request_id = request_ref
         .split("/requests/")
@@ -8521,17 +8513,16 @@ fn remove_task_result_optional_validation_fields(fixture: &Fixture, request_ref:
         .as_array_mut()
         .expect("read plan groups");
     for group in groups {
-        let Some(fields) = group["fields"].as_array_mut() else {
-            continue;
-        };
+        let mut fields = read_group_fields_from_json(group);
         fields.retain(|field| {
             !matches!(
                 field.as_str(),
-                Some("task.conceptRefs" | "outputContract.blockedReasonOptions")
+                "task.conceptRefs" | "outputContract.blockedReasonOptions"
             )
         });
+        group["selectors"] = delivery_core::read_selectors_value_from_paths(fields);
     }
-    write_json_atomic(&request_path, &root).expect("write legacy-shaped request");
+    write_json_atomic(&request_path, &root).expect("write request with trimmed selectors");
 }
 
 fn assert_no_root_submit_metadata(root: &Value) {

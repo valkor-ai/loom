@@ -3,7 +3,7 @@ use std::{
     path::Path,
 };
 
-use delivery_core::ReadGroupRef;
+use delivery_core::{expand_read_selectors, read_selectors_from_paths, ReadGroupRef, ReadSelector};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -302,7 +302,7 @@ fn canonicalize_read_plan(
                 "required": group.required,
                 "purpose": group.purpose,
                 "whenToRead": group.when_to_read,
-                "fields": group.fields,
+                "selectors": group.selectors,
             })
         })
         .collect::<Vec<_>>();
@@ -329,30 +329,40 @@ fn read_group_ref_from_value(
         .ok_or_else(|| StateError::InvalidArgument("read group must be an object".to_string()))?;
     let group_id = string_field(object, "groupId")?;
     reject_read_group_sidecar_fields(&group_id, object)?;
-    let fields = object
-        .get("fields")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            StateError::InvalidArgument(format!("read group {group_id} fields are required"))
-        })?
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|field| !field.is_empty())
-        .map(validate_read_field_selector)
-        .collect::<StateResult<Vec<_>>>()?
-        .into_iter()
-        .fold(Vec::<String>::new(), |mut acc, field| {
-            if !acc.contains(&field) {
-                acc.push(field);
-            }
-            acc
-        });
-    if fields.is_empty() {
+    if object.contains_key("fields") {
         return Err(StateError::InvalidArgument(format!(
-            "read group {group_id} must include at least one field"
+            "read group {group_id} must use selectors, not fields"
         )));
     }
+    let selectors = object
+        .get("selectors")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            StateError::InvalidArgument(format!("read group {group_id} selectors are required"))
+        })
+        .and_then(|_| {
+            serde_json::from_value::<Vec<ReadSelector>>(
+                object
+                    .get("selectors")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Array(vec![])),
+            )
+            .map_err(|error| {
+                StateError::InvalidArgument(format!(
+                    "read group {group_id} selectors are invalid: {error}"
+                ))
+            })
+        })?;
+    let fields = expand_read_selectors(&selectors)
+        .into_iter()
+        .map(|field| validate_read_field_selector(&field))
+        .collect::<StateResult<Vec<_>>>()?;
+    if fields.is_empty() {
+        return Err(StateError::InvalidArgument(format!(
+            "read group {group_id} must include at least one selector field"
+        )));
+    }
+    let selectors = read_selectors_from_paths(fields);
     Ok(ReadGroupRef {
         group_id: group_id.clone(),
         required: object
@@ -370,7 +380,7 @@ fn read_group_ref_from_value(
             .and_then(Value::as_str)
             .unwrap_or("Before acting on this request.")
             .to_string(),
-        fields,
+        selectors,
         read_tool: "loom.readFieldGroup".to_string(),
         resource_uri: format!(
             "loom://projects/{project_id}/requests/{request_id}/field-groups/{}",
@@ -518,7 +528,7 @@ fn canonicalize_context_refs(root_object: &mut Map<String, Value>, read_groups: 
 
 fn used_context_ref_keys(read_groups: &[ReadGroupRef]) -> BTreeSet<&'static str> {
     let mut used = BTreeSet::new();
-    for field in read_groups.iter().flat_map(|group| group.fields.iter()) {
+    for field in read_groups.iter().flat_map(ReadGroupRef::expanded_fields) {
         if field == "requirementContext.normalizedText" {
             used.insert("normalizedRequirementTextRef");
             continue;
@@ -576,10 +586,9 @@ fn used_storage_ref_keys(
     let splittable = SPLITTABLE_REF_KEYS.iter().copied().collect::<BTreeSet<_>>();
     let mut used = read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
-        .filter_map(|field| field.split('.').next())
-        .filter(|root_key| splittable.contains(root_key))
-        .map(str::to_string)
+        .flat_map(ReadGroupRef::expanded_fields)
+        .filter_map(|field| field.split('.').next().map(str::to_string))
+        .filter(|root_key| splittable.contains(root_key.as_str()))
         .collect::<BTreeSet<_>>();
     if root_object.contains_key("outputContract") {
         used.insert("outputContract".to_string());
@@ -599,8 +608,9 @@ fn validate_read_plan_contract(
     let mut warnings = Vec::new();
     for group in read_groups {
         let mut group_bytes = 0usize;
-        for field in &group.fields {
-            let value = match resolve_field_for_validation(project_root, root_object, refs, field) {
+        for field in group.expanded_fields() {
+            let value = match resolve_field_for_validation(project_root, root_object, refs, &field)
+            {
                 Ok(value) => value,
                 Err(error) if is_field_not_found(&error) => continue,
                 Err(error) => {

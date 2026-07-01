@@ -7,8 +7,8 @@ use std::{
 
 use algorithm_client::AlgorithmClient;
 use delivery_core::{
-    KnowledgeChunkReadRef, LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpBlockedResult,
-    LoomMcpDoneResult,
+    read_selectors_value_from_paths, KnowledgeChunkReadRef, LoomMcpActionResult,
+    LoomMcpAutoRunnableResult, LoomMcpBlockedResult, LoomMcpDoneResult,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -354,7 +354,7 @@ fn write_semantic_request(
                         "required": true,
                         "purpose": "Read the semantic pack contract and chunk inspect plan.",
                         "whenToRead": "Before reading chunks and writing the semantic result.",
-                        "fields": [
+                        "selectors": read_selectors_value_from_paths([
                             "sourceName",
                             "sourceId",
                             "buildId",
@@ -366,7 +366,7 @@ fn write_semantic_request(
                             "generationRules",
                             "outputContract.writeTargets",
                             "outputContract.submitTool"
-                        ]
+                        ])
                     }]
                 }
             }),

@@ -587,7 +587,6 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "loom.inspectRequest",
         "loom.readFieldGroup",
         "requestReadPlan.groups",
-        "loom.readRequestFields",
         "GenerateKnowledgeSemanticsNext",
         "loom.knowledgeInspectChunk",
         "ExecuteTaskNext",
@@ -601,6 +600,10 @@ fn opencode_commands_expose_mcp_result_discipline() {
             "opencode loom.md missing {required}"
         );
     }
+    assert!(
+        !loom.contains("loom.readRequestFields"),
+        "opencode loom.md must not expose readRequestFields"
+    );
 
     for required in [
         "MCP-selected references:",
