@@ -55,6 +55,13 @@ For `DeployRepairAssetsNext`, edit only the returned deployment asset files and 
 
 The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
 
+Protocol:
+- Read `references/uix/core.md` only when the current action creates, changes, or reviews user-visible frontend work.
+- After reading the current request group, map `uiQualityContract.referenceProfile.referenceIds` to the exact scenario, token, and stack reference files named below. Do not scan the whole `references/uix` tree.
+- When `uiQualityContract.designTokenAssetPlan.templateId` is present, load only the matching token template file. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
+- If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
+- In `frontendQualitySelfCheck`, report `referenceIdsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
+
 UIX references:
 - `references/uix/core.md`: writing or reviewing user-visible frontend artifacts.
 - `references/uix/interaction.md`: forms, flows, search/filter, loading, empty, error, or recovery states.

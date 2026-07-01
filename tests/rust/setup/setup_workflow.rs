@@ -647,6 +647,37 @@ fn opencode_commands_expose_mcp_result_discipline() {
 }
 
 #[test]
+fn agent_templates_expose_reference_loading_protocol() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    let files = [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+    ];
+
+    for file in files {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        for required in [
+            "## Reference Loading",
+            "Protocol:",
+            "After reading the current request group",
+            "uiQualityContract.referenceProfile.referenceIds",
+            "uiQualityContract.designTokenAssetPlan.templateId",
+            "Do not scan the whole",
+            "If a referenced file is not selected by the MCP contract",
+            "frontendQualitySelfCheck",
+            "do not paste reference prose or template bodies",
+        ] {
+            assert!(
+                content.contains(required),
+                "{file} missing reference loading protocol fragment {required}"
+            );
+        }
+    }
+}
+
+#[test]
 fn agent_templates_expose_knowledge_direct_route_and_semantic_pack_discipline() {
     let repo = repo_root();
     let plugin_root = repo.join("plugins");
