@@ -14,8 +14,8 @@ Load a focused stack reference when the MCP `referenceIds` asks for it or the ta
 
 - `uix.stacks.react` -> `references/uix/stacks/react.md`
 - `uix.stacks.vue` -> `references/uix/stacks/vue.md`
-- `uix.stacks.plain_html` -> `references/uix/stacks/plain-html.md`
-- `uix.stacks.native_mobile` -> `references/uix/stacks/native-mobile.md`
+- `uix.stacks.plain-html` -> `references/uix/stacks/plain-html.md`
+- `uix.stacks.native-mobile` -> `references/uix/stacks/native-mobile.md`
 - `uix.stacks.threejs` -> `references/uix/stacks/threejs.md`
 
 ## Web Frameworks

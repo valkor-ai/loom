@@ -903,3 +903,45 @@ fn issue(code: &str, field_path: &str, message: &str) -> RepairIssue {
         field_path: Some(field_path.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::known_ui_reference_ids;
+
+    #[test]
+    fn known_ui_reference_ids_resolve_to_shared_reference_files() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        for reference_id in known_ui_reference_ids() {
+            let relative = reference_file_for_id(reference_id);
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(relative);
+            assert!(
+                path.exists(),
+                "UIX reference id {reference_id} must resolve to {}",
+                path.display()
+            );
+        }
+    }
+
+    fn reference_file_for_id(reference_id: &str) -> String {
+        if reference_id == "uix.core" {
+            return "core.md".to_string();
+        }
+        if reference_id == "uix.anti-patterns" {
+            return "anti-patterns.md".to_string();
+        }
+        for (prefix, directory) in [
+            ("uix.tokens.", "tokens"),
+            ("uix.scenarios.", "scenarios"),
+            ("uix.stacks.", "stacks"),
+        ] {
+            if let Some(name) = reference_id.strip_prefix(prefix) {
+                return format!("{directory}/{name}.md");
+            }
+        }
+        panic!("unknown UIX reference id prefix: {reference_id}");
+    }
+}
