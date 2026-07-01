@@ -37,9 +37,10 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        frontend_self_check_applies, runtime_delivery_evidence_applies,
-        runtime_delivery_requirement_template, task_result_required_top_level_fields,
-        task_result_template, taskplan_group_result_template, taskplan_outline_result_template,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
+        task_result_required_top_level_fields, task_result_template,
+        taskplan_group_result_template, taskplan_outline_result_template,
     },
 };
 
@@ -690,6 +691,18 @@ fn build_repair_execution_request(
             "executionRules.controlledRuntimeProbeRules",
         ]);
     }
+    if frontend_quality_self_check_applies(task) {
+        repair_core_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+            "task.frontendExperienceRequirement.uiQualityContractRef",
+            "task.frontendExperienceRequirement.uiQualityContract.scenario",
+            "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+            "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
+            "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+            "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
+        ]);
+    }
     if runtime_delivery_evidence_applies(task) {
         repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
         repair_core_fields.extend([
@@ -743,6 +756,9 @@ fn build_repair_execution_request(
     if frontend_self_check_applies(task) {
         repair_result_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if frontend_quality_self_check_applies(task) {
+        repair_result_fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
     }
     if runtime_delivery_evidence_applies(task) {
         repair_result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");

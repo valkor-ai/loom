@@ -481,6 +481,48 @@ pub struct ConceptEvidence {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityStateCoverage {
+    pub state: String,
+    pub status: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityBusinessRuleCheck {
+    pub rule_id: String,
+    pub status: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityForbiddenContentCheck {
+    pub checked: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub violations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualitySelfCheck {
+    pub status: String,
+    pub scenario_kind: String,
+    pub quality_level: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_ids_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states_covered: Vec<FrontendQualityStateCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub business_ui_rules_checked: Vec<FrontendQualityBusinessRuleCheck>,
+    pub forbidden_content_check: FrontendQualityForbiddenContentCheck,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_gaps: Vec<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockedReason {
@@ -523,6 +565,8 @@ pub struct TaskResult {
     pub notes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontend_experience_self_check: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontend_quality_self_check: Option<FrontendQualitySelfCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_evidence: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

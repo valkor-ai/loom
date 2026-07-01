@@ -187,6 +187,12 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             frontend_experience_self_check_template(task),
         );
     }
+    if frontend_quality_self_check_applies(task) {
+        object.insert(
+            "frontendQualitySelfCheck".to_string(),
+            frontend_quality_self_check_template(task),
+        );
+    }
     if runtime_delivery_evidence_applies(task) {
         object.insert(
             "runtimeDeliveryEvidence".to_string(),
@@ -236,6 +242,9 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
     if frontend_self_check_applies(task) {
         fields.push("frontendExperienceSelfCheck");
     }
+    if frontend_quality_self_check_applies(task) {
+        fields.push("frontendQualitySelfCheck");
+    }
     if runtime_delivery_evidence_applies(task) {
         fields.push("runtimeDeliveryEvidence");
     }
@@ -254,6 +263,15 @@ pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
 
 pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
     task.frontend_experience_requirement.is_some() && !runtime_delivery_evidence_applies(task)
+}
+
+pub(crate) fn frontend_quality_self_check_applies(task: &TaskDefinition) -> bool {
+    frontend_self_check_applies(task)
+        && task
+            .frontend_experience_requirement
+            .as_ref()
+            .and_then(|requirement| requirement.get("uiQualityContract"))
+            .is_some()
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
@@ -316,6 +334,72 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
             "knownGaps": []
         },
         "evidenceRefs": [],
+        "summary": ""
+    })
+}
+
+fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
+    let ui_quality_contract = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiQualityContract"))
+        .unwrap_or(&Value::Null);
+    let reference_ids = ui_quality_contract
+        .pointer("/referenceProfile/referenceIds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let states_covered = ui_quality_contract
+        .get("requiredUiStates")
+        .and_then(Value::as_array)
+        .map(|states| {
+            states
+                .iter()
+                .filter_map(|state| {
+                    state
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .map(|state_name| {
+                            json!({
+                                "state": state_name,
+                                "status": "covered",
+                                "evidence": ""
+                            })
+                        })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let business_rules_checked = ui_quality_contract
+        .get("businessUiRules")
+        .and_then(Value::as_array)
+        .map(|rules| {
+            rules
+                .iter()
+                .filter_map(|rule| {
+                    rule.get("ruleId").and_then(Value::as_str).map(|rule_id| {
+                        json!({
+                            "ruleId": rule_id,
+                            "status": "satisfied",
+                            "evidence": ""
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "status": "satisfied",
+        "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
+        "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str).unwrap_or("production_internal_product"),
+        "referenceIdsChecked": reference_ids,
+        "statesCovered": states_covered,
+        "businessUiRulesChecked": business_rules_checked,
+        "forbiddenContentCheck": {
+            "checked": true,
+            "violations": []
+        },
+        "knownGaps": [],
         "summary": ""
     })
 }

@@ -2361,6 +2361,12 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     ));
     assert!(core_group
         .fields
+        .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
+    assert!(core_group.fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
+    ));
+    assert!(core_group
+        .fields
         .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
     assert!(core_group
         .fields
@@ -2380,10 +2386,14 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
                 .to_string(),
             "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"
                 .to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
             "executionRules.frontendImplementationOrganizationRules".to_string(),
             "executionRules.interactiveVerificationProbePolicy".to_string(),
             "executionRules.controlledRuntimeProbeRules".to_string(),
+            "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
             "outputContract.resultFile".to_string(),
             "outputContract.requiredTopLevelFields".to_string(),
             "outputContract.resultTemplate".to_string(),
@@ -2424,11 +2434,58 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["closureRequirementIds"],
         json!(["closure:flow.account-lifecycle:step.submit-open-account"])
     );
+    assert_eq!(
+        fields["task.frontendExperienceRequirement.executionGuidance.uiQuality"].value
+            ["selfCheckField"],
+        json!("frontendQualitySelfCheck")
+    );
+    assert!(
+        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile"].value
+            ["referenceIds"]
+            .as_array()
+            .expect("ui quality reference ids")
+            .contains(&json!("uix.tokens.spacing"))
+    );
+    assert_eq!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["scenarioKind"],
+        fields["task.frontendExperienceRequirement.uiQualityContract.scenario"].value["kind"]
+    );
+    assert_eq!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["qualityLevel"],
+        json!("production_internal_product")
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["referenceIdsChecked"]
+            .as_array()
+            .expect("reference ids checked")
+            .contains(&json!("uix.tokens.spacing"))
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["statesCovered"]
+            [0]
+        .is_object()
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["businessUiRulesChecked"][0]
+            .is_object()
+    );
+    assert!(
+        fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
+            .value
+            .is_object()
+    );
     assert!(fields["outputContract.requiredTopLevelFields"]
         .value
         .as_array()
         .expect("required top-level fields")
         .contains(&json!("frontendExperienceSelfCheck")));
+    assert!(fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("frontendQualitySelfCheck")));
     assert!(!fields["outputContract.requiredTopLevelFields"]
         .value
         .as_array()
@@ -2452,6 +2509,124 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         fixture.root_str(),
     );
     assert_eq!(record_result["state"], "auto_runnable", "{record_result:#}");
+}
+
+#[test]
+fn task_result_repair_carries_frontend_quality_contract_fields() {
+    let fixture = Fixture::new("task-result-frontend-quality-repair");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, taskplan_request_ref);
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    result
+        .as_object_mut()
+        .expect("result object")
+        .remove("frontendQualitySelfCheck");
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
+
+    let record_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(record_result["state"], "auto_runnable", "{record_result:#}");
+    assert_eq!(
+        record_result["next"]["artifactKind"], "task_result_repair",
+        "{record_result:#}"
+    );
+    let repair_request_ref = record_result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef")
+        .to_string();
+    let repair_root = read_request_root_value(fixture.root_str(), &repair_request_ref);
+    let repair_read_fields = repair_root["requestReadPlan"]["groups"]
+        .as_array()
+        .expect("repair read groups")
+        .iter()
+        .flat_map(|group| group["fields"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile"));
+    assert!(repair_read_fields
+        .contains("outputContract.schemaShape.properties.frontendQualitySelfCheck"));
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref,
+        fields: vec![
+            "repairContract.issueConflicts".to_string(),
+            "repairContract.minimalRepairRules".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+            "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
+        ],
+    })
+    .expect("read repair contract fields")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"));
+    assert!(
+        serde_json::to_string(&repair_fields["repairContract.minimalRepairRules"].value)
+            .expect("serialize rules")
+            .contains("frontendQualitySelfCheck")
+    );
+    assert!(
+        repair_fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile"]
+            .value["referenceIds"]
+            .as_array()
+            .expect("reference ids")
+            .contains(&json!("uix.tokens.spacing"))
+    );
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendQualitySelfCheck")
+        .is_some());
+    assert!(
+        repair_fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
+            .value
+            .is_object()
+    );
 }
 
 #[test]

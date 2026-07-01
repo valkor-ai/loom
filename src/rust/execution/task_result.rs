@@ -26,7 +26,8 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        frontend_self_check_applies, runtime_delivery_evidence_applies, task_result_template,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, task_result_template,
     },
 };
 
@@ -144,25 +145,34 @@ where
         "task.conceptRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
-        "task.runtimeDeliveryRequirement",
+        "task.frontendExperienceRequirement.uiQualityContract.scenario",
+        "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+        "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
+        "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+        "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
     ] {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
         }
     }
-    for runtime_field in [
-        "task.runtimeDeliveryRequirement.appliesToThisTask",
-        "task.runtimeDeliveryRequirement.reason",
-        "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
-        "task.runtimeDeliveryRequirement.affectedContractFields",
-        "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
-        "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
-        "task.runtimeDeliveryRequirement.forbiddenActions",
-        "task.runtimeDeliveryRequirement.source",
-        "task.runtimeDeliveryRequirement.deploymentFailureRef",
-    ] {
-        if allowed_read_fields.contains(runtime_field) {
-            fields_to_read.push(runtime_field.to_string());
+    if allowed_read_fields.contains("task.runtimeDeliveryRequirement") {
+        fields_to_read.push("task.runtimeDeliveryRequirement".to_string());
+    } else {
+        for runtime_field in [
+            "task.runtimeDeliveryRequirement.appliesToThisTask",
+            "task.runtimeDeliveryRequirement.reason",
+            "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+            "task.runtimeDeliveryRequirement.affectedContractFields",
+            "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+            "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+            "task.runtimeDeliveryRequirement.forbiddenActions",
+            "task.runtimeDeliveryRequirement.source",
+            "task.runtimeDeliveryRequirement.deploymentFailureRef",
+        ] {
+            if allowed_read_fields.contains(runtime_field) {
+                fields_to_read.push(runtime_field.to_string());
+            }
         }
     }
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
@@ -175,16 +185,7 @@ where
     let task_id = string_field(&fields, "source.taskId")?;
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
-    let frontend_experience_requirement = fields
-        .get("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs")
-        .map(|field| {
-            json!({
-                "executionGuidance": {
-                    "closureRequirementRefs": field.value
-                }
-            })
-        })
-        .unwrap_or(Value::Null);
+    let frontend_experience_requirement = frontend_experience_requirement_from_fields(&fields);
     let task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
@@ -497,6 +498,7 @@ fn validate_result(
     validate_concept_evidence(result, task, &mut issues);
     validate_runtime_delivery_evidence(result, task, &mut issues);
     validate_frontend_experience_self_check(result, task, &mut issues);
+    validate_frontend_quality_self_check(result, task, &mut issues);
     validate_blocked_reasons(result, blocked_output, &mut issues);
     if result
         .execution_continuity
@@ -1228,6 +1230,146 @@ fn validate_frontend_experience_self_check(
     }
 }
 
+fn validate_frontend_quality_self_check(
+    result: &TaskResult,
+    task: &TaskDefinition,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if !frontend_quality_self_check_applies(task) {
+        return;
+    }
+    let ui_quality_contract = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiQualityContract"))
+        .unwrap_or(&Value::Null);
+    let Some(self_check_model) = &result.frontend_quality_self_check else {
+        if matches!(
+            result.status,
+            TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+        ) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck",
+                "TaskResult must include frontendQualitySelfCheck for frontend quality tasks.",
+            ));
+        }
+        return;
+    };
+    let self_check = serde_json::to_value(self_check_model).unwrap_or(Value::Null);
+    if self_check.get("scenarioKind").and_then(Value::as_str)
+        != ui_quality_contract
+            .pointer("/scenario/kind")
+            .and_then(Value::as_str)
+    {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.scenarioKind",
+            "frontendQualitySelfCheck.scenarioKind must match uiQualityContract.scenario.kind.",
+        ));
+    }
+    if self_check.get("qualityLevel").and_then(Value::as_str)
+        != ui_quality_contract
+            .get("qualityLevel")
+            .and_then(Value::as_str)
+    {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.qualityLevel",
+            "frontendQualitySelfCheck.qualityLevel must match uiQualityContract.qualityLevel.",
+        ));
+    }
+    let checked_refs = string_array_at(&self_check, "referenceIdsChecked");
+    for reference_id in string_array_at(
+        ui_quality_contract
+            .get("referenceProfile")
+            .unwrap_or(&Value::Null),
+        "referenceIds",
+    ) {
+        if !checked_refs.contains(&reference_id) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.referenceIdsChecked",
+                "frontendQualitySelfCheck must cover every uiQualityContract reference id.",
+            ));
+            break;
+        }
+    }
+    let covered_states = self_check
+        .get("statesCovered")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("state").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for state in ui_quality_contract
+        .get("requiredUiStates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("state").and_then(Value::as_str))
+    {
+        if !covered_states.iter().any(|item| item == state) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.statesCovered",
+                "frontendQualitySelfCheck must cover every uiQualityContract required UI state.",
+            ));
+            break;
+        }
+    }
+    let checked_rules = self_check
+        .get("businessUiRulesChecked")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for rule_id in ui_quality_contract
+        .get("businessUiRules")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
+    {
+        if !checked_rules.iter().any(|item| item == rule_id) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.businessUiRulesChecked",
+                "frontendQualitySelfCheck must cover every uiQualityContract business UI rule.",
+            ));
+            break;
+        }
+    }
+    if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
+        let violations = self_check
+            .pointer("/forbiddenContentCheck/violations")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0);
+        let gaps = self_check
+            .get("knownGaps")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0);
+        if violations > 0 || gaps > 0 {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.status",
+                "Satisfied frontendQualitySelfCheck cannot contain forbidden content violations or known gaps.",
+            ));
+        }
+    }
+}
+
 fn validate_blocked_reasons(
     result: &TaskResult,
     blocked_output: &Value,
@@ -1641,6 +1783,18 @@ fn materialize_task_result_repair(
         context_fields
             .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
     }
+    if frontend_quality_self_check_applies(&context.task) {
+        context_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+            "task.frontendExperienceRequirement.uiQualityContractRef",
+            "task.frontendExperienceRequirement.uiQualityContract.scenario",
+            "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+            "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
+            "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+            "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
+        ]);
+    }
     if runtime_delivery_evidence_applies(&context.task) {
         context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
     }
@@ -1664,6 +1818,10 @@ fn materialize_task_result_repair(
     if frontend_self_check_applies(&context.task) {
         write_contract_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if frontend_quality_self_check_applies(&context.task) {
+        write_contract_fields
+            .push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
     }
     if runtime_delivery_evidence_applies(&context.task) {
         write_contract_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
@@ -1809,6 +1967,9 @@ fn task_result_issue_conflicts(
             if issue.code == "TASK_RESULT_WORKFLOW_CLOSURE_INVALID" {
                 return task_result_workflow_conflict(context, base);
             }
+            if issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID" {
+                return task_result_frontend_quality_conflict(context, base);
+            }
             if issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID" {
                 return task_result_runtime_conflict(context, base);
             }
@@ -1851,6 +2012,52 @@ fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) 
     base["validRepairChoices"] = json!([
         "If the implementation and evidence are actually wired, repair frontendExperienceSelfCheck.dataBinding.mode to wired, clear knownGaps, and cite evidence.",
         "If wired evidence is missing, do not claim satisfied; report the remaining gap through frontendExperienceSelfCheck and the normal TaskResult status."
+    ]);
+    base
+}
+
+fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    let ui_quality_contract = context
+        .task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiQualityContract"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let self_check = context
+        .submitted_result
+        .get("frontendQualitySelfCheck")
+        .cloned()
+        .unwrap_or(Value::Null);
+    base["current"] = json!({
+        "status": self_check.get("status").and_then(Value::as_str),
+        "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
+        "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
+        "referenceIdsChecked": string_array_at(&self_check, "referenceIdsChecked"),
+        "knownGapsCount": self_check
+            .get("knownGaps")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+    });
+    base["expected"] = json!({
+        "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
+        "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
+        "referenceIds": string_array_at(
+            ui_quality_contract
+                .get("referenceProfile")
+                .unwrap_or(&Value::Null),
+            "referenceIds"
+        ),
+        "requiredUiStates": ui_quality_contract.get("requiredUiStates").cloned().unwrap_or_else(|| json!([])),
+        "businessUiRules": ui_quality_contract.get("businessUiRules").cloned().unwrap_or_else(|| json!([])),
+        "forbiddenUserVisibleContent": ui_quality_contract
+            .get("forbiddenUserVisibleContent")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    base["validRepairChoices"] = json!([
+        "If the implemented UI satisfies the contract, repair frontendQualitySelfCheck to match task.frontendExperienceRequirement.uiQualityContract and cite evidence.",
+        "If the UI still has quality gaps, keep status below satisfied and record the specific gaps without claiming completion."
     ]);
     base
 }
@@ -1904,6 +2111,13 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
     {
         rules.push("RuntimeDeliveryEvidence codeLevelChecks must use only required check ids from the request.");
         rules.push("For passed runtime checks, omit reason; use a non-empty reason only for failed, blocked, or not_applicable checks.");
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+    {
+        rules.push("frontendQualitySelfCheck must match the task uiQualityContract scenario, quality level, references, required states, and business UI rules.");
+        rules.push("frontendQualitySelfCheck.status=satisfied is valid only when forbidden content violations and knownGaps are empty.");
     }
     rules
 }
@@ -2320,6 +2534,53 @@ fn runtime_delivery_requirement_from_fields(
         if !value.is_null() {
             requirement[key] = value;
         }
+    }
+    requirement
+}
+
+fn frontend_experience_requirement_from_fields(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    let has_closure = fields.contains_key(
+        "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+    );
+    let has_ui_quality =
+        fields.contains_key("task.frontendExperienceRequirement.uiQualityContract.scenario");
+    if !has_closure && !has_ui_quality {
+        return Value::Null;
+    }
+    let mut requirement = json!({
+        "executionGuidance": {}
+    });
+    if has_closure {
+        requirement["executionGuidance"]["closureRequirementRefs"] = array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        );
+    }
+    let ui_quality_guidance = value_field(
+        fields,
+        "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+    );
+    if !ui_quality_guidance.is_null() {
+        requirement["executionGuidance"]["uiQuality"] = ui_quality_guidance;
+    }
+    let ui_quality_ref = value_field(
+        fields,
+        "task.frontendExperienceRequirement.uiQualityContractRef",
+    );
+    if !ui_quality_ref.is_null() {
+        requirement["uiQualityContractRef"] = ui_quality_ref;
+    }
+    if has_ui_quality {
+        requirement["uiQualityContract"] = json!({
+            "scenario": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.scenario"),
+            "qualityLevel": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.qualityLevel"),
+            "referenceProfile": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile"),
+            "requiredUiStates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates"),
+            "businessUiRules": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.businessUiRules"),
+            "forbiddenUserVisibleContent": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent")
+        });
     }
     requirement
 }

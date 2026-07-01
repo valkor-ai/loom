@@ -25,8 +25,9 @@ use crate::{
     },
     task_plan::{execute_task_next_from_request, update_run_summary},
     templates::{
-        frontend_self_check_applies, runtime_delivery_evidence_applies,
-        task_result_required_top_level_fields, task_result_template,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
+        task_result_template,
     },
 };
 
@@ -590,6 +591,22 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
         ]);
     }
+    if frontend_quality_self_check_applies(task) {
+        core_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+            "task.frontendExperienceRequirement.uiQualityContractRef",
+            "task.frontendExperienceRequirement.uiQualityContract.scenario",
+            "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+            "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
+            "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
+            "task.frontendExperienceRequirement.uiQualityContract.density",
+            "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+            "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
+            "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
+            "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+        ]);
+    }
     if has_frontend_execution {
         if !runtime_delivery_evidence_applies(task) {
             core_fields.push("executionRules.frontendImplementationOrganizationRules");
@@ -644,6 +661,9 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
     ];
     if frontend_self_check_applies(task) {
         result_fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if frontend_quality_self_check_applies(task) {
+        result_fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
     }
     if runtime_delivery_evidence_applies(task) {
         result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
@@ -917,7 +937,7 @@ fn build_frontend_execution_guidance(
     if closure_requirements.is_empty() {
         warnings.push("No workflow closure requirement matched this task; use task refs and source context to decide whether frontend work is static, mocked, or wired.".to_string());
     }
-    json!({
+    let mut guidance = json!({
         "schemaVersion": "1.0",
         "purpose": "Task-scoped frontend execution guidance derived from AAC and TaskPlan refs.",
         "userFacingLanguage": user_facing_language,
@@ -941,6 +961,34 @@ fn build_frontend_execution_guidance(
             "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, userFlow steps, and executable interfaces."
         },
         "guidanceWarnings": warnings
+    });
+    let ui_quality = frontend_quality_execution_guidance(task);
+    if !ui_quality.is_null() {
+        guidance["uiQuality"] = ui_quality;
+    }
+    guidance
+}
+
+fn frontend_quality_execution_guidance(task: &TaskDefinition) -> Value {
+    let Some(requirement) = task.frontend_experience_requirement.as_ref() else {
+        return Value::Null;
+    };
+    if requirement.get("uiQualityContract").is_none() {
+        return Value::Null;
+    }
+    json!({
+        "contractRef": requirement.get("uiQualityContractRef").cloned().unwrap_or(Value::Null),
+        "contractField": "task.frontendExperienceRequirement.uiQualityContract",
+        "selfCheckField": "frontendQualitySelfCheck",
+        "mustCover": [
+            "scenario",
+            "qualityLevel",
+            "referenceProfile.referenceIds",
+            "requiredUiStates",
+            "businessUiRules",
+            "forbiddenUserVisibleContent"
+        ],
+        "rule": "Implement the UI according to the uiQualityContract fields and report evidence in frontendQualitySelfCheck."
     })
 }
 
