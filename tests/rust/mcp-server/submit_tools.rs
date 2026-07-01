@@ -605,6 +605,11 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
             "unrelated"
         ])
     );
+    let generation_rule_text = generation_rules.fields["generationRules"].value.to_string();
+    assert!(
+        generation_rule_text.contains("integration_boundary is not a surface relevance value"),
+        "RepositoryContext rules must prevent surface relevance/read reason enum mixing: {generation_rule_text}"
+    );
     let write_contract = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: repository_context_request_ref.to_string(),
@@ -695,6 +700,129 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
     assert_eq!(
         repository_result["next"]["artifactKind"],
         "architecture_section_candidate"
+    );
+}
+
+#[test]
+fn repository_context_accept_normalizes_repairable_schema_metadata() {
+    let fixture = Fixture::new("repository-context-normalizes-schema-metadata");
+    write_json_atomic(
+        &fixture.root.join("package.json"),
+        &json!({ "name": "loom-fixture", "private": true }),
+    )
+    .expect("write package.json");
+    std::fs::create_dir_all(fixture.root.join("src")).expect("create src");
+    std::fs::write(
+        fixture.root.join("src/main.tsx"),
+        "export const app = true;\n",
+    )
+    .expect("write entrypoint");
+
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    write_candidate_target(
+        &fixture,
+        &baseline_request_ref,
+        &technical_baseline_candidate_json("existing_project", "policy_auto_accept"),
+    );
+    let baseline_result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+    let repository_context_request_ref = baseline_result["next"]["requestRef"]
+        .as_str()
+        .expect("repository context requestRef")
+        .to_string();
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let brainstorm_contract_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "brainstormContract");
+    let technical_baseline_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "technicalBaseline");
+    let mut repository_candidate = repository_context_candidate_json(
+        &repository_context_request_ref,
+        &brainstorm_contract_ref,
+        &technical_baseline_ref,
+    );
+    repository_candidate["repoOverview"]["repositoryShape"] = json!("multi_app");
+    repository_candidate["relevantSurfaces"][0]["kind"] = json!("api");
+    repository_candidate["relevantSurfaces"][0]["relevance"] = json!("integration_boundary");
+    repository_candidate["relevantSurfaces"][0]["suggestedUse"] = json!("extend");
+    repository_candidate["recommendedReadRefs"][0]["reason"] = json!("architecture_boundary");
+    repository_candidate["recommendedReadRefs"][0]["priority"] = json!("urgent");
+    repository_candidate["contextQuality"]["coverage"] = json!("complete");
+    repository_candidate["contextQuality"]
+        .as_object_mut()
+        .expect("context quality")
+        .remove("confidence");
+    repository_candidate["contextQuality"]["warnings"] =
+        json!(["Repository scan was intentionally narrow."]);
+    repository_candidate["warnings"] = json!(["Top-level warning as text."]);
+
+    write_candidate_target(
+        &fixture,
+        &repository_context_request_ref,
+        &repository_candidate,
+    );
+    let repository_result = call_submit(
+        "loom.repositoryContextAcceptFile",
+        &repository_context_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        repository_result["state"], "auto_runnable",
+        "{repository_result:#}"
+    );
+
+    let repository_context_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestRepositoryContext");
+    let persisted_path = fixture.root.join(repository_context_ref);
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(persisted_path).expect("read persisted repository context"),
+    )
+    .expect("parse persisted repository context");
+    assert_eq!(
+        persisted["repoOverview"]["repositoryShape"],
+        json!("multi_application")
+    );
+    assert_eq!(
+        persisted["relevantSurfaces"][0]["kind"],
+        json!("controller")
+    );
+    assert_eq!(
+        persisted["relevantSurfaces"][0]["relevance"],
+        json!("architecture_boundary")
+    );
+    assert_eq!(
+        persisted["relevantSurfaces"][0]["suggestedUse"],
+        json!("inspect_or_extend")
+    );
+    assert_eq!(
+        persisted["recommendedReadRefs"][0]["reason"],
+        json!("integration_boundary")
+    );
+    assert_eq!(
+        persisted["recommendedReadRefs"][0]["priority"],
+        json!("medium")
+    );
+    assert_eq!(persisted["contextQuality"]["coverage"], json!("broad"));
+    assert_eq!(persisted["contextQuality"]["confidence"], json!("unknown"));
+    assert_eq!(
+        persisted["contextQuality"]["warnings"][0]["message"],
+        json!("Repository scan was intentionally narrow.")
+    );
+    assert_eq!(
+        persisted["warnings"][0]["message"],
+        json!("Top-level warning as text.")
     );
 }
 

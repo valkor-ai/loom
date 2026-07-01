@@ -186,6 +186,8 @@ fn build_request_root(
         "technologySignals and structureSignals are objects, not arrays.",
         "repoOverview.primaryApplications, structureSignals.rootPaths, structureSignals.entryPoints, existingCapabilities, relevantSurfaces, and recommendedReadRefs are arrays of objects with the fields shown in outputContract.resultTemplate.",
         "Every existingCapabilities[].surfaceRefs and recommendedReadRefs[].surfaceRefs value must reference a relevantSurfaces[].surfaceId.",
+        "Use enumRefs.surfaceRelevance only for relevantSurfaces[].relevance; integration_boundary is not a surface relevance value and belongs only to recommendedReadRefs[].reason.",
+        "Use architecture_boundary for code surfaces that define API, module, service, frontend/backend, or persistence boundaries.",
     ];
     if matches!(
         repository_lens.phase_development_mode,
@@ -556,6 +558,10 @@ where
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let candidate: RepositoryContextCandidateAgentWritable =
         match state::store::read_json_value(&candidate_file)
+            .map(|mut raw| {
+                normalize_repository_context_candidate_value(&mut raw);
+                raw
+            })
             .and_then(|raw| serde_json::from_value(raw).map_err(state::store::StateError::Json))
         {
             Ok(candidate) => candidate,
@@ -718,6 +724,253 @@ fn current_phase_scope_confirmed(
             })
         })
         .unwrap_or(false))
+}
+
+fn normalize_repository_context_candidate_value(raw: &mut Value) {
+    let Some(object) = raw.as_object_mut() else {
+        return;
+    };
+    normalize_repo_overview(object.get_mut("repoOverview"));
+    normalize_relevant_surfaces(object.get_mut("relevantSurfaces"));
+    normalize_recommended_read_refs(object.get_mut("recommendedReadRefs"));
+    normalize_context_quality(object.get_mut("contextQuality"));
+    normalize_context_warnings(object.get_mut("warnings"), "REPOSITORY_CONTEXT_WARNING");
+}
+
+fn normalize_repo_overview(value: Option<&mut Value>) {
+    let Some(object) = value.and_then(Value::as_object_mut) else {
+        return;
+    };
+    normalize_enum_field(
+        object,
+        "repositoryShape",
+        &[
+            ("multi_app", "multi_application"),
+            ("multi_application_repo", "multi_application"),
+            ("single_app", "single_package"),
+        ],
+        &["single_package", "monorepo", "multi_application", "unknown"],
+        "unknown",
+    );
+}
+
+fn normalize_relevant_surfaces(value: Option<&mut Value>) {
+    let Some(items) = value.and_then(Value::as_array_mut) else {
+        return;
+    };
+    for (index, item) in items.iter_mut().enumerate() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        if !object
+            .get("surfaceId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            object.insert(
+                "surfaceId".to_string(),
+                json!(format!("surface-{}", index + 1)),
+            );
+        }
+        normalize_enum_field(
+            object,
+            "kind",
+            &[
+                ("api", "controller"),
+                ("database", "data_access"),
+                ("frontend", "ui"),
+                ("backend", "service"),
+            ],
+            &[
+                "entrypoint",
+                "module",
+                "service",
+                "controller",
+                "data_access",
+                "ui",
+                "config",
+                "test",
+                "script",
+                "documentation",
+                "unknown",
+            ],
+            "unknown",
+        );
+        normalize_enum_field(
+            object,
+            "relevance",
+            &[
+                ("integration_boundary", "architecture_boundary"),
+                ("dependency_context", "architecture_boundary"),
+                ("test_or_validation", "validation_surface"),
+                ("risk_review", "delivery_context"),
+            ],
+            &[
+                "implemented_capability",
+                "architecture_boundary",
+                "extension_point",
+                "validation_surface",
+                "delivery_context",
+                "unrelated",
+            ],
+            "delivery_context",
+        );
+        normalize_enum_field(
+            object,
+            "suggestedUse",
+            &[
+                ("inspect", "inspect_only"),
+                ("read_only", "inspect_only"),
+                ("extend", "inspect_or_extend"),
+                ("reuse", "reuse_existing_pattern"),
+                ("avoid", "avoid_modifying"),
+            ],
+            &[
+                "inspect_only",
+                "inspect_or_extend",
+                "reuse_existing_pattern",
+                "avoid_modifying",
+            ],
+            "inspect_only",
+        );
+    }
+}
+
+fn normalize_recommended_read_refs(value: Option<&mut Value>) {
+    let Some(items) = value.and_then(Value::as_array_mut) else {
+        return;
+    };
+    for item in items {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        normalize_enum_field(
+            object,
+            "reason",
+            &[
+                ("architecture_boundary", "integration_boundary"),
+                ("validation_surface", "test_or_validation"),
+                ("delivery_context", "dependency_context"),
+            ],
+            &[
+                "implemented_capability",
+                "dependency_context",
+                "integration_boundary",
+                "test_or_validation",
+                "risk_review",
+                "extension_point",
+            ],
+            "dependency_context",
+        );
+        normalize_enum_field(
+            object,
+            "priority",
+            &[],
+            &["high", "medium", "low"],
+            "medium",
+        );
+    }
+}
+
+fn normalize_context_quality(value: Option<&mut Value>) {
+    let Some(object) = value.and_then(Value::as_object_mut) else {
+        return;
+    };
+    normalize_enum_field(
+        object,
+        "coverage",
+        &[
+            ("complete", "broad"),
+            ("comprehensive", "broad"),
+            ("high", "broad"),
+            ("medium", "partial"),
+            ("low", "insufficient"),
+        ],
+        &["focused", "partial", "broad", "insufficient"],
+        "partial",
+    );
+    normalize_enum_field(
+        object,
+        "confidence",
+        &[("certain", "high"), ("none", "unknown")],
+        &["low", "medium", "high", "unknown"],
+        "unknown",
+    );
+    normalize_context_warnings(
+        object.get_mut("warnings"),
+        "REPOSITORY_CONTEXT_QUALITY_WARNING",
+    );
+}
+
+fn normalize_context_warnings(value: Option<&mut Value>, default_code: &str) {
+    let Some(value) = value else {
+        return;
+    };
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_context_warning_item(item, default_code);
+            }
+        }
+        Value::String(message) => {
+            *value = json!([{ "code": default_code, "message": message.clone() }]);
+        }
+        _ => {
+            *value = json!([]);
+        }
+    }
+}
+
+fn normalize_context_warning_item(item: &mut Value, default_code: &str) {
+    match item {
+        Value::String(message) => {
+            *item = json!({ "code": default_code, "message": message.clone() });
+        }
+        Value::Object(object) => {
+            if !object
+                .get("code")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                object.insert("code".to_string(), json!(default_code));
+            }
+            if !object
+                .get("message")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                object.insert("message".to_string(), json!("Repository context warning."));
+            }
+        }
+        _ => {
+            *item = json!({ "code": default_code, "message": "Repository context warning." });
+        }
+    }
+}
+
+fn normalize_enum_field(
+    object: &mut Map<String, Value>,
+    field: &str,
+    aliases: &[(&str, &str)],
+    allowed: &[&str],
+    default_value: &str,
+) {
+    let candidate = object
+        .get(field)
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let normalized = aliases
+        .iter()
+        .find_map(|(from, to)| (candidate == *from).then_some(*to))
+        .or_else(|| {
+            allowed
+                .iter()
+                .copied()
+                .find(|allowed| candidate == *allowed)
+        })
+        .unwrap_or(default_value);
+    object.insert(field.to_string(), json!(normalized));
 }
 
 fn validate_repository_context(
