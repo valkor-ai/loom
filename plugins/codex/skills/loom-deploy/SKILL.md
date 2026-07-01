@@ -22,9 +22,15 @@ Follow the returned action result. During `active_operation`, only call the obse
 
 Do not invent deployment files, stack choices, preview URLs, ports, or repair scopes outside the current MCP result.
 
-## Optional References
+## Reference Loading
 
 The current MCP deploy result remains the authority. Load no reference by default; load references only when the current deploy action matches the trigger.
+
+Protocol:
+- Read only references that match the current deploy action, repair request, or detected runtime family from the MCP result.
+- Prefer the exact runtime family reference selected by the deploy result; do not scan the whole `references/` directory.
+- Use references as implementation guidance for generated or repaired deployment files; do not paste reference prose into deployment artifacts, repair results, or final chat output.
+- If the current deploy action does not require a reference file, leave deploy references unread.
 
 - `references/repair.md`: executing a returned deploy repair action.
 - `references/compose.md`: editing Compose files, service wiring, build contexts, ports, or environment blocks.

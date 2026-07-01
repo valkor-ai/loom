@@ -26,6 +26,14 @@ For `DeployRepairAssetsNext`, edit only the returned generated deployment asset 
 
 When a deploy repair or deploy execution repair result contains `requestRef`, use `loom.inspectRequest` and `loom.readFieldGroup`. `requestReadPlan.groups` is the only read contract. Read only the field groups needed for the current repair action.
 
+## Reference Loading
+
 The current MCP deploy result remains the authority. Optional deploy references are installed under `../references/loom-deploy/`; load none by default. Load one file for the matching deploy action: repair, compose, dockerfile, environment, workspace, bootstrap, provider, external-reference review, or the detected runtime family.
+
+Protocol:
+- Read only references that match the current deploy action, repair request, or detected runtime family from the MCP result.
+- Prefer the exact runtime family reference selected by the deploy result; do not scan the whole `../references/loom-deploy` directory.
+- Use references as implementation guidance for generated or repaired deployment files; do not paste reference prose into deployment artifacts, repair results, or final chat output.
+- If the current deploy action does not require a reference file, leave deploy references unread.
 
 Do not copy deployment stack rules, repair contracts, runtime-family rules, or TaskResult contracts into this command. They belong to the current MCP deploy result or repair request.

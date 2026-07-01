@@ -658,6 +658,10 @@ fn agent_templates_expose_reference_loading_protocol() {
 
     for file in files {
         let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            !content.contains("## Optional References"),
+            "{file} must use Reference Loading instead of Optional References"
+        );
         for required in [
             "## Reference Loading",
             "Protocol:",
@@ -672,6 +676,32 @@ fn agent_templates_expose_reference_loading_protocol() {
             assert!(
                 content.contains(required),
                 "{file} missing reference loading protocol fragment {required}"
+            );
+        }
+    }
+
+    for file in [
+        "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/skills/loom-deploy/SKILL.md",
+        "opencode/.opencode/commands/loom-deploy.md",
+    ] {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            !content.contains("## Optional References"),
+            "{file} must use Reference Loading instead of Optional References"
+        );
+        for required in [
+            "## Reference Loading",
+            "Protocol:",
+            "current deploy action",
+            "detected runtime family",
+            "do not scan the whole",
+            "do not paste reference prose",
+            "If the current deploy action does not require a reference file",
+        ] {
+            assert!(
+                content.contains(required),
+                "{file} missing deploy reference loading protocol fragment {required}"
             );
         }
     }
