@@ -43,6 +43,8 @@ For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups
 
 For `DeployRepairAssetsNext`, edit only the returned deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
 
+## Reference Loading
+
 The current MCP request/result remains the authority. Optional references are installed under `../references/loom/`. Load no reference by default; load references only when the current action matches the trigger.
 
 UIX references:

@@ -39,7 +39,19 @@ When a result contains `requestRef`, use `loom.inspectRequest` and `loom.readFie
 
 Read only the field groups needed for the current action. Use `loom.readRequestFields` only for declared fields inside the request read plan.
 
-## Optional References
+## Writing And Submit
+
+Write artifacts only to the returned `writeTargets`. Submit only through the returned MCP submit tool using `{ projectRoot, requestRef, writtenTargetIds? }`.
+
+For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowledgeInspectChunk`, fill the provided result template, and submit with `loom.knowledgeSemanticSubmitFile`. Continue pack by pack until the result is published, blocked, or user-gated.
+
+For `ExecuteTaskNext`, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
+
+For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress.
+
+For `DeployRepairAssetsNext`, edit only the returned deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
+
+## Reference Loading
 
 The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
 
@@ -57,18 +69,6 @@ UIX references:
 - `references/uix/templates/tokens.css.tpl` or `references/uix/templates/tokens.tailwind.tpl`: load only when the MCP `uiQualityContract.designTokenAssetPlan.templateId` selects the matching template id. Use it as a baseline to merge into the project's existing token/theme system; do not paste template text into Loom artifacts or create a parallel token system.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
-
-## Writing And Submit
-
-Write artifacts only to the returned `writeTargets`. Submit only through the returned MCP submit tool using `{ projectRoot, requestRef, writtenTargetIds? }`.
-
-For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowledgeInspectChunk`, fill the provided result template, and submit with `loom.knowledgeSemanticSubmitFile`. Continue pack by pack until the result is published, blocked, or user-gated.
-
-For `ExecuteTaskNext`, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
-
-For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress.
-
-For `DeployRepairAssetsNext`, edit only the returned deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
 
 ## Boundaries
 
