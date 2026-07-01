@@ -603,6 +603,9 @@ fn opencode_commands_expose_mcp_result_discipline() {
     }
 
     for required in [
+        "MCP-selected references:",
+        "Fallback focused references:",
+        "uiQualityContract.referenceProfile.referenceIds",
         "../references/loom/uix/core.md",
         "../references/loom/uix/interaction.md",
         "../references/loom/uix/system.md",
@@ -612,14 +615,15 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "../references/loom/uix/data.md",
         "../references/loom/uix/verification.md",
         "../references/loom/uix/anti-patterns.md",
-        "../references/loom/uix/scenarios/*.md",
-        "../references/loom/uix/tokens/*.md",
-        "../references/loom/uix/stacks/*.md",
+        "uix.scenarios.admin-dashboard",
+        "uix.tokens.color-system",
+        "uix.stacks.react",
         "../references/loom/uix/templates/tokens.css.tpl",
         "../references/loom/uix/templates/tokens.tailwind.tpl",
         "uiQualityContract.designTokenAssetPlan.templateId",
-        "do not paste template text into Loom artifacts or create a parallel token system",
-        "writing or reviewing user-visible frontend artifacts",
+        "do not paste reference prose or template bodies",
+        "creates, changes, or reviews user-visible frontend work",
+        "These files are not substitutes for MCP-selected `referenceProfile.referenceIds`",
         "forms, flows, search/filter, loading, empty, error, or recovery states",
         "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
         "Do not load separate delivery reference files",
@@ -662,9 +666,15 @@ fn agent_templates_expose_reference_loading_protocol() {
             !content.contains("## Optional References"),
             "{file} must use Reference Loading instead of Optional References"
         );
+        assert!(
+            !content.contains("UIX references:"),
+            "{file} must not keep the old broad UIX references section"
+        );
         for required in [
             "## Reference Loading",
             "Protocol:",
+            "MCP-selected references:",
+            "Fallback focused references:",
             "After reading the current request group",
             "uiQualityContract.referenceProfile.referenceIds",
             "uiQualityContract.designTokenAssetPlan.templateId",
@@ -672,6 +682,11 @@ fn agent_templates_expose_reference_loading_protocol() {
             "If a referenced file is not selected by the MCP contract",
             "frontendQualitySelfCheck",
             "do not paste reference prose or template bodies",
+            "These files are not substitutes for MCP-selected `referenceProfile.referenceIds`",
+            "`uix.scenarios.admin-dashboard`",
+            "`uix.tokens.color-system`",
+            "`uix.stacks.react`",
+            "`uix.templates.tokens-css`",
         ] {
             assert!(
                 content.contains(required),

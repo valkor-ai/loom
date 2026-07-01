@@ -54,8 +54,16 @@ Protocol:
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
 - In `frontendQualitySelfCheck`, report `referenceIdsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
 
-UIX references:
-- `../references/loom/uix/core.md`: writing or reviewing user-visible frontend artifacts.
+MCP-selected references:
+- `uix.core` -> `../references/loom/uix/core.md`.
+- `uix.anti-patterns` -> `../references/loom/uix/anti-patterns.md`.
+- `uix.tokens.color-system`, `uix.tokens.typography`, `uix.tokens.spacing`, `uix.tokens.layout-grid`, `uix.tokens.motion`, `uix.tokens.radius-elevation` -> the matching file under `../references/loom/uix/tokens/`.
+- `uix.scenarios.admin-dashboard`, `uix.scenarios.data-console`, `uix.scenarios.fintech-workstation`, `uix.scenarios.fintech-consumer-app`, `uix.scenarios.consumer-app`, `uix.scenarios.mobile-responsive`, `uix.scenarios.mobile-native`, `uix.scenarios.marketing-site`, `uix.scenarios.corporate-site`, `uix.scenarios.docs-site`, `uix.scenarios.developer-tool`, `uix.scenarios.immersive-3d` -> the matching file under `../references/loom/uix/scenarios/`.
+- `uix.stacks.react`, `uix.stacks.vue`, `uix.stacks.plain-html`, `uix.stacks.native-mobile`, `uix.stacks.threejs`, `uix.stacks.svelte`, `uix.stacks.uniapp` -> the matching file under `../references/loom/uix/stacks/`.
+- `uix.templates.tokens-css` -> `../references/loom/uix/templates/tokens.css.tpl`; `uix.templates.tokens-tailwind` -> `../references/loom/uix/templates/tokens.tailwind.tpl`.
+
+Fallback focused references:
+- These files are not substitutes for MCP-selected `referenceProfile.referenceIds`; use them only when the current action needs that focus and the MCP contract has not selected a more precise scenario/token/stack reference.
 - `../references/loom/uix/interaction.md`: forms, flows, search/filter, loading, empty, error, or recovery states.
 - `../references/loom/uix/system.md`: design system, tokens, components, icons, theming, motion, or localization.
 - `../references/loom/uix/mobile.md`: mobile, tablet, responsive, PWA, or touch behavior.
@@ -63,9 +71,6 @@ UIX references:
 - `../references/loom/uix/content.md`: UX writing, labels, empty states, errors, CTAs, onboarding, or terminology.
 - `../references/loom/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
 - `../references/loom/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
-- `../references/loom/uix/anti-patterns.md`: product-boundary failures, demo-looking UI, and forbidden delivery/process content in product screens.
-- `../references/loom/uix/scenarios/*.md`, `../references/loom/uix/tokens/*.md`, and `../references/loom/uix/stacks/*.md`: load only when the MCP `referenceProfile.referenceIds` asks for a matching scenario, token, or stack reference.
-- `../references/loom/uix/templates/tokens.css.tpl` or `../references/loom/uix/templates/tokens.tailwind.tpl`: load only when the MCP `uiQualityContract.designTokenAssetPlan.templateId` selects the matching template id. Use it as a baseline to merge into the project's existing token/theme system; do not paste template text into Loom artifacts or create a parallel token system.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 
