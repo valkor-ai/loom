@@ -4919,6 +4919,128 @@ fn review_flags_missing_workflow_closure_assignment_as_taskplan_repair() {
 }
 
 #[test]
+fn review_flags_frontend_quality_self_check_gaps() {
+    let fixture = Fixture::new("review-frontend-quality-gap");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    assert_eq!(
+        taskplan_result["state"], "auto_runnable",
+        "{taskplan_result:#}"
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let execution_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution result template")
+    .fields;
+    let result_file = execution_fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut task_result_candidate = execution_fields["outputContract.resultTemplate"]
+        .value
+        .clone();
+    task_result_candidate["changedFiles"] = json!(["src/App.tsx"]);
+    task_result_candidate["frontendQualitySelfCheck"]["status"] = json!("needs_repair");
+    task_result_candidate["frontendQualitySelfCheck"]["knownGaps"] =
+        json!(["The UI quality pass found a remaining density/state polish gap."]);
+    write_json_atomic(&fixture.root.join(result_file), &task_result_candidate)
+        .expect("write task result with frontend quality gap");
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    assert_eq!(task_result["next"]["artifactKind"], "review_result");
+    let review_request_ref = task_result["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef")
+        .to_string();
+
+    let review_packets = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.clone(),
+        group_id: "review_packets".to_string(),
+    })
+    .expect("read review packets");
+    assert_eq!(
+        review_packets.fields["reviewPacket.taskResultSummaries"].value[0]
+            ["frontendQualitySelfCheckPresent"],
+        json!(true)
+    );
+    assert_eq!(
+        review_packets.fields["reviewPacket.taskResultSummaries"].value[0]
+            ["frontendQualitySelfCheck"]["knownGapCount"],
+        json!(1)
+    );
+    let review_matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.clone(),
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read review matrices");
+    let quality_matrix = review_matrices.fields["frontendQualityReviewMatrix"]
+        .value
+        .as_array()
+        .expect("frontend quality matrix");
+    assert_eq!(quality_matrix[0]["qualitySatisfied"], json!(false));
+    assert_eq!(quality_matrix[0]["knownGapCount"], json!(1));
+    let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
+        .value
+        .as_array()
+        .expect("review signals");
+    assert!(
+        review_signals.iter().any(|signal| {
+            signal["kind"] == json!("frontend_ui_quality")
+                && signal["uiQualitySatisfied"] == json!(false)
+                && signal["recommendedNextAction"] == json!("execution_repair")
+        }),
+        "review signals must include compact frontend quality failure fact: {review_signals:#?}"
+    );
+
+    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT" && issue["fieldPath"] == "decision"
+    }));
+}
+
+#[test]
 fn repeated_invalid_review_result_stays_repairable() {
     let fixture = Fixture::new("review-invalid-repairable");
     let review_request_ref = complete_task_execution_to_review(&fixture);

@@ -241,6 +241,7 @@ fn build_review_request(
         "changeContext": change_context,
         "conceptReviewMatrix": build_concept_review_matrix(task_plan, task_results),
         "detailReviewMatrix": build_detail_review_matrix(task_plan, task_results),
+        "frontendQualityReviewMatrix": build_frontend_quality_review_matrix(task_plan, task_results),
         "enumRefs": {
             "decision": ["approved", "approved_with_notes", "changes_requested", "blocked", "needs_user_decision"],
             "findingSeverity": ["critical", "major", "minor", "note"],
@@ -272,7 +273,7 @@ fn build_review_request(
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence or frontend workflow closure.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
             ],
@@ -382,6 +383,7 @@ fn build_review_request(
                     "fields": [
                         "conceptReviewMatrix",
                         "detailReviewMatrix",
+                        "frontendQualityReviewMatrix",
                         "outputContract.reviewSignals.items"
                     ]
                 },
@@ -1421,18 +1423,22 @@ fn validate_review_signals(
         item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
             && item.get("closureSatisfied").and_then(Value::as_bool) == Some(false)
     });
+    let unsatisfied_frontend_quality = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("frontend_ui_quality")
+            && item.get("uiQualitySatisfied").and_then(Value::as_bool) == Some(false)
+    });
     let missing_workflow_task_assignment = signals.as_array().into_iter().flatten().any(|item| {
         item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
             && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
             && item.get("recommendedNextAction").and_then(Value::as_str) == Some("taskplan_repair")
     });
     if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
-        && (unsatisfied_detail || unsatisfied_frontend)
+        && (unsatisfied_detail || unsatisfied_frontend || unsatisfied_frontend_quality)
     {
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
             "decision",
-            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail or frontend workflow closure.",
+            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, or frontend UI quality.",
         ));
     }
     if missing_workflow_task_assignment {
@@ -2326,6 +2332,90 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
         .collect()
 }
 
+fn build_frontend_quality_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .tasks
+        .iter()
+        .filter_map(|task| {
+            let ui_quality_contract = task
+                .frontend_experience_requirement
+                .as_ref()
+                .and_then(|requirement| requirement.get("uiQualityContract"))?;
+            let result = task_results
+                .iter()
+                .find(|result| result.task_id == task.task_id);
+            let self_check = result
+                .and_then(|result| result.frontend_quality_self_check.as_ref())
+                .map(serde_json::to_value)
+                .and_then(Result::ok)
+                .unwrap_or(Value::Null);
+            let expected_refs = value_string_array(
+                ui_quality_contract
+                    .get("referenceProfile")
+                    .unwrap_or(&Value::Null),
+                "referenceIds",
+            );
+            let checked_refs = value_string_array(&self_check, "referenceIdsChecked");
+            let expected_states =
+                object_array_string_field(ui_quality_contract, "requiredUiStates", "state");
+            let covered_states = object_array_string_field(&self_check, "statesCovered", "state");
+            let expected_rules =
+                object_array_string_field(ui_quality_contract, "businessUiRules", "ruleId");
+            let checked_rules =
+                object_array_string_field(&self_check, "businessUiRulesChecked", "ruleId");
+            let missing_reference_ids = missing_strings(&expected_refs, &checked_refs);
+            let missing_ui_states = missing_strings(&expected_states, &covered_states);
+            let missing_business_ui_rule_ids = missing_strings(&expected_rules, &checked_rules);
+            let forbidden_violation_count = self_check
+                .pointer("/forbiddenContentCheck/violations")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            let known_gap_count = self_check
+                .get("knownGaps")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            let scenario_matches = self_check.get("scenarioKind").and_then(Value::as_str)
+                == ui_quality_contract
+                    .pointer("/scenario/kind")
+                    .and_then(Value::as_str);
+            let quality_level_matches = self_check.get("qualityLevel").and_then(Value::as_str)
+                == ui_quality_contract
+                    .get("qualityLevel")
+                    .and_then(Value::as_str);
+            let quality_satisfied = self_check.get("status").and_then(Value::as_str)
+                == Some("satisfied")
+                && scenario_matches
+                && quality_level_matches
+                && missing_reference_ids.is_empty()
+                && missing_ui_states.is_empty()
+                && missing_business_ui_rule_ids.is_empty()
+                && forbidden_violation_count == 0
+                && known_gap_count == 0;
+            Some(json!({
+                "taskId": task.task_id,
+                "taskResultId": result.map(|result| result.task_result_id.clone()),
+                "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
+                "actualScenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
+                "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
+                "actualQualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
+                "actualStatus": self_check.get("status").and_then(Value::as_str),
+                "qualitySatisfied": quality_satisfied,
+                "missingReferenceIds": missing_reference_ids,
+                "missingUiStates": missing_ui_states,
+                "missingBusinessUiRuleIds": missing_business_ui_rule_ids,
+                "forbiddenViolationCount": forbidden_violation_count,
+                "knownGapCount": known_gap_count,
+                "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" }
+            }))
+        })
+        .collect()
+}
+
 fn build_review_signals(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
@@ -2362,6 +2452,35 @@ fn build_review_signals(
                 "Assigned TaskResult evidence reports this requirement detail as satisfied."
             } else {
                 "Assigned TaskResult evidence is missing or does not report this requirement detail as satisfied."
+            }
+        }));
+    }
+    for quality in build_frontend_quality_review_matrix(task_plan, task_results) {
+        let task_id = quality
+            .get("taskId")
+            .and_then(Value::as_str)
+            .unwrap_or("task");
+        let quality_satisfied = quality
+            .get("qualitySatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!("sig-frontend-ui-quality-{}", safe_signal_id(task_id)),
+            "kind": "frontend_ui_quality",
+            "taskRefs": [task_id],
+            "taskResultId": quality.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "uiQualitySatisfied": quality_satisfied,
+            "actualStatus": quality.get("actualStatus").cloned().unwrap_or(Value::Null),
+            "missingReferenceIds": quality.get("missingReferenceIds").cloned().unwrap_or_else(|| json!([])),
+            "missingUiStates": quality.get("missingUiStates").cloned().unwrap_or_else(|| json!([])),
+            "missingBusinessUiRuleIds": quality.get("missingBusinessUiRuleIds").cloned().unwrap_or_else(|| json!([])),
+            "forbiddenViolationCount": quality.get("forbiddenViolationCount").cloned().unwrap_or_else(|| json!(0)),
+            "knownGapCount": quality.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
+            "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
+            "reason": if quality_satisfied {
+                "TaskResult frontend quality self-check satisfies the UI quality contract."
+            } else {
+                "TaskResult frontend quality self-check does not satisfy the UI quality contract."
             }
         }));
     }
@@ -2479,6 +2598,15 @@ fn build_review_signals(
                 "evidenceType": "frontend_experience"
             }));
         }
+        if result.frontend_quality_self_check.is_some() {
+            signals.push(json!({
+                "signalId": format!("sig-frontend-quality-evidence-{}", safe_signal_id(&result.task_result_id)),
+                "kind": "task_result_evidence_presence",
+                "taskResultId": result.task_result_id,
+                "taskId": result.task_id,
+                "evidenceType": "frontend_quality"
+            }));
+        }
     }
     Value::Array(signals)
 }
@@ -2490,6 +2618,29 @@ fn value_string_array(value: &Value, key: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+fn object_array_string_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {
+    value
+        .get(array_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get(field_key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+fn missing_strings(expected: &[String], actual: &[String]) -> Vec<String> {
+    let actual = actual.iter().collect::<BTreeSet<_>>();
+    expected
+        .iter()
+        .filter(|item| !actual.contains(item))
+        .cloned()
         .collect()
 }
 
@@ -2578,7 +2729,7 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
     task_results
         .iter()
         .map(|result| {
-            json!({
+            let mut summary = json!({
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
                 "status": result.status,
@@ -2606,13 +2757,62 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                     })
                 }).collect::<Vec<_>>(),
                 "frontendExperienceSelfCheckPresent": result.frontend_experience_self_check.is_some(),
+                "frontendQualitySelfCheckPresent": result.frontend_quality_self_check.is_some(),
                 "runtimeDeliveryEvidencePresent": result.runtime_delivery_evidence.is_some(),
                 "blockedReasonCodes": result.blocked_reasons.iter().map(|reason| reason.code.clone()).collect::<Vec<_>>(),
                 "failureCode": result.failure.as_ref().map(|failure| failure.code.clone()),
                 "noChangeReasonCode": result.no_change_reason.as_ref().map(|reason| reason.code.clone())
-            })
+            });
+            if result.frontend_quality_self_check.is_some() {
+                summary
+                    .as_object_mut()
+                    .expect("task result summary object")
+                    .insert(
+                        "frontendQualitySelfCheck".to_string(),
+                        compact_frontend_quality_self_check(result),
+                    );
+            }
+            summary
         })
         .collect()
+}
+
+fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
+    let Some(self_check) = result.frontend_quality_self_check.as_ref() else {
+        return json!({});
+    };
+    let self_check = serde_json::to_value(self_check).unwrap_or(Value::Null);
+    json!({
+        "present": true,
+        "status": self_check.get("status").and_then(Value::as_str),
+        "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
+        "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
+        "referenceIdsCheckedCount": self_check
+            .get("referenceIdsChecked")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "statesCoveredCount": self_check
+            .get("statesCovered")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "businessUiRulesCheckedCount": self_check
+            .get("businessUiRulesChecked")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "forbiddenViolationCount": self_check
+            .pointer("/forbiddenContentCheck/violations")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "knownGapCount": self_check
+            .get("knownGaps")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+    })
 }
 
 fn allowed_refs(
