@@ -4,7 +4,7 @@ Load this file when a loom request includes `frontend_experience`, `frontendExpe
 
 ## Reference Routing
 
-When the MCP request includes `executionGuidance.uiQuality.referenceProfile.referenceIds`, load only the matching focused references in addition to this core file.
+When the MCP request includes `uiQualityContract.referenceProfile.referenceIds`, load only the matching focused references in addition to this core file.
 
 - `uix.anti-patterns` -> `references/uix/anti-patterns.md`
 - `uix.scenarios.*` -> the matching file under `references/uix/scenarios/`
