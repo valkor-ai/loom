@@ -1,10 +1,10 @@
 use std::{collections::BTreeSet, path::Path};
 
 use contracts::{
-    AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
-    ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, ArchitectureSectionStatus,
-    COVERAGE_ARTIFACT_TYPES,
+    validate_ui_quality_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
+    ArchitectureArtifactSource, ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry,
+    ArchitectureHandoff, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -606,6 +606,9 @@ fn validate_frontend_rules(
                 "frontend_experience must preserve the confirmed/current frontend authority ref.",
             ));
         }
+    }
+    if let Some(frontend_experience) = candidate.content.get("frontendExperience") {
+        issues.extend(validate_ui_quality_contract(frontend_experience));
     }
     issues
 }

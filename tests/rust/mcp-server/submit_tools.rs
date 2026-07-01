@@ -1180,6 +1180,42 @@ fn architecture_read_groups_follow_current_section() {
         "frontend_experience must rely on its focused frontend context instead of broad acceptance candidates"
     );
     assert_architecture_scope_summary_fields(&frontend_core_fields);
+    let frontend_context_fields = architecture_group_fields(
+        &fixture,
+        &architecture_request_ref,
+        "architecture_frontend_context",
+    );
+    for required in [
+        "uiQualitySeed.required",
+        "uiQualitySeed.scenarioCandidates",
+        "uiQualitySeed.qualityLevel",
+        "uiQualitySeed.requiredReferenceIds",
+        "uiQualitySeed.requiredUiStates",
+        "uiQualitySeed.selectionRule",
+    ] {
+        assert!(
+            frontend_context_fields.contains(&required.to_string()),
+            "frontend_experience must expose field-level UI quality seed field {required}"
+        );
+    }
+    let frontend_template =
+        architecture_section_contract(&fixture, &architecture_request_ref, "frontend_experience");
+    let ui_quality_contract = frontend_template["resultTemplate"]["content"]["frontendExperience"]
+        ["uiQualityContract"]
+        .as_object()
+        .expect("uiQualityContract template");
+    assert_eq!(
+        ui_quality_contract["semanticTokenPolicy"],
+        json!("semantic_tokens_required")
+    );
+    assert!(ui_quality_contract["referenceProfile"]["referenceIds"]
+        .as_array()
+        .expect("ui quality reference ids")
+        .contains(&json!("uix.tokens.layout-grid")));
+    assert!(frontend_template["enumRefs"]
+        .pointer("/uiQuality/scenarioKind")
+        .and_then(Value::as_array)
+        .is_some());
 
     advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
     assert_architecture_group_ids(
@@ -1559,6 +1595,11 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         frontend_template_refs["brainstormFrontendExperienceRef"],
         json!(frontend_authority_ref)
     );
+    assert!(
+        frontend_template["resultTemplate"]["content"]["frontendExperience"]
+            .get("uiQualityContract")
+            .is_some()
+    );
 
     write_candidate_target(
         &fixture,
@@ -1594,6 +1635,32 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         continued["next"]["writeTargets"][0]["targetId"],
         "domain_contract"
     );
+}
+
+#[test]
+fn architecture_frontend_submit_repairs_missing_ui_quality_contract() {
+    let fixture = Fixture::new("architecture-frontend-ui-quality-required");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["frontendExperience"]
+        .as_object_mut()
+        .expect("frontend object")
+        .remove("uiQualityContract");
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .any(|issue| issue["code"] == json!("UI_QUALITY_CONTRACT_REQUIRED")));
 }
 
 #[test]
@@ -5489,6 +5556,14 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
             .fields
             .get("frontendExperienceSource.currentFrontendExperienceRef"))
         .is_some());
+    assert!(frontend_group
+        .fields
+        .get("uiQualitySeed.scenarioCandidates")
+        .is_some());
+    assert!(frontend_group
+        .fields
+        .get("uiQualitySeed.requiredReferenceIds")
+        .is_some());
     advance_architecture_to_section(&fixture, &repair_action_ref, "runtime_delivery");
     assert_architecture_group_ids(
         &fixture,
@@ -7616,6 +7691,10 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .map(|field| &field.value)
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let frontend_ui_quality_contract =
+        architecture_section_contract(fixture, request_ref, "frontend_experience")
+            ["resultTemplate"]["content"]["frontendExperience"]["uiQualityContract"]
+            .clone();
 
     let content = match section {
         "foundation" => json!({
@@ -7665,6 +7744,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 "dataViews": [],
                 "actions": [],
                 "operationPaths": [],
+                "uiQualityContract": frontend_ui_quality_contract,
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": frontend_authority_ref
                 }

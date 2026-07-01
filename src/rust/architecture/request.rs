@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use contracts::{
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    build_ui_quality_seed, ui_quality_contract_shape, ui_quality_contract_template,
+    ui_quality_enum_refs, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
     PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
@@ -133,6 +134,7 @@ fn materialize_request_inner(
         has_previous_runtime_delivery,
         &frontend_experience_source,
         &planning_contract,
+        &technical_baseline,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
@@ -200,7 +202,7 @@ fn build_request_root(
     planning_contract_ref: &str,
     planning_contract: &PlanningGenerationContract,
     technical_baseline_ref: &str,
-    _technical_baseline: &TechnicalBaselineContract,
+    technical_baseline: &TechnicalBaselineContract,
     brainstorm_contract_ref: &str,
     phase: &delivery_core::DeliveryPhaseState,
     has_previous_runtime_delivery: bool,
@@ -219,6 +221,13 @@ fn build_request_root(
     );
     let allowed_refs = build_allowed_refs(planning_contract);
     let context_projection = build_context_projection(planning_contract);
+    let ui_quality_seed = build_ui_quality_seed(
+        planning_contract
+            .planning_inputs
+            .frontend_experience
+            .as_ref(),
+        Some(technical_baseline),
+    );
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -229,6 +238,7 @@ fn build_request_root(
         "sourceRefs": source_refs,
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
+        "uiQualitySeed": ui_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -241,7 +251,8 @@ fn build_request_root(
             "section": SECTION_ORDER,
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-            "acceptancePriority": ["must", "should", "could"]
+            "acceptancePriority": ["must", "should", "could"],
+            "uiQuality": ui_quality_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -448,6 +459,18 @@ pub(crate) fn architecture_read_groups(
         frontend_fields.extend([
             "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
             "contextProjection.requirementDetailTransfer.userFacingLanguage",
+            "uiQualitySeed.required",
+            "uiQualitySeed.scenarioCandidates",
+            "uiQualitySeed.qualityLevel",
+            "uiQualitySeed.surfacePolicyCandidates",
+            "uiQualitySeed.layoutBaselineCandidates",
+            "uiQualitySeed.densityCandidates",
+            "uiQualitySeed.semanticTokenPolicy",
+            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.stackReferenceCandidates",
+            "uiQualitySeed.forbiddenUserVisibleContent",
+            "uiQualitySeed.requiredUiStates",
+            "uiQualitySeed.selectionRule",
         ]);
         groups.push(json!({
             "groupId": "architecture_frontend_context",
@@ -666,7 +689,15 @@ fn build_section_outputs(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
+    technical_baseline: &TechnicalBaselineContract,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
+    let ui_quality_seed = build_ui_quality_seed(
+        planning_contract
+            .planning_inputs
+            .frontend_experience
+            .as_ref(),
+        Some(technical_baseline),
+    );
     SECTION_ORDER
         .iter()
         .copied()
@@ -687,6 +718,7 @@ fn build_section_outputs(
                     has_previous_runtime_delivery,
                     frontend_experience_source,
                     planning_contract,
+                    &ui_quality_seed,
                 ),
                 enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
                 generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
@@ -787,6 +819,7 @@ fn section_content_shape(
                 "dataViews": ["object"],
                 "actions": ["object"],
                 "operationPaths": ["object"],
+                "uiQualityContract": ui_quality_contract_shape(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": "string"
                 }
@@ -900,6 +933,7 @@ fn section_result_template(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
+    ui_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -912,7 +946,8 @@ fn section_result_template(
             section,
             has_previous_runtime_delivery,
             frontend_experience_source,
-            planning_contract
+            planning_contract,
+            ui_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -924,6 +959,7 @@ fn section_content_template(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
+    ui_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -1024,6 +1060,7 @@ fn section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
+                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
@@ -1197,6 +1234,9 @@ fn section_enum_refs(
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
         }),
+        ArchitectureSectionGroup::FrontendExperience => json!({
+            "uiQuality": ui_quality_enum_refs()
+        }),
         _ => json!({}),
     }
 }
@@ -1230,8 +1270,11 @@ fn section_generation_rules(
         ],
         ArchitectureSectionGroup::FrontendExperience => vec![
             "Read frontendExperienceSource before writing this section.".to_string(),
+            "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
+            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; use compact reference ids, not copied reference text.".to_string(),
+            "The first visible UI must be the actual product/work surface for the selected scenario; do not add runtime commands, stack explanations, Loom progress notes, or verification instructions to user-visible UI.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."

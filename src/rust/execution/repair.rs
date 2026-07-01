@@ -4,9 +4,11 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, TaskDefinition, TaskPlan,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus, COVERAGE_ARTIFACT_TYPES,
+    build_ui_quality_seed, ui_quality_contract_template, ui_quality_enum_refs,
+    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     ArtifactKind, DomainDispatcher, ExecuteEditBoundary, ExecuteTaskNext,
@@ -1315,6 +1317,19 @@ fn materialize_architecture_repair_action(
         .and_then(Value::as_str)
         .map(|planning_ref| read_project_json_value(root, planning_ref))
         .transpose()?;
+    let planning_contract = planning_value
+        .clone()
+        .map(serde_json::from_value::<PlanningGenerationContract>)
+        .transpose()
+        .map_err(state::store::StateError::Json)?;
+    let technical_baseline = source_refs
+        .get("technicalBaselineRef")
+        .and_then(Value::as_str)
+        .map(|baseline_ref| read_project_json_value(root, baseline_ref))
+        .transpose()?
+        .map(serde_json::from_value::<TechnicalBaselineContract>)
+        .transpose()
+        .map_err(state::store::StateError::Json)?;
     let frontend_experience_details = planning_value
         .as_ref()
         .and_then(|value| value.pointer("/planningInputs/frontendExperience"))
@@ -1376,6 +1391,14 @@ fn materialize_architecture_repair_action(
     } else {
         frontend_experience_source_from_fields(&frontend_fields)?
     };
+    let ui_quality_seed = ui_quality_seed_from_fields(&frontend_fields).unwrap_or_else(|| {
+        build_ui_quality_seed(
+            planning_contract
+                .as_ref()
+                .and_then(|contract| contract.planning_inputs.frontend_experience.as_ref()),
+            technical_baseline.as_ref(),
+        )
+    });
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
         .and_then(Value::as_str)
@@ -1392,6 +1415,7 @@ fn materialize_architecture_repair_action(
         phase_id,
         &frontend_experience_source,
         &context_projection,
+        &ui_quality_seed,
     )?;
     let candidate_files = section_outputs
         .iter()
@@ -1428,6 +1452,7 @@ fn materialize_architecture_repair_action(
         "repairContext": repair_context,
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
+        "uiQualitySeed": ui_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": ARCHITECTURE_SECTION_ORDER,
@@ -1441,7 +1466,8 @@ fn materialize_architecture_repair_action(
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
-            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
+            "uiQuality": ui_quality_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -1653,6 +1679,29 @@ fn frontend_experience_source_from_fields(
     Ok(Value::Object(object))
 }
 
+fn ui_quality_seed_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Option<Value> {
+    let required = value_field(fields, "uiQualitySeed.required");
+    if required.is_null() {
+        return None;
+    }
+    Some(json!({
+        "required": required,
+        "scenarioCandidates": value_field(fields, "uiQualitySeed.scenarioCandidates"),
+        "qualityLevel": value_field(fields, "uiQualitySeed.qualityLevel"),
+        "surfacePolicyCandidates": value_field(fields, "uiQualitySeed.surfacePolicyCandidates"),
+        "layoutBaselineCandidates": value_field(fields, "uiQualitySeed.layoutBaselineCandidates"),
+        "densityCandidates": value_field(fields, "uiQualitySeed.densityCandidates"),
+        "semanticTokenPolicy": value_field(fields, "uiQualitySeed.semanticTokenPolicy"),
+        "requiredReferenceIds": value_field(fields, "uiQualitySeed.requiredReferenceIds"),
+        "stackReferenceCandidates": value_field(fields, "uiQualitySeed.stackReferenceCandidates"),
+        "forbiddenUserVisibleContent": value_field(fields, "uiQualitySeed.forbiddenUserVisibleContent"),
+        "requiredUiStates": value_field(fields, "uiQualitySeed.requiredUiStates"),
+        "selectionRule": value_field(fields, "uiQualitySeed.selectionRule")
+    }))
+}
+
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
     let authority_ref = frontend_experience_source
         .get("confirmedFrontendExperienceRef")
@@ -1801,6 +1850,18 @@ fn architecture_repair_read_groups(
         frontend_fields.extend([
             "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
             "contextProjection.requirementDetailTransfer.userFacingLanguage",
+            "uiQualitySeed.required",
+            "uiQualitySeed.scenarioCandidates",
+            "uiQualitySeed.qualityLevel",
+            "uiQualitySeed.surfacePolicyCandidates",
+            "uiQualitySeed.layoutBaselineCandidates",
+            "uiQualitySeed.densityCandidates",
+            "uiQualitySeed.semanticTokenPolicy",
+            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.stackReferenceCandidates",
+            "uiQualitySeed.forbiddenUserVisibleContent",
+            "uiQualitySeed.requiredUiStates",
+            "uiQualitySeed.selectionRule",
         ]);
         groups.push(json!({
             "groupId": "architecture_frontend_context",
@@ -1851,6 +1912,7 @@ fn build_architecture_repair_section_outputs(
     phase_id: &str,
     frontend_experience_source: &Value,
     context_projection: &Value,
+    ui_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1873,14 +1935,16 @@ fn build_architecture_repair_section_outputs(
                     phase_id,
                     *section,
                     frontend_experience_source,
-                    context_projection
+                    context_projection,
+                    ui_quality_seed
                 ),
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
                     "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
                     "acceptancePriority": ["must", "should", "could"],
-                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
+                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
+                    "uiQuality": ui_quality_enum_refs()
                 },
                 "generationRules": [
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
@@ -1898,6 +1962,7 @@ fn architecture_repair_section_result_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
+    ui_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -1909,7 +1974,8 @@ fn architecture_repair_section_result_template(
         "content": architecture_repair_section_content_template(
             section,
             frontend_experience_source,
-            context_projection
+            context_projection,
+            ui_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -1920,6 +1986,7 @@ fn architecture_repair_section_content_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
+    ui_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -2020,6 +2087,7 @@ fn architecture_repair_section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
+                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
