@@ -388,6 +388,18 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let design_token_plan = ui_quality_contract
+        .get("designTokenAssetPlan")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let token_strategy = design_token_plan
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("not_applicable");
+    let template_id = design_token_plan
+        .get("templateId")
+        .cloned()
+        .unwrap_or(Value::Null);
     json!({
         "status": "satisfied",
         "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
@@ -398,6 +410,15 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         "forbiddenContentCheck": {
             "checked": true,
             "violations": []
+        },
+        "designTokenEvidence": {
+            "strategyUsed": token_strategy,
+            "templateIdUsed": template_id,
+            "tokenAssetFiles": [],
+            "tokenConsumerFiles": [],
+            "existingTokenSystemReused": matches!(token_strategy, "reuse_existing" | "extend_existing"),
+            "parallelTokenSystemCreated": false,
+            "mergeSummary": ""
         },
         "knownGaps": [],
         "summary": ""

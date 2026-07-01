@@ -468,6 +468,7 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceIds",
             "uiQualitySeed.stackReferenceCandidates",
+            "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
             "uiQualitySeed.requiredUiStates",
             "uiQualitySeed.selectionRule",

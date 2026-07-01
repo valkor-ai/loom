@@ -148,6 +148,7 @@ where
         "task.frontendExperienceRequirement.uiQualityContract.scenario",
         "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
         "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+        "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
         "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
         "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
         "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
@@ -1349,6 +1350,7 @@ fn validate_frontend_quality_self_check(
             break;
         }
     }
+    validate_design_token_evidence(&self_check, ui_quality_contract, issues);
     if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
         let violations = self_check
             .pointer("/forbiddenContentCheck/violations")
@@ -1365,6 +1367,84 @@ fn validate_frontend_quality_self_check(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
                 "frontendQualitySelfCheck.status",
                 "Satisfied frontendQualitySelfCheck cannot contain forbidden content violations or known gaps.",
+            ));
+        }
+    }
+}
+
+fn validate_design_token_evidence(
+    self_check: &Value,
+    ui_quality_contract: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let plan = ui_quality_contract
+        .get("designTokenAssetPlan")
+        .unwrap_or(&Value::Null);
+    let strategy = plan
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("not_applicable");
+    let Some(evidence) = self_check.get("designTokenEvidence") else {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.designTokenEvidence",
+            "frontendQualitySelfCheck must include designTokenEvidence for UI quality tasks.",
+        ));
+        return;
+    };
+    if evidence.get("strategyUsed").and_then(Value::as_str) != Some(strategy) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.designTokenEvidence.strategyUsed",
+            "designTokenEvidence.strategyUsed must match uiQualityContract.designTokenAssetPlan.strategy.",
+        ));
+    }
+    let expected_template = plan.get("templateId").unwrap_or(&Value::Null);
+    let actual_template = evidence.get("templateIdUsed").unwrap_or(&Value::Null);
+    if expected_template != actual_template {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.designTokenEvidence.templateIdUsed",
+            "designTokenEvidence.templateIdUsed must match uiQualityContract.designTokenAssetPlan.templateId.",
+        ));
+    }
+    let satisfied = self_check.get("status").and_then(Value::as_str) == Some("satisfied");
+    if satisfied
+        && evidence
+            .get("parallelTokenSystemCreated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.designTokenEvidence.parallelTokenSystemCreated",
+            "Satisfied frontendQualitySelfCheck cannot create a parallel token system.",
+        ));
+    }
+    if satisfied && strategy != "not_applicable" {
+        if evidence
+            .get("tokenAssetFiles")
+            .and_then(Value::as_array)
+            .map(|items| items.is_empty())
+            .unwrap_or(true)
+        {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.designTokenEvidence.tokenAssetFiles",
+                "Satisfied frontendQualitySelfCheck requires tokenAssetFiles for the active designTokenAssetPlan.",
+            ));
+        }
+        if evidence
+            .get("mergeSummary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.designTokenEvidence.mergeSummary",
+                "Satisfied frontendQualitySelfCheck requires mergeSummary explaining how token assets were reused, extended, or created.",
             ));
         }
     }
@@ -1789,7 +1869,12 @@ fn materialize_task_result_repair(
             "task.frontendExperienceRequirement.uiQualityContractRef",
             "task.frontendExperienceRequirement.uiQualityContract.scenario",
             "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+            "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
+            "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
+            "task.frontendExperienceRequirement.uiQualityContract.density",
+            "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
             "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
             "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
             "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
@@ -2034,6 +2119,7 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
         "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
         "referenceIdsChecked": string_array_at(&self_check, "referenceIdsChecked"),
+        "designTokenEvidence": self_check.get("designTokenEvidence").cloned().unwrap_or(Value::Null),
         "knownGapsCount": self_check
             .get("knownGaps")
             .and_then(Value::as_array)
@@ -2050,6 +2136,10 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         ),
         "requiredUiStates": ui_quality_contract.get("requiredUiStates").cloned().unwrap_or_else(|| json!([])),
         "businessUiRules": ui_quality_contract.get("businessUiRules").cloned().unwrap_or_else(|| json!([])),
+        "designTokenAssetPlan": ui_quality_contract
+            .get("designTokenAssetPlan")
+            .cloned()
+            .unwrap_or(Value::Null),
         "forbiddenUserVisibleContent": ui_quality_contract
             .get("forbiddenUserVisibleContent")
             .cloned()
@@ -2576,7 +2666,12 @@ fn frontend_experience_requirement_from_fields(
         requirement["uiQualityContract"] = json!({
             "scenario": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.scenario"),
             "qualityLevel": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.qualityLevel"),
+            "surfacePolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy"),
+            "layoutBaseline": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline"),
+            "density": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.density"),
+            "semanticTokenPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy"),
             "referenceProfile": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile"),
+            "designTokenAssetPlan": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"),
             "requiredUiStates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates"),
             "businessUiRules": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.businessUiRules"),
             "forbiddenUserVisibleContent": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent")

@@ -1190,6 +1190,7 @@ fn architecture_read_groups_follow_current_section() {
         "uiQualitySeed.scenarioCandidates",
         "uiQualitySeed.qualityLevel",
         "uiQualitySeed.requiredReferenceIds",
+        "uiQualitySeed.designTokenAssetPlan",
         "uiQualitySeed.requiredUiStates",
         "uiQualitySeed.selectionRule",
     ] {
@@ -1207,6 +1208,18 @@ fn architecture_read_groups_follow_current_section() {
     assert_eq!(
         ui_quality_contract["semanticTokenPolicy"],
         json!("semantic_tokens_required")
+    );
+    assert_eq!(
+        ui_quality_contract["designTokenAssetPlan"]["strategy"],
+        json!("create_css_tokens")
+    );
+    assert_eq!(
+        ui_quality_contract["designTokenAssetPlan"]["templateId"],
+        json!("uix.templates.tokens-css")
+    );
+    assert_eq!(
+        ui_quality_contract["designTokenAssetPlan"]["duplicationPolicy"],
+        json!("do_not_create_parallel_token_system")
     );
     assert!(ui_quality_contract["referenceProfile"]["referenceIds"]
         .as_array()
@@ -2158,6 +2171,10 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         frontend_requirement_template["uiQualityContract"]["semanticTokenPolicy"],
         json!("semantic_tokens_required")
     );
+    assert_eq!(
+        frontend_requirement_template["uiQualityContract"]["designTokenAssetPlan"]["templateId"],
+        json!("uix.templates.tokens-css")
+    );
     assert!(
         frontend_requirement_template["uiQualityContract"]["referenceProfile"]["referenceIds"]
             .as_array()
@@ -2365,6 +2382,9 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert!(core_group.fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
     ));
+    assert!(core_group.fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string()
+    ));
     assert!(core_group
         .fields
         .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
@@ -2389,6 +2409,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
             "executionRules.frontendImplementationOrganizationRules".to_string(),
             "executionRules.interactiveVerificationProbePolicy".to_string(),
@@ -2447,6 +2468,11 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             .contains(&json!("uix.tokens.spacing"))
     );
     assert_eq!(
+        fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"].value
+            ["templateId"],
+        json!("uix.templates.tokens-css")
+    );
+    assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["scenarioKind"],
         fields["task.frontendExperienceRequirement.uiQualityContract.scenario"].value["kind"]
     );
@@ -2470,6 +2496,11 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
             ["businessUiRulesChecked"][0]
             .is_object()
+    );
+    assert_eq!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["designTokenEvidence"]["templateIdUsed"],
+        json!("uix.templates.tokens-css")
     );
     assert!(
         fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
@@ -2502,6 +2533,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/App.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
     write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
     let record_result = call_submit(
         "loom.recordTaskResultFile",
@@ -2586,6 +2618,8 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
     assert!(repair_read_fields
         .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile"));
     assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"));
+    assert!(repair_read_fields
         .contains("outputContract.schemaShape.properties.frontendQualitySelfCheck"));
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
@@ -2594,6 +2628,7 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
             "repairContract.issueConflicts".to_string(),
             "repairContract.minimalRepairRules".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string(),
             "outputContract.resultTemplate".to_string(),
             "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
         ],
@@ -2617,6 +2652,11 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
             .as_array()
             .expect("reference ids")
             .contains(&json!("uix.tokens.spacing"))
+    );
+    assert_eq!(
+        repair_fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"]
+            .value["templateId"],
+        json!("uix.templates.tokens-css")
     );
     assert!(repair_fields["outputContract.resultTemplate"]
         .value
@@ -2727,6 +2767,7 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
     result["taskPlanId"] = json!("wrong-taskplan");
     result["taskId"] = json!("wrong-task");
     result["changedFiles"] = json!(["src/App.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
     result["verificationResults"][0]["verificationId"] = json!("wrong-verification");
     result["verificationResults"][0]["evidenceType"] = json!("runtime_api_check");
     result["failure"] = json!({
@@ -4742,6 +4783,7 @@ fn review_flags_missing_workflow_closure_assignment_as_taskplan_repair() {
             .value
             .clone();
         task_result_candidate["changedFiles"] = json!(["src/App.tsx"]);
+        complete_frontend_quality_token_evidence_for_test(&mut task_result_candidate);
         write_json_atomic(&fixture.root.join(result_file), &task_result_candidate)
             .expect("write task result from template");
         let result = call_submit(
@@ -4970,6 +5012,7 @@ fn review_flags_frontend_quality_self_check_gaps() {
         .value
         .clone();
     task_result_candidate["changedFiles"] = json!(["src/App.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut task_result_candidate);
     task_result_candidate["frontendQualitySelfCheck"]["status"] = json!("needs_repair");
     task_result_candidate["frontendQualitySelfCheck"]["knownGaps"] =
         json!(["The UI quality pass found a remaining density/state polish gap."]);
@@ -5015,6 +5058,10 @@ fn review_flags_frontend_quality_self_check_gaps() {
         .expect("frontend quality matrix");
     assert_eq!(quality_matrix[0]["qualitySatisfied"], json!(false));
     assert_eq!(quality_matrix[0]["knownGapCount"], json!(1));
+    assert_eq!(
+        quality_matrix[0]["designTokenAsset"]["satisfied"],
+        json!(true)
+    );
     let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
         .value
         .as_array()
@@ -5906,6 +5953,10 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     assert!(frontend_group
         .fields
         .get("uiQualitySeed.requiredReferenceIds")
+        .is_some());
+    assert!(frontend_group
+        .fields
+        .get("uiQualitySeed.designTokenAssetPlan")
         .is_some());
     advance_architecture_to_section(&fixture, &repair_action_ref, "runtime_delivery");
     assert_architecture_group_ids(
@@ -7136,6 +7187,33 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
     write_task_result_candidate_with_detail_evidence(fixture, request_ref, true, false);
 }
 
+fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
+    let Some(evidence) = result
+        .pointer_mut("/frontendQualitySelfCheck/designTokenEvidence")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let strategy = evidence
+        .get("strategyUsed")
+        .and_then(Value::as_str)
+        .unwrap_or("create_css_tokens")
+        .to_string();
+    if strategy != "not_applicable" {
+        let asset_file = match strategy.as_str() {
+            "create_tailwind_tokens" => "tailwind.config.js",
+            _ => "src/styles/tokens.css",
+        };
+        evidence.insert("tokenAssetFiles".to_string(), json!([asset_file]));
+        evidence.insert("tokenConsumerFiles".to_string(), json!(["src/App.tsx"]));
+        evidence.insert(
+            "mergeSummary".to_string(),
+            json!("Token assets were reused or extended before page-level styling in this test candidate."),
+        );
+    }
+    evidence.insert("parallelTokenSystemCreated".to_string(), json!(false));
+}
+
 fn mutate_task_result_candidate<F>(fixture: &Fixture, request_ref: &str, mutate: F)
 where
     F: FnOnce(&mut Value),
@@ -7293,6 +7371,7 @@ fn write_task_result_candidate_with_detail_evidence(
             json!("The frontend flow is wired to the declared task behavior and verified."),
         );
     }
+    complete_frontend_quality_token_evidence_for_test(&mut result);
     write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
 }
 
@@ -7404,6 +7483,7 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/main.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
     for field in [
         "schemaVersion",
         "taskResultId",
@@ -7653,53 +7733,49 @@ fn write_blocked_task_result_candidate(
         .as_str()
         .expect("taskPlanId");
     let task_id = fields["source.taskId"].value.as_str().expect("taskId");
-    write_json_atomic(
-        &fixture.root.join(result_file),
-        &json!({
-            "schemaVersion": "1.0",
-            "taskResultId": format!("result-blocked-{code}"),
-            "taskId": task_id,
-            "taskPlanId": task_plan_id,
-            "status": "blocked",
-            "changedFiles": [],
-            "noChangeReason": {
-                "code": "BLOCKED",
-                "summary": "The task is blocked by an upstream contract issue."
-            },
-            "verificationResults": [{
-                "verificationId": "verify-account-001",
-                "status": "not_run",
-                "evidenceType": "static_check",
-                "summary": "Verification was not run because the task is blocked."
-            }],
-            "selfRepairSummary": {
-                "attempted": false,
-                "attemptCount": 0,
-                "stopReason": "not_attempted",
-                "progressObserved": false
-            },
-            "failure": null,
-            "executionContinuity": {
-                "taskResultSubmittedAfterVerification": true,
-                "agentOwnedLongRunningWork": "none",
-                "notes": []
-            },
-            "notes": [],
-            "frontendExperienceSelfCheck": null,
-            "runtimeDeliveryEvidence": null,
-            "requirementDetailEvidence": [],
-            "conceptEvidence": [],
-            "blockedReasons": [{
-                "code": code,
-                "nextNode": next_node,
-                "message": "The task is blocked by an upstream contract issue.",
-                "details": {}
-            }],
-            "createdAt": "2026-06-24T10:06:00+08:00",
-            "updatedAt": "2026-06-24T10:06:00+08:00"
-        }),
-    )
-    .expect("write blocked task result");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["taskResultId"] = json!(format!("result-blocked-{code}"));
+    result["taskId"] = json!(task_id);
+    result["taskPlanId"] = json!(task_plan_id);
+    result["status"] = json!("blocked");
+    result["changedFiles"] = json!([]);
+    result["noChangeReason"] = json!({
+        "code": "BLOCKED",
+        "summary": "The task is blocked by an upstream contract issue."
+    });
+    result["verificationResults"] = json!([{
+        "verificationId": "verify-account-001",
+        "status": "not_run",
+        "evidenceType": "static_check",
+        "summary": "Verification was not run because the task is blocked."
+    }]);
+    result["selfRepairSummary"] = json!({
+        "attempted": false,
+        "attemptCount": 0,
+        "stopReason": "not_attempted",
+        "progressObserved": false
+    });
+    result["failure"] = Value::Null;
+    result["executionContinuity"] = json!({
+        "taskResultSubmittedAfterVerification": true,
+        "agentOwnedLongRunningWork": "none",
+        "notes": []
+    });
+    result["notes"] = json!([]);
+    result["frontendExperienceSelfCheck"] = Value::Null;
+    result["frontendQualitySelfCheck"] = Value::Null;
+    result["runtimeDeliveryEvidence"] = Value::Null;
+    result["requirementDetailEvidence"] = json!([]);
+    result["conceptEvidence"] = json!([]);
+    result["blockedReasons"] = json!([{
+        "code": code,
+        "nextNode": next_node,
+        "message": "The task is blocked by an upstream contract issue.",
+        "details": {}
+    }]);
+    result["createdAt"] = json!("2026-06-24T10:06:00+08:00");
+    result["updatedAt"] = json!("2026-06-24T10:06:00+08:00");
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write blocked task result");
 }
 
 fn execution_result_fields(
@@ -7713,6 +7789,7 @@ fn execution_result_fields(
             "source.taskPlanId".to_string(),
             "source.taskId".to_string(),
             "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
         ],
     })
     .expect("read execution request fields")

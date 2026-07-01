@@ -602,6 +602,7 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "task.frontendExperienceRequirement.uiQualityContract.density",
             "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile",
+            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan",
             "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
             "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
             "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
@@ -984,11 +985,12 @@ fn frontend_quality_execution_guidance(task: &TaskDefinition) -> Value {
             "scenario",
             "qualityLevel",
             "referenceProfile.referenceIds",
+            "designTokenAssetPlan",
             "requiredUiStates",
             "businessUiRules",
             "forbiddenUserVisibleContent"
         ],
-        "rule": "Implement the UI according to the uiQualityContract fields and report evidence in frontendQualitySelfCheck."
+        "rule": "Implement the UI according to the uiQualityContract fields, apply designTokenAssetPlan by reusing/extending existing token assets before creating new ones, and report evidence in frontendQualitySelfCheck."
     })
 }
 

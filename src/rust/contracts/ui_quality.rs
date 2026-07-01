@@ -51,6 +51,21 @@ pub const UI_DENSITIES: [&str; 4] = ["workbench_dense", "balanced", "comfortable
 
 pub const UI_SEMANTIC_TOKEN_POLICIES: [&str; 1] = ["semantic_tokens_required"];
 
+pub const UI_DESIGN_TOKEN_STRATEGIES: [&str; 5] = [
+    "reuse_existing",
+    "extend_existing",
+    "create_css_tokens",
+    "create_tailwind_tokens",
+    "not_applicable",
+];
+
+pub const UI_DESIGN_TOKEN_TEMPLATE_IDS: [&str; 2] =
+    ["uix.templates.tokens-css", "uix.templates.tokens-tailwind"];
+
+pub const UI_DESIGN_TOKEN_MERGE_POLICIES: [&str; 1] = ["preserve_existing_project_tokens"];
+
+pub const UI_DESIGN_TOKEN_DUPLICATION_POLICIES: [&str; 1] = ["do_not_create_parallel_token_system"];
+
 pub const UI_FORBIDDEN_USER_VISIBLE_CONTENT: [&str; 5] = [
     "runtime_commands",
     "technical_stack_explanation",
@@ -107,6 +122,10 @@ pub fn ui_quality_enum_refs() -> Value {
         "layoutBaseline": UI_LAYOUT_BASELINES,
         "density": UI_DENSITIES,
         "semanticTokenPolicy": UI_SEMANTIC_TOKEN_POLICIES,
+        "designTokenStrategy": UI_DESIGN_TOKEN_STRATEGIES,
+        "designTokenTemplateId": UI_DESIGN_TOKEN_TEMPLATE_IDS,
+        "designTokenMergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES,
+        "designTokenDuplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiState": UI_REQUIRED_STATES,
         "knownReferenceIds": known_ui_reference_ids()
@@ -129,6 +148,20 @@ pub fn ui_quality_contract_shape() -> Value {
             "referenceIds": ["known uix reference id"],
             "loadMode": "skill_reference_by_id"
         },
+        "designTokenAssetPlan": {
+            "strategy": UI_DESIGN_TOKEN_STRATEGIES.join(" | "),
+            "templateId": "known design token template id or null",
+            "targetFiles": ["project-relative path"],
+            "existingStyleEvidence": {
+                "tailwindConfigRefs": ["project-relative path"],
+                "tokenFileRefs": ["project-relative path"],
+                "globalStyleRefs": ["project-relative path"],
+                "componentThemeRefs": ["project-relative path"],
+                "summary": "string"
+            },
+            "mergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES.join(" | "),
+            "duplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES.join(" | ")
+        },
         "forbiddenUserVisibleContent": [UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | ")],
         "requiredUiStates": [{
             "state": UI_REQUIRED_STATES.join(" | "),
@@ -148,6 +181,7 @@ pub fn build_ui_quality_seed(
     let required = frontend.map(|item| item.required).unwrap_or(false);
     let primary_scenario = infer_primary_scenario(frontend, baseline);
     let stack_refs = infer_stack_reference_ids(baseline);
+    let design_token_seed = design_token_asset_seed(baseline);
     let mut required_reference_ids = UI_CORE_REFERENCE_IDS
         .iter()
         .map(|item| (*item).to_string())
@@ -171,9 +205,10 @@ pub fn build_ui_quality_seed(
         "semanticTokenPolicy": "semantic_tokens_required",
         "requiredReferenceIds": required_reference_ids,
         "stackReferenceCandidates": stack_refs,
+        "designTokenAssetPlan": design_token_seed,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": UI_REQUIRED_STATES,
-        "selectionRule": "Pick one scenarioKind from scenarioCandidates. Keep requiredReferenceIds in referenceProfile.referenceIds, add only known ids from enumRefs.uiQuality. Do not expose runtime commands, stack explanations, progress notes, verification instructions, or Loom/internal workflow terms in user-visible UI."
+        "selectionRule": "Pick one scenarioKind from scenarioCandidates. Keep requiredReferenceIds in referenceProfile.referenceIds, add only known ids from enumRefs.uiQuality. Preserve or extend existing project token/theme files before creating new token assets. Use designTokenAssetPlan to choose the token strategy and template id; never copy template text into the request artifact. Do not expose runtime commands, stack explanations, progress notes, verification instructions, or Loom/internal workflow terms in user-visible UI."
     })
 }
 
@@ -220,6 +255,10 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
                 )))
                 .collect()
         });
+    let design_token_asset_plan = ui_quality_seed
+        .get("designTokenAssetPlan")
+        .cloned()
+        .unwrap_or_else(default_design_token_asset_plan);
 
     json!({
         "scenario": {
@@ -236,6 +275,7 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
             "referenceIds": reference_ids,
             "loadMode": "skill_reference_by_id"
         },
+        "designTokenAssetPlan": design_token_asset_plan,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": [
             {
@@ -380,6 +420,7 @@ pub fn validate_ui_quality_contract(frontend_experience: &Value) -> Vec<RepairIs
         "UI_QUALITY_FORBIDDEN_CONTENT_INVALID",
         &mut issues,
     );
+    validate_design_token_asset_plan(contract, &mut issues);
     validate_required_ui_states(contract, &mut issues);
     validate_business_rules(contract, &mut issues);
     issues
@@ -637,6 +678,85 @@ fn infer_stack_reference_ids(baseline: Option<&TechnicalBaselineContract>) -> Ve
     refs
 }
 
+fn design_token_asset_seed(baseline: Option<&TechnicalBaselineContract>) -> Value {
+    let stack = baseline
+        .map(|item| item.stack.to_string().to_lowercase())
+        .unwrap_or_default();
+    if contains_any(
+        &stack,
+        &[
+            "tailwind",
+            "shadcn",
+            "@tailwind",
+            "daisyui",
+            "nuxt tailwind",
+        ],
+    ) {
+        json!({
+            "strategy": "create_tailwind_tokens",
+            "templateId": "uix.templates.tokens-tailwind",
+            "targetFiles": ["tailwind.config.js"],
+            "existingStyleEvidence": empty_style_evidence("No repository style evidence is available in the seed. During architecture, inspect RepositoryContext and project files; switch to reuse_existing or extend_existing when existing token/theme assets are found."),
+            "mergePolicy": "preserve_existing_project_tokens",
+            "duplicationPolicy": "do_not_create_parallel_token_system",
+            "selectionRule": "If an existing Tailwind config or theme exists, extend it in place and preserve content, plugins, presets, and existing theme keys. Enable optional plugins only when the project already depends on them."
+        })
+    } else if contains_any(
+        &stack,
+        &[
+            "react native",
+            "flutter",
+            "swift",
+            "kotlin",
+            "ios",
+            "android",
+            "native",
+        ],
+    ) {
+        json!({
+            "strategy": "not_applicable",
+            "templateId": Value::Null,
+            "targetFiles": [],
+            "existingStyleEvidence": empty_style_evidence("Native mobile stacks should use the platform or existing app theme. CSS/Tailwind token templates are not directly applicable."),
+            "mergePolicy": "preserve_existing_project_tokens",
+            "duplicationPolicy": "do_not_create_parallel_token_system",
+            "selectionRule": "Use the platform theme or existing native design tokens; do not create web CSS/Tailwind token assets for native-only surfaces."
+        })
+    } else {
+        json!({
+            "strategy": "create_css_tokens",
+            "templateId": "uix.templates.tokens-css",
+            "targetFiles": ["src/styles/tokens.css"],
+            "existingStyleEvidence": empty_style_evidence("No repository style evidence is available in the seed. During architecture, inspect RepositoryContext and project files; switch to reuse_existing or extend_existing when existing token/theme assets are found."),
+            "mergePolicy": "preserve_existing_project_tokens",
+            "duplicationPolicy": "do_not_create_parallel_token_system",
+            "selectionRule": "If an existing tokens.css, theme.css, variables.css, globals.css, or component-library theme exists, extend it in place instead of creating a parallel token file."
+        })
+    }
+}
+
+fn default_design_token_asset_plan() -> Value {
+    json!({
+        "strategy": "create_css_tokens",
+        "templateId": "uix.templates.tokens-css",
+        "targetFiles": ["src/styles/tokens.css"],
+        "existingStyleEvidence": empty_style_evidence("No design token evidence was supplied."),
+        "mergePolicy": "preserve_existing_project_tokens",
+        "duplicationPolicy": "do_not_create_parallel_token_system",
+        "selectionRule": "Preserve or extend existing project token/theme files before creating new token assets."
+    })
+}
+
+fn empty_style_evidence(summary: &str) -> Value {
+    json!({
+        "tailwindConfigRefs": [],
+        "tokenFileRefs": [],
+        "globalStyleRefs": [],
+        "componentThemeRefs": [],
+        "summary": summary
+    })
+}
+
 fn ui_haystack(
     frontend: Option<&FrontendExperience>,
     baseline: Option<&TechnicalBaselineContract>,
@@ -789,6 +909,183 @@ fn validate_required_string_array(
     }
 }
 
+fn validate_design_token_asset_plan(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(plan) = contract.get("designTokenAssetPlan") else {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_ASSET_PLAN_REQUIRED",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan",
+            "uiQualityContract requires designTokenAssetPlan so semantic tokens are planned as concrete assets instead of page-local styles.",
+        ));
+        return;
+    };
+    if !plan.is_object() {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_ASSET_PLAN_INVALID",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan",
+            "designTokenAssetPlan must be an object.",
+        ));
+        return;
+    }
+    require_string_in(
+        plan,
+        "/strategy",
+        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.strategy",
+        &UI_DESIGN_TOKEN_STRATEGIES,
+        "UI_QUALITY_TOKEN_ASSET_STRATEGY_INVALID",
+        issues,
+    );
+    require_string_in(
+        plan,
+        "/mergePolicy",
+        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.mergePolicy",
+        &UI_DESIGN_TOKEN_MERGE_POLICIES,
+        "UI_QUALITY_TOKEN_ASSET_MERGE_POLICY_INVALID",
+        issues,
+    );
+    require_string_in(
+        plan,
+        "/duplicationPolicy",
+        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.duplicationPolicy",
+        &UI_DESIGN_TOKEN_DUPLICATION_POLICIES,
+        "UI_QUALITY_TOKEN_ASSET_DUPLICATION_POLICY_INVALID",
+        issues,
+    );
+    validate_design_token_template_id(plan, issues);
+    validate_design_token_target_files(plan, issues);
+    validate_design_token_style_evidence(plan, issues);
+}
+
+fn validate_design_token_template_id(plan: &Value, issues: &mut Vec<RepairIssue>) {
+    let strategy = plan
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let template = plan.get("templateId").unwrap_or(&Value::Null);
+    match strategy {
+        "create_css_tokens" => {
+            if template.as_str() != Some("uix.templates.tokens-css") {
+                issues.push(issue(
+                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
+                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
+                    "create_css_tokens requires templateId=uix.templates.tokens-css.",
+                ));
+            }
+        }
+        "create_tailwind_tokens" => {
+            if template.as_str() != Some("uix.templates.tokens-tailwind") {
+                issues.push(issue(
+                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
+                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
+                    "create_tailwind_tokens requires templateId=uix.templates.tokens-tailwind.",
+                ));
+            }
+        }
+        "reuse_existing" | "not_applicable" => {
+            if !template.is_null() {
+                issues.push(issue(
+                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
+                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
+                    "reuse_existing and not_applicable require templateId=null.",
+                ));
+            }
+        }
+        "extend_existing" => {
+            if !(template.is_null()
+                || template.as_str().is_some_and(|id| {
+                    UI_DESIGN_TOKEN_TEMPLATE_IDS
+                        .iter()
+                        .any(|known| known == &id)
+                }))
+            {
+                issues.push(issue(
+                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
+                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
+                    "extend_existing templateId must be null or a known UIX token template id.",
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_design_token_target_files(plan: &Value, issues: &mut Vec<RepairIssue>) {
+    let strategy = plan
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(items) = plan.get("targetFiles").and_then(Value::as_array) else {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_TARGET_FILES_INVALID",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles",
+            "designTokenAssetPlan.targetFiles must be an array.",
+        ));
+        return;
+    };
+    if strategy != "not_applicable" && items.is_empty() {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_TARGET_FILES_REQUIRED",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles",
+            "designTokenAssetPlan.targetFiles must list the token/theme files to reuse, extend, or create.",
+        ));
+    }
+    if strategy == "not_applicable" && !items.is_empty() {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_TARGET_FILES_INVALID",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles",
+            "not_applicable designTokenAssetPlan must leave targetFiles empty.",
+        ));
+    }
+    for (index, item) in items.iter().enumerate() {
+        if item.as_str().map(str::trim).unwrap_or_default().is_empty() {
+            issues.push(issue(
+                "UI_QUALITY_TOKEN_TARGET_FILES_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles[{index}]"),
+                "targetFiles entries must be non-empty project-relative paths.",
+            ));
+        }
+    }
+}
+
+fn validate_design_token_style_evidence(plan: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(evidence) = plan.get("existingStyleEvidence") else {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_STYLE_EVIDENCE_REQUIRED",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence",
+            "designTokenAssetPlan must include compact existingStyleEvidence so agents know whether to reuse, extend, or create token assets.",
+        ));
+        return;
+    };
+    if !evidence.is_object() {
+        issues.push(issue(
+            "UI_QUALITY_TOKEN_STYLE_EVIDENCE_INVALID",
+            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence",
+            "existingStyleEvidence must be an object.",
+        ));
+        return;
+    }
+    for key in [
+        "tailwindConfigRefs",
+        "tokenFileRefs",
+        "globalStyleRefs",
+        "componentThemeRefs",
+    ] {
+        if !evidence.get(key).is_some_and(Value::is_array) {
+            issues.push(issue(
+                "UI_QUALITY_TOKEN_STYLE_EVIDENCE_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.{key}"),
+                "existingStyleEvidence ref fields must be arrays.",
+            ));
+        }
+    }
+    require_non_empty_string(
+        evidence,
+        "/summary",
+        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary",
+        "UI_QUALITY_TOKEN_STYLE_EVIDENCE_SUMMARY_REQUIRED",
+        issues,
+    );
+}
+
 fn validate_required_ui_states(contract: &Value, issues: &mut Vec<RepairIssue>) {
     let Some(items) = contract.get("requiredUiStates").and_then(Value::as_array) else {
         issues.push(issue(
@@ -926,7 +1223,10 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::{build_ui_quality_seed, known_ui_reference_ids, UI_CORE_REFERENCE_IDS};
+    use super::{
+        build_ui_quality_seed, known_ui_reference_ids, UI_CORE_REFERENCE_IDS,
+        UI_DESIGN_TOKEN_TEMPLATE_IDS,
+    };
 
     #[test]
     fn known_ui_reference_ids_resolve_to_shared_reference_files() {
@@ -959,6 +1259,22 @@ mod tests {
             assert!(
                 reference_ids.contains(reference_id),
                 "uiQualitySeed.requiredReferenceIds must include {reference_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn known_ui_token_template_ids_resolve_to_shared_template_files() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        for template_id in UI_DESIGN_TOKEN_TEMPLATE_IDS {
+            let relative = template_file_for_id(template_id);
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(relative);
+            assert!(
+                path.exists(),
+                "UIX template id {template_id} must resolve to {}",
+                path.display()
             );
         }
     }
@@ -1007,5 +1323,13 @@ mod tests {
             }
         }
         panic!("unknown UIX reference id prefix: {reference_id}");
+    }
+
+    fn template_file_for_id(template_id: &str) -> &'static str {
+        match template_id {
+            "uix.templates.tokens-css" => "templates/tokens.css.tpl",
+            "uix.templates.tokens-tailwind" => "templates/tokens.tailwind.tpl",
+            _ => panic!("unknown UIX token template id: {template_id}"),
+        }
     }
 }

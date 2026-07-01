@@ -507,6 +507,21 @@ pub struct FrontendQualityForbiddenContentCheck {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendDesignTokenEvidence {
+    pub strategy_used: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_id_used: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub token_asset_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub token_consumer_files: Vec<String>,
+    pub existing_token_system_reused: bool,
+    pub parallel_token_system_created: bool,
+    pub merge_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendQualitySelfCheck {
     pub status: String,
     pub scenario_kind: String,
@@ -518,6 +533,8 @@ pub struct FrontendQualitySelfCheck {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub business_ui_rules_checked: Vec<FrontendQualityBusinessRuleCheck>,
     pub forbidden_content_check: FrontendQualityForbiddenContentCheck,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_gaps: Vec<String>,
     pub summary: String,

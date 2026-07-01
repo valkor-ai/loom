@@ -2374,6 +2374,49 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
+            let token_plan = ui_quality_contract
+                .get("designTokenAssetPlan")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let token_evidence = self_check
+                .get("designTokenEvidence")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let token_strategy = token_plan
+                .get("strategy")
+                .and_then(Value::as_str)
+                .unwrap_or("not_applicable");
+            let token_strategy_matches = token_evidence
+                .get("strategyUsed")
+                .and_then(Value::as_str)
+                == Some(token_strategy);
+            let token_template_matches =
+                token_evidence.get("templateIdUsed").unwrap_or(&Value::Null)
+                    == token_plan.get("templateId").unwrap_or(&Value::Null);
+            let token_asset_file_count = token_evidence
+                .get("tokenAssetFiles")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            let token_consumer_file_count = token_evidence
+                .get("tokenConsumerFiles")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0);
+            let parallel_token_system_created = token_evidence
+                .get("parallelTokenSystemCreated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let token_merge_summary_present = token_evidence
+                .get("mergeSummary")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|summary| !summary.is_empty());
+            let token_asset_satisfied = token_strategy_matches
+                && token_template_matches
+                && !parallel_token_system_created
+                && (token_strategy == "not_applicable"
+                    || (token_asset_file_count > 0 && token_merge_summary_present));
             let known_gap_count = self_check
                 .get("knownGaps")
                 .and_then(Value::as_array)
@@ -2394,6 +2437,7 @@ fn build_frontend_quality_review_matrix(
                 && missing_reference_ids.is_empty()
                 && missing_ui_states.is_empty()
                 && missing_business_ui_rule_ids.is_empty()
+                && token_asset_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
@@ -2408,6 +2452,17 @@ fn build_frontend_quality_review_matrix(
                 "missingReferenceIds": missing_reference_ids,
                 "missingUiStates": missing_ui_states,
                 "missingBusinessUiRuleIds": missing_business_ui_rule_ids,
+                "designTokenAsset": {
+                    "strategy": token_strategy,
+                    "templateId": token_plan.get("templateId").cloned().unwrap_or(Value::Null),
+                    "strategyMatches": token_strategy_matches,
+                    "templateMatches": token_template_matches,
+                    "tokenAssetFileCount": token_asset_file_count,
+                    "tokenConsumerFileCount": token_consumer_file_count,
+                    "mergeSummaryPresent": token_merge_summary_present,
+                    "parallelTokenSystemCreated": parallel_token_system_created,
+                    "satisfied": token_asset_satisfied
+                },
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
                 "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" }
@@ -2802,6 +2857,32 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
+        "designTokenEvidence": self_check
+            .get("designTokenEvidence")
+            .map(|evidence| json!({
+                "strategyUsed": evidence.get("strategyUsed").cloned().unwrap_or(Value::Null),
+                "templateIdUsed": evidence.get("templateIdUsed").cloned().unwrap_or(Value::Null),
+                "tokenAssetFileCount": evidence
+                    .get("tokenAssetFiles")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "tokenConsumerFileCount": evidence
+                    .get("tokenConsumerFiles")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "parallelTokenSystemCreated": evidence
+                    .get("parallelTokenSystemCreated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "mergeSummaryPresent": evidence
+                    .get("mergeSummary")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|summary| !summary.is_empty())
+            }))
+            .unwrap_or(Value::Null),
         "forbiddenViolationCount": self_check
             .pointer("/forbiddenContentCheck/violations")
             .and_then(Value::as_array)

@@ -14,6 +14,8 @@ When the request includes `uiQualityContract.referenceProfile.referenceIds`, loa
 | `uix.tokens.*` | `references/uix/tokens/` | Defines semantic color, typography, spacing, grid, radius, elevation, and motion decisions. |
 | `uix.scenarios.*` | `references/uix/scenarios/` | Defines surface layout, density, navigation, component, and state expectations for a product scenario. |
 | `uix.stacks.*` | `references/uix/stacks/` | Defines framework-specific implementation patterns without changing the product contract. |
+| `uix.templates.tokens-css` | `references/uix/templates/tokens.css.tpl` | Token asset baseline for CSS variable systems. Load only when `uiQualityContract.designTokenAssetPlan.templateId` selects it. |
+| `uix.templates.tokens-tailwind` | `references/uix/templates/tokens.tailwind.tpl` | Token asset baseline for Tailwind theme extension. Load only when `uiQualityContract.designTokenAssetPlan.templateId` selects it. |
 
 Do not load unrelated UI skills. Do not copy reference text into task results. Cite reference ids in `frontendQualitySelfCheck.referenceIdsChecked`, then provide concrete evidence from the implemented UI.
 
@@ -54,6 +56,7 @@ Every production UI surface must establish these decisions before implementation
 - Keep the contract field-level and operational. Do not store large prose blobs or duplicate the full frontend model inside the UI contract.
 - The selected scenario reference must explain page structure. Token references must explain how the visual system is made. Stack references must explain how to implement it in the detected framework.
 - Frontend sections must reject product-boundary leakage: runtime commands, stack explanations, Loom/MCP terms, verification instructions, and delivery progress do not belong in the product UI.
+- `designTokenAssetPlan` selects whether to reuse, extend, or create token assets. When it contains a `templateId`, read the matching template file as a baseline, adapt it to the project stack and existing theme, and record only file/evidence facts in the result.
 
 ## Task Planning
 
@@ -72,6 +75,7 @@ Do not attach UI baseline requirements to backend-only tasks, schema-only tasks,
 - Implement state coverage next to the component that needs it. A global spinner or generic toast is not enough for forms, tables, destructive actions, or business blocks.
 - Keep command examples, verification notes, local ports, framework names, and delivery progress out of the product screen unless the product itself is a developer/runtime tool.
 - Use existing project conventions first: component library, router, data fetching, CSS approach, icons, tokens, and lint/test setup. Add new primitives only when the repo lacks a safe equivalent.
+- Apply `designTokenAssetPlan` before page-level styling: reuse or extend existing token/theme files first; create `targetFiles` only when no compatible token asset exists. Do not create a second token system beside an existing one.
 - Use icons for compact tool actions when the icon meaning is standard. Pair icon-only controls with accessible labels and tooltips when needed.
 
 ## Review
@@ -84,4 +88,4 @@ Classify UI defects as product defects when they affect:
 - Responsive behavior at required viewports.
 - Product-boundary leakage or demo-only filler.
 
-Task and review evidence should name changed screens/components, checked states, checked viewports, reference ids used, screenshot or Playwright evidence when available, and known manual-review gaps.
+Task and review evidence should name changed screens/components, checked states, checked viewports, reference ids used, token asset files changed/reused, screenshot or Playwright evidence when available, and known manual-review gaps.
