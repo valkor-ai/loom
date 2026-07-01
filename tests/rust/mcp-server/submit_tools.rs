@@ -3032,6 +3032,37 @@ fn task_result_submit_fills_single_intent_detail_verification_ids() {
 }
 
 #[test]
+fn task_result_submit_normalizes_invalid_no_change_reason_type() {
+    let fixture = Fixture::new("task-result-no-change-reason-type");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["noChangeReason"] = json!("verification task changed no files");
+    });
+
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(
+        accepted["next"]["artifactKind"],
+        json!("task_result_repair"),
+        "{accepted:#}"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+    let latest_result_ref =
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(latest_result_ref)).expect("read task result"),
+    )
+    .expect("parse persisted task result");
+    assert_eq!(persisted["noChangeReason"], Value::Null);
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);

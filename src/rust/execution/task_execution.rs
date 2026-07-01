@@ -523,6 +523,7 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         "If status is failed, failure is required.".to_string(),
         "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
+        "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
         "For completed or completed_with_notes results, every requirementDetailEvidence entry must include verificationIds that reference task.verificationIntents; do not leave verificationIds empty.".to_string(),
     ];
     if frontend_self_check_applies(task) {

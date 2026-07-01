@@ -580,7 +580,11 @@ fn normalize_task_result_machine_fields(
     {
         object.insert("changedFiles".to_string(), json!([]));
     }
-    if !object.contains_key("noChangeReason") {
+    if !object.contains_key("noChangeReason")
+        || !object
+            .get("noChangeReason")
+            .is_some_and(|value| value.is_null() || value.is_object())
+    {
         object.insert("noChangeReason".to_string(), Value::Null);
     }
     if !object.contains_key("selfRepairSummary") {
