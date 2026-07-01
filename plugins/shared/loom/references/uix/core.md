@@ -17,6 +17,18 @@ When the request includes `uiQualityContract.referenceProfile.referenceIds`, loa
 
 Do not load unrelated UI skills. Do not copy reference text into task results. Cite reference ids in `frontendQualitySelfCheck.referenceIdsChecked`, then provide concrete evidence from the implemented UI.
 
+## Reference Compression Rule
+
+Loom UIX references are not meant to be tiny summaries, and they are not meant to become a full copied design-code library. Keep the parts that change implementation behavior:
+
+- Keep scenario-specific layout skeletons, component anatomy, responsive breakpoints, state patterns, accessibility requirements, and verification expectations.
+- Keep compact code-like examples when they explain structure that agents commonly get wrong: app shell grids, sidebar/topbar behavior, table/detail composition, mobile collapse, sticky action regions, and scoped loading/error/empty states.
+- Keep examples semantic. Use token names such as `--surface`, `--border`, `--space-4`, and `--radius-md` instead of brand-specific final values.
+- Drop exhaustive component CSS, full template libraries, repeated variants, large brand palettes, decorative examples, and framework-specific boilerplate that belongs in stack references.
+- Drop examples that only demonstrate syntax and do not improve product quality.
+
+The target size is "operational reference": enough concrete structure for an agent to build a production surface, still small enough to be read only when the MCP contract selects that UIX reference id.
+
 ## Required UI Baseline
 
 Every production UI surface must establish these decisions before implementation:
