@@ -8,6 +8,16 @@ Load this file when a framework, component library, design system, or frontend s
 - Use the existing design tokens and component primitives where they exist. If none exist, keep the new system small and coherent.
 - Keep visual behavior close to framework idioms: server/client boundaries, hydration, Suspense/loading paths, route transitions, and error boundaries should match the stack.
 
+## Focused Stack References
+
+Load a focused stack reference when the MCP `referenceIds` asks for it or the task clearly uses that stack.
+
+- `uix.stacks.react` -> `references/uix/stacks/react.md`
+- `uix.stacks.vue` -> `references/uix/stacks/vue.md`
+- `uix.stacks.plain_html` -> `references/uix/stacks/plain-html.md`
+- `uix.stacks.native_mobile` -> `references/uix/stacks/native-mobile.md`
+- `uix.stacks.threejs` -> `references/uix/stacks/threejs.md`
+
 ## Web Frameworks
 
 - React/Next.js/Remix: preserve component boundaries, accessible semantics, loading/error routes, and client/server data ownership.

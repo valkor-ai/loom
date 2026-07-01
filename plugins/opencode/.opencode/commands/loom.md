@@ -54,6 +54,8 @@ UIX references:
 - `../references/loom/uix/content.md`: UX writing, labels, empty states, errors, CTAs, onboarding, or terminology.
 - `../references/loom/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
 - `../references/loom/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
+- `../references/loom/uix/anti-patterns.md`: product-boundary failures, demo-looking UI, and forbidden delivery/process content in product screens.
+- `../references/loom/uix/scenarios/*.md`, `../references/loom/uix/tokens/*.md`, and `../references/loom/uix/stacks/*.md`: load only when the MCP `referenceProfile.referenceIds` asks for a matching scenario, token, or stack reference.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 

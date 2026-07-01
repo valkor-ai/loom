@@ -591,6 +591,10 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "../references/loom/uix/content.md",
         "../references/loom/uix/data.md",
         "../references/loom/uix/verification.md",
+        "../references/loom/uix/anti-patterns.md",
+        "../references/loom/uix/scenarios/*.md",
+        "../references/loom/uix/tokens/*.md",
+        "../references/loom/uix/stacks/*.md",
         "writing or reviewing user-visible frontend artifacts",
         "forms, flows, search/filter, loading, empty, error, or recovery states",
         "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
@@ -855,6 +859,7 @@ impl Fixture {
 
     fn write_shared_references(&self) {
         for name in [
+            "anti-patterns",
             "content",
             "core",
             "data",
@@ -869,6 +874,38 @@ impl Fixture {
                     .package_root
                     .join(format!("plugins/shared/loom/references/uix/{name}.md")),
                 &format!("# {name} Reference\n"),
+            );
+        }
+        for path in [
+            "scenarios/admin-dashboard",
+            "scenarios/consumer-app",
+            "scenarios/corporate-site",
+            "scenarios/data-console",
+            "scenarios/developer-tool",
+            "scenarios/docs-site",
+            "scenarios/fintech-consumer-app",
+            "scenarios/fintech-workstation",
+            "scenarios/immersive-3d",
+            "scenarios/marketing-site",
+            "scenarios/mobile-native",
+            "scenarios/mobile-responsive",
+            "stacks/native-mobile",
+            "stacks/plain-html",
+            "stacks/react",
+            "stacks/threejs",
+            "stacks/vue",
+            "tokens/color-system",
+            "tokens/layout-grid",
+            "tokens/motion",
+            "tokens/radius-elevation",
+            "tokens/spacing",
+            "tokens/typography",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/references/uix/{path}.md")),
+                &format!("# {path} Reference\n"),
             );
         }
         for name in [

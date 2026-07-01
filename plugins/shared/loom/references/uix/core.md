@@ -2,6 +2,17 @@
 
 Load this file when a loom request includes `frontend_experience`, `frontendExperienceRequirement`, frontend review signals, or user-visible UI work. Loom request artifacts remain the source of truth; this reference only sharpens visual and interaction execution.
 
+## Reference Routing
+
+When the MCP request includes `executionGuidance.uiQuality.referenceProfile.referenceIds`, load only the matching focused references in addition to this core file.
+
+- `uix.anti_patterns` -> `references/uix/anti-patterns.md`
+- `uix.scenarios.*` -> the matching file under `references/uix/scenarios/`
+- `uix.tokens.*` -> the matching file under `references/uix/tokens/`
+- `uix.stacks.*` -> the matching file under `references/uix/stacks/`
+
+Do not load a second, unrelated UI skill or copy reference text into result artifacts. Reference files guide implementation; the MCP request remains the contract.
+
 ## Brainstorm
 
 - Capture the product surface in user language: main users, jobs-to-be-done, primary flows, navigation model, visual direction, interaction density, responsive targets, accessibility expectations, explicit must-not shapes, and whether success needs a business UI, verification UI, or no UI.
@@ -20,6 +31,8 @@ Load this file when a loom request includes `frontend_experience`, `frontendExpe
 - Do not ship a static happy-path mock when the contract expects an interactive workflow.
 - Make primary actions, destructive actions, navigation exits, and feedback states visible in the flow where users need them.
 - Keep forms, filters, tables, cards, charts, and navigation usable under realistic content length, missing data, and API failure.
+- Keep product UI separate from delivery process UI. Runtime commands, technical stack explanations, verification instructions, and delivery progress notes belong in TaskResult or documentation, not in the user's product screen unless the product itself is a developer/runtime tool.
+- For new frontend foundations, establish the app shell, semantic tokens, responsive layout rules, and reusable component boundaries before adding workflow-specific screens.
 
 ## Review
 
