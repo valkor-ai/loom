@@ -155,17 +155,7 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
         .requirement_detail_refs
         .iter()
         .map(|detail_id| {
-            let verification_ids = task
-                .verification_intents
-                .iter()
-                .filter(|intent| {
-                    intent
-                        .requirement_detail_refs
-                        .iter()
-                        .any(|id| id == detail_id)
-                })
-                .map(|intent| intent.verification_id.clone())
-                .collect::<Vec<_>>();
+            let verification_ids = template_verification_ids_for_detail(task, detail_id);
             json!({
                 "detailId": detail_id,
                 "status": "satisfied",
@@ -242,6 +232,27 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
         );
     }
     template
+}
+
+fn template_verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
+    let direct = task
+        .verification_intents
+        .iter()
+        .filter(|intent| {
+            intent
+                .requirement_detail_refs
+                .iter()
+                .any(|id| id == detail_id)
+        })
+        .map(|intent| intent.verification_id.clone())
+        .collect::<Vec<_>>();
+    if !direct.is_empty() {
+        return direct;
+    }
+    if task.verification_intents.len() == 1 {
+        return vec![task.verification_intents[0].verification_id.clone()];
+    }
+    Vec::new()
 }
 
 pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Vec<&'static str> {

@@ -787,7 +787,7 @@ fn normalize_requirement_detail_evidence_machine_fields(
         {
             item.insert("status".to_string(), json!("not_verified"));
         }
-        let detail_verification_ids = verification_ids_for_detail(task, detail_id);
+        let detail_verification_ids = verification_ids_for_detail_with_fallback(task, detail_id);
         if !detail_verification_ids.is_empty() {
             item.insert(
                 "verificationIds".to_string(),
@@ -1096,6 +1096,20 @@ fn verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<St
         })
         .map(|intent| intent.verification_id.clone())
         .collect()
+}
+
+fn verification_ids_for_detail_with_fallback(
+    task: &TaskDefinition,
+    detail_id: &str,
+) -> Vec<String> {
+    let direct = verification_ids_for_detail(task, detail_id);
+    if !direct.is_empty() {
+        return direct;
+    }
+    if task.verification_intents.len() == 1 {
+        return vec![task.verification_intents[0].verification_id.clone()];
+    }
+    Vec::new()
 }
 
 fn validate_concept_evidence(
