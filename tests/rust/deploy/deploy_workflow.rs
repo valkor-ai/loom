@@ -128,6 +128,21 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     assert!(compose.contains("    ports:\n"), "{compose}");
     let backend_block = compose_service_block(&compose, "backend").expect("backend compose block");
     assert!(!backend_block.contains("ports:"), "{backend_block}");
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(
+        frontend_dockerfile.contains("ENV VITE_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
 }
 
 #[test]
@@ -346,6 +361,21 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     assert!(
         compose.contains("      backend:\n        condition: service_healthy"),
         "{compose}"
+    );
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(
+        frontend_dockerfile.contains("ENV VITE_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
     );
 }
 

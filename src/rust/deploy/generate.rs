@@ -133,7 +133,8 @@ fn generate_static_frontend_dockerfile(
         })
         .into_iter()
         .collect::<Vec<_>>();
-    [
+    let frontend_build_env = frontend_proxy_build_env(service, spec);
+    let mut lines = vec![
         "FROM node:22-alpine AS builder".to_string(),
         "WORKDIR /workspace".to_string(),
         "COPY . .".to_string(),
@@ -142,6 +143,9 @@ fn generate_static_frontend_dockerfile(
             "RUN {}",
             install_command(package_manager, service.has_lockfile)
         ),
+    ];
+    lines.extend(frontend_build_env);
+    lines.extend([
         format!("RUN {build_command}"),
         "".to_string(),
         "FROM nginx:1.27-alpine AS runner".to_string(),
@@ -149,11 +153,43 @@ fn generate_static_frontend_dockerfile(
         format!("COPY --from=builder /workspace/{output_dir} /usr/share/nginx/html"),
         "EXPOSE 80".to_string(),
         "".to_string(),
+    ]);
+    lines.join("\n")
+}
+
+fn frontend_proxy_build_env(
+    service: &DeploymentSourceService,
+    spec: &DeploymentSpec,
+) -> Vec<String> {
+    let Some(api_base) = public_proxy_path_for_frontend(service, spec) else {
+        return vec![];
+    };
+    [
+        "VITE_API_BASE_URL",
+        "FRONTEND_API_BASE_URL",
+        "REACT_APP_API_BASE_URL",
+        "NEXT_PUBLIC_API_BASE_URL",
     ]
     .into_iter()
-    .filter(|line| !line.is_empty() || true)
-    .collect::<Vec<_>>()
-    .join("\n")
+    .map(|name| format!("ENV {name}={api_base}"))
+    .collect()
+}
+
+fn public_proxy_path_for_frontend(
+    service: &DeploymentSourceService,
+    spec: &DeploymentSpec,
+) -> Option<String> {
+    if service.service_id != spec.topology.public_entry_service_id {
+        return None;
+    }
+    spec.topology.routes.iter().find_map(|route| match route {
+        DeploymentRoute::HttpProxy {
+            public_path,
+            preserve_path: true,
+            ..
+        } => Some(public_path.clone()),
+        _ => None,
+    })
 }
 
 fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
