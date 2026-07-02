@@ -2308,8 +2308,10 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             "outputContract.frontendExperienceRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryClosureTaskTemplate".to_string(),
+            "outputContract.engineeringQualityRequirementTemplate".to_string(),
             "generationRules.runtimeDeliveryRules".to_string(),
             "generationRules.verificationEvidenceRules".to_string(),
+            "generationRules.engineeringQualityRules".to_string(),
         ],
     })
     .expect("read taskplan contract fields")
@@ -2408,6 +2410,26 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         serde_json::to_string(verification_rules).expect("serialize verification rules");
     assert!(verification_rules_text.contains("Every covered current-phase detailId"));
     assert!(verification_rules_text.contains("same parent task.requirementDetailRefs"));
+    let engineering_template =
+        &taskplan_contract_fields["outputContract.engineeringQualityRequirementTemplate"].value;
+    assert_eq!(
+        engineering_template["kind"],
+        json!("persistence_mapping"),
+        "{engineering_template:#}"
+    );
+    assert!(engineering_template["stackSignals"]
+        .as_object()
+        .expect("stackSignals")
+        .contains_key("persistence"));
+    assert_eq!(
+        engineering_template["taskRefRule"],
+        json!("Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task.")
+    );
+    let engineering_rules =
+        &taskplan_contract_fields["generationRules.engineeringQualityRules"].value;
+    assert!(engineering_rules["acceptNormalization"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("do not duplicate full quality requirements")));
     assert!(inspected
         .read_groups
         .iter()
@@ -3767,6 +3789,220 @@ fn taskplan_accept_normalizes_forbidden_paths_before_execution() {
         .expect("tasks")
         .iter()
         .all(|task| task["writeBoundary"]["forbiddenPaths"] == json!([".loom"])));
+}
+
+#[test]
+fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
+    let fixture = Fixture::new("taskplan-engineering-quality");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_with_persistence_quality(&fixture, taskplan_request_ref);
+
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_eq!(accepted["next"]["kind"], "execute_task");
+
+    let delivery_id = request_delivery_id(fixture.root_str(), taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let taskplan: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(taskplan_ref)).expect("read taskplan"),
+    )
+    .expect("parse taskplan");
+
+    let requirements = taskplan["engineeringQualityRequirements"]
+        .as_array()
+        .expect("engineering quality requirements");
+    assert_eq!(requirements.len(), 1, "{taskplan:#}");
+    let requirement = &requirements[0];
+    assert_eq!(
+        requirement["requirementId"],
+        json!("eqr-persistence-mapping-001")
+    );
+    assert_eq!(requirement["kind"], json!("persistence_mapping"));
+    assert_eq!(
+        requirement["appliesToTaskIds"],
+        json!(["task-backend-data-001", "task-backend-api-001"])
+    );
+    assert!(requirement["stackSignals"].get("persistence").is_some());
+    assert!(
+        requirement["stackSignals"].get("migrationTool").is_none(),
+        "absent migration tool must not be invented: {requirement:#}"
+    );
+    assert!(requirement["alignmentTargets"]
+        .as_array()
+        .expect("alignment targets")
+        .contains(&json!("storage_schema_field")));
+    assert!(requirement["riskFieldKinds"]
+        .as_array()
+        .expect("risk fields")
+        .contains(&json!("datetime")));
+
+    let tasks = taskplan["tasks"].as_array().expect("tasks");
+    let backend_data = tasks
+        .iter()
+        .find(|task| task["taskId"] == json!("task-backend-data-001"))
+        .expect("backend data task");
+    let backend_api = tasks
+        .iter()
+        .find(|task| task["taskId"] == json!("task-backend-api-001"))
+        .expect("backend api task");
+    let frontend = tasks
+        .iter()
+        .find(|task| task["taskId"] == json!("task-frontend-001"))
+        .expect("frontend task");
+    assert_eq!(
+        backend_data["engineeringQualityRequirementRefs"],
+        json!(["eqr-persistence-mapping-001"])
+    );
+    assert_eq!(
+        backend_api["engineeringQualityRequirementRefs"],
+        json!(["eqr-persistence-mapping-001"])
+    );
+    assert!(
+        frontend.get("engineeringQualityRequirementRefs").is_none(),
+        "pure frontend task must not receive persistence quality refs: {frontend:#}"
+    );
+
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+    })
+    .expect("inspect execution request");
+    let core_fields = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_core")
+        .expect("task execution core")
+        .expanded_fields();
+    assert!(core_fields.contains(&"task.engineeringQualityRequirementRefs".to_string()));
+    assert!(core_fields.contains(&"sourceContext.engineeringQualityRequirements".to_string()));
+    assert!(core_fields.contains(&"executionRules.engineeringQualityExecutionRules".to_string()));
+    assert!(!core_fields.contains(&"engineeringQualityRequirements".to_string()));
+
+    let core = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+        group_id: "task_execution_core".to_string(),
+    })
+    .expect("read task execution core")
+    .fields;
+    assert_eq!(
+        core["task.engineeringQualityRequirementRefs"].value,
+        json!(["eqr-persistence-mapping-001"])
+    );
+    assert_eq!(
+        core["sourceContext.engineeringQualityRequirements"].value[0]["appliesToTaskIds"],
+        json!(["task-backend-data-001", "task-backend-api-001"])
+    );
+    assert!(
+        core["executionRules.engineeringQualityExecutionRules"].value["implementationRules"]
+            .as_array()
+            .is_some_and(|rules| !rules.is_empty())
+    );
+}
+
+#[test]
+fn review_request_carries_engineering_quality_signals() {
+    let fixture = Fixture::new("review-engineering-quality");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_with_persistence_quality(&fixture, taskplan_request_ref);
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+
+    let mut execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    let mut review_request_ref = None;
+    for _ in 0..8 {
+        write_task_result_candidate(&fixture, &execution_request_ref);
+        let result = call_submit(
+            "loom.recordTaskResultFile",
+            &execution_request_ref,
+            fixture.root_str(),
+        );
+        assert_eq!(result["state"], "auto_runnable", "{result:#}");
+        if result["next"]["artifactKind"] == json!("review_result") {
+            review_request_ref = Some(
+                result["next"]["requestRef"]
+                    .as_str()
+                    .expect("review requestRef")
+                    .to_string(),
+            );
+            break;
+        }
+        assert_eq!(result["next"]["kind"], "execute_task", "{result:#}");
+        execution_request_ref = result["next"]["requestRef"]
+            .as_str()
+            .expect("next execution requestRef")
+            .to_string();
+    }
+    let review_request_ref = review_request_ref.expect("execution reaches review request");
+
+    let review_matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref,
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read review matrices")
+    .fields;
+    let matrix = review_matrices["engineeringQualityReviewMatrix"]
+        .value
+        .as_array()
+        .expect("engineering quality matrix");
+    assert_eq!(matrix.len(), 2, "{matrix:#?}");
+    assert!(matrix.iter().all(|item| {
+        item["requirementId"] == json!("eqr-persistence-mapping-001")
+            && item["kind"] == json!("persistence_mapping")
+            && item["qualitySatisfied"] == json!(true)
+            && item["passedVerificationSummaries"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+    }));
+    assert!(!matrix
+        .iter()
+        .any(|item| item["taskId"] == json!("task-frontend-001")));
+    let signals = review_matrices["outputContract.reviewSignals.items"]
+        .value
+        .as_array()
+        .expect("review signals");
+    assert!(signals.iter().any(|signal| {
+        signal["kind"] == json!("engineering_quality")
+            && signal["requirementId"] == json!("eqr-persistence-mapping-001")
+            && signal["qualitySatisfied"] == json!(true)
+    }));
 }
 
 #[test]
@@ -6303,6 +6539,8 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         fields: vec![
             "outputContract.runtimeDeliveryRequirementTemplate".to_string(),
             "outputContract.runtimeDeliveryClosureTaskTemplate".to_string(),
+            "outputContract.engineeringQualityRequirementTemplate".to_string(),
+            "generationRules.engineeringQualityRules".to_string(),
         ],
     })
     .expect("read taskplan repair runtime templates")
@@ -6316,6 +6554,15 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         repair_fields["outputContract.runtimeDeliveryClosureTaskTemplate"]
             .value
             .is_object()
+    );
+    assert_eq!(
+        repair_fields["outputContract.engineeringQualityRequirementTemplate"].value["kind"],
+        json!("persistence_mapping")
+    );
+    assert!(
+        repair_fields["generationRules.engineeringQualityRules"].value["acceptNormalization"]
+            .as_str()
+            .is_some_and(|rule| rule.contains("do not duplicate full quality requirements"))
     );
     let repair_inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
@@ -6364,6 +6611,11 @@ fn taskplan_repair_submit_replaces_taskplan_and_starts_new_run() {
         .iter()
         .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "outputContract.runtimeDeliveryRequirementTemplate"));
+    assert!(repair_inspected
+        .read_groups
+        .iter()
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
+        .any(|field| field == "outputContract.engineeringQualityRequirementTemplate"));
     assert!(!repair_inspected
         .read_groups
         .iter()
@@ -7552,6 +7804,276 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
         )
         .expect("write runtime closure group");
     }
+}
+
+fn write_taskplan_grouped_candidates_with_persistence_quality(
+    fixture: &Fixture,
+    request_ref: &str,
+) {
+    let request_root = read_request_root_value(fixture.root_str(), request_ref);
+    let request_id = request_root["requestId"].as_str().expect("requestId");
+    let delivery_id = request_root["deliveryId"].as_str().expect("deliveryId");
+    let phase_id = request_root["phaseId"].as_str().expect("phaseId");
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "allowedRefs.scopeRefs".to_string(),
+            "allowedRefs.acceptanceRefs".to_string(),
+            "allowedRefs.requirementDetailIds".to_string(),
+            "allowedRefs.moduleRefs".to_string(),
+            "allowedRefs.entityRefs".to_string(),
+            "allowedRefs.interfaceRefs".to_string(),
+            "allowedRefs.userFlowRefs".to_string(),
+            "allowedRefs.stateMachineRefs".to_string(),
+            "outputContract.outlineFile".to_string(),
+            "outputContract.groupFilePattern".to_string(),
+        ],
+    })
+    .expect("read taskplan persistence fields")
+    .fields;
+    let scope_id = fields["allowedRefs.scopeRefs"].value[0]
+        .as_str()
+        .expect("scope ref");
+    let acceptance_id = fields["allowedRefs.acceptanceRefs"].value[0]
+        .as_str()
+        .expect("acceptance ref");
+    let detail_id = fields["allowedRefs.requirementDetailIds"].value[0]
+        .as_str()
+        .expect("detail id");
+    let module_id = fields["allowedRefs.moduleRefs"].value[0]
+        .as_str()
+        .unwrap_or("module.account-service");
+    let entity_id = fields["allowedRefs.entityRefs"].value[0]
+        .as_str()
+        .unwrap_or("entity.account");
+    let interface_id = fields["allowedRefs.interfaceRefs"].value[0]
+        .as_str()
+        .unwrap_or("api.account.open");
+    let user_flow_id = fields["allowedRefs.userFlowRefs"].value[0]
+        .as_str()
+        .unwrap_or("flow.account-lifecycle");
+    let state_machine_id = fields["allowedRefs.stateMachineRefs"].value[0]
+        .as_str()
+        .unwrap_or("machine.account-status");
+    let outline_file = fields["outputContract.outlineFile"]
+        .value
+        .as_str()
+        .expect("outline file");
+    let group_pattern = fields["outputContract.groupFilePattern"]
+        .value
+        .as_str()
+        .expect("group file pattern");
+    let backend_group_id = "group-backend";
+    let frontend_group_id = "group-frontend";
+    let backend_data_task_id = "task-backend-data-001";
+    let backend_api_task_id = "task-backend-api-001";
+    let frontend_task_id = "task-frontend-001";
+    write_json_atomic(
+        &fixture.root.join(outline_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "taskPlanId": "taskplan-phase-1",
+            "groups": [
+                {
+                    "groupId": backend_group_id,
+                    "title": "Backend persistence and API",
+                    "objective": "Implement persisted backend capability.",
+                    "dependsOn": [],
+                    "scopeRefs": [scope_id],
+                    "acceptanceRefs": [acceptance_id],
+                    "taskIds": [backend_data_task_id, backend_api_task_id]
+                },
+                {
+                    "groupId": frontend_group_id,
+                    "title": "Frontend workflow",
+                    "objective": "Implement staff-facing UI workflow.",
+                    "dependsOn": [backend_group_id],
+                    "scopeRefs": [scope_id],
+                    "acceptanceRefs": [acceptance_id],
+                    "taskIds": [frontend_task_id]
+                }
+            ],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write taskplan outline");
+
+    let backend_group_file = group_pattern.replace("{groupId}", backend_group_id);
+    write_json_atomic(
+        &fixture.root.join(backend_group_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "group": {
+                "groupId": backend_group_id,
+                "title": "Backend persistence and API",
+                "objective": "Implement persisted backend capability.",
+                "dependsOn": [],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [backend_data_task_id, backend_api_task_id]
+            },
+            "tasks": [
+                {
+                    "taskId": backend_data_task_id,
+                    "groupId": backend_group_id,
+                    "title": "Implement persisted domain model",
+                    "taskKind": "data_model_increment",
+                    "implementationActions": [
+                        "create_or_update_entity",
+                        "create_or_update_persistence",
+                        "create_entity_migration",
+                        "create_entity_repository",
+                        "add_or_update_tests"
+                    ],
+                    "objective": "Create the persisted entity, schema or migration, repository mapping, and provider-backed tests.",
+                    "dependsOn": [],
+                    "scopeRefs": [scope_id],
+                    "acceptanceRefs": [acceptance_id],
+                    "requirementDetailRefs": [detail_id],
+                    "writeBoundary": {
+                        "forbiddenPaths": [".loom"],
+                        "artifactRefs": {
+                            "modules": [module_id],
+                            "entities": [entity_id],
+                            "interfaces": [],
+                            "userFlows": [],
+                            "stateMachines": [state_machine_id],
+                            "decisions": [],
+                            "risks": []
+                        }
+                    },
+                    "verificationIntents": [{
+                        "verificationId": "verify-backend-data-001",
+                        "acceptanceRefs": [acceptance_id],
+                        "requirementDetailRefs": [detail_id],
+                        "behavior": "Verify persisted fields, schema mapping, and repository readback with the selected provider.",
+                        "preferredEvidence": ["automated_test"],
+                        "acceptableEvidence": ["automated_test", "manual_command_output"]
+                    }],
+                    "conceptRefs": [],
+                    "conceptResponsibilities": [],
+                    "conceptVerificationIntents": []
+                },
+                {
+                    "taskId": backend_api_task_id,
+                    "groupId": backend_group_id,
+                    "title": "Implement persisted API behavior",
+                    "taskKind": "interface_increment",
+                    "implementationActions": [
+                        "create_or_update_interface",
+                        "create_or_update_business_rule",
+                        "wire_reference_in_api_or_ui",
+                        "add_or_update_tests"
+                    ],
+                    "objective": "Expose create/list/detail API behavior on top of the persisted entity.",
+                    "dependsOn": [backend_data_task_id],
+                    "scopeRefs": [scope_id],
+                    "acceptanceRefs": [acceptance_id],
+                    "requirementDetailRefs": [detail_id],
+                    "writeBoundary": {
+                        "forbiddenPaths": [".loom"],
+                        "artifactRefs": {
+                            "modules": [module_id],
+                            "entities": [entity_id],
+                            "interfaces": [interface_id],
+                            "userFlows": [],
+                            "stateMachines": [state_machine_id],
+                            "decisions": [],
+                            "risks": []
+                        }
+                    },
+                    "verificationIntents": [{
+                        "verificationId": "verify-backend-api-001",
+                        "acceptanceRefs": [acceptance_id],
+                        "requirementDetailRefs": [detail_id],
+                        "behavior": "Verify API DTOs, validation errors, persisted create/read behavior, and query fields stay aligned.",
+                        "preferredEvidence": ["automated_test"],
+                        "acceptableEvidence": ["automated_test", "runtime_api_check"]
+                    }],
+                    "conceptRefs": [],
+                    "conceptResponsibilities": [],
+                    "conceptVerificationIntents": []
+                }
+            ],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write backend taskplan group");
+
+    let frontend_requirement_template =
+        frontend_requirement_template_from_taskplan_request(fixture, request_ref);
+    let frontend_group_file = group_pattern.replace("{groupId}", frontend_group_id);
+    write_json_atomic(
+        &fixture.root.join(frontend_group_file),
+        &json!({
+            "schemaVersion": "1.0",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "status": "ready",
+            "group": {
+                "groupId": frontend_group_id,
+                "title": "Frontend workflow",
+                "objective": "Implement staff-facing UI workflow.",
+                "dependsOn": [backend_group_id],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "taskIds": [frontend_task_id]
+            },
+            "tasks": [{
+                "taskId": frontend_task_id,
+                "groupId": frontend_group_id,
+                "title": "Implement frontend workflow",
+                "taskKind": "ui_flow_increment",
+                "implementationActions": [
+                    "create_or_update_ui_flow",
+                    "wire_reference_in_api_or_ui",
+                    "implement_frontend_experience_contract",
+                    "add_or_update_tests"
+                ],
+                "objective": "Implement the staff-facing workflow UI and bind it to the backend API.",
+                "dependsOn": [backend_api_task_id],
+                "scopeRefs": [scope_id],
+                "acceptanceRefs": [acceptance_id],
+                "requirementDetailRefs": [detail_id],
+                "writeBoundary": {
+                    "forbiddenPaths": [".loom"],
+                    "artifactRefs": {
+                        "modules": [module_id],
+                        "entities": [entity_id],
+                        "interfaces": [interface_id],
+                        "userFlows": [user_flow_id],
+                        "stateMachines": [state_machine_id],
+                        "decisions": [],
+                        "risks": []
+                    }
+                },
+                "verificationIntents": [{
+                    "verificationId": "verify-frontend-001",
+                    "acceptanceRefs": [acceptance_id],
+                    "requirementDetailRefs": [detail_id],
+                    "behavior": "Verify the UI displays the workflow, submits the action, and shows success or blocking feedback.",
+                    "preferredEvidence": ["static_check"],
+                    "acceptableEvidence": ["static_check", "runtime_api_check"]
+                }],
+                "frontendExperienceRequirement": frontend_requirement_template,
+                "conceptRefs": [],
+                "conceptResponsibilities": [],
+                "conceptVerificationIntents": []
+            }],
+            "createdAt": "2026-06-24T10:00:00+08:00"
+        }),
+    )
+    .expect("write frontend taskplan group");
 }
 
 fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, request_ref: &str) {

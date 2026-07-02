@@ -5,11 +5,11 @@ use std::{
 
 use contracts::{
     ui_quality_enum_refs, AcceptancePriority, ArchitectureArtifactContract, CoverageStatus,
-    ImplementationAction, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
-    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
-    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus, VerificationEvidence,
+    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskGroupRunState,
+    TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction,
+    TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary, TaskPlanScopeSnapshot,
+    TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -238,6 +238,7 @@ fn build_request_root(
         runtime_delivery_requirement_template(aac.runtime_delivery.as_ref());
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
+    let engineering_quality_template = engineering_quality_requirement_template(baseline);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
@@ -283,6 +284,10 @@ fn build_request_root(
         output_contract["frontendExperienceRequirementTemplate"] =
             frontend_requirement_template.clone();
     }
+    if !engineering_quality_template.is_null() {
+        output_contract["engineeringQualityRequirementTemplate"] =
+            engineering_quality_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -311,7 +316,8 @@ fn build_request_root(
                 &source_refs,
                 &frontend_requirement_template,
                 &runtime_requirement_template,
-                &runtime_closure_template
+                &runtime_closure_template,
+                &engineering_quality_template
             )
         }
     })
@@ -349,6 +355,7 @@ fn taskplan_read_groups(
     frontend_requirement_template: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
+    engineering_quality_template: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.technicalBaselineRef",
@@ -368,6 +375,7 @@ fn taskplan_read_groups(
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
         "contextProjection.architectureArtifactContractId",
+        "contextProjection.technicalBaseline.stack",
         "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
         "contextProjection.requirementDetailTransfer.currentPhaseScope",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
@@ -411,7 +419,8 @@ fn taskplan_read_groups(
                 "generationRules.conceptGroundingRules",
                 "generationRules.frontendExperienceRules",
                 "generationRules.workflowClosureRules",
-                "generationRules.runtimeDeliveryRules"
+                "generationRules.runtimeDeliveryRules",
+                "generationRules.engineeringQualityRules"
             ])
         }),
         json!({
@@ -422,7 +431,8 @@ fn taskplan_read_groups(
             "selectors": read_selectors_value_from_paths(taskplan_candidate_contract_fields(
                 frontend_requirement_template,
                 runtime_requirement_template,
-                runtime_closure_template
+                runtime_closure_template,
+                engineering_quality_template
             ))
         }),
     ];
@@ -433,6 +443,7 @@ fn taskplan_candidate_contract_fields(
     frontend_requirement_template: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
+    engineering_quality_template: &Value,
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
@@ -453,6 +464,9 @@ fn taskplan_candidate_contract_fields(
     }
     if !runtime_closure_template.is_null() {
         fields.push("outputContract.runtimeDeliveryClosureTaskTemplate");
+    }
+    if !engineering_quality_template.is_null() {
+        fields.push("outputContract.engineeringQualityRequirementTemplate");
     }
     fields
 }
@@ -691,6 +705,8 @@ where
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
+    let engineering_quality_requirements =
+        normalize_engineering_quality_requirements(&baseline, &mut tasks);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -759,6 +775,7 @@ where
         },
         groups,
         tasks,
+        engineering_quality_requirements,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -2661,8 +2678,314 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement exactly from that template.",
             "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
             "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
+        },
+        "engineeringQualityRules": {
+            "persistenceMappingRequirementSource": "outputContract.engineeringQualityRequirementTemplate",
+            "appliesWhen": "Use this only when the task creates or changes persistence, entities, migrations, repositories, or backend API/business logic that reads or mutates persisted entities.",
+            "notFor": "Do not attach persistence mapping requirements to pure frontend UI tasks, even when they call APIs.",
+            "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level engineeringQualityRequirements and task engineeringQualityRequirementRefs; do not duplicate full quality requirements inside every task.",
+            "taskPlanningRule": "For applicable tasks, verificationIntents should prove storage schema, data-access mapping, DTO/API contract, query/sort/filter fields, and same-provider persistence behavior stay aligned."
         }
     })
+}
+
+fn engineering_quality_requirement_template(
+    baseline: &contracts::TechnicalBaselineContract,
+) -> Value {
+    let stack_signals = stack_signals_from_baseline(&baseline.stack);
+    if !has_persistence_quality_signal(&stack_signals) {
+        return Value::Null;
+    }
+    json!({
+        "requirementId": "eqr-persistence-mapping-001",
+        "kind": "persistence_mapping",
+        "stackSignals": stack_signals,
+        "alignmentTargets": persistence_alignment_targets(),
+        "riskFieldKinds": persistence_risk_field_kinds(),
+        "verificationObligations": persistence_verification_obligations(),
+        "taskRefRule": "Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task."
+    })
+}
+
+fn normalize_engineering_quality_requirements(
+    baseline: &contracts::TechnicalBaselineContract,
+    tasks: &mut [TaskDefinition],
+) -> Vec<EngineeringQualityRequirement> {
+    let stack_signals = stack_signals_from_baseline(&baseline.stack);
+    if !has_persistence_quality_signal(&stack_signals) {
+        for task in tasks {
+            task.engineering_quality_requirement_refs.clear();
+        }
+        return vec![];
+    }
+    let applies_to_task_ids = persistence_quality_task_ids(tasks);
+    let requirement_id = "eqr-persistence-mapping-001".to_string();
+    let applies_set = applies_to_task_ids.iter().cloned().collect::<BTreeSet<_>>();
+    for task in tasks {
+        task.engineering_quality_requirement_refs = if applies_set.contains(&task.task_id) {
+            vec![requirement_id.clone()]
+        } else {
+            vec![]
+        };
+    }
+    if applies_to_task_ids.is_empty() {
+        return vec![];
+    }
+    vec![EngineeringQualityRequirement {
+        requirement_id,
+        kind: "persistence_mapping".to_string(),
+        applies_to_task_ids,
+        stack_signals,
+        alignment_targets: persistence_alignment_targets(),
+        risk_field_kinds: persistence_risk_field_kinds(),
+        verification_obligations: persistence_verification_obligations(),
+    }]
+}
+
+fn stack_signals_from_baseline(stack: &Value) -> BTreeMap<String, String> {
+    let mut signals = BTreeMap::new();
+    for (signal, track) in [
+        ("web", "web"),
+        ("backend", "backend"),
+        ("persistence", "persistence"),
+        ("dataAccess", "dataAccess"),
+        ("externalServices", "externalServices"),
+        ("migrationTool", "migrationTool"),
+        ("testDatabase", "testDatabase"),
+    ] {
+        if let Some(value) = stack_track_selection(stack, track) {
+            signals.insert(signal.to_string(), value);
+        }
+    }
+    for (signal, keys) in [
+        ("backend", &["backend", "server", "api"][..]),
+        (
+            "persistence",
+            &["persistence", "database", "databaseProvider", "db"][..],
+        ),
+        ("dataAccess", &["dataAccess", "orm", "data_access"][..]),
+        (
+            "migrationTool",
+            &["migrationTool", "migration", "migrations"][..],
+        ),
+        (
+            "testDatabase",
+            &["testDatabase", "testDb", "test_database"][..],
+        ),
+    ] {
+        if signals.contains_key(signal) {
+            continue;
+        }
+        if let Some(value) = first_stack_string_for_keys(stack, keys) {
+            signals.insert(signal.to_string(), value);
+        }
+    }
+    signals
+}
+
+fn stack_track_selection(stack: &Value, track: &str) -> Option<String> {
+    let track_value = stack.get("tracks")?.get(track)?;
+    let status = track_value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        status.as_str(),
+        "not_needed" | "not_applicable" | "none" | "disabled"
+    ) {
+        return None;
+    }
+    let selection = compact_stack_value(track_value.get("selection")?)?;
+    (!selection_is_absent(&selection)).then_some(selection)
+}
+
+fn first_stack_string_for_keys(stack: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = stack.get(*key).and_then(compact_stack_value) {
+            if !selection_is_absent(&value) {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn compact_stack_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Array(items) => {
+            let values = items
+                .iter()
+                .filter_map(compact_stack_value)
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then(|| values.join(", "))
+        }
+        Value::Object(object) => object
+            .get("selection")
+            .and_then(compact_stack_value)
+            .or_else(|| object.get("name").and_then(compact_stack_value)),
+        _ => None,
+    }
+}
+
+fn selection_is_absent(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "no persistence",
+        "no database",
+        "none",
+        "not needed",
+        "not applicable",
+        "n/a",
+        "无",
+        "不需要",
+        "无需",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn has_persistence_quality_signal(signals: &BTreeMap<String, String>) -> bool {
+    signals.contains_key("persistence")
+        || signals.contains_key("dataAccess")
+        || signals.contains_key("migrationTool")
+}
+
+fn persistence_quality_task_ids(tasks: &[TaskDefinition]) -> Vec<String> {
+    let direct_ids = tasks
+        .iter()
+        .filter(|task| task_directly_owns_persistence_mapping(task))
+        .map(|task| task.task_id.clone())
+        .collect::<BTreeSet<_>>();
+    tasks
+        .iter()
+        .filter(|task| {
+            task_directly_owns_persistence_mapping(task)
+                || (task_backend_consumes_persistence_mapping(task)
+                    && task_depends_on_any(task, tasks, &direct_ids))
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
+fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::DataModelIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateEntity
+                    | ImplementationAction::CreateOrUpdatePersistence
+                    | ImplementationAction::CreateEntityMigration
+                    | ImplementationAction::CreateEntityRepository
+                    | ImplementationAction::CreateEntityCrud
+            )
+        })
+}
+
+fn task_backend_consumes_persistence_mapping(task: &TaskDefinition) -> bool {
+    if task_is_frontend_task(task) || task.write_boundary.artifact_refs.entities.is_empty() {
+        return false;
+    }
+    matches!(
+        task.task_kind,
+        TaskKind::FeatureIncrement | TaskKind::InterfaceIncrement | TaskKind::IntegrationIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::WireReferenceInApiOrUi
+        )
+    })
+}
+
+fn task_is_frontend_task(task: &TaskDefinition) -> bool {
+    task.frontend_experience_requirement.is_some()
+        || matches!(
+            task.task_kind,
+            TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+        )
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::ImplementFrontendExperienceContract
+                    | ImplementationAction::CreateEntityAdminPage
+            )
+        })
+}
+
+fn task_depends_on_any(
+    task: &TaskDefinition,
+    tasks: &[TaskDefinition],
+    target_ids: &BTreeSet<String>,
+) -> bool {
+    let by_id = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task))
+        .collect::<BTreeMap<_, _>>();
+    let mut stack = task.depends_on.clone();
+    let mut seen = BTreeSet::new();
+    while let Some(task_id) = stack.pop() {
+        if !seen.insert(task_id.clone()) {
+            continue;
+        }
+        if target_ids.contains(&task_id) {
+            return true;
+        }
+        if let Some(dependency) = by_id.get(task_id.as_str()) {
+            stack.extend(dependency.depends_on.clone());
+        }
+    }
+    false
+}
+
+fn persistence_alignment_targets() -> Vec<String> {
+    [
+        "domain_model_field",
+        "storage_schema_field",
+        "data_access_mapping",
+        "dto_json_contract",
+        "query_sort_filter_field",
+        "test_database_provider",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn persistence_risk_field_kinds() -> Vec<String> {
+    [
+        "datetime",
+        "decimal",
+        "enum",
+        "boolean",
+        "json",
+        "foreign_key",
+        "unique_constraint",
+        "nullable_default",
+        "identifier",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn persistence_verification_obligations() -> Vec<String> {
+    [
+        "same_provider_persistence_test",
+        "create_detail_list_roundtrip",
+        "state_change_readback",
+        "error_response_message_contract",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) -> Value {

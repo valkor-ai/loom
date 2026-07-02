@@ -241,6 +241,7 @@ fn build_review_request(
         "changeContext": change_context,
         "conceptReviewMatrix": build_concept_review_matrix(task_plan, task_results),
         "detailReviewMatrix": build_detail_review_matrix(task_plan, task_results),
+        "engineeringQualityReviewMatrix": build_engineering_quality_review_matrix(task_plan, task_results),
         "frontendQualityReviewMatrix": build_frontend_quality_review_matrix(task_plan, task_results),
         "enumRefs": {
             "decision": ["approved", "approved_with_notes", "changes_requested", "blocked", "needs_user_decision"],
@@ -273,7 +274,7 @@ fn build_review_request(
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, frontend workflow closure, or frontend UI quality.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
             ],
@@ -383,6 +384,7 @@ fn build_review_request(
                     "selectors": read_selectors_value_from_paths([
                         "conceptReviewMatrix",
                         "detailReviewMatrix",
+                        "engineeringQualityReviewMatrix",
                         "frontendQualityReviewMatrix",
                         "outputContract.reviewSignals.items"
                     ])
@@ -2332,6 +2334,81 @@ fn build_detail_review_matrix(task_plan: &TaskPlan, task_results: &[TaskResult])
         .collect()
 }
 
+fn build_engineering_quality_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .engineering_quality_requirements
+        .iter()
+        .flat_map(|requirement| {
+            requirement.applies_to_task_ids.iter().map(|task_id| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == *task_id);
+                let passed_verifications = result
+                    .map(passed_verification_summaries)
+                    .unwrap_or_default();
+                let satisfied = result
+                    .map(|result| {
+                        matches!(
+                            result.status,
+                            contracts::TaskResultStatus::Completed
+                                | contracts::TaskResultStatus::CompletedWithNotes
+                        ) && !passed_verifications.is_empty()
+                    })
+                    .unwrap_or(false);
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "kind": requirement.kind,
+                    "taskId": task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "stackSignals": requirement.stack_signals,
+                    "alignmentTargets": requirement.alignment_targets,
+                    "riskFieldKinds": requirement.risk_field_kinds,
+                    "verificationObligations": requirement.verification_obligations,
+                    "passedVerificationSummaries": passed_verifications,
+                    "requirementDetailEvidence": result
+                        .map(compact_requirement_detail_evidence)
+                        .unwrap_or_default(),
+                    "qualitySatisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
+fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
+    result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| {
+            json!({
+                "verificationId": verification.verification_id,
+                "evidenceType": verification.evidence_type,
+                "summary": compact_summary(&verification.summary)
+            })
+        })
+        .collect()
+}
+
+fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
+    result
+        .requirement_detail_evidence
+        .iter()
+        .map(|evidence| {
+            json!({
+                "detailId": evidence.detail_id,
+                "status": evidence.status,
+                "verificationIds": evidence.verification_ids,
+                "summary": compact_summary(&evidence.summary)
+            })
+        })
+        .collect()
+}
+
 fn build_frontend_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
@@ -2536,6 +2613,45 @@ fn build_review_signals(
                 "TaskResult frontend quality self-check satisfies the UI quality contract."
             } else {
                 "TaskResult frontend quality self-check does not satisfy the UI quality contract."
+            }
+        }));
+    }
+    for item in build_engineering_quality_review_matrix(task_plan, task_results) {
+        let requirement_id = item
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or("engineering_quality");
+        let task_id = item.get("taskId").and_then(Value::as_str).unwrap_or("task");
+        let quality_satisfied = item
+            .get("qualitySatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-engineering-quality-{}-{}",
+                safe_signal_id(requirement_id),
+                safe_signal_id(task_id)
+            ),
+            "kind": "engineering_quality",
+            "requirementId": requirement_id,
+            "qualityKind": item.get("kind").cloned().unwrap_or(Value::Null),
+            "taskRefs": [task_id],
+            "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "qualitySatisfied": quality_satisfied,
+            "stackSignals": item.get("stackSignals").cloned().unwrap_or_else(|| json!({})),
+            "alignmentTargets": item.get("alignmentTargets").cloned().unwrap_or_else(|| json!([])),
+            "riskFieldKinds": item.get("riskFieldKinds").cloned().unwrap_or_else(|| json!([])),
+            "verificationObligations": item.get("verificationObligations").cloned().unwrap_or_else(|| json!([])),
+            "passedVerificationCount": item
+                .get("passedVerificationSummaries")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
+            "reason": if quality_satisfied {
+                "TaskResult contains passed verification evidence for the referenced engineering quality requirement."
+            } else {
+                "TaskResult is missing passed verification evidence for the referenced engineering quality requirement."
             }
         }));
     }
@@ -2774,7 +2890,8 @@ fn compact_task_summaries(tasks: &[TaskDefinition]) -> Vec<Value> {
                     })
                 }).collect::<Vec<_>>(),
                 "frontendExperienceRequired": task.frontend_experience_requirement.is_some(),
-                "runtimeDeliveryRequired": task.runtime_delivery_requirement.is_some()
+                "runtimeDeliveryRequired": task.runtime_delivery_requirement.is_some(),
+                "engineeringQualityRequirementRefs": task.engineering_quality_requirement_refs
             })
         })
         .collect()
@@ -2830,6 +2947,15 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
             summary
         })
         .collect()
+}
+
+fn compact_summary(value: &str) -> String {
+    const LIMIT: usize = 320;
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= LIMIT {
+        return trimmed.to_string();
+    }
+    trimmed.chars().take(LIMIT).collect::<String>()
 }
 
 fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {

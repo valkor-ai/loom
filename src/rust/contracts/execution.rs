@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +153,23 @@ pub struct TaskRuntimeDeliveryRequirement {
     pub deployment_failure_ref: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineeringQualityRequirement {
+    pub requirement_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applies_to_task_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stack_signals: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alignment_targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risk_field_kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_obligations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDefinition {
@@ -183,6 +201,8 @@ pub struct TaskDefinition {
     pub frontend_experience_requirement: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_requirement: Option<TaskRuntimeDeliveryRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engineering_quality_requirement_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -297,6 +317,8 @@ pub struct TaskPlan {
     pub groups: Vec<TaskPlanGroup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<TaskDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engineering_quality_requirements: Vec<EngineeringQualityRequirement>,
     pub handoff: TaskPlanHandoff,
     pub created_at: String,
     pub updated_at: String,

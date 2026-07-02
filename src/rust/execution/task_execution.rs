@@ -4,8 +4,9 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureArtifactContract, ImplementationAction, TaskDefinition, TaskKind, TaskPlan,
-    TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
+    ArchitectureArtifactContract, EngineeringQualityRequirement, ImplementationAction,
+    TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
@@ -251,6 +252,8 @@ fn build_execution_request(
         &aac,
         &pgc.planning_inputs.user_facing_language,
     );
+    let engineering_quality_requirements =
+        task_scoped_engineering_quality_requirements(task_plan, &request_task);
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -276,6 +279,9 @@ fn build_execution_request(
     });
     if !dependency_results.is_empty() {
         source_context["dependencyResults"] = json!(dependency_results);
+    }
+    if !engineering_quality_requirements.is_empty() {
+        source_context["engineeringQualityRequirements"] = json!(engineering_quality_requirements);
     }
     Ok(json!({
         "schemaVersion": "1.0",
@@ -393,6 +399,12 @@ pub(crate) fn task_execution_rules(
         object.insert(
             "runtimeDeliveryExecutionRules".to_string(),
             runtime_delivery_execution_rules(),
+        );
+    }
+    if !task.engineering_quality_requirement_refs.is_empty() {
+        object.insert(
+            "engineeringQualityExecutionRules".to_string(),
+            engineering_quality_execution_rules(task),
         );
     }
     rules
@@ -535,7 +547,29 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("For runtimeDeliveryEvidence.codeLevelChecks, use only the exact checkId values listed in task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId.".to_string());
         rules.push("If a temporary runtime/probe/server/container was started, include runtimeDeliveryEvidence.runtimeProbeCleanup; cleanup failure alone should be completed_with_notes, not failed or blocked.".to_string());
     }
+    if !task.engineering_quality_requirement_refs.is_empty() {
+        rules.push("For referenced engineeringQualityRequirements, verificationResults summaries must state how implementation kept the declared alignmentTargets aligned for this task.".to_string());
+        rules.push("For persistence_mapping requirements, evidence must cover changed risk field kinds across domain model, storage schema or migration, data access mapping, DTO/API contract, and same-provider persistence behavior when those parts are in task scope.".to_string());
+    }
     json!(rules)
+}
+
+fn engineering_quality_execution_rules(task: &TaskDefinition) -> Value {
+    json!({
+        "appliesToRequirementRefs": task.engineering_quality_requirement_refs,
+        "requirementSource": "sourceContext.engineeringQualityRequirements",
+        "scopeRule": "Apply only the listed requirements whose appliesToTaskIds include this task; do not create new requirements inside TaskResult.",
+        "implementationRules": [
+            "Before editing persistence-affecting code, compare sourceContext.engineeringQualityRequirements[].alignmentTargets against this task's changed entities, schema or migrations, repositories, DTOs, API payloads, query fields, and tests.",
+            "Keep field type semantics aligned across code, storage, data access, serialization, and tests; do not rely on provider defaults for declared riskFieldKinds.",
+            "Use the actual stackSignals from the request as evidence to choose provider-compatible mappings; do not hardcode assumptions from an unrelated stack."
+        ],
+        "verificationRules": [
+            "Use task.verificationIntents as the verification id source.",
+            "When implementation touches persistence, prefer same-provider tests or runtime checks over mock-only evidence.",
+            "Record concise alignment evidence in verificationResults[].summary and requirementDetailEvidence[].summary."
+        ]
+    })
 }
 
 fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: bool) -> Value {
@@ -615,6 +649,13 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
         core_fields.push("executionRules.runtimeDeliveryExecutionRules");
     }
+    if !task.engineering_quality_requirement_refs.is_empty() {
+        core_fields.extend([
+            "task.engineeringQualityRequirementRefs",
+            "sourceContext.engineeringQualityRequirements",
+            "executionRules.engineeringQualityExecutionRules",
+        ]);
+    }
     if has_dependency_results {
         core_fields.push("sourceContext.dependencyResults");
     }
@@ -682,6 +723,25 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "selectors": read_selectors_value_from_paths(result_fields)
         }),
     ])
+}
+
+fn task_scoped_engineering_quality_requirements(
+    task_plan: &TaskPlan,
+    task: &TaskDefinition,
+) -> Vec<EngineeringQualityRequirement> {
+    if task.engineering_quality_requirement_refs.is_empty() {
+        return vec![];
+    }
+    let refs = task
+        .engineering_quality_requirement_refs
+        .iter()
+        .collect::<BTreeSet<_>>();
+    task_plan
+        .engineering_quality_requirements
+        .iter()
+        .filter(|requirement| refs.contains(&requirement.requirement_id))
+        .cloned()
+        .collect()
 }
 
 fn task_has_frontend_execution(task: &TaskDefinition) -> bool {

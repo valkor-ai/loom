@@ -970,7 +970,7 @@ fn materialize_taskplan_repair_action(
             "taskPlanningFieldMapping": field_value(&core_fields, "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping")?
         }
     });
-    let generation_rules = json!({
+    let mut generation_rules = json!({
         "groupedOutputRules": field_value(&rule_fields, "generationRules.groupedOutputRules")?,
         "scopeAndReferenceRules": field_value(&rule_fields, "generationRules.scopeAndReferenceRules")?,
         "writeBoundaryRules": field_value(&rule_fields, "generationRules.writeBoundaryRules")?,
@@ -980,6 +980,11 @@ fn materialize_taskplan_repair_action(
         "workflowClosureRules": field_value(&rule_fields, "generationRules.workflowClosureRules")?,
         "runtimeDeliveryRules": field_value(&rule_fields, "generationRules.runtimeDeliveryRules")?
     });
+    let engineering_quality_rules =
+        value_field(&rule_fields, "generationRules.engineeringQualityRules");
+    if !engineering_quality_rules.is_null() {
+        generation_rules["engineeringQualityRules"] = engineering_quality_rules;
+    }
     let enum_refs = json!({
         "taskKind": value_field(&contract_fields, "enumRefs.taskKind"),
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
@@ -1008,6 +1013,10 @@ fn materialize_taskplan_repair_action(
     let runtime_closure_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryClosureTaskTemplate",
+    );
+    let engineering_quality_template = value_field(
+        &contract_fields,
+        "outputContract.engineeringQualityRequirementTemplate",
     );
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1094,6 +1103,10 @@ fn materialize_taskplan_repair_action(
         taskplan_repair_write_contract_fields
             .push("outputContract.runtimeDeliveryClosureTaskTemplate");
     }
+    if !engineering_quality_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.engineeringQualityRequirementTemplate");
+    }
 
     let mut request_root = json!({
         "schemaVersion": "1.0",
@@ -1160,7 +1173,8 @@ fn materialize_taskplan_repair_action(
                         "generationRules.conceptGroundingRules",
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",
-                        "generationRules.runtimeDeliveryRules"
+                        "generationRules.runtimeDeliveryRules",
+                        "generationRules.engineeringQualityRules"
                     ])
                 },
                 {
@@ -1201,6 +1215,16 @@ fn materialize_taskplan_repair_action(
             .insert(
                 "runtimeDeliveryClosureTaskTemplate".to_string(),
                 runtime_closure_template,
+            );
+    }
+    if !engineering_quality_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "engineeringQualityRequirementTemplate".to_string(),
+                engineering_quality_template,
             );
     }
     let stored = state::write_native_request(
