@@ -248,6 +248,118 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
 }
 
 #[test]
+fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
+    let fixture = Fixture::new("deploy-previous-phase-runtime");
+    fixture.write_runtime_delivery(plugin_style_dual_service_runtime_delivery());
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+    fixture.write_text("backend/mvnw", "#!/bin/sh\n");
+
+    let index_path = fixture.root.join(".loom/deliveries/delivery-1/index.json");
+    let mut index: Value = read_json(&index_path).expect("delivery index");
+    index["activePhaseId"] = json!("phase-2");
+    index["phases"].as_array_mut().expect("phases").push(json!({
+        "phaseId": "phase-2",
+        "latestRefs": {}
+    }));
+    write_json_atomic(&index_path, &index).expect("write phase-2 index");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.runtime_contract.source, "accepted_aac");
+    assert!(spec
+        .runtime_contract
+        .r#ref
+        .as_deref()
+        .expect("runtime contract ref")
+        .contains("contracts/architecture/phase-1/aac.json#/runtimeDelivery"));
+    assert_eq!(
+        spec.runtime_contract.deployment_shape,
+        Some(DeploymentShape::FrontendAndBackend)
+    );
+    assert_eq!(spec.source_model.shape, DeploymentShape::FrontendAndBackend);
+    let frontend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    let backend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "backend")
+        .expect("backend service");
+    assert_eq!(frontend.root, "frontend");
+    assert_eq!(frontend.output_directory.as_deref(), Some("frontend/dist"));
+    assert_eq!(frontend.build_command.as_deref(), Some("npm run build"));
+    assert_eq!(backend.root, "backend");
+    assert_eq!(backend.build_command.as_deref(), Some("./mvnw package"));
+    assert_eq!(backend.start_command, None);
+}
+
+#[test]
+fn prepare_without_loom_delivery_uses_repository_code_probe() {
+    let fixture = Fixture::new("deploy-no-delivery-code-probe");
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.runtime_contract.source, "heuristic");
+    assert_eq!(spec.runtime_contract.r#ref, None);
+    assert_eq!(spec.source_model.source, SourceModelSource::CodeProbe);
+    let service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(service.package_manager, Some(PackageManager::Maven));
+    assert_eq!(
+        service.build_command.as_deref(),
+        Some("cd backend && mvn -DskipTests package")
+    );
+    assert_eq!(
+        service.workspace_package_json_paths,
+        vec!["frontend/package.json"]
+    );
+    assert_eq!(service.output_directory.as_deref(), Some("frontend/dist"));
+}
+
+#[test]
 fn prepare_promotes_composite_runtime_above_preview_app_path() {
     let fixture = Fixture::new("deploy-composite-app-path");
     fixture.write_runtime_delivery(json!({
@@ -1979,6 +2091,36 @@ fn runtime_delivery() -> Value {
         "environment": {
             "required": ["SPRING_DATASOURCE_URL"],
             "optional": ["postgres"]
+        }
+    })
+}
+
+fn plugin_style_dual_service_runtime_delivery() -> Value {
+    json!({
+        "status": "modified",
+        "runtimeKind": "react_vite_plus_spring_boot",
+        "deploymentShape": "dual-service",
+        "build": {
+            "command": "frontend: npm run build; backend: ./mvnw package",
+            "outputs": ["frontend/dist", "backend/target/*.jar"],
+            "workingDirectory": "."
+        },
+        "start": {
+            "command": "frontend: npm run dev; backend: ./mvnw spring-boot:run",
+            "workingDirectory": "."
+        },
+        "httpProbes": {
+            "previewPath": "/",
+            "apiPaths": ["/api/health", "/api/purchase-requests"],
+            "expectedStatus": "2xx_or_3xx"
+        },
+        "runtimeSurfaces": [
+            { "surfaceId": "runtime_surface_1", "kind": "frontend", "urlPath": "/" },
+            { "surfaceId": "runtime_surface_2", "kind": "api", "urlPath": "/api" }
+        ],
+        "environment": {
+            "required": [],
+            "optional": ["SPRING_PROFILES_ACTIVE"]
         }
     })
 }

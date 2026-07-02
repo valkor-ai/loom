@@ -17,30 +17,37 @@ pub fn source_model_from_runtime_contract(
         return source_model_from_probe(fallback_probe, build_context_path);
     }
     if shape == DeploymentShape::FrontendAndBackend {
-        let frontend_root = service_root_from_refs(&[
-            runtime
-                .frontend
-                .as_ref()
-                .and_then(|item| item.source_root.as_deref()),
-            runtime
-                .frontend
-                .as_ref()
-                .and_then(|item| item.output_dir.as_deref()),
-            runtime
-                .frontend
-                .as_ref()
-                .and_then(|item| item.build_command.as_deref()),
-            runtime.build_command.as_deref(),
-        ]);
-        let backend_root = service_root_from_refs(&[
-            runtime.api.as_ref().and_then(|item| item.entry.as_deref()),
-            runtime
-                .api
-                .as_ref()
-                .and_then(|item| item.build_command.as_deref()),
-            runtime.start_command.as_deref(),
-            runtime.build_command.as_deref(),
-        ]);
+        let frontend_root = service_root_from_refs(
+            &[
+                runtime
+                    .frontend
+                    .as_ref()
+                    .and_then(|item| item.source_root.as_deref()),
+                runtime
+                    .frontend
+                    .as_ref()
+                    .and_then(|item| item.output_dir.as_deref()),
+                runtime
+                    .frontend
+                    .as_ref()
+                    .and_then(|item| item.build_command.as_deref()),
+                runtime.build_command.as_deref(),
+                runtime.start_command.as_deref(),
+            ],
+            &["frontend", "web", "client", "ui"],
+        );
+        let backend_root = service_root_from_refs(
+            &[
+                runtime.api.as_ref().and_then(|item| item.entry.as_deref()),
+                runtime
+                    .api
+                    .as_ref()
+                    .and_then(|item| item.build_command.as_deref()),
+                runtime.start_command.as_deref(),
+                runtime.build_command.as_deref(),
+            ],
+            &["backend", "api", "service", "server"],
+        );
         let backend_kind = runtime_kind_from_signals(&[
             runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
             runtime.start_command.as_deref(),
@@ -80,10 +87,12 @@ pub fn source_model_from_runtime_contract(
                 .as_ref()
                 .and_then(|item| item.output_dir.clone())
                 .or_else(|| runtime.frontend_output_dir.clone())
-                .or_else(|| Some("dist".to_string())),
+                .or_else(|| Some(default_frontend_output_dir(&frontend_root))),
             port: 80,
             healthcheck_path: Some("/".to_string()),
         };
+        let backend_start = command_for_root(runtime.start_command.clone(), &backend_root)
+            .filter(|command| start_command_is_runtime_safe(backend_kind, command));
         let backend = DeploymentSourceService {
             service_id: "backend".to_string(),
             role: SourceServiceRole::Backend,
@@ -109,7 +118,7 @@ pub fn source_model_from_runtime_contract(
             runtime_version: fallback_probe.runtime_version.clone(),
             runtime_version_source: fallback_probe.runtime_version_source.clone(),
             build_command: command_for_root(backend_build, &backend_root),
-            start_command: command_for_root(runtime.start_command.clone(), &backend_root),
+            start_command: backend_start,
             output_directory: None,
             port: runtime.port.unwrap_or(8080),
             healthcheck_path: runtime
@@ -417,8 +426,11 @@ fn default_package_manager(kind: RuntimeKind) -> Option<PackageManager> {
     }
 }
 
-fn service_root_from_refs(values: &[Option<&str>]) -> String {
+fn service_root_from_refs(values: &[Option<&str>], preferred_labels: &[&str]) -> String {
     for value in values.iter().flatten() {
+        if let Some(root) = preferred_labeled_root(value, preferred_labels) {
+            return root;
+        }
         if let Some(root) = prefix_root(value) {
             return root;
         }
@@ -439,6 +451,14 @@ fn service_root_from_refs(values: &[Option<&str>]) -> String {
     ".".to_string()
 }
 
+fn preferred_labeled_root(value: &str, preferred_labels: &[&str]) -> Option<String> {
+    let labels = labeled_command_segments(value);
+    preferred_labels
+        .iter()
+        .find(|label| labels.iter().any(|candidate| candidate == **label))
+        .map(|label| label.to_string())
+}
+
 fn prefix_root(value: &str) -> Option<String> {
     let marker = "--prefix ";
     let index = value.find(marker)?;
@@ -451,6 +471,9 @@ fn prefix_root(value: &str) -> Option<String> {
 
 fn command_for_root(command: Option<String>, root: &str) -> Option<String> {
     let command = command?;
+    if let Some(segment) = labeled_command_for_root(&command, root) {
+        return Some(segment);
+    }
     if root == "." {
         return Some(command);
     }
@@ -459,4 +482,63 @@ fn command_for_root(command: Option<String>, root: &str) -> Option<String> {
             .replace(&format!("{root}/"), "")
             .replace(&format!("--prefix {root}"), ""),
     )
+}
+
+fn labeled_command_for_root(command: &str, root: &str) -> Option<String> {
+    let aliases = root_aliases(root);
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let (label, rest) = trimmed.split_once(':')?;
+            let label = label.trim().to_ascii_lowercase();
+            if !aliases.iter().any(|alias| alias == &label) {
+                return None;
+            }
+            let rest = rest.trim();
+            (!rest.is_empty()).then(|| rest.to_string())
+        })
+        .next()
+}
+
+fn root_aliases(root: &str) -> Vec<String> {
+    let root = root.trim_matches('/').to_ascii_lowercase();
+    let mut aliases = vec![root.clone()];
+    match root.as_str() {
+        "frontend" | "web" | "client" | "ui" => {
+            aliases.extend(["frontend", "web", "client", "ui"].map(str::to_string));
+        }
+        "backend" | "api" | "service" | "server" => {
+            aliases.extend(["backend", "api", "service", "server"].map(str::to_string));
+        }
+        _ => {}
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn default_frontend_output_dir(frontend_root: &str) -> String {
+    if frontend_root == "." {
+        "dist".to_string()
+    } else {
+        format!("{frontend_root}/dist")
+    }
+}
+
+fn start_command_is_runtime_safe(kind: RuntimeKind, command: &str) -> bool {
+    if kind == RuntimeKind::Java {
+        let lower = command.to_ascii_lowercase();
+        return !(lower.contains("spring-boot:run")
+            || lower.contains("bootrun")
+            || lower.contains("./mvnw")
+            || lower.contains(" mvn")
+            || lower.starts_with("mvn")
+            || lower.contains("./gradlew")
+            || lower.contains(" gradle")
+            || lower.starts_with("gradle"));
+    }
+    true
 }

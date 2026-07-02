@@ -38,8 +38,8 @@ pub fn deploy_run(input: DeployToolInput) -> LoomMcpActionResult {
             return LoomMcpActionResult::Blocked(delivery_core::LoomMcpBlockedResult {
                 project_root: project_root.to_string_lossy().into_owned(),
                 blockers: vec![error.to_string()],
-                recommended_tool: Some("loom.continue".to_string()),
-                details: Some(json!({ "failureKind": "runtime_contract_missing" })),
+                recommended_tool: Some("loom.deployInspect".to_string()),
+                details: Some(json!({ "failureKind": "deploy_prepare_failed" })),
             });
         }
     }

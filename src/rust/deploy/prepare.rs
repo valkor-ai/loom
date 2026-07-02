@@ -544,10 +544,10 @@ fn runtime_contract_blocked(project_root: &Path, error: StateError) -> LoomMcpAc
     LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
         project_root: project_root.to_string_lossy().into_owned(),
         blockers: vec![error.to_string()],
-        recommended_tool: Some("loom.continue".to_string()),
+        recommended_tool: Some("loom.deployInspect".to_string()),
         details: Some(json!({
-            "failureKind": "runtime_contract_missing",
-            "reason": "Deploy is MCP-only and must use accepted AAC runtime_delivery instead of guessing a detected stack."
+            "failureKind": "runtime_contract_unavailable",
+            "reason": "Deploy could not prepare a runtime contract from accepted AAC runtimeDelivery or repository code evidence."
         })),
     })
 }
