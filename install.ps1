@@ -6,7 +6,7 @@ param(
   [string]$Agent,
 
   [Alias("version")]
-  [string]$Version = "0.2.1",
+  [string]$Version = "0.2.2",
 
   [Alias("baseUrl")]
   [string]$BaseUrl = "https://github.com/valkor-ai/loom/releases/latest/download",
