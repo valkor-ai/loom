@@ -53,16 +53,24 @@ pub fn source_model_from_runtime_contract(
             runtime.start_command.as_deref(),
             runtime.runtime_kind.as_deref(),
         ]);
-        let frontend_build = runtime
-            .frontend
-            .as_ref()
-            .and_then(|item| item.build_command.clone())
-            .or_else(|| runtime.build_command.clone());
-        let backend_build = runtime
-            .api
-            .as_ref()
-            .and_then(|item| item.build_command.clone())
-            .or_else(|| runtime.build_command.clone());
+        let frontend_build = command_for_root(
+            runtime
+                .frontend
+                .as_ref()
+                .and_then(|item| item.build_command.clone())
+                .or_else(|| runtime.build_command.clone()),
+            &frontend_root,
+        );
+        let backend_build = command_for_root(
+            runtime
+                .api
+                .as_ref()
+                .and_then(|item| item.build_command.clone())
+                .or_else(|| runtime.build_command.clone()),
+            &backend_root,
+        );
+        let backend_start = command_for_root(runtime.start_command.clone(), &backend_root)
+            .filter(|command| start_command_is_runtime_safe(backend_kind, command));
         let frontend = DeploymentSourceService {
             service_id: "frontend".to_string(),
             role: SourceServiceRole::Frontend,
@@ -72,15 +80,21 @@ pub fn source_model_from_runtime_contract(
             runtime_kind: RuntimeKind::Node,
             package_manager: package_manager_from_command(frontend_build.as_deref())
                 .or(Some(PackageManager::Npm)),
-            has_lockfile: fallback_probe.has_lockfile,
+            has_lockfile: node_lockfile_for_root(fallback_probe, &frontend_root),
             framework: runtime
                 .frontend
                 .as_ref()
                 .and_then(|item| item.kind.clone())
+                .or_else(|| {
+                    frontend_framework_from_signals(&[
+                        frontend_build.as_deref(),
+                        runtime.runtime_kind.as_deref(),
+                    ])
+                })
                 .or_else(|| Some("frontend".to_string())),
             runtime_version: None,
             runtime_version_source: None,
-            build_command: command_for_root(frontend_build, &frontend_root),
+            build_command: frontend_build,
             start_command: None,
             output_directory: runtime
                 .frontend
@@ -91,8 +105,6 @@ pub fn source_model_from_runtime_contract(
             port: 80,
             healthcheck_path: Some("/".to_string()),
         };
-        let backend_start = command_for_root(runtime.start_command.clone(), &backend_root)
-            .filter(|command| start_command_is_runtime_safe(backend_kind, command));
         let backend = DeploymentSourceService {
             service_id: "backend".to_string(),
             role: SourceServiceRole::Backend,
@@ -100,31 +112,31 @@ pub fn source_model_from_runtime_contract(
             working_directory: (backend_root != ".").then_some(backend_root.clone()),
             workspace_package_json_paths: vec![],
             runtime_kind: backend_kind,
-            package_manager: package_manager_from_command(
-                runtime
-                    .api
-                    .as_ref()
-                    .and_then(|api| api.build_command.as_deref())
-                    .or(runtime.start_command.as_deref())
-                    .or(runtime.build_command.as_deref()),
-            )
-            .or_else(|| default_package_manager(backend_kind)),
-            has_lockfile: fallback_probe.has_lockfile,
+            package_manager: package_manager_from_command(backend_build.as_deref())
+                .or_else(|| package_manager_from_command(backend_start.as_deref()))
+                .or_else(|| fallback_package_manager_for_kind(fallback_probe, backend_kind))
+                .or_else(|| default_package_manager(backend_kind)),
+            has_lockfile: node_lockfile_for_root(fallback_probe, &backend_root)
+                && backend_kind == RuntimeKind::Node,
             framework: runtime
                 .api
                 .as_ref()
                 .and_then(|item| item.kind.clone())
-                .or_else(|| runtime.runtime_kind.clone()),
+                .or_else(|| {
+                    normalized_framework_from_signals(&[
+                        backend_build.as_deref(),
+                        backend_start.as_deref(),
+                        runtime.runtime_kind.as_deref(),
+                    ])
+                })
+                .or_else(|| fallback_framework_for_kind(fallback_probe, backend_kind)),
             runtime_version: fallback_probe.runtime_version.clone(),
             runtime_version_source: fallback_probe.runtime_version_source.clone(),
-            build_command: command_for_root(backend_build, &backend_root),
+            build_command: backend_build,
             start_command: backend_start,
             output_directory: None,
             port: runtime.port.unwrap_or(8080),
-            healthcheck_path: runtime
-                .health_path
-                .clone()
-                .or_else(|| Some(runtime.preview_path.clone())),
+            healthcheck_path: backend_healthcheck_path(runtime, fallback_probe),
         };
         return DeploymentSourceModel {
             schema_version: 1,
@@ -268,6 +280,90 @@ fn dependencies_from_runtime_or_probe(
     } else {
         runtime.dependency_services.clone()
     }
+}
+
+fn fallback_package_manager_for_kind(
+    probe: &DeploymentCodeProbe,
+    kind: RuntimeKind,
+) -> Option<PackageManager> {
+    (probe.kind == kind)
+        .then_some(probe.package_manager)
+        .flatten()
+}
+
+fn fallback_framework_for_kind(probe: &DeploymentCodeProbe, kind: RuntimeKind) -> Option<String> {
+    (probe.kind == kind)
+        .then(|| probe.framework.clone())
+        .flatten()
+}
+
+fn normalized_framework_from_signals(signals: &[Option<&str>]) -> Option<String> {
+    signals
+        .iter()
+        .flatten()
+        .find_map(|signal| normalized_framework_label(signal))
+}
+
+fn frontend_framework_from_signals(signals: &[Option<&str>]) -> Option<String> {
+    let text = signals
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    if text.contains("next") {
+        Some("nextjs".to_string())
+    } else if text.contains("vite") {
+        Some("vite".to_string())
+    } else if text.contains("react") {
+        Some("react".to_string())
+    } else if text.contains("vue") {
+        Some("vue".to_string())
+    } else if text.contains("svelte") {
+        Some("svelte".to_string())
+    } else {
+        None
+    }
+}
+
+fn node_lockfile_for_root(probe: &DeploymentCodeProbe, root: &str) -> bool {
+    if !probe.has_lockfile {
+        return false;
+    }
+    let package_path = if root == "." {
+        "package.json".to_string()
+    } else {
+        format!("{}/package.json", root.trim_matches('/'))
+    };
+    probe
+        .workspace_package_json_paths
+        .iter()
+        .any(|path| path == &package_path)
+}
+
+fn backend_healthcheck_path(
+    runtime: &DeploymentRuntimeContract,
+    fallback_probe: &DeploymentCodeProbe,
+) -> Option<String> {
+    runtime
+        .health_path
+        .clone()
+        .or_else(|| preferred_api_probe_path(runtime))
+        .or_else(|| fallback_probe.healthcheck_path.clone())
+        .or_else(|| Some(runtime.preview_path.clone()))
+}
+
+fn preferred_api_probe_path(runtime: &DeploymentRuntimeContract) -> Option<String> {
+    let mut paths = runtime.api_paths.clone();
+    if let Some(api) = &runtime.api {
+        paths.extend(api.probe_paths.clone());
+    }
+    paths
+        .iter()
+        .find(|path| path.to_ascii_lowercase().contains("health"))
+        .cloned()
+        .or_else(|| paths.into_iter().find(|path| path.starts_with('/')))
 }
 
 fn command_is_usable(command: &str) -> bool {

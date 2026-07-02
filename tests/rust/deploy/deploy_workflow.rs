@@ -13,7 +13,7 @@ use contracts::{
     DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
     DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
     DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentRuntimePort,
-    DeploymentShape, DeploymentSpec, PackageManager, SourceModelSource,
+    DeploymentShape, DeploymentSpec, PackageManager, RuntimeKind, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -122,7 +122,7 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     );
     assert!(compose.contains("  backend:"));
     assert!(compose.contains("  postgres:"));
-    assert!(compose.contains("      - backend"));
+    assert!(compose.contains("      backend:\n        condition: service_healthy"));
     assert!(compose.contains("      - postgres"));
     assert!(compose.contains("  frontend:\n    build:"), "{compose}");
     assert!(compose.contains("    ports:\n"), "{compose}");
@@ -309,9 +309,44 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     assert_eq!(frontend.root, "frontend");
     assert_eq!(frontend.output_directory.as_deref(), Some("frontend/dist"));
     assert_eq!(frontend.build_command.as_deref(), Some("npm run build"));
+    assert_eq!(frontend.package_manager, Some(PackageManager::Npm));
+    assert!(frontend.has_lockfile);
+    assert_eq!(frontend.framework.as_deref(), Some("vite"));
     assert_eq!(backend.root, "backend");
+    assert_eq!(backend.runtime_kind, RuntimeKind::Java);
+    assert_eq!(backend.package_manager, Some(PackageManager::Maven));
+    assert!(!backend.has_lockfile);
+    assert_eq!(backend.framework.as_deref(), Some("spring-boot"));
     assert_eq!(backend.build_command.as_deref(), Some("./mvnw package"));
     assert_eq!(backend.start_command, None);
+    assert_eq!(backend.healthcheck_path.as_deref(), Some("/api/health"));
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.backend"),
+    )
+    .expect("backend dockerfile");
+    assert!(dockerfile.contains("FROM maven:3-eclipse-temurin-21 AS builder"));
+    assert!(dockerfile.contains("WORKDIR /workspace/backend"));
+    assert!(dockerfile.contains("COPY backend/ ./"));
+    assert!(dockerfile.contains("RUN mvn -DskipTests package"));
+    assert!(!dockerfile.contains("RUN ./mvnw package"), "{dockerfile}");
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("curl -fsS http://127.0.0.1:8080/api/health || exit 1"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("      backend:\n        condition: service_healthy"),
+        "{compose}"
+    );
 }
 
 #[test]

@@ -191,26 +191,24 @@ fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
     if java_service_needs_static_asset_overlay(service) {
         return generate_java_dockerfile_with_static_asset_overlay(service);
     }
-    let build_command = service
-        .build_command
-        .clone()
-        .unwrap_or_else(|| default_java_build_command(service));
+    let build_command = java_build_command(service);
     let start_command = service
         .start_command
         .clone()
         .unwrap_or_else(|| "java -jar /app/app.jar".to_string());
     let builder_image = java_builder_image(service);
-    [
-        format!("FROM {builder_image} AS builder"),
-        "WORKDIR /workspace".to_string(),
-        "COPY . .".to_string(),
-        service_root_workdir(service),
+    let mut lines = vec![format!("FROM {builder_image} AS builder")];
+    lines.extend(java_builder_context(service));
+    lines.extend([
         format!("RUN {build_command}"),
-        "RUN JAR=\"$(find . -type f -name '*.jar' ! -name '*-plain.jar' | sort | head -n 1)\" && test -n \"$JAR\" && cp \"$JAR\" /workspace/app.jar".to_string(),
+        "RUN JAR=\"$(find target -type f -name '*.jar' ! -name '*-plain.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | sort | head -n 1)\" && test -n \"$JAR\" && cp \"$JAR\" /workspace/app.jar".to_string(),
         "RUN mkdir -p /tmp/data && if [ -d data ]; then cp -R data/. /tmp/data/; elif [ -d service/data ]; then cp -R service/data/. /tmp/data/; fi".to_string(),
         "".to_string(),
         "FROM eclipse-temurin:21-jre AS runner".to_string(),
         "WORKDIR /app".to_string(),
+        "RUN apt-get update \\".to_string(),
+        "    && apt-get install -y --no-install-recommends curl \\".to_string(),
+        "    && rm -rf /var/lib/apt/lists/*".to_string(),
         format!("ENV PORT={}", service.port),
         format!("ENV SERVER_PORT={}", service.port),
         "COPY --from=builder /workspace/app.jar /app/app.jar".to_string(),
@@ -218,11 +216,52 @@ fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
         "".to_string(),
+    ]);
+    lines.join("\n")
+}
+
+fn java_builder_context(service: &DeploymentSourceService) -> Vec<String> {
+    if service.root == "." {
+        return vec!["WORKDIR /workspace".to_string(), "COPY . .".to_string()];
+    }
+    vec![
+        format!("WORKDIR /workspace/{}", service.root),
+        format!("COPY {}/ ./", service.root),
     ]
-    .into_iter()
-    .filter(|line| !line.is_empty() || true)
-    .collect::<Vec<_>>()
-    .join("\n")
+}
+
+fn java_build_command(service: &DeploymentSourceService) -> String {
+    let command = service
+        .build_command
+        .clone()
+        .unwrap_or_else(|| default_java_build_command(service));
+    match service.package_manager {
+        Some(PackageManager::Maven) => normalize_maven_build_command(&command),
+        _ => command,
+    }
+}
+
+fn normalize_maven_build_command(command: &str) -> String {
+    let trimmed = command.trim();
+    let wrapper_command = trimmed
+        .strip_prefix("chmod +x ./mvnw &&")
+        .map(str::trim)
+        .unwrap_or(trimmed);
+    let Some(args) = wrapper_command
+        .strip_prefix("./mvnw")
+        .or_else(|| wrapper_command.strip_prefix("mvnw"))
+        .map(str::trim)
+    else {
+        return trimmed.to_string();
+    };
+    let args = if args.is_empty() { "package" } else { args };
+    if args.contains("-DskipTests") {
+        format!("mvn {args}")
+    } else if args.split_whitespace().any(|part| part == "package") {
+        format!("mvn -DskipTests {args}")
+    } else {
+        format!("mvn {args}")
+    }
 }
 
 fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSourceService) -> String {
@@ -232,10 +271,7 @@ fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSource
         .output_directory
         .clone()
         .unwrap_or_else(|| format!("{frontend_root}/dist"));
-    let build_command = service
-        .build_command
-        .clone()
-        .unwrap_or_else(|| default_java_build_command(service));
+    let build_command = java_build_command(service);
     let builder_image = java_builder_image(service);
     [
         "FROM node:22-bookworm-slim AS web-builder".to_string(),
@@ -430,13 +466,9 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
         lines.push(format!("      - \"{}:{}\"", host_port, service.port));
     }
     lines.extend(yaml_environment(&env, 4));
-    if service.start_command.is_some() {
+    if service_has_healthcheck(service) {
         lines.push("    healthcheck:".to_string());
-        lines.push(format!(
-            "      test: [\"CMD-SHELL\", \"wget -qO- http://127.0.0.1:{}{} >/dev/null 2>&1 || exit 1\"]",
-            service.port,
-            service.healthcheck_path.as_deref().unwrap_or("/")
-        ));
+        lines.push(format!("      test: {}", healthcheck_test(service)));
         lines.push("      interval: 10s".to_string());
         lines.push("      timeout: 3s".to_string());
         lines.push("      retries: 6".to_string());
@@ -445,12 +477,47 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
     if !depends_on.is_empty() {
         lines.push("    depends_on:".to_string());
         for dependency in depends_on {
-            lines.push(format!("      - {dependency}"));
+            if service_has_healthcheck_for_id(spec, &dependency) {
+                lines.push(format!("      {dependency}:"));
+                lines.push("        condition: service_healthy".to_string());
+            } else {
+                lines.push(format!("      - {dependency}"));
+            }
         }
     }
     lines.push("    restart: unless-stopped".to_string());
     lines.push(String::new());
     lines
+}
+
+fn service_has_healthcheck_for_id(spec: &DeploymentSpec, service_id: &str) -> bool {
+    spec.source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == service_id)
+        .map(service_has_healthcheck)
+        .unwrap_or(false)
+}
+
+fn service_has_healthcheck(service: &DeploymentSourceService) -> bool {
+    service.healthcheck_path.is_some() && service.role != SourceServiceRole::Frontend
+}
+
+fn healthcheck_test(service: &DeploymentSourceService) -> String {
+    let path = service.healthcheck_path.as_deref().unwrap_or("/");
+    let command = match service.runtime_kind {
+        RuntimeKind::Java => {
+            format!(
+                "curl -fsS http://127.0.0.1:{}{} || exit 1",
+                service.port, path
+            )
+        }
+        _ => format!(
+            "wget -qO- http://127.0.0.1:{}{} >/dev/null 2>&1 || exit 1",
+            service.port, path
+        ),
+    };
+    format!("[\"CMD-SHELL\", {}]", yaml_string(&command))
 }
 
 fn compose_depends_on(spec: &DeploymentSpec, service: &DeploymentSourceService) -> Vec<String> {
