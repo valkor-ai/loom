@@ -418,6 +418,83 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
 }
 
 #[test]
+fn prepare_generates_file_database_env_from_code_probe_when_contract_omits_it() {
+    let fixture = Fixture::new("deploy-code-probe-file-db-env");
+    let mut runtime = plugin_style_dual_service_runtime_delivery();
+    runtime["environment"]["required"] = json!([]);
+    fixture.write_runtime_delivery(runtime);
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+    fixture.write_text("backend/mvnw", "#!/bin/sh\n");
+    fixture.write_text(
+        "backend/src/main/resources/application.yml",
+        r#"spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./var/purchase-approval;MODE=PostgreSQL}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert!(
+        spec.environment
+            .required
+            .iter()
+            .all(|variable| variable.name != "DATABASE_URL"),
+        "{:#?}",
+        spec.environment.required
+    );
+    assert_eq!(
+        spec.environment.generated["DATABASE_URL"],
+        "jdbc:h2:file:/app/data/purchase-approval;MODE=PostgreSQL"
+    );
+    assert_eq!(
+        spec.environment.generated["SPRING_JPA_HIBERNATE_DDL_AUTO"],
+        "none"
+    );
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("DATABASE_URL: jdbc:h2:file:/app/data/purchase-approval;MODE=PostgreSQL"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("SPRING_JPA_HIBERNATE_DDL_AUTO: none"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("      - backend-data:/app/data"),
+        "{compose}"
+    );
+}
+
+#[test]
 fn prepare_without_loom_delivery_uses_repository_code_probe() {
     let fixture = Fixture::new("deploy-no-delivery-code-probe");
     fixture.write_text(

@@ -261,6 +261,14 @@ fn env_diagnostics(
             );
         }
     }
+    for (name, default_value) in &code_probe.env_defaults {
+        if std::env::var(name).is_ok() || generated.contains_key(name) {
+            continue;
+        }
+        if let Some(container_value) = container_env_default(name, default_value) {
+            generated.insert(name.clone(), container_value);
+        }
+    }
     if should_disable_spring_ddl_validation(code_probe, &generated) {
         generated
             .entry("SPRING_JPA_HIBERNATE_DDL_AUTO".to_string())
