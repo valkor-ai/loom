@@ -202,6 +202,18 @@ fn build_review_request(
         .and_then(Value::as_str)
         .unwrap_or("current_file_content")
         .to_string();
+    let concept_review_matrix = build_concept_review_matrix(task_plan, task_results);
+    let detail_review_matrix = build_detail_review_matrix(task_plan, task_results);
+    let engineering_quality_review_matrix =
+        build_engineering_quality_review_matrix(task_plan, task_results);
+    let frontend_quality_review_matrix =
+        build_frontend_quality_review_matrix(task_plan, task_results);
+    let review_matrix_summary = compact_review_matrix_summary(
+        &concept_review_matrix,
+        &detail_review_matrix,
+        &engineering_quality_review_matrix,
+        &frontend_quality_review_matrix,
+    );
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "review_gate",
@@ -239,10 +251,11 @@ fn build_review_request(
         },
         "changeSet": change_set,
         "changeContext": change_context,
-        "conceptReviewMatrix": build_concept_review_matrix(task_plan, task_results),
-        "detailReviewMatrix": build_detail_review_matrix(task_plan, task_results),
-        "engineeringQualityReviewMatrix": build_engineering_quality_review_matrix(task_plan, task_results),
-        "frontendQualityReviewMatrix": build_frontend_quality_review_matrix(task_plan, task_results),
+        "conceptReviewMatrix": concept_review_matrix,
+        "detailReviewMatrix": detail_review_matrix,
+        "engineeringQualityReviewMatrix": engineering_quality_review_matrix,
+        "frontendQualityReviewMatrix": frontend_quality_review_matrix,
+        "reviewMatrixSummary": review_matrix_summary,
         "enumRefs": {
             "decision": ["approved", "approved_with_notes", "changes_requested", "blocked", "needs_user_decision"],
             "findingSeverity": ["critical", "major", "minor", "note"],
@@ -379,13 +392,13 @@ fn build_review_request(
                 {
                     "groupId": "review_matrices",
                     "required": true,
-                    "purpose": "Read concept, requirement detail, frontend, and runtime review signals.",
+                    "purpose": "Read compact concept, requirement detail, engineering quality, frontend quality, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
                     "selectors": read_selectors_value_from_paths([
-                        "conceptReviewMatrix",
-                        "detailReviewMatrix",
-                        "engineeringQualityReviewMatrix",
-                        "frontendQualityReviewMatrix",
+                        "reviewMatrixSummary.concept",
+                        "reviewMatrixSummary.detail",
+                        "reviewMatrixSummary.engineeringQuality",
+                        "reviewMatrixSummary.frontendQuality",
                         "outputContract.reviewSignals.items"
                     ])
                 },
@@ -2548,6 +2561,74 @@ fn build_frontend_quality_review_matrix(
         .collect()
 }
 
+fn compact_review_matrix_summary(
+    concept_matrix: &[Value],
+    detail_matrix: &[Value],
+    engineering_quality_matrix: &[Value],
+    frontend_quality_matrix: &[Value],
+) -> Value {
+    json!({
+        "concept": concept_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "conceptRef": item.get("conceptRef").cloned().unwrap_or(Value::Null),
+                "status": item.get("status").cloned().unwrap_or(Value::Null),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "detail": detail_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "detailId": item.get("detailId").cloned().unwrap_or(Value::Null),
+                "detailSatisfied": item.get("detailSatisfied").cloned().unwrap_or(Value::Null),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "engineeringQuality": engineering_quality_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
+                "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
+                "missingAlignmentTargetCount": item
+                    .get("missingAlignmentTargets")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "frontendQuality": frontend_quality_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+                "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
+                "scenarioKind": item.get("scenarioKind").cloned().unwrap_or(Value::Null),
+                "actualScenarioKind": item.get("actualScenarioKind").cloned().unwrap_or(Value::Null),
+                "qualityLevel": item.get("qualityLevel").cloned().unwrap_or(Value::Null),
+                "actualQualityLevel": item.get("actualQualityLevel").cloned().unwrap_or(Value::Null),
+                "missingReferenceCount": item
+                    .get("missingReferenceIds")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "missingUiStateCount": item
+                    .get("missingUiStates")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "missingBusinessUiRuleCount": item
+                    .get("missingBusinessUiRuleIds")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "forbiddenViolationCount": item.get("forbiddenViolationCount").cloned().unwrap_or_else(|| json!(0)),
+                "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>()
+    })
+}
+
 fn build_review_signals(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
@@ -2980,6 +3061,11 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             .unwrap_or(0),
         "businessUiRulesCheckedCount": self_check
             .get("businessUiRulesChecked")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "surfacesCoveredCount": self_check
+            .get("surfacesCovered")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),

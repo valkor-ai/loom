@@ -2596,6 +2596,12 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert!(core_fields
         .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
     assert!(core_fields.contains(
+        &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string()
+    ));
+    assert!(core_fields.contains(
+        &"task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string()
+    ));
+    assert!(core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
             .to_string()
     ));
@@ -2625,15 +2631,15 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
                 .to_string(),
             "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"
                 .to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.surfacesInScope".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.actionsInScope".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
             "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
                 .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode"
-                .to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy"
                 .to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
             "executionRules.frontendImplementationOrganizationRules".to_string(),
@@ -2643,6 +2649,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "outputContract.resultFile".to_string(),
             "outputContract.requiredTopLevelFields".to_string(),
             "outputContract.resultTemplate".to_string(),
+            "outputContract.resultRules".to_string(),
         ],
     })
     .expect("read execution fields")
@@ -2656,6 +2663,30 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         fields["task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"]
             .value[0]["interfaces"][0]["interfaceId"],
         json!("api.account.open")
+    );
+    assert_eq!(
+        fields["task.frontendExperienceRequirement.executionGuidance.surfacesInScope"].value[0]
+            ["surfaceId"],
+        json!("surface_account_admin")
+    );
+    assert_eq!(
+        fields["task.frontendExperienceRequirement.executionGuidance.actionsInScope"].value[0]
+            ["actionId"],
+        json!("action_open_account")
+    );
+    assert!(
+        fields["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"].value
+            ["forbiddenComposition"]
+            .as_array()
+            .expect("forbidden composition")
+            .contains(&json!("runtime command instructions"))
+    );
+    assert!(
+        fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"].value
+            ["referenceIds"]
+            .as_array()
+            .expect("style reference ids")
+            .contains(&json!("uix.tokens.spacing"))
     );
     let interfaces = &fields["sourceContext.architectureArtifactProjection.interfaces"].value;
     assert_eq!(interfaces.as_array().expect("interfaces").len(), 1);
@@ -2723,9 +2754,43 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     );
     assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["surfacesCovered"][0]["surfaceId"],
+        json!("surface_account_admin")
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["surfacesCovered"][0]["files"]
+            .as_array()
+            .expect("surface files")
+            .contains(&json!("replace_with_ui_file_path_for_this_surface"))
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["surfacesCovered"][0]["states"]
+            .as_array()
+            .expect("surface states")
+            .contains(&json!("business_blocking"))
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["surfacesCovered"][0]["businessActions"]
+            .as_array()
+            .expect("surface actions")
+            .contains(&json!("action_open_account"))
+    );
+    assert_eq!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
             ["designTokenEvidence"]["templateIdUsed"],
         json!("uix.templates.tokens-css")
     );
+    assert!(fields["outputContract.resultRules"]
+        .value
+        .as_array()
+        .expect("result rules")
+        .iter()
+        .any(|rule| rule
+            .as_str()
+            .is_some_and(|text| text.contains("do not leave replace_with_* values"))));
     assert!(
         fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
             .value
@@ -3978,18 +4043,15 @@ fn review_request_carries_engineering_quality_signals() {
     })
     .expect("read review matrices")
     .fields;
-    let matrix = review_matrices["engineeringQualityReviewMatrix"]
+    let matrix = review_matrices["reviewMatrixSummary.engineeringQuality"]
         .value
         .as_array()
-        .expect("engineering quality matrix");
+        .expect("engineering quality matrix summary");
     assert_eq!(matrix.len(), 2, "{matrix:#?}");
     assert!(matrix.iter().all(|item| {
         item["requirementId"] == json!("eqr-persistence-mapping-001")
-            && item["kind"] == json!("persistence_mapping")
             && item["qualitySatisfied"] == json!(true)
-            && item["passedVerificationSummaries"]
-                .as_array()
-                .is_some_and(|items| !items.is_empty())
+            && item["recommendedNextAction"] == json!("none")
     }));
     assert!(!matrix
         .iter()
@@ -5759,15 +5821,15 @@ fn review_flags_frontend_quality_self_check_gaps() {
         group_id: "review_matrices".to_string(),
     })
     .expect("read review matrices");
-    let quality_matrix = review_matrices.fields["frontendQualityReviewMatrix"]
+    let quality_matrix = review_matrices.fields["reviewMatrixSummary.frontendQuality"]
         .value
         .as_array()
-        .expect("frontend quality matrix");
+        .expect("frontend quality matrix summary");
     assert_eq!(quality_matrix[0]["qualitySatisfied"], json!(false));
     assert_eq!(quality_matrix[0]["knownGapCount"], json!(1));
     assert_eq!(
-        quality_matrix[0]["designTokenAsset"]["satisfied"],
-        json!(true)
+        quality_matrix[0]["recommendedNextAction"],
+        json!("execution_repair")
     );
     let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
         .value

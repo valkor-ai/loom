@@ -379,6 +379,10 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .as_ref()
         .and_then(|requirement| requirement.get("uiQualityContract"))
         .unwrap_or(&Value::Null);
+    let frontend_execution_guidance = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("executionGuidance"));
     let reference_ids = ui_quality_contract
         .pointer("/referenceProfile/referenceIds")
         .and_then(Value::as_array)
@@ -423,6 +427,77 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let default_surface_states = frontend_execution_guidance
+        .and_then(|guidance| guidance.pointer("/uiProductionBrief/stateExpectation"))
+        .and_then(Value::as_array)
+        .map(|states| {
+            states
+                .iter()
+                .filter_map(|state| {
+                    state.as_str().map(|value| json!(value)).or_else(|| {
+                        state
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .map(|value| json!(value))
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let default_surface_actions = frontend_execution_guidance
+        .and_then(|guidance| guidance.get("actionsInScope"))
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter_map(|action| {
+                    action
+                        .get("actionId")
+                        .and_then(Value::as_str)
+                        .or_else(|| action.get("label").and_then(Value::as_str))
+                        .map(|value| json!(value))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let surfaces_covered = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.pointer("/executionGuidance/surfacesInScope"))
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            surfaces
+                .iter()
+                .filter_map(|surface| {
+                    let surface_id = surface.get("surfaceId").and_then(Value::as_str)?;
+                    let states = surface
+                        .get("stateRefs")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .filter(|items| !items.is_empty())
+                        .unwrap_or_else(|| default_surface_states.clone());
+                    let business_actions = surface
+                        .get("actionRefs")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .filter(|items| !items.is_empty())
+                        .unwrap_or_else(|| default_surface_actions.clone());
+                    Some(json!({
+                        "surfaceId": surface_id,
+                        "surfaceRole": surface
+                            .get("surfaceRole")
+                            .or_else(|| surface.get("role"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("page"),
+                        "files": ["replace_with_ui_file_path_for_this_surface"],
+                        "states": states,
+                        "businessActions": business_actions,
+                        "evidence": "Describe how this surface implements the business purpose, layout composition, states, and actions."
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let design_token_plan = ui_quality_contract
         .get("designTokenAssetPlan")
         .cloned()
@@ -435,6 +510,11 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .get("templateId")
         .cloned()
         .unwrap_or(Value::Null);
+    let token_asset_files = design_token_plan
+        .get("targetFiles")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     json!({
         "status": "satisfied",
         "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
@@ -446,11 +526,12 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             "checked": true,
             "violations": []
         },
+        "surfacesCovered": surfaces_covered,
         "designTokenEvidence": {
             "strategyUsed": token_strategy,
             "templateIdUsed": template_id,
-            "tokenAssetFiles": [],
-            "tokenConsumerFiles": [],
+            "tokenAssetFiles": token_asset_files,
+            "tokenConsumerFiles": ["replace_with_ui_file_using_declared_tokens"],
             "existingTokenSystemReused": matches!(token_strategy, "reuse_existing" | "extend_existing"),
             "parallelTokenSystemCreated": false,
             "mergeSummary": ""

@@ -2352,8 +2352,23 @@ fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) 
             .get("experienceLevel")
             .and_then(Value::as_str)
             .unwrap_or("production_internal_product"),
-        "mustSatisfy": true
+        "mustSatisfy": true,
+        "uiTaskScope": {
+            "source": "AAC frontendExperience.uiSurfaceRegistry plus frontend surfaces, dataViews, actions, and operationPaths",
+            "selectionRule": "For each frontend task, select only the surfaces, data views, actions, operation paths, states, and backend/API bindings owned by that task. Do not copy unrelated UI surfaces into the task.",
+            "surfacesInScope": ["current-task uiSurfaceRegistry surface object"],
+            "dataViewsInScope": ["current-task frontendExperience.dataViews object"],
+            "actionsInScope": ["current-task frontendExperience.actions object"],
+            "operationPathsInScope": ["current-task frontendExperience.operationPaths object"],
+            "frontendBackendBindings": ["current-task binding between UI action/path and AAC interface when known"],
+            "stateExpectation": ["loading", "success", "error", "empty", "business_blocking"]
+        }
     });
+    if frontend.get("uiSurfaceRegistry").is_some() {
+        requirement["uiSurfaceRegistryRef"] = json!(
+            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceRegistry"
+        );
+    }
     if let Some(ui_quality_contract) = frontend.get("uiQualityContract") {
         requirement["uiQualityContractRef"] = json!(
             "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
@@ -2374,6 +2389,7 @@ fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value 
         "dataViews": frontend.get("dataViews").cloned().unwrap_or(Value::Array(vec![])),
         "actions": frontend.get("actions").cloned().unwrap_or(Value::Array(vec![])),
         "operationPaths": frontend.get("operationPaths").cloned().unwrap_or(Value::Array(vec![])),
+        "uiSurfaceRegistry": frontend.get("uiSurfaceRegistry").cloned().unwrap_or(Value::Null),
         "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null)
     })
 }
@@ -2655,7 +2671,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "required": aac.frontend_experience.as_ref().and_then(|value| value.get("required")).and_then(Value::as_bool).unwrap_or(false),
             "requirementTemplate": "outputContract.frontendExperienceRequirementTemplate",
             "uiQualityContractSource": "outputContract.frontendExperienceRequirementTemplate.uiQualityContract",
+            "uiSurfaceRegistrySource": "contextProjection.requirementDetailTransfer.frontendExperienceDetails.uiSurfaceRegistry",
             "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement.",
+            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must fill frontendExperienceRequirement.uiTaskScope from the AAC uiSurfaceRegistry and related frontend arrays. Select only the current task's surfaces, data views, actions, operation paths, states, and bindings.",
             "uiQualityRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must copy outputContract.frontendExperienceRequirementTemplate.uiQualityContract into frontendExperienceRequirement; do not reinterpret scenario, qualityLevel, referenceProfile, or forbidden user-visible content."
         },
         "workflowClosureRules": {

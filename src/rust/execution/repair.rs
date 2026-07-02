@@ -2146,6 +2146,34 @@ fn architecture_repair_section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
+                "uiSurfaceRegistry": {
+                    "registryId": "ui-registry-1",
+                    "selectionRule": "Use this registry as the source for TaskPlan frontendExperienceRequirement execution guidance. Each frontend task should receive only the surfaces, data views, actions, operation paths, states, and bindings it owns.",
+                    "surfaces": [{
+                        "surfaceId": "surface_1",
+                        "surfaceRole": "page",
+                        "businessPurpose": "",
+                        "requiredComposition": [
+                            "business navigation or context",
+                            "task-relevant data view",
+                            "task-relevant action area",
+                            "local loading, empty, error, success, and business-blocking feedback"
+                        ],
+                        "forbiddenComposition": [
+                            "marketing or hero introduction",
+                            "runtime command instructions",
+                            "technical stack explanation",
+                            "delivery progress notes",
+                            "tutorial-style explanatory copy unrelated to the business task"
+                        ],
+                        "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
+                        "dataViewRefs": ["view_1"],
+                        "actionRefs": ["action_1"],
+                        "operationPathRefs": ["path_1"],
+                        "workflowRefs": [],
+                        "interfaceRefs": []
+                    }]
+                },
                 "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }

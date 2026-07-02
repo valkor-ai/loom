@@ -820,6 +820,23 @@ fn section_content_shape(
                 "dataViews": ["object"],
                 "actions": ["object"],
                 "operationPaths": ["object"],
+                "uiSurfaceRegistry": {
+                    "registryId": "string",
+                    "selectionRule": "string",
+                    "surfaces": [{
+                        "surfaceId": "string",
+                        "surfaceRole": "app_shell | page | panel | drawer | modal | table | form | detail | widget | navigation | feedback_area",
+                        "businessPurpose": "string",
+                        "requiredComposition": ["string"],
+                        "forbiddenComposition": ["string"],
+                        "stateRefs": ["loading | success | error | empty | business_blocking"],
+                        "dataViewRefs": ["string"],
+                        "actionRefs": ["string"],
+                        "operationPathRefs": ["string"],
+                        "workflowRefs": ["string"],
+                        "interfaceRefs": ["string"]
+                    }]
+                },
                 "uiQualityContract": ui_quality_contract_shape(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": "string"
@@ -1061,6 +1078,34 @@ fn section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
+                "uiSurfaceRegistry": {
+                    "registryId": "ui-registry-1",
+                    "selectionRule": "Use this registry as the source for TaskPlan frontendExperienceRequirement execution guidance. Each frontend task should receive only the surfaces, data views, actions, operation paths, states, and bindings it owns.",
+                    "surfaces": [{
+                        "surfaceId": "surface_1",
+                        "surfaceRole": "page",
+                        "businessPurpose": "",
+                        "requiredComposition": [
+                            "business navigation or context",
+                            "task-relevant data view",
+                            "task-relevant action area",
+                            "local loading, empty, error, success, and business-blocking feedback"
+                        ],
+                        "forbiddenComposition": [
+                            "marketing or hero introduction",
+                            "runtime command instructions",
+                            "technical stack explanation",
+                            "delivery progress notes",
+                            "tutorial-style explanatory copy unrelated to the business task"
+                        ],
+                        "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
+                        "dataViewRefs": ["view_1"],
+                        "actionRefs": ["action_1"],
+                        "operationPathRefs": ["path_1"],
+                        "workflowRefs": [],
+                        "interfaceRefs": []
+                    }]
+                },
                 "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
@@ -1275,7 +1320,9 @@ fn section_generation_rules(
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
             "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; use compact reference ids, not copied reference text.".to_string(),
-            "The first visible UI must be the actual product/work surface for the selected scenario; do not add runtime commands, stack explanations, Loom progress notes, or verification instructions to user-visible UI.".to_string(),
+            "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
+            "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
+            "Business UI surfaces must directly serve the selected scenario and task workflow; do not add marketing hero blocks, runtime commands, stack explanations, Loom progress notes, verification instructions, or tutorial-style explanatory copy to user-visible UI.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."

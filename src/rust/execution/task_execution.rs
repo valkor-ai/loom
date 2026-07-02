@@ -542,6 +542,9 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present.".to_string());
         rules.push("For browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy and record evidence through existing TaskResult fields.".to_string());
     }
+    if frontend_quality_self_check_applies(task) {
+        rules.push("For frontendQualitySelfCheck, replace template placeholders with concrete UI files, states, business actions, token asset files, token consumer files, and evidence from this task; do not leave replace_with_* values in submitted results.".to_string());
+    }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
         rules.push("For runtimeDeliveryEvidence.codeLevelChecks, use only the exact checkId values listed in task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId.".to_string());
@@ -626,6 +629,8 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
             "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
             "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
         ]);
     }
     if frontend_quality_self_check_applies(task) {
@@ -897,99 +902,38 @@ fn build_frontend_execution_guidance(
                 "closureRequirementIds": [],
                 "derivationRule": "No AAC frontendExperience is present for this task."
             },
+            "uiProductionBrief": Value::Null,
+            "styleAssetPlan": Value::Null,
             "guidanceWarnings": ["AAC frontendExperience is absent."]
         });
     };
     let closure_requirements = workflow_closure_requirements_for_task(task, aac);
-    let closure_workflow_refs = closure_requirements
-        .iter()
-        .filter_map(|item| string_at(item, "workflowRef"))
-        .collect::<Vec<_>>();
-    let workflow_refs = unique_strings(
-        task.write_boundary
-            .artifact_refs
-            .user_flows
-            .iter()
-            .cloned()
-            .chain(closure_workflow_refs)
-            .collect(),
+    let task_scope = frontend_task_scope(task, aac, frontend, &closure_requirements);
+    let surfaces = selected_frontend_surfaces(frontend, &task_scope.surface_refs);
+    let operation_paths = selected_frontend_values(
+        frontend,
+        "operationPaths",
+        "pathId",
+        &task_scope.operation_path_refs,
     );
-    let surface_refs = unique_strings(
-        closure_requirements
-            .iter()
-            .flat_map(|item| string_array_at(item, "surfaceRefs"))
-            .collect(),
-    );
-    let operation_path_refs = unique_strings(
-        closure_requirements
-            .iter()
-            .flat_map(|item| string_array_at(item, "operationPathRefs"))
-            .collect(),
-    );
-    let data_view_refs = unique_strings(
-        closure_requirements
-            .iter()
-            .flat_map(|item| string_array_at(item, "dataViewRefs"))
-            .collect(),
-    );
-    let action_refs = unique_strings(
-        closure_requirements
-            .iter()
-            .flat_map(|item| string_array_at(item, "actionRefs"))
-            .collect(),
-    );
-    let surfaces = array_at(frontend, "surfaces")
-        .into_iter()
-        .filter(|surface| {
-            string_at(surface, "surfaceId")
-                .map(|id| surface_refs.iter().any(|item| item == &id))
-                .unwrap_or(false)
-                || string_array_at(surface, "workflowRefs")
-                    .iter()
-                    .any(|workflow_ref| workflow_refs.iter().any(|item| item == workflow_ref))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let operation_paths = array_at(frontend, "operationPaths")
-        .into_iter()
-        .filter(|path| {
-            string_at(path, "pathId")
-                .map(|id| operation_path_refs.iter().any(|item| item == &id))
-                .unwrap_or(false)
-                || string_at(path, "workflowRef")
-                    .map(|id| workflow_refs.iter().any(|item| item == &id))
-                    .unwrap_or(false)
-                || string_at(path, "surfaceRef")
-                    .map(|id| surface_refs.iter().any(|item| item == &id))
-                    .unwrap_or(false)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let data_views = array_at(frontend, "dataViews")
-        .into_iter()
-        .filter(|view| {
-            string_at(view, "viewId")
-                .map(|id| data_view_refs.iter().any(|item| item == &id))
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    let actions = array_at(frontend, "actions")
-        .into_iter()
-        .filter(|action| {
-            string_at(action, "actionId")
-                .map(|id| action_refs.iter().any(|item| item == &id))
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let data_views =
+        selected_frontend_values(frontend, "dataViews", "viewId", &task_scope.data_view_refs);
+    let actions =
+        selected_frontend_values(frontend, "actions", "actionId", &task_scope.action_refs);
+    let mut frontend_backend_bindings = frontend_backend_bindings(&closure_requirements);
+    if frontend_backend_bindings.is_empty() {
+        frontend_backend_bindings = frontend_backend_bindings_from_scope(aac, &task_scope);
+    }
     let closure_ids = closure_requirements
         .iter()
         .filter_map(|item| string_at(item, "closureId"))
         .collect::<Vec<_>>();
     let mut warnings = Vec::new();
     if closure_requirements.is_empty() {
-        warnings.push("No workflow closure requirement matched this task; use task refs and source context to decide whether frontend work is static, mocked, or wired.".to_string());
+        warnings.push("No workflow closure requirement matched this task; UI scope was derived from AAC uiSurfaceRegistry, detail coverage, task refs, and frontend operation paths.".to_string());
+    }
+    if surfaces.is_empty() && task_has_frontend_execution(task) {
+        warnings.push("No task-specific UI surface matched this task; use uiProductionBrief to keep any implementation business-surface scoped and avoid unrelated UI expansion.".to_string());
     }
     let mut guidance = json!({
         "schemaVersion": "1.0",
@@ -1000,7 +944,7 @@ fn build_frontend_execution_guidance(
         "dataViewsInScope": data_views,
         "actionsInScope": actions,
         "operationPathsInScope": operation_paths,
-        "frontendBackendBindings": frontend_backend_bindings(&closure_requirements),
+        "frontendBackendBindings": frontend_backend_bindings,
         "dataBindingExpectation": {
             "allowedModes": ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"],
             "requiredModeForSatisfaction": if closure_requirements.is_empty() { Value::Null } else { json!("wired") },
@@ -1014,6 +958,8 @@ fn build_frontend_execution_guidance(
             "detailAuthority": "Use closureRequirementRefs, frontendBackendBindings, and sourceContext.architectureArtifactProjection from this request.",
             "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, userFlow steps, and executable interfaces."
         },
+        "uiProductionBrief": ui_production_brief(task, frontend, &task_scope),
+        "styleAssetPlan": style_asset_plan(task),
         "guidanceWarnings": warnings
     });
     let ui_quality = frontend_quality_execution_guidance(task);
@@ -1045,6 +991,499 @@ fn frontend_quality_execution_guidance(task: &TaskDefinition) -> Value {
         ],
         "rule": "Implement the UI according to the uiQualityContract fields, apply designTokenAssetPlan by reusing/extending existing token assets before creating new ones, and report evidence in frontendQualitySelfCheck."
     })
+}
+
+#[derive(Default)]
+struct FrontendTaskScope {
+    surface_refs: Vec<String>,
+    data_view_refs: Vec<String>,
+    action_refs: Vec<String>,
+    operation_path_refs: Vec<String>,
+    workflow_refs: Vec<String>,
+    interface_refs: Vec<String>,
+    state_refs: Vec<String>,
+}
+
+fn frontend_task_scope(
+    task: &TaskDefinition,
+    aac: &ArchitectureArtifactContract,
+    frontend: &Value,
+    closure_requirements: &[Value],
+) -> FrontendTaskScope {
+    let mut scope = FrontendTaskScope::default();
+    push_unique_strings(
+        &mut scope.workflow_refs,
+        task.write_boundary.artifact_refs.user_flows.clone(),
+    );
+    push_unique_strings(
+        &mut scope.interface_refs,
+        task.write_boundary.artifact_refs.interfaces.clone(),
+    );
+    for requirement in closure_requirements {
+        push_unique(
+            &mut scope.workflow_refs,
+            string_at(requirement, "workflowRef"),
+        );
+        push_unique_strings(
+            &mut scope.surface_refs,
+            string_array_at(requirement, "surfaceRefs"),
+        );
+        push_unique_strings(
+            &mut scope.operation_path_refs,
+            string_array_at(requirement, "operationPathRefs"),
+        );
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            string_array_at(requirement, "dataViewRefs"),
+        );
+        push_unique_strings(
+            &mut scope.action_refs,
+            string_array_at(requirement, "actionRefs"),
+        );
+        push_unique_strings(
+            &mut scope.interface_refs,
+            string_array_at(requirement, "interfaceRefs"),
+        );
+    }
+    if let Some(requirement) = task.frontend_experience_requirement.as_ref() {
+        push_unique_strings(
+            &mut scope.surface_refs,
+            scope_refs_from_requirement(
+                requirement,
+                "/uiTaskScope/surfacesInScope",
+                &["surfaceId"],
+            ),
+        );
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            scope_refs_from_requirement(requirement, "/uiTaskScope/dataViewsInScope", &["viewId"]),
+        );
+        push_unique_strings(
+            &mut scope.action_refs,
+            scope_refs_from_requirement(requirement, "/uiTaskScope/actionsInScope", &["actionId"]),
+        );
+        push_unique_strings(
+            &mut scope.operation_path_refs,
+            scope_refs_from_requirement(
+                requirement,
+                "/uiTaskScope/operationPathsInScope",
+                &["pathId"],
+            ),
+        );
+        push_unique_strings(
+            &mut scope.state_refs,
+            scope_refs_from_requirement(requirement, "/uiTaskScope/stateExpectation", &["state"]),
+        );
+    }
+    for detail in &aac.detail_coverage {
+        if !task
+            .requirement_detail_refs
+            .iter()
+            .any(|detail_id| detail_id == &detail.detail_id)
+        {
+            continue;
+        }
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            detail.artifact_refs.frontend_data_views.clone(),
+        );
+        push_unique_strings(
+            &mut scope.action_refs,
+            detail.artifact_refs.frontend_actions.clone(),
+        );
+        push_unique_strings(
+            &mut scope.operation_path_refs,
+            detail.artifact_refs.frontend_operation_paths.clone(),
+        );
+        push_unique_strings(
+            &mut scope.workflow_refs,
+            detail.artifact_refs.user_flows.clone(),
+        );
+        push_unique_strings(
+            &mut scope.interface_refs,
+            detail.artifact_refs.interfaces.clone(),
+        );
+    }
+    for _ in 0..2 {
+        enrich_scope_from_operation_paths(frontend, &mut scope);
+        enrich_scope_from_surfaces(frontend, &mut scope);
+    }
+    if task_has_frontend_execution(task)
+        && scope.surface_refs.is_empty()
+        && scope.data_view_refs.is_empty()
+        && scope.action_refs.is_empty()
+        && scope.operation_path_refs.is_empty()
+    {
+        push_unique_strings(
+            &mut scope.surface_refs,
+            registry_surface_values(frontend)
+                .into_iter()
+                .filter_map(|surface| string_at(surface, "surfaceId"))
+                .chain(
+                    array_at(frontend, "surfaces")
+                        .into_iter()
+                        .filter_map(|surface| string_at(surface, "surfaceId")),
+                )
+                .collect(),
+        );
+        push_unique_strings(
+            &mut scope.operation_path_refs,
+            array_at(frontend, "operationPaths")
+                .into_iter()
+                .filter_map(|path| string_at(path, "pathId"))
+                .collect(),
+        );
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            array_at(frontend, "dataViews")
+                .into_iter()
+                .filter_map(|view| string_at(view, "viewId"))
+                .collect(),
+        );
+        push_unique_strings(
+            &mut scope.action_refs,
+            array_at(frontend, "actions")
+                .into_iter()
+                .filter_map(|action| string_at(action, "actionId"))
+                .collect(),
+        );
+    }
+    if scope.state_refs.is_empty() {
+        if let Some(contract) = task
+            .frontend_experience_requirement
+            .as_ref()
+            .and_then(|requirement| requirement.get("uiQualityContract"))
+        {
+            push_unique_strings(
+                &mut scope.state_refs,
+                object_array_field(contract, "requiredUiStates", "state"),
+            );
+        }
+    }
+    scope.surface_refs = unique_strings(scope.surface_refs);
+    scope.data_view_refs = unique_strings(scope.data_view_refs);
+    scope.action_refs = unique_strings(scope.action_refs);
+    scope.operation_path_refs = unique_strings(scope.operation_path_refs);
+    scope.workflow_refs = unique_strings(scope.workflow_refs);
+    scope.interface_refs = unique_strings(scope.interface_refs);
+    scope.state_refs = unique_strings(scope.state_refs);
+    scope
+}
+
+fn scope_refs_from_requirement(
+    requirement: &Value,
+    pointer: &str,
+    id_keys: &[&str],
+) -> Vec<String> {
+    requirement
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_string).or_else(|| {
+                        id_keys.iter().find_map(|key| {
+                            item.get(*key).and_then(Value::as_str).map(str::to_string)
+                        })
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn enrich_scope_from_operation_paths(frontend: &Value, scope: &mut FrontendTaskScope) {
+    for path in array_at(frontend, "operationPaths") {
+        let path_id = string_at(path, "pathId");
+        let surface_ref = string_at(path, "surfaceRef");
+        let workflow_ref = string_at(path, "workflowRef");
+        let interface_refs = string_array_at(path, "interfaceRefs");
+        let matches_scope = path_id
+            .as_ref()
+            .map(|id| scope.operation_path_refs.iter().any(|item| item == id))
+            .unwrap_or(false)
+            || surface_ref
+                .as_ref()
+                .map(|id| scope.surface_refs.iter().any(|item| item == id))
+                .unwrap_or(false)
+            || workflow_ref
+                .as_ref()
+                .map(|id| scope.workflow_refs.iter().any(|item| item == id))
+                .unwrap_or(false)
+            || interface_refs
+                .iter()
+                .any(|id| scope.interface_refs.iter().any(|item| item == id));
+        if !matches_scope {
+            continue;
+        }
+        push_unique(&mut scope.operation_path_refs, path_id);
+        push_unique(&mut scope.surface_refs, surface_ref);
+        push_unique(&mut scope.workflow_refs, workflow_ref);
+        push_unique_strings(&mut scope.interface_refs, interface_refs);
+        push_unique_strings(
+            &mut scope.data_view_refs,
+            string_array_at(path, "dataViewRefs"),
+        );
+        push_unique_strings(&mut scope.action_refs, string_array_at(path, "actionRefs"));
+    }
+}
+
+fn enrich_scope_from_surfaces(frontend: &Value, scope: &mut FrontendTaskScope) {
+    for surface in registry_surface_values(frontend)
+        .into_iter()
+        .chain(array_at(frontend, "surfaces"))
+    {
+        let surface_id = string_at(surface, "surfaceId");
+        let workflow_refs = string_array_at(surface, "workflowRefs");
+        let data_view_refs = string_array_at(surface, "dataViewRefs");
+        let action_refs = string_array_at(surface, "actionRefs");
+        let operation_path_refs = string_array_at(surface, "operationPathRefs");
+        let interface_refs = string_array_at(surface, "interfaceRefs");
+        let matches_scope = surface_id
+            .as_ref()
+            .map(|id| scope.surface_refs.iter().any(|item| item == id))
+            .unwrap_or(false)
+            || workflow_refs
+                .iter()
+                .any(|id| scope.workflow_refs.iter().any(|item| item == id))
+            || data_view_refs
+                .iter()
+                .any(|id| scope.data_view_refs.iter().any(|item| item == id))
+            || action_refs
+                .iter()
+                .any(|id| scope.action_refs.iter().any(|item| item == id))
+            || operation_path_refs
+                .iter()
+                .any(|id| scope.operation_path_refs.iter().any(|item| item == id))
+            || interface_refs
+                .iter()
+                .any(|id| scope.interface_refs.iter().any(|item| item == id));
+        if !matches_scope {
+            continue;
+        }
+        push_unique(&mut scope.surface_refs, surface_id);
+        push_unique_strings(&mut scope.workflow_refs, workflow_refs);
+        push_unique_strings(&mut scope.data_view_refs, data_view_refs);
+        push_unique_strings(&mut scope.action_refs, action_refs);
+        push_unique_strings(&mut scope.operation_path_refs, operation_path_refs);
+        push_unique_strings(&mut scope.interface_refs, interface_refs);
+        push_unique_strings(&mut scope.state_refs, string_array_at(surface, "stateRefs"));
+    }
+}
+
+fn selected_frontend_surfaces(frontend: &Value, ids: &[String]) -> Vec<Value> {
+    let registry = selected_from_values(registry_surface_values(frontend), "surfaceId", ids);
+    if registry.is_empty() {
+        selected_frontend_values(frontend, "surfaces", "surfaceId", ids)
+    } else {
+        registry
+    }
+}
+
+fn selected_frontend_values(
+    frontend: &Value,
+    array_key: &str,
+    id_key: &str,
+    ids: &[String],
+) -> Vec<Value> {
+    selected_from_values(array_at(frontend, array_key), id_key, ids)
+}
+
+fn selected_from_values(values: Vec<&Value>, id_key: &str, ids: &[String]) -> Vec<Value> {
+    if ids.is_empty() {
+        return vec![];
+    }
+    values
+        .into_iter()
+        .filter(|value| {
+            string_at(value, id_key)
+                .map(|id| ids.iter().any(|item| item == &id))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}
+
+fn registry_surface_values(frontend: &Value) -> Vec<&Value> {
+    frontend
+        .pointer("/uiSurfaceRegistry/surfaces")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default()
+}
+
+fn frontend_backend_bindings_from_scope(
+    aac: &ArchitectureArtifactContract,
+    scope: &FrontendTaskScope,
+) -> Vec<Value> {
+    aac.interfaces
+        .iter()
+        .filter(|interface| {
+            string_at(interface, "interfaceId")
+                .map(|id| scope.interface_refs.iter().any(|item| item == &id))
+                .unwrap_or(false)
+        })
+        .filter(|interface| is_executable_interface(interface))
+        .map(|interface| {
+            let interface_id = string_at(interface, "interfaceId").unwrap_or_default();
+            json!({
+                "bindingId": format!("ui-binding:{interface_id}"),
+                "workflowRefs": scope.workflow_refs.clone(),
+                "operationPathRefs": scope.operation_path_refs.clone(),
+                "interfaces": [compact_interface_binding(interface)],
+                "completionRule": "Wire the task-owned UI action or surface to this AAC-declared interface when the task owns the interaction."
+            })
+        })
+        .collect()
+}
+
+fn ui_production_brief(
+    task: &TaskDefinition,
+    frontend: &Value,
+    scope: &FrontendTaskScope,
+) -> Value {
+    let contract = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiQualityContract"))
+        .unwrap_or(&Value::Null);
+    let surfaces = selected_frontend_surfaces(frontend, &scope.surface_refs);
+    let data_views =
+        selected_frontend_values(frontend, "dataViews", "viewId", &scope.data_view_refs);
+    let actions = selected_frontend_values(frontend, "actions", "actionId", &scope.action_refs);
+    let operation_paths = selected_frontend_values(
+        frontend,
+        "operationPaths",
+        "pathId",
+        &scope.operation_path_refs,
+    );
+    json!({
+        "scopeRule": "Apply this brief to every UI surface owned by the task. App entry first viewport is only one surface role, not the general rule.",
+        "surfaceRoles": unique_strings(surfaces.iter().map(surface_role).collect()),
+        "businessPurpose": compact_join(unique_strings(surfaces.iter().filter_map(surface_business_purpose).collect()), task.objective.as_str()),
+        "requiredComposition": composition_expectations(&surfaces, "requiredComposition", default_required_composition()),
+        "forbiddenComposition": composition_expectations(&surfaces, "forbiddenComposition", default_forbidden_composition(contract)),
+        "densityExpectation": contract.get("density").cloned().unwrap_or_else(|| json!("balanced")),
+        "layoutBaseline": contract.get("layoutBaseline").cloned().unwrap_or_else(|| json!("custom_product_layout")),
+        "stateExpectation": if scope.state_refs.is_empty() { object_array_field(contract, "requiredUiStates", "state") } else { scope.state_refs.clone() },
+        "interactionExpectation": actions.iter().filter_map(value_display_name).chain(operation_paths.iter().filter_map(value_display_name)).collect::<Vec<_>>(),
+        "dataExpectation": data_views.iter().filter_map(value_display_name).collect::<Vec<_>>(),
+        "forbiddenUserVisibleContent": contract.get("forbiddenUserVisibleContent").cloned().unwrap_or_else(|| json!([])),
+        "qualityLevel": contract.get("qualityLevel").cloned().unwrap_or(Value::Null),
+        "surfacePolicy": contract.get("surfacePolicy").cloned().unwrap_or(Value::Null)
+    })
+}
+
+fn style_asset_plan(task: &TaskDefinition) -> Value {
+    let contract = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiQualityContract"))
+        .unwrap_or(&Value::Null);
+    json!({
+        "designTokenAssetPlan": contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
+        "semanticTokenPolicy": contract.get("semanticTokenPolicy").cloned().unwrap_or(Value::Null),
+        "referenceIds": contract.pointer("/referenceProfile/referenceIds").cloned().unwrap_or_else(|| json!([])),
+        "implementationRules": [
+            "Load only the listed UIX reference ids and matching token template when the task changes user-visible frontend code.",
+            "Reuse or extend the declared token asset before creating component-local raw styles.",
+            "Do not create a parallel token system or paste UIX reference prose into source files or task results.",
+            "Report concrete token asset files and token consumer files in frontendQualitySelfCheck."
+        ]
+    })
+}
+
+fn surface_role(surface: &Value) -> String {
+    string_at(surface, "surfaceRole")
+        .or_else(|| string_at(surface, "role"))
+        .unwrap_or_else(|| "page".to_string())
+}
+
+fn surface_business_purpose(surface: &Value) -> Option<String> {
+    string_at(surface, "businessPurpose")
+        .or_else(|| string_at(surface, "purpose"))
+        .or_else(|| string_at(surface, "name"))
+}
+
+fn value_display_name(value: &Value) -> Option<String> {
+    string_at(value, "label")
+        .or_else(|| string_at(value, "name"))
+        .or_else(|| string_at(value, "title"))
+}
+
+fn composition_expectations(surfaces: &[Value], key: &str, fallback: Vec<String>) -> Vec<String> {
+    let values = unique_strings(
+        surfaces
+            .iter()
+            .flat_map(|surface| string_array_at(surface, key))
+            .collect(),
+    );
+    if values.is_empty() {
+        fallback
+    } else {
+        values
+    }
+}
+
+fn default_required_composition() -> Vec<String> {
+    vec![
+        "business navigation or local context".to_string(),
+        "task-relevant data view, form, table, detail, or action area".to_string(),
+        "local loading, empty, error, success, and business-blocking states where applicable"
+            .to_string(),
+    ]
+}
+
+fn default_forbidden_composition(contract: &Value) -> Vec<String> {
+    let mut values = vec![
+        "marketing or hero introduction unrelated to the business task".to_string(),
+        "runtime command instructions".to_string(),
+        "technical stack explanation".to_string(),
+        "delivery progress notes".to_string(),
+        "tutorial-style explanatory copy unrelated to the business task".to_string(),
+    ];
+    values.extend(string_array_at(contract, "forbiddenUserVisibleContent"));
+    unique_strings(values)
+}
+
+fn object_array_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {
+    value
+        .get(array_key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.get(field_key)
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn compact_join(values: Vec<String>, fallback: &str) -> String {
+    if values.is_empty() {
+        fallback.to_string()
+    } else {
+        values.join("; ")
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: Option<String>) {
+    if let Some(value) = value {
+        if !value.trim().is_empty() && !values.iter().any(|item| item == &value) {
+            values.push(value);
+        }
+    }
+}
+
+fn push_unique_strings(values: &mut Vec<String>, next: Vec<String>) {
+    for value in next {
+        push_unique(values, Some(value));
+    }
 }
 
 fn workflow_closure_requirements_for_task(
