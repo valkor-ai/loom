@@ -31,6 +31,7 @@ use crate::{
     generate::{generate_deployment_files, generated_file_refs},
     paths::{deployment_paths, DeploymentPaths},
     port_plan::{build_deployment_runtime, primary_url},
+    references::reference_profile_value,
     runtime_contract::load_runtime_contract,
     source_model::{runtime_contract_declares_multi_root, source_model_from_runtime_contract},
     strategy::resolve_deployment_strategy,
@@ -592,6 +593,7 @@ pub(crate) fn deployment_prepare_details(
         })),
         "generatedFileRefs": deployment_generated_file_refs(spec),
         "reusedFileRefs": spec.files.reused,
+        "deployReferenceProfile": reference_profile_value(spec, None, false),
         "primaryUrl": primary_url(&spec.runtime),
         "ports": spec.runtime.ports.iter().map(|port| json!({
             "serviceId": port.service_id.clone(),

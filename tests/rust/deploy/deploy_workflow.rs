@@ -41,6 +41,22 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     });
     let value = serde_json::to_value(result).expect("result json");
     assert_eq!(value["state"], "done", "{value:#}");
+    let reference_ids = &value["details"]["deployReferenceProfile"]["referenceIds"];
+    for expected in [
+        "deploy.providers",
+        "deploy.compose",
+        "deploy.dockerfile",
+        "deploy.environment",
+        "deploy.workspaces",
+        "deploy.stacks.node",
+        "deploy.stacks.java",
+    ] {
+        assert_json_array_contains(reference_ids, expected);
+    }
+    assert_eq!(
+        value["details"]["deployReferenceProfile"]["loadMode"],
+        "skill_reference_by_id"
+    );
 
     let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
         .expect("deployment spec");
@@ -917,6 +933,17 @@ exit 0
     });
     let value = serde_json::to_value(result).expect("deploy up json");
     assert_eq!(fixture.read_spec().provider, DeployProvider::Generated);
+    let reference_ids = &value["next"]["deployReferenceProfile"]["referenceIds"];
+    for expected in [
+        "deploy.providers",
+        "deploy.compose",
+        "deploy.dockerfile",
+        "deploy.repair",
+        "deploy.stacks.node",
+    ] {
+        assert_json_array_contains(reference_ids, expected);
+    }
+    assert_json_array_excludes(reference_ids, "deploy.external-references");
     let repair = fixture.repair_action_value();
     assert!(!repair["protectedFiles"]
         .as_array()
@@ -2334,6 +2361,22 @@ fn assert_forbidden_cli_fields_absent(value: &Value) {
         }
         _ => {}
     }
+}
+
+fn assert_json_array_contains(value: &Value, expected: &str) {
+    let contains = value
+        .as_array()
+        .map(|items| items.iter().any(|item| item == expected))
+        .unwrap_or(false);
+    assert!(contains, "expected {expected} in {value:#}");
+}
+
+fn assert_json_array_excludes(value: &Value, forbidden: &str) {
+    let contains = value
+        .as_array()
+        .map(|items| items.iter().any(|item| item == forbidden))
+        .unwrap_or(false);
+    assert!(!contains, "forbidden {forbidden} appears in {value:#}");
 }
 
 struct Fixture {

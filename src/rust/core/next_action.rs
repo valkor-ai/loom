@@ -383,7 +383,15 @@ pub struct DeployRepairAssetsNext {
     pub diagnostics_ref: Option<String>,
     pub error_window: Option<DeploymentErrorWindow>,
     pub read_policy: DeploymentRepairReadPolicy,
+    pub deploy_reference_profile: DeployReferenceProfile,
     pub retry_tool: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployReferenceProfile {
+    pub reference_ids: Vec<String>,
+    pub load_mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

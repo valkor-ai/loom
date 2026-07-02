@@ -30,6 +30,7 @@ use crate::{
         deploy_execution_repair_action_file, deploy_execution_repair_result_file, deployment_paths,
     },
     prepare::{deployment_generated_file_refs, read_spec},
+    references::reference_profile,
     run::deploy_retry_after_repair,
     DeployToolInput,
 };
@@ -189,6 +190,13 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                         diagnostics_ref: "Read next.diagnosticsRef only when compact diagnostics and errorWindow are insufficient.".to_string(),
                         full_log_ref: "Read full logs only after diagnosticsRef is still insufficient or the retry returns a new failure.".to_string(),
                     },
+                    deploy_reference_profile: spec
+                        .as_ref()
+                        .map(|spec| reference_profile(spec, Some(request.failure_kind), true))
+                        .unwrap_or(delivery_core::DeployReferenceProfile {
+                            reference_ids: vec!["deploy.repair".to_string()],
+                            load_mode: "skill_reference_by_id".to_string(),
+                        }),
                     retry_tool: "loom.deployUp".to_string(),
                 }),
             ))

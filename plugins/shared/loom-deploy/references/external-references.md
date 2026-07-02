@@ -1,5 +1,7 @@
 # External Docker Skill References
 
+Maintainer-only research note. Do not load this file during normal `loom deploy` prepare, up, validate, inspect, repair, or agent execution repair.
+
 Use this file only when evaluating whether loom deploy should absorb ideas from external Docker/agent skill projects. Do not vendor third-party skills or generators directly into loom unless the product explicitly adopts their license, update policy, and runtime contract.
 
 ## Reviewed Sources

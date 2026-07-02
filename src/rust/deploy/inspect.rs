@@ -8,6 +8,7 @@ use crate::{
     active_operation::{active_operation_result, live_operation},
     paths::deployment_paths,
     prepare::{deployment_generated_file_refs, read_spec},
+    references::reference_profile_value,
     repair::latest_repair_summary,
     DeployToolInput,
 };
@@ -58,6 +59,7 @@ pub fn deploy_inspect(input: DeployToolInput) -> LoomMcpActionResult {
             }))),
             "generatedFileRefs": spec.as_ref().map(deployment_generated_file_refs).unwrap_or_default(),
             "reusedFileRefs": spec.as_ref().map(|spec| spec.files.reused.clone()).unwrap_or_default(),
+            "deployReferenceProfile": spec.as_ref().map(|spec| reference_profile_value(spec, None, false)),
             "stateRef": path_exists(&paths.state_file).then(|| to_project_relative(project_root, &paths.state_file).ok()).flatten(),
             "repairRef": path_exists(&paths.repair_action_file).then(|| to_project_relative(project_root, &paths.repair_action_file).ok()).flatten(),
             "repairSummary": latest_repair_summary(project_root),

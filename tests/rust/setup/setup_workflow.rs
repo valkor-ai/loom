@@ -637,6 +637,9 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "deploy execution repair",
         "loom.inspectRequest",
         "loom.readFieldGroup",
+        "deployReferenceProfile",
+        "deploy.providers",
+        "../references/loom-deploy/compose.md",
         "requestReadPlan.groups",
         "Do not copy deployment stack rules",
     ] {
@@ -706,18 +709,80 @@ fn agent_templates_expose_reference_loading_protocol() {
         for required in [
             "## Reference Loading",
             "Protocol:",
-            "current deploy action",
-            "detected runtime family",
-            "do not scan the whole",
+            "deployReferenceProfile.referenceIds",
+            "MCP-selected deploy references:",
+            "deploy.providers",
+            "deploy.stacks.java",
+            "Do not infer extra files",
             "do not paste reference prose",
-            "If the current deploy action does not require a reference file",
+            "If the current deploy action has no `deployReferenceProfile`",
+            "external-references.md` is maintainer research material only",
         ] {
             assert!(
                 content.contains(required),
                 "{file} missing deploy reference loading protocol fragment {required}"
             );
         }
+        assert!(
+            !content.contains("references/external-references.md`: comparing external"),
+            "{file} must not expose external-references as a normal deploy reference"
+        );
     }
+}
+
+#[test]
+fn deploy_references_explain_profile_and_provider_fallback_without_external_runtime_loading() {
+    let repo = repo_root();
+    let deploy_refs = repo.join("plugins/shared/loom-deploy/references");
+    let providers = fs::read_to_string(deploy_refs.join("providers.md")).unwrap();
+    let compose = fs::read_to_string(deploy_refs.join("compose.md")).unwrap();
+    let repair = fs::read_to_string(deploy_refs.join("repair.md")).unwrap();
+    let external = fs::read_to_string(deploy_refs.join("external-references.md")).unwrap();
+
+    for required in [
+        "Existing assets are tried first when the user did not force a provider",
+        "may fall back to the generated provider",
+        "When the user explicitly selected `compose-existing` or `dockerfile-existing`, fallback is not allowed",
+    ] {
+        assert!(
+            providers.contains(required),
+            "providers.md missing fallback rule {required}"
+        );
+    }
+    assert!(
+        !providers.contains("Do not automatically switch provider after a failure.\n"),
+        "providers.md must not contradict unforced generated fallback"
+    );
+
+    for required in [
+        "DeploymentSpec.runtime.ports",
+        "`hostPort` is the real available local port chosen by Loom",
+        "build.context",
+        "build.dockerfile",
+        "Frontend plus backend projects",
+    ] {
+        assert!(
+            compose.contains(required),
+            "compose.md missing generation guardrail {required}"
+        );
+    }
+
+    for required in [
+        "Generation-First Repair Posture",
+        "sourceModelRef",
+        "topologyRef",
+        "Ask the user only when",
+    ] {
+        assert!(
+            repair.contains(required),
+            "repair.md missing repair posture {required}"
+        );
+    }
+
+    assert!(
+        external.contains("Maintainer-only research note"),
+        "external-references.md must be clearly maintainer-only"
+    );
 }
 
 #[test]

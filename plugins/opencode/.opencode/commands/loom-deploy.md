@@ -28,12 +28,23 @@ When a deploy repair or deploy execution repair result contains `requestRef`, us
 
 ## Reference Loading
 
-The current MCP deploy result remains the authority. Optional deploy references are installed under `../references/loom-deploy/`; load none by default. Load one file for the matching deploy action: repair, compose, dockerfile, environment, workspace, bootstrap, provider, external-reference review, or the detected runtime family.
+The current MCP deploy result remains the authority. Optional deploy references are installed under `../references/loom-deploy/`; load none by default. Load deploy references only when the MCP result selects them by id.
 
 Protocol:
-- Read only references that match the current deploy action, repair request, or detected runtime family from the MCP result.
-- Prefer the exact runtime family reference selected by the deploy result; do not scan the whole `../references/loom-deploy` directory.
+- After a deploy MCP result, look for `next.deployReferenceProfile.referenceIds` or `details.deployReferenceProfile.referenceIds`.
+- Read only the selected reference ids. Do not infer extra files from stack names, failure text, or the `../references/loom-deploy` directory.
 - Use references as implementation guidance for generated or repaired deployment files; do not paste reference prose into deployment artifacts, repair results, or final chat output.
-- If the current deploy action does not require a reference file, leave deploy references unread.
+- If the current deploy action has no `deployReferenceProfile`, leave deploy references unread.
+
+MCP-selected deploy references:
+- `deploy.providers` -> `../references/loom-deploy/providers.md`.
+- `deploy.compose` -> `../references/loom-deploy/compose.md`.
+- `deploy.dockerfile` -> `../references/loom-deploy/dockerfile.md`.
+- `deploy.environment` -> `../references/loom-deploy/environment.md`.
+- `deploy.workspaces` -> `../references/loom-deploy/workspaces.md`.
+- `deploy.bootstrap` -> `../references/loom-deploy/bootstrap.md`.
+- `deploy.repair` -> `../references/loom-deploy/repair.md`.
+- `deploy.stacks.node`, `deploy.stacks.python`, `deploy.stacks.go`, `deploy.stacks.java`, `deploy.stacks.dotnet`, `deploy.stacks.php`, `deploy.stacks.ruby`, `deploy.stacks.static` -> the matching runtime-family file under `../references/loom-deploy/`.
+- `external-references.md` is maintainer research material only. Do not load it during normal deploy prepare, up, validate, inspect, or repair.
 
 Do not copy deployment stack rules, repair contracts, runtime-family rules, or TaskResult contracts into this command. They belong to the current MCP deploy result or repair request.
