@@ -4,17 +4,20 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, TaskDefinition, TaskPlan,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus, COVERAGE_ARTIFACT_TYPES,
+    build_ui_quality_seed, ui_quality_contract_template, ui_quality_enum_refs,
+    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
-    ArtifactKind, DomainDispatcher, ExecuteEditBoundary, ExecuteTaskNext,
-    ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
-    LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction, ReadFieldGroupInput,
-    RepairContext, RepairOrigin, RouteAction, RouteActionKind, SubmitAcceptedEvent,
-    TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
+    read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
+    ExecuteTaskNext, ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction,
+    ReadFieldGroupInput, RepairContext, RepairOrigin, RouteAction, RouteActionKind,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore, WriteArtifactNext, WriteMode,
+    WriteTarget,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -35,9 +38,11 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        frontend_self_check_applies, runtime_delivery_evidence_applies,
-        runtime_delivery_requirement_template, task_result_required_top_level_fields,
-        task_result_template, taskplan_group_result_template, taskplan_outline_result_template,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
+        task_result_required_top_level_fields, task_result_template,
+        taskplan_group_result_template, taskplan_outline_result_template,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -688,6 +693,13 @@ fn build_repair_execution_request(
             "executionRules.controlledRuntimeProbeRules",
         ]);
     }
+    if frontend_quality_self_check_applies(task) {
+        repair_core_fields.extend([
+            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+            "task.frontendExperienceRequirement.uiQualityContractRef",
+        ]);
+        repair_core_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
+    }
     if runtime_delivery_evidence_applies(task) {
         repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
         repair_core_fields.extend([
@@ -741,6 +753,9 @@ fn build_repair_execution_request(
     if frontend_self_check_applies(task) {
         repair_result_fields
             .push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if frontend_quality_self_check_applies(task) {
+        repair_result_fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
     }
     if runtime_delivery_evidence_applies(task) {
         repair_result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
@@ -813,14 +828,14 @@ fn build_repair_execution_request(
                     "required": true,
                     "purpose": "Read task, repair context, and execution rules before editing.",
                     "whenToRead": "Read before source edits.",
-                    "fields": repair_core_fields
+                    "selectors": read_selectors_value_from_paths(repair_core_fields)
                 },
                 {
                     "groupId": "repair_result_contract",
                     "required": true,
                     "purpose": "Read TaskResult write contract before submitting repair result.",
                     "whenToRead": "Read before writing TaskResult.",
-                    "fields": repair_result_fields
+                    "selectors": read_selectors_value_from_paths(repair_result_fields)
                 }
             ]
         }
@@ -872,19 +887,19 @@ fn materialize_taskplan_repair_action(
             .join(format!("{request_id}.json")),
     )?;
 
-    let core_fields = state::read_field_group(ReadFieldGroupInput {
+    let core_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_core_context".to_string(),
     })?
     .fields;
-    let rule_fields = state::read_field_group(ReadFieldGroupInput {
+    let rule_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_generation_rules".to_string(),
     })?
     .fields;
-    let contract_fields = state::read_field_group(ReadFieldGroupInput {
+    let contract_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_candidate_contract".to_string(),
@@ -955,7 +970,7 @@ fn materialize_taskplan_repair_action(
             "taskPlanningFieldMapping": field_value(&core_fields, "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping")?
         }
     });
-    let generation_rules = json!({
+    let mut generation_rules = json!({
         "groupedOutputRules": field_value(&rule_fields, "generationRules.groupedOutputRules")?,
         "scopeAndReferenceRules": field_value(&rule_fields, "generationRules.scopeAndReferenceRules")?,
         "writeBoundaryRules": field_value(&rule_fields, "generationRules.writeBoundaryRules")?,
@@ -965,11 +980,21 @@ fn materialize_taskplan_repair_action(
         "workflowClosureRules": field_value(&rule_fields, "generationRules.workflowClosureRules")?,
         "runtimeDeliveryRules": field_value(&rule_fields, "generationRules.runtimeDeliveryRules")?
     });
+    let engineering_quality_rules =
+        value_field(&rule_fields, "generationRules.engineeringQualityRules");
+    if !engineering_quality_rules.is_null() {
+        generation_rules["engineeringQualityRules"] = engineering_quality_rules;
+    }
     let enum_refs = json!({
         "taskKind": value_field(&contract_fields, "enumRefs.taskKind"),
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
-        "verificationEvidence": value_field(&contract_fields, "enumRefs.verificationEvidence")
+        "verificationEvidence": value_field(&contract_fields, "enumRefs.verificationEvidence"),
+        "uiQuality": value_field(&contract_fields, "enumRefs.uiQuality")
     });
+    let frontend_requirement_template = value_field(
+        &contract_fields,
+        "outputContract.frontendExperienceRequirementTemplate",
+    );
     let mut runtime_requirement_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryRequirementTemplate",
@@ -988,6 +1013,10 @@ fn materialize_taskplan_repair_action(
     let runtime_closure_template = value_field(
         &contract_fields,
         "outputContract.runtimeDeliveryClosureTaskTemplate",
+    );
+    let engineering_quality_template = value_field(
+        &contract_fields,
+        "outputContract.engineeringQualityRequirementTemplate",
     );
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1051,6 +1080,34 @@ fn materialize_taskplan_repair_action(
         "allowedRefs.riskRefs",
     ]);
 
+    let mut taskplan_repair_write_contract_fields = vec![
+        "enumRefs.taskKind",
+        "enumRefs.implementationAction",
+        "enumRefs.verificationEvidence",
+        "enumRefs.uiQuality",
+        "outputContract.outlineFile",
+        "outputContract.groupFilePattern",
+        "outputContract.pathAuthority",
+        "outputContract.outlineResultTemplate",
+        "outputContract.groupResultTemplate",
+    ];
+    if !frontend_requirement_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.frontendExperienceRequirementTemplate");
+    }
+    if !runtime_requirement_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.runtimeDeliveryRequirementTemplate");
+    }
+    if !runtime_closure_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.runtimeDeliveryClosureTaskTemplate");
+    }
+    if !engineering_quality_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.engineeringQualityRequirementTemplate");
+    }
+
     let mut request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_repair",
@@ -1101,14 +1158,14 @@ fn materialize_taskplan_repair_action(
                     "required": true,
                     "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the replacement TaskPlan outline.",
                     "whenToRead": "Read first.",
-                    "fields": taskplan_core_fields
+                    "selectors": read_selectors_value_from_paths(taskplan_core_fields)
                 },
                 {
                     "groupId": "taskplan_generation_rules",
                     "required": true,
                     "purpose": "Read grouping, reference, verification, frontend, workflow, and runtime rules.",
                     "whenToRead": "Read after core context and before writing group files.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "generationRules.groupedOutputRules",
                         "generationRules.scopeAndReferenceRules",
                         "generationRules.writeBoundaryRules",
@@ -1116,28 +1173,30 @@ fn materialize_taskplan_repair_action(
                         "generationRules.conceptGroundingRules",
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",
-                        "generationRules.runtimeDeliveryRules"
-                    ]
+                        "generationRules.runtimeDeliveryRules",
+                        "generationRules.engineeringQualityRules"
+                    ])
                 },
                 {
                     "groupId": "taskplan_repair_write_contract",
                     "required": true,
                     "purpose": "Read output paths, schema shapes, and enum refs before writing replacement candidates.",
                     "whenToRead": "Read before writing output files.",
-                    "fields": [
-                        "enumRefs.taskKind",
-                        "enumRefs.implementationAction",
-                        "enumRefs.verificationEvidence",
-                        "outputContract.outlineFile",
-                        "outputContract.groupFilePattern",
-                        "outputContract.pathAuthority",
-                        "outputContract.outlineResultTemplate",
-                        "outputContract.groupResultTemplate"
-                    ]
+                    "selectors": read_selectors_value_from_paths(taskplan_repair_write_contract_fields)
                 }
             ]
         }
     });
+    if !frontend_requirement_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "frontendExperienceRequirementTemplate".to_string(),
+                frontend_requirement_template,
+            );
+    }
     if !runtime_requirement_template.is_null() {
         request_root
             .pointer_mut("/outputContract")
@@ -1147,11 +1206,6 @@ fn materialize_taskplan_repair_action(
                 "runtimeDeliveryRequirementTemplate".to_string(),
                 runtime_requirement_template,
             );
-        request_root
-            .pointer_mut("/requestReadPlan/groups/2/fields")
-            .and_then(Value::as_array_mut)
-            .expect("taskplan repair write contract fields")
-            .push(json!("outputContract.runtimeDeliveryRequirementTemplate"));
     }
     if !runtime_closure_template.is_null() {
         request_root
@@ -1162,11 +1216,16 @@ fn materialize_taskplan_repair_action(
                 "runtimeDeliveryClosureTaskTemplate".to_string(),
                 runtime_closure_template,
             );
+    }
+    if !engineering_quality_template.is_null() {
         request_root
-            .pointer_mut("/requestReadPlan/groups/2/fields")
-            .and_then(Value::as_array_mut)
-            .expect("taskplan repair write contract fields")
-            .push(json!("outputContract.runtimeDeliveryClosureTaskTemplate"));
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "engineeringQualityRequirementTemplate".to_string(),
+                engineering_quality_template,
+            );
     }
     let stored = state::write_native_request(
         project_root,
@@ -1240,13 +1299,13 @@ fn materialize_architecture_repair_action(
             .join("requests")
             .join(format!("{request_id}.json")),
     )?;
-    let core_fields = state::read_field_group(ReadFieldGroupInput {
+    let core_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "architecture_core_context".to_string(),
     })?
     .fields;
-    let frontend_fields = state::read_field_group(ReadFieldGroupInput {
+    let frontend_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "architecture_frontend_context".to_string(),
@@ -1315,6 +1374,19 @@ fn materialize_architecture_repair_action(
         .and_then(Value::as_str)
         .map(|planning_ref| read_project_json_value(root, planning_ref))
         .transpose()?;
+    let planning_contract = planning_value
+        .clone()
+        .map(serde_json::from_value::<PlanningGenerationContract>)
+        .transpose()
+        .map_err(state::store::StateError::Json)?;
+    let technical_baseline = source_refs
+        .get("technicalBaselineRef")
+        .and_then(Value::as_str)
+        .map(|baseline_ref| read_project_json_value(root, baseline_ref))
+        .transpose()?
+        .map(serde_json::from_value::<TechnicalBaselineContract>)
+        .transpose()
+        .map_err(state::store::StateError::Json)?;
     let frontend_experience_details = planning_value
         .as_ref()
         .and_then(|value| value.pointer("/planningInputs/frontendExperience"))
@@ -1376,6 +1448,14 @@ fn materialize_architecture_repair_action(
     } else {
         frontend_experience_source_from_fields(&frontend_fields)?
     };
+    let ui_quality_seed = ui_quality_seed_from_fields(&frontend_fields).unwrap_or_else(|| {
+        build_ui_quality_seed(
+            planning_contract
+                .as_ref()
+                .and_then(|contract| contract.planning_inputs.frontend_experience.as_ref()),
+            technical_baseline.as_ref(),
+        )
+    });
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
         .and_then(Value::as_str)
@@ -1392,6 +1472,7 @@ fn materialize_architecture_repair_action(
         phase_id,
         &frontend_experience_source,
         &context_projection,
+        &ui_quality_seed,
     )?;
     let candidate_files = section_outputs
         .iter()
@@ -1428,6 +1509,7 @@ fn materialize_architecture_repair_action(
         "repairContext": repair_context,
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
+        "uiQualitySeed": ui_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": ARCHITECTURE_SECTION_ORDER,
@@ -1441,7 +1523,8 @@ fn materialize_architecture_repair_action(
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
-            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
+            "uiQuality": ui_quality_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -1653,6 +1736,30 @@ fn frontend_experience_source_from_fields(
     Ok(Value::Object(object))
 }
 
+fn ui_quality_seed_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Option<Value> {
+    let required = value_field(fields, "uiQualitySeed.required");
+    if required.is_null() {
+        return None;
+    }
+    Some(json!({
+        "required": required,
+        "scenarioCandidates": value_field(fields, "uiQualitySeed.scenarioCandidates"),
+        "qualityLevel": value_field(fields, "uiQualitySeed.qualityLevel"),
+        "surfacePolicyCandidates": value_field(fields, "uiQualitySeed.surfacePolicyCandidates"),
+        "layoutBaselineCandidates": value_field(fields, "uiQualitySeed.layoutBaselineCandidates"),
+        "densityCandidates": value_field(fields, "uiQualitySeed.densityCandidates"),
+        "semanticTokenPolicy": value_field(fields, "uiQualitySeed.semanticTokenPolicy"),
+        "requiredReferenceIds": value_field(fields, "uiQualitySeed.requiredReferenceIds"),
+        "stackReferenceCandidates": value_field(fields, "uiQualitySeed.stackReferenceCandidates"),
+        "designTokenAssetPlan": value_field(fields, "uiQualitySeed.designTokenAssetPlan"),
+        "forbiddenUserVisibleContent": value_field(fields, "uiQualitySeed.forbiddenUserVisibleContent"),
+        "requiredUiStates": value_field(fields, "uiQualitySeed.requiredUiStates"),
+        "selectionRule": value_field(fields, "uiQualitySeed.selectionRule")
+    }))
+}
+
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
     let authority_ref = frontend_experience_source
         .get("confirmedFrontendExperienceRef")
@@ -1753,14 +1860,14 @@ fn architecture_repair_read_groups(
                 "Read the current-phase planning authority and repair context before generating the replacement Architecture section."
             },
             "whenToRead": "Read before drafting any replacement Architecture section candidate.",
-            "fields": core_fields
+            "selectors": read_selectors_value_from_paths(core_fields)
         }),
         json!({
             "groupId": "architecture_section_contract",
             "required": true,
             "purpose": "Read the current section contract, schema projection, and write target before writing the replacement section candidate.",
             "whenToRead": "Read immediately before writing the current replacement Architecture section candidate.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "sectionState.currentSection",
                 "currentSectionContract.section",
                 "currentSectionContract.candidateFile",
@@ -1775,7 +1882,7 @@ fn architecture_repair_read_groups(
                 "enumRefs.status",
                 "enumRefs.coverageStatus",
                 "enumRefs.acceptancePriority"
-            ]
+            ])
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
@@ -1801,13 +1908,26 @@ fn architecture_repair_read_groups(
         frontend_fields.extend([
             "contextProjection.requirementDetailTransfer.frontendExperienceDetails",
             "contextProjection.requirementDetailTransfer.userFacingLanguage",
+            "uiQualitySeed.required",
+            "uiQualitySeed.scenarioCandidates",
+            "uiQualitySeed.qualityLevel",
+            "uiQualitySeed.surfacePolicyCandidates",
+            "uiQualitySeed.layoutBaselineCandidates",
+            "uiQualitySeed.densityCandidates",
+            "uiQualitySeed.semanticTokenPolicy",
+            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.stackReferenceCandidates",
+            "uiQualitySeed.designTokenAssetPlan",
+            "uiQualitySeed.forbiddenUserVisibleContent",
+            "uiQualitySeed.requiredUiStates",
+            "uiQualitySeed.selectionRule",
         ]);
         groups.push(json!({
             "groupId": "architecture_frontend_context",
             "required": true,
             "purpose": "Read the frontend authority refs for frontend_experience.",
             "whenToRead": "Read when sectionState.currentSection is frontend_experience.",
-            "fields": frontend_fields
+            "selectors": read_selectors_value_from_paths(frontend_fields)
         }));
     }
     if matches!(
@@ -1821,10 +1941,10 @@ fn architecture_repair_read_groups(
             "required": true,
             "purpose": "Read compact actors and capability groups for structural, domain, and behavior architecture repair sections.",
             "whenToRead": "Read when sectionState.currentSection is foundation, domain_contract, or behavior.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "contextProjection.requirementDetailTransfer.actors",
                 "contextProjection.requirementDetailTransfer.capabilityGroups"
-            ]
+            ])
         }));
     }
     Value::Array(groups)
@@ -1851,6 +1971,7 @@ fn build_architecture_repair_section_outputs(
     phase_id: &str,
     frontend_experience_source: &Value,
     context_projection: &Value,
+    ui_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1873,14 +1994,16 @@ fn build_architecture_repair_section_outputs(
                     phase_id,
                     *section,
                     frontend_experience_source,
-                    context_projection
+                    context_projection,
+                    ui_quality_seed
                 ),
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
                     "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
                     "acceptancePriority": ["must", "should", "could"],
-                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
+                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
+                    "uiQuality": ui_quality_enum_refs()
                 },
                 "generationRules": [
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
@@ -1898,6 +2021,7 @@ fn architecture_repair_section_result_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
+    ui_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -1909,7 +2033,8 @@ fn architecture_repair_section_result_template(
         "content": architecture_repair_section_content_template(
             section,
             frontend_experience_source,
-            context_projection
+            context_projection,
+            ui_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -1920,6 +2045,7 @@ fn architecture_repair_section_content_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
+    ui_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -2020,6 +2146,35 @@ fn architecture_repair_section_content_template(
                     "actionRefs": ["action_1"],
                     "sourceRefs": []
                 }],
+                "uiSurfaceRegistry": {
+                    "registryId": "ui-registry-1",
+                    "selectionRule": "Use this registry as the source for TaskPlan frontendExperienceRequirement execution guidance. Each frontend task should receive only the surfaces, data views, actions, operation paths, states, and bindings it owns.",
+                    "surfaces": [{
+                        "surfaceId": "surface_1",
+                        "surfaceRole": "page",
+                        "businessPurpose": "",
+                        "requiredComposition": [
+                            "business navigation or context",
+                            "task-relevant data view",
+                            "task-relevant action area",
+                            "local loading, empty, error, success, and business-blocking feedback"
+                        ],
+                        "forbiddenComposition": [
+                            "marketing or hero introduction",
+                            "runtime command instructions",
+                            "technical stack explanation",
+                            "delivery progress notes",
+                            "tutorial-style explanatory copy unrelated to the business task"
+                        ],
+                        "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
+                        "dataViewRefs": ["view_1"],
+                        "actionRefs": ["action_1"],
+                        "operationPathRefs": ["path_1"],
+                        "workflowRefs": [],
+                        "interfaceRefs": []
+                    }]
+                },
+                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),

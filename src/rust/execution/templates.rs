@@ -1,6 +1,30 @@
 use contracts::TaskDefinition;
 use serde_json::{json, Value};
 
+pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 21] = [
+    "task.frontendExperienceRequirement.uiQualityContract.scenario",
+    "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+    "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
+    "task.frontendExperienceRequirement.uiQualityContract.density",
+    "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds",
+    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tailwindConfigRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tokenFileRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.globalStyleRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.componentThemeRefs",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.mergePolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.duplicationPolicy",
+    "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
+    "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
+    "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+];
+
 pub(crate) fn taskplan_outline_result_template(
     request_id: &str,
     delivery_id: &str,
@@ -131,17 +155,7 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
         .requirement_detail_refs
         .iter()
         .map(|detail_id| {
-            let verification_ids = task
-                .verification_intents
-                .iter()
-                .filter(|intent| {
-                    intent
-                        .requirement_detail_refs
-                        .iter()
-                        .any(|id| id == detail_id)
-                })
-                .map(|intent| intent.verification_id.clone())
-                .collect::<Vec<_>>();
+            let verification_ids = template_verification_ids_for_detail(task, detail_id);
             json!({
                 "detailId": detail_id,
                 "status": "satisfied",
@@ -187,6 +201,12 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             frontend_experience_self_check_template(task),
         );
     }
+    if frontend_quality_self_check_applies(task) {
+        object.insert(
+            "frontendQualitySelfCheck".to_string(),
+            frontend_quality_self_check_template(task),
+        );
+    }
     if runtime_delivery_evidence_applies(task) {
         object.insert(
             "runtimeDeliveryEvidence".to_string(),
@@ -214,6 +234,27 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
     template
 }
 
+fn template_verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
+    let direct = task
+        .verification_intents
+        .iter()
+        .filter(|intent| {
+            intent
+                .requirement_detail_refs
+                .iter()
+                .any(|id| id == detail_id)
+        })
+        .map(|intent| intent.verification_id.clone())
+        .collect::<Vec<_>>();
+    if !direct.is_empty() {
+        return direct;
+    }
+    if task.verification_intents.len() == 1 {
+        return vec![task.verification_intents[0].verification_id.clone()];
+    }
+    Vec::new()
+}
+
 pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Vec<&'static str> {
     let mut fields = vec![
         "schemaVersion",
@@ -236,6 +277,9 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
     if frontend_self_check_applies(task) {
         fields.push("frontendExperienceSelfCheck");
     }
+    if frontend_quality_self_check_applies(task) {
+        fields.push("frontendQualitySelfCheck");
+    }
     if runtime_delivery_evidence_applies(task) {
         fields.push("runtimeDeliveryEvidence");
     }
@@ -254,6 +298,15 @@ pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
 
 pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
     task.frontend_experience_requirement.is_some() && !runtime_delivery_evidence_applies(task)
+}
+
+pub(crate) fn frontend_quality_self_check_applies(task: &TaskDefinition) -> bool {
+    frontend_self_check_applies(task)
+        && task
+            .frontend_experience_requirement
+            .as_ref()
+            .and_then(|requirement| requirement.get("uiQualityContract"))
+            .is_some()
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
@@ -316,6 +369,174 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
             "knownGaps": []
         },
         "evidenceRefs": [],
+        "summary": ""
+    })
+}
+
+fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
+    let ui_quality_contract = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiQualityContract"))
+        .unwrap_or(&Value::Null);
+    let frontend_execution_guidance = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("executionGuidance"));
+    let reference_ids = ui_quality_contract
+        .pointer("/referenceProfile/referenceIds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let states_covered = ui_quality_contract
+        .get("requiredUiStates")
+        .and_then(Value::as_array)
+        .map(|states| {
+            states
+                .iter()
+                .filter_map(|state| {
+                    state
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .map(|state_name| {
+                            json!({
+                                "state": state_name,
+                                "status": "covered",
+                                "evidence": ""
+                            })
+                        })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let business_rules_checked = ui_quality_contract
+        .get("businessUiRules")
+        .and_then(Value::as_array)
+        .map(|rules| {
+            rules
+                .iter()
+                .filter_map(|rule| {
+                    rule.get("ruleId").and_then(Value::as_str).map(|rule_id| {
+                        json!({
+                            "ruleId": rule_id,
+                            "status": "satisfied",
+                            "evidence": ""
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let default_surface_states = frontend_execution_guidance
+        .and_then(|guidance| guidance.pointer("/uiProductionBrief/stateExpectation"))
+        .and_then(Value::as_array)
+        .map(|states| {
+            states
+                .iter()
+                .filter_map(|state| {
+                    state.as_str().map(|value| json!(value)).or_else(|| {
+                        state
+                            .get("state")
+                            .and_then(Value::as_str)
+                            .map(|value| json!(value))
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let default_surface_actions = frontend_execution_guidance
+        .and_then(|guidance| guidance.get("actionsInScope"))
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter_map(|action| {
+                    action
+                        .get("actionId")
+                        .and_then(Value::as_str)
+                        .or_else(|| action.get("label").and_then(Value::as_str))
+                        .map(|value| json!(value))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let surfaces_covered = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.pointer("/executionGuidance/surfacesInScope"))
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            surfaces
+                .iter()
+                .filter_map(|surface| {
+                    let surface_id = surface.get("surfaceId").and_then(Value::as_str)?;
+                    let states = surface
+                        .get("stateRefs")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .filter(|items| !items.is_empty())
+                        .unwrap_or_else(|| default_surface_states.clone());
+                    let business_actions = surface
+                        .get("actionRefs")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .filter(|items| !items.is_empty())
+                        .unwrap_or_else(|| default_surface_actions.clone());
+                    Some(json!({
+                        "surfaceId": surface_id,
+                        "surfaceRole": surface
+                            .get("surfaceRole")
+                            .or_else(|| surface.get("role"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("page"),
+                        "files": ["replace_with_ui_file_path_for_this_surface"],
+                        "states": states,
+                        "businessActions": business_actions,
+                        "evidence": "Describe how this surface implements the business purpose, layout composition, states, and actions."
+                    }))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let design_token_plan = ui_quality_contract
+        .get("designTokenAssetPlan")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let token_strategy = design_token_plan
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("not_applicable");
+    let template_id = design_token_plan
+        .get("templateId")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let token_asset_files = design_token_plan
+        .get("targetFiles")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    json!({
+        "status": "satisfied",
+        "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
+        "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str).unwrap_or("production_internal_product"),
+        "referenceIdsChecked": reference_ids,
+        "statesCovered": states_covered,
+        "businessUiRulesChecked": business_rules_checked,
+        "forbiddenContentCheck": {
+            "checked": true,
+            "violations": []
+        },
+        "surfacesCovered": surfaces_covered,
+        "designTokenEvidence": {
+            "strategyUsed": token_strategy,
+            "templateIdUsed": template_id,
+            "tokenAssetFiles": token_asset_files,
+            "tokenConsumerFiles": ["replace_with_ui_file_using_declared_tokens"],
+            "existingTokenSystemReused": matches!(token_strategy, "reuse_existing" | "extend_existing"),
+            "parallelTokenSystemCreated": false,
+            "mergeSummary": ""
+        },
+        "knownGaps": [],
         "summary": ""
     })
 }

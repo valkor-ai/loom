@@ -29,7 +29,11 @@ For reused app-local Dockerfiles and Compose files, keep the build context at th
 
 For generated Node workspace Dockerfiles, prefer the workspace root as build context so root lockfiles and workspace manifests remain available to npm/pnpm/yarn/bun. Set `detectedStack.workingDirectory` to the selected app path and make the Dockerfile switch to that directory before running app build/start scripts.
 
-For generated non-Node stacks, keep context at the selected app path until stack-specific workspace support is implemented.
+For generated non-Node stacks, choose context from the source model:
+
+- app-local service with all build files under one root -> app root context
+- frontend/backend composition where one image copies frontend static assets into a backend -> repository or common ancestor context
+- multi-service generated Compose -> each service may use a different Dockerfile and workdir, but every Dockerfile path must be valid from its Compose build context
 
 ## Package Managers
 
@@ -48,3 +52,5 @@ When a monorepo deployment fails, inspect these fields first:
 - `detectedStack.workingDirectory`
 
 Common fixes are correcting the Compose `build.context`, Dockerfile path relative to that context, or the Dockerfile `WORKDIR` used before install/build/start commands.
+
+If a build command works locally only because it is run from a subdirectory, encode that subdirectory as `WORKDIR` or an explicit `cd` in the generated Dockerfile. Do not flatten the workspace into one root command unless the project already has root-level build scripts for that app.

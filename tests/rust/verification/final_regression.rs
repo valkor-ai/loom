@@ -64,11 +64,11 @@ fn final_verification_reports_cover_protocol_metrics_and_delivery_isolation() {
                         "required": true,
                         "purpose": "Read phase two write contract.",
                         "whenToRead": "Before writing the phase two candidate.",
-                        "fields": [
+                        "selectors": delivery_core::read_selectors_value_from_paths([
                             "protocolPurpose",
                             "outputContract.submitTool",
                             "outputContract.writeTargets"
-                        ]
+                        ])
                     }]
                 }
             }),
@@ -369,8 +369,7 @@ fn run_knowledge_context(
             )
             .expect("read knowledge context plan"),
     );
-    let field_name = format!("knowledgeQueryPlan.blocks.{block}.executionOrder");
-    let steps = knowledge_plan["fields"][field_name]
+    let steps = knowledge_plan["fields"]["knowledgeQueryPlan"]["blocks"][block]["executionOrder"]
         .as_array()
         .expect("knowledge executionOrder");
     for step in steps {

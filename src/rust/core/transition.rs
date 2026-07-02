@@ -153,7 +153,6 @@ where
                             "loom.status".to_string(),
                             "loom.inspectRequest".to_string(),
                             "loom.readFieldGroup".to_string(),
-                            "loom.readRequestFields".to_string(),
                         ],
                         observation_policy: None,
                         forbidden_actions: vec![],

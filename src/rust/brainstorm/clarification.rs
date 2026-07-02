@@ -18,7 +18,7 @@ use state::{
 use crate::{
     gate::{
         block_message, required_knowledge_step_ids, to_value, BrainstormGate,
-        BrainstormResponseRule,
+        BrainstormResponseRule, SkippedBlockSummary,
     },
     paths::{brainstorm_agent_candidate_file, brainstorm_clarification_state_file},
     request::{
@@ -271,7 +271,14 @@ fn confirm_block_inner(
             ),
         });
     }
-    if input.summary.trim().is_empty() {
+    let summary = clean_user_facing_text(&input.summary);
+    let skip_reason = input
+        .skip_reason
+        .as_deref()
+        .map(clean_user_facing_text)
+        .filter(|value| !value.trim().is_empty());
+    let confirmed_data = input.confirmed_data.map(clean_confirmed_value);
+    if summary.trim().is_empty() {
         return Err(ConfirmError {
             project_root,
             code: "BRAINSTORM_CONFIRM_SUMMARY_REQUIRED".to_string(),
@@ -299,11 +306,11 @@ fn confirm_block_inner(
         &mut state,
         ConfirmedClarificationBlock {
             block: input.block.clone(),
-            summary: input.summary.trim().to_string(),
+            summary,
             confirmed_by_user: !input.skipped,
             skipped: input.skipped,
-            skip_reason: input.skip_reason.filter(|value| !value.trim().is_empty()),
-            confirmed_data: input.confirmed_data,
+            skip_reason,
+            confirmed_data,
             confirmed_at: now.clone(),
         },
     );
@@ -458,7 +465,7 @@ fn confirm_block_inner(
             "brainstormRequestRef".to_string(),
             stored.request_ref.clone(),
         );
-        let gate = gate_for_block(next);
+        let gate = gate_for_state(next, &state);
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::BrainstormClarification,
             source: "brainstorm_confirm_block".to_string(),
@@ -711,13 +718,29 @@ fn block_id(block: &ClarificationBlockName) -> &'static str {
     }
 }
 
-fn gate_for_block(block: ClarificationBlockName) -> BrainstormGate {
+fn gate_for_state(block: ClarificationBlockName, state: &ClarificationState) -> BrainstormGate {
     BrainstormGate {
         gate_id: format!("gate_{}", block_id(&block)),
         current_block: block.clone(),
         required_blocks: crate::gate::required_blocks(),
-        already_confirmed_blocks: vec![],
-        skipped_blocks: vec![],
+        already_confirmed_blocks: state
+            .blocks
+            .iter()
+            .filter(|confirmed| confirmed.confirmed_by_user && !confirmed.skipped)
+            .map(|confirmed| confirmed.block.clone())
+            .collect(),
+        skipped_blocks: state
+            .blocks
+            .iter()
+            .filter(|confirmed| confirmed.skipped)
+            .map(|confirmed| SkippedBlockSummary {
+                block: confirmed.block.clone(),
+                reason: confirmed
+                    .skip_reason
+                    .clone()
+                    .unwrap_or_else(|| "User confirmed this block is not applicable.".to_string()),
+            })
+            .collect(),
         user_message: block_message(&block),
         response_rule: BrainstormResponseRule {
             mode: "progressive_brainstorm".to_string(),
@@ -726,6 +749,50 @@ fn gate_for_block(block: ClarificationBlockName) -> BrainstormGate {
         },
         issues: vec![],
     }
+}
+
+fn clean_confirmed_value(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(clean_user_facing_text(&text)),
+        Value::Array(items) => Value::Array(items.into_iter().map(clean_confirmed_value).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, clean_confirmed_value(value)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn clean_user_facing_text(value: &str) -> String {
+    let mut cleaned = value.trim().to_string();
+    loop {
+        let trimmed = cleaned.trim_end();
+        let Some(last) = trimmed.chars().last() else {
+            return String::new();
+        };
+        let Some((open, close)) = unmatched_pair_for_closer(last) else {
+            return trimmed.to_string();
+        };
+        if char_count(trimmed, close) <= char_count(trimmed, open) {
+            return trimmed.to_string();
+        }
+        cleaned = trimmed[..trimmed.len() - last.len_utf8()]
+            .trim_end()
+            .to_string();
+    }
+}
+
+fn unmatched_pair_for_closer(ch: char) -> Option<(char, char)> {
+    match ch {
+        '}' => Some(('{', '}')),
+        ']' => Some(('[', ']')),
+        _ => None,
+    }
+}
+
+fn char_count(value: &str, target: char) -> usize {
+    value.chars().filter(|ch| *ch == target).count()
 }
 
 fn context_refs(

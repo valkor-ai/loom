@@ -134,6 +134,18 @@ fn install_projects_shared_references_to_agent_read_paths() {
     for agent in [AgentKind::Codex, AgentKind::ClaudeCode] {
         let root = env.agent_plugin_root(agent);
         assert!(root.join("skills/loom/references/uix/core.md").exists());
+        assert!(root
+            .join("skills/loom/references/uix/templates/tokens.css.tpl")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/uix/templates/tokens.tailwind.tpl")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/uix/stacks/svelte.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/uix/stacks/uniapp.md")
+            .exists());
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -143,6 +155,14 @@ fn install_projects_shared_references_to_agent_read_paths() {
     assert!(env
         .opencode_home
         .join("references/loom/uix/core.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/uix/templates/tokens.css.tpl")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/uix/templates/tokens.tailwind.tpl")
         .exists());
     assert!(!env.opencode_home.join("references/loom/delivery").exists());
     assert!(env
@@ -567,7 +587,6 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "loom.inspectRequest",
         "loom.readFieldGroup",
         "requestReadPlan.groups",
-        "loom.readRequestFields",
         "GenerateKnowledgeSemanticsNext",
         "loom.knowledgeInspectChunk",
         "ExecuteTaskNext",
@@ -581,18 +600,28 @@ fn opencode_commands_expose_mcp_result_discipline() {
             "opencode loom.md missing {required}"
         );
     }
+    assert!(
+        !loom.contains("loom.readRequestFields"),
+        "opencode loom.md must not expose readRequestFields"
+    );
 
     for required in [
+        "MCP-selected references:",
+        "Reference discipline:",
+        "uiQualityContract.referenceProfile.referenceIds",
         "../references/loom/uix/core.md",
-        "../references/loom/uix/interaction.md",
-        "../references/loom/uix/system.md",
-        "../references/loom/uix/mobile.md",
-        "../references/loom/uix/frameworks.md",
-        "../references/loom/uix/content.md",
-        "../references/loom/uix/data.md",
-        "../references/loom/uix/verification.md",
-        "writing or reviewing user-visible frontend artifacts",
-        "forms, flows, search/filter, loading, empty, error, or recovery states",
+        "`uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification`",
+        "../references/loom/uix/anti-patterns.md",
+        "uix.scenarios.admin-dashboard",
+        "uix.tokens.color-system",
+        "uix.stacks.react",
+        "../references/loom/uix/templates/tokens.css.tpl",
+        "../references/loom/uix/templates/tokens.tailwind.tpl",
+        "uiQualityContract.designTokenAssetPlan.templateId",
+        "do not paste reference prose or template bodies",
+        "creates, changes, or reviews user-visible frontend work",
+        "Focus references are contract-selected ids, not fallback reading",
+        "companion scenario ids",
         "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
         "Do not load separate delivery reference files",
     ] {
@@ -608,6 +637,9 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "deploy execution repair",
         "loom.inspectRequest",
         "loom.readFieldGroup",
+        "deployReferenceProfile",
+        "deploy.providers",
+        "../references/loom-deploy/compose.md",
         "requestReadPlan.groups",
         "Do not copy deployment stack rules",
     ] {
@@ -616,6 +648,141 @@ fn opencode_commands_expose_mcp_result_discipline() {
             "opencode loom-deploy.md missing {required}"
         );
     }
+}
+
+#[test]
+fn agent_templates_expose_reference_loading_protocol() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    let files = [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+    ];
+
+    for file in files {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            !content.contains("## Optional References"),
+            "{file} must use Reference Loading instead of Optional References"
+        );
+        assert!(
+            !content.contains("UIX references:"),
+            "{file} must not keep the old broad UIX references section"
+        );
+        for required in [
+            "## Reference Loading",
+            "Protocol:",
+            "MCP-selected references:",
+            "Reference discipline:",
+            "After reading the current request group",
+            "uiQualityContract.referenceProfile.referenceIds",
+            "uiQualityContract.designTokenAssetPlan.templateId",
+            "Do not scan the whole",
+            "If a referenced file is not selected by the MCP contract",
+            "frontendQualitySelfCheck",
+            "do not paste reference prose or template bodies",
+            "Focus references are contract-selected ids, not fallback reading",
+            "`uix.system`",
+            "`uix.scenarios.admin-dashboard`",
+            "`uix.tokens.color-system`",
+            "`uix.stacks.react`",
+            "`uix.templates.tokens-css`",
+        ] {
+            assert!(
+                content.contains(required),
+                "{file} missing reference loading protocol fragment {required}"
+            );
+        }
+    }
+
+    for file in [
+        "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/skills/loom-deploy/SKILL.md",
+        "opencode/.opencode/commands/loom-deploy.md",
+    ] {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            !content.contains("## Optional References"),
+            "{file} must use Reference Loading instead of Optional References"
+        );
+        for required in [
+            "## Reference Loading",
+            "Protocol:",
+            "deployReferenceProfile.referenceIds",
+            "MCP-selected deploy references:",
+            "deploy.providers",
+            "deploy.stacks.java",
+            "Do not infer extra files",
+            "do not paste reference prose",
+            "If the current deploy action has no `deployReferenceProfile`",
+            "external-references.md` is maintainer research material only",
+        ] {
+            assert!(
+                content.contains(required),
+                "{file} missing deploy reference loading protocol fragment {required}"
+            );
+        }
+        assert!(
+            !content.contains("references/external-references.md`: comparing external"),
+            "{file} must not expose external-references as a normal deploy reference"
+        );
+    }
+}
+
+#[test]
+fn deploy_references_explain_profile_and_provider_fallback_without_external_runtime_loading() {
+    let repo = repo_root();
+    let deploy_refs = repo.join("plugins/shared/loom-deploy/references");
+    let providers = fs::read_to_string(deploy_refs.join("providers.md")).unwrap();
+    let compose = fs::read_to_string(deploy_refs.join("compose.md")).unwrap();
+    let repair = fs::read_to_string(deploy_refs.join("repair.md")).unwrap();
+    let external = fs::read_to_string(deploy_refs.join("external-references.md")).unwrap();
+
+    for required in [
+        "Existing assets are tried first when the user did not force a provider",
+        "may fall back to the generated provider",
+        "When the user explicitly selected `compose-existing` or `dockerfile-existing`, fallback is not allowed",
+    ] {
+        assert!(
+            providers.contains(required),
+            "providers.md missing fallback rule {required}"
+        );
+    }
+    assert!(
+        !providers.contains("Do not automatically switch provider after a failure.\n"),
+        "providers.md must not contradict unforced generated fallback"
+    );
+
+    for required in [
+        "DeploymentSpec.runtime.ports",
+        "`hostPort` is the real available local port chosen by Loom",
+        "build.context",
+        "build.dockerfile",
+        "Frontend plus backend projects",
+    ] {
+        assert!(
+            compose.contains(required),
+            "compose.md missing generation guardrail {required}"
+        );
+    }
+
+    for required in [
+        "Generation-First Repair Posture",
+        "sourceModelRef",
+        "topologyRef",
+        "Ask the user only when",
+    ] {
+        assert!(
+            repair.contains(required),
+            "repair.md missing repair posture {required}"
+        );
+    }
+
+    assert!(
+        external.contains("Maintainer-only research note"),
+        "external-references.md must be clearly maintainer-only"
+    );
 }
 
 #[test]
@@ -855,6 +1022,7 @@ impl Fixture {
 
     fn write_shared_references(&self) {
         for name in [
+            "anti-patterns",
             "content",
             "core",
             "data",
@@ -869,6 +1037,48 @@ impl Fixture {
                     .package_root
                     .join(format!("plugins/shared/loom/references/uix/{name}.md")),
                 &format!("# {name} Reference\n"),
+            );
+        }
+        for path in [
+            "scenarios/admin-dashboard",
+            "scenarios/consumer-app",
+            "scenarios/corporate-site",
+            "scenarios/data-console",
+            "scenarios/developer-tool",
+            "scenarios/docs-site",
+            "scenarios/fintech-consumer-app",
+            "scenarios/fintech-workstation",
+            "scenarios/immersive-3d",
+            "scenarios/marketing-site",
+            "scenarios/mobile-native",
+            "scenarios/mobile-responsive",
+            "stacks/native-mobile",
+            "stacks/plain-html",
+            "stacks/react",
+            "stacks/svelte",
+            "stacks/threejs",
+            "stacks/uniapp",
+            "stacks/vue",
+            "tokens/color-system",
+            "tokens/layout-grid",
+            "tokens/motion",
+            "tokens/radius-elevation",
+            "tokens/spacing",
+            "tokens/typography",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/references/uix/{path}.md")),
+                &format!("# {path} Reference\n"),
+            );
+        }
+        for path in ["templates/tokens.css.tpl", "templates/tokens.tailwind.tpl"] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/references/uix/{path}")),
+                &format!("/* {path} */\n"),
             );
         }
         for name in [

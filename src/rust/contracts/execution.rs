@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +153,23 @@ pub struct TaskRuntimeDeliveryRequirement {
     pub deployment_failure_ref: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineeringQualityRequirement {
+    pub requirement_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applies_to_task_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stack_signals: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alignment_targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risk_field_kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_obligations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDefinition {
@@ -183,6 +201,8 @@ pub struct TaskDefinition {
     pub frontend_experience_requirement: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_requirement: Option<TaskRuntimeDeliveryRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engineering_quality_requirement_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -297,6 +317,8 @@ pub struct TaskPlan {
     pub groups: Vec<TaskPlanGroup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<TaskDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub engineering_quality_requirements: Vec<EngineeringQualityRequirement>,
     pub handoff: TaskPlanHandoff,
     pub created_at: String,
     pub updated_at: String,
@@ -481,6 +503,81 @@ pub struct ConceptEvidence {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityStateCoverage {
+    pub state: String,
+    pub status: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityBusinessRuleCheck {
+    pub rule_id: String,
+    pub status: String,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityForbiddenContentCheck {
+    pub checked: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub violations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualitySurfaceEvidence {
+    pub surface_id: String,
+    pub surface_role: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub business_actions: Vec<String>,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendDesignTokenEvidence {
+    pub strategy_used: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_id_used: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub token_asset_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub token_consumer_files: Vec<String>,
+    pub existing_token_system_reused: bool,
+    pub parallel_token_system_created: bool,
+    pub merge_summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualitySelfCheck {
+    pub status: String,
+    pub scenario_kind: String,
+    pub quality_level: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_ids_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states_covered: Vec<FrontendQualityStateCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub business_ui_rules_checked: Vec<FrontendQualityBusinessRuleCheck>,
+    pub forbidden_content_check: FrontendQualityForbiddenContentCheck,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surfaces_covered: Vec<FrontendQualitySurfaceEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_gaps: Vec<String>,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockedReason {
@@ -523,6 +620,8 @@ pub struct TaskResult {
     pub notes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontend_experience_self_check: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontend_quality_self_check: Option<FrontendQualitySelfCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_evidence: Option<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

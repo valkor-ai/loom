@@ -21,25 +21,9 @@ Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. A tas
 
 ## Request Reading
 
-When a result contains `requestRef`, use `loom.inspectRequest` and `loom.readFieldGroup`. `requestReadPlan.groups` is the only read contract. Use `loom.readRequestFields` only for declared fields.
+When a result contains `requestRef`, use `loom.inspectRequest` and `loom.readFieldGroup`. `requestReadPlan.groups` is the only read contract. Do not request individual field paths.
 
 Do not search `.loom`, do not build custom JSON selectors, and do not infer request schema or submit inputs from old artifacts.
-
-## Optional References
-
-The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
-
-UIX references:
-- `references/uix/core.md`: writing or reviewing user-visible frontend artifacts.
-- `references/uix/interaction.md`: forms, flows, search/filter, loading, empty, error, or recovery states.
-- `references/uix/system.md`: design system, tokens, components, icons, theming, motion, or localization.
-- `references/uix/mobile.md`: mobile, tablet, responsive, PWA, or touch behavior.
-- `references/uix/frameworks.md`: framework or component-library-specific frontend work.
-- `references/uix/content.md`: UX writing, labels, empty states, errors, CTAs, onboarding, or terminology.
-- `references/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
-- `references/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
-
-Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 
 ## Writing And Submit
 
@@ -52,6 +36,33 @@ For task execution, implement only the returned task request, respect edit bound
 For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting completion.
 
 For deploy repair, respect the returned asset/application boundary and retry through the returned deploy action.
+
+## Reference Loading
+
+The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
+
+Protocol:
+- Read `references/uix/core.md` only when the current action creates, changes, or reviews user-visible frontend work.
+- After reading the current request group, map `uiQualityContract.referenceProfile.referenceIds` to the exact focus, scenario, token, and stack reference files named below. Do not scan the whole `references/uix` tree.
+- When `uiQualityContract.designTokenAssetPlan.templateId` is present, load only the matching token template file. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
+- If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
+- In `frontendQualitySelfCheck`, report `referenceIdsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
+
+MCP-selected references:
+- `uix.core` -> `references/uix/core.md`.
+- `uix.anti-patterns` -> `references/uix/anti-patterns.md`.
+- `uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification` -> the matching top-level file under `references/uix/`.
+- `uix.tokens.color-system`, `uix.tokens.typography`, `uix.tokens.spacing`, `uix.tokens.layout-grid`, `uix.tokens.motion`, `uix.tokens.radius-elevation` -> the matching file under `references/uix/tokens/`.
+- `uix.scenarios.admin-dashboard`, `uix.scenarios.data-console`, `uix.scenarios.fintech-workstation`, `uix.scenarios.fintech-consumer-app`, `uix.scenarios.consumer-app`, `uix.scenarios.mobile-responsive`, `uix.scenarios.mobile-native`, `uix.scenarios.marketing-site`, `uix.scenarios.corporate-site`, `uix.scenarios.docs-site`, `uix.scenarios.developer-tool`, `uix.scenarios.immersive-3d` -> the matching file under `references/uix/scenarios/`.
+- `uix.stacks.react`, `uix.stacks.vue`, `uix.stacks.plain-html`, `uix.stacks.native-mobile`, `uix.stacks.threejs`, `uix.stacks.svelte`, `uix.stacks.uniapp` -> the matching file under `references/uix/stacks/`.
+- `uix.templates.tokens-css` -> `references/uix/templates/tokens.css.tpl`; `uix.templates.tokens-tailwind` -> `references/uix/templates/tokens.tailwind.tpl`.
+
+Reference discipline:
+- Focus references are contract-selected ids, not fallback reading. Load a focus file only when its `uix.*` id appears in `referenceProfile.referenceIds`.
+- If the contract selects companion scenario ids such as `uix.scenarios.data-console` and `uix.scenarios.admin-dashboard`, read both and apply the more specific rule to each surface.
+- Do not load unselected UIX files to compensate for weak implementation planning; ask Loom to repair the contract only when selected references are insufficient for the task.
+
+Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 
 ## Boundaries
 

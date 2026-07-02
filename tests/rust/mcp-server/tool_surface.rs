@@ -70,7 +70,6 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
             "knowledgeUpdate",
             "plan",
             "readFieldGroup",
-            "readRequestFields",
             "recordTaskResultFile",
             "repairSubmitFile",
             "repositoryContextAcceptFile",
@@ -178,7 +177,6 @@ fn batch_2_resource_templates_are_registered() {
         vec![
             "loom://knowledge/{sourceId}/builds/{buildId}/chunks/{chunkId}",
             "loom://projects/{projectId}/requests/{requestId}/field-groups/{groupId}",
-            "loom://projects/{projectId}/requests/{requestId}/fields/{encodedFieldPath}",
         ]
     );
 }

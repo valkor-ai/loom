@@ -61,24 +61,16 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
     let selected = structured(
         server
             .invoke_tool(
-                "readRequestFields",
+                "readFieldGroup",
                 Some(args(json!({
                     "projectRoot": fixture.root_str(),
                     "requestRef": request_ref,
-                    "fields": ["knowledgeQueryPlan.toolContract"]
+                    "groupId": "knowledge_context_plan"
                 }))),
             )
-            .expect("read request fields"),
+            .expect("read knowledge context plan"),
     );
-    assert_eq!(
-        selected
-            .as_object()
-            .expect("selected fields object")
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>(),
-        vec!["fields".to_string()]
-    );
+    assert!(selected["fields"]["knowledgeQueryPlan"]["toolContract"].is_object());
     let knowledge_group = inspected
         .read_groups
         .iter()
@@ -117,7 +109,7 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .expect("requirement_context group");
     assert!(
         !requirement_context
-            .fields
+            .expanded_fields()
             .contains(&"requirementContext.normalizedText".to_string()),
         "default requirement_context group must stay compact"
     );
@@ -128,7 +120,7 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .expect("requirement_full_text group");
     assert!(!full_text.required);
     assert_eq!(
-        full_text.fields,
+        full_text.expanded_fields(),
         vec!["requirementContext.normalizedText".to_string()]
     );
     let current_block_rules = state::read_field_group(delivery_core::ReadFieldGroupInput {
@@ -205,6 +197,10 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
         .to_string()
         .contains("kind:text"));
     assert!(knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
+        .value
+        .to_string()
+        .contains("object:core business object"));
+    assert!(!knowledge_fields.fields["knowledgeQueryPlan.sharedRules"]
         .value
         .to_string()
         .contains("object:证券账户"));
@@ -285,7 +281,7 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         "clarification request must not expose candidate_write_contract"
     );
 
-    request_ref = confirm_block(
+    let phase_scope_confirmed = confirm_block(
         &server,
         &fixture,
         &request_ref,
@@ -300,12 +296,32 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             "recommendation": {
                 "label": "证券账户模块闭环",
                 "reason": "证券账户是交易身份和持仓归属的上游基础对象。"
-            }
+            },
+            "nextPhasePreview": "下一步确认证券账户规则和页面路径。}}"
         }),
-    )["requestRef"]
+    );
+    assert_eq!(
+        phase_scope_confirmed["gate"]["alreadyConfirmedBlocks"],
+        json!(["phase_scope"])
+    );
+    request_ref = phase_scope_confirmed["requestRef"]
         .as_str()
         .expect("concept request ref")
         .to_string();
+    let clarification_state_ref = latest_ref_for_phase(
+        fixture.root_str(),
+        planned["deliveryId"].as_str().unwrap(),
+        "brainstormClarificationState",
+    );
+    let clarification_state: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(clarification_state_ref))
+            .expect("read clarification state"),
+    )
+    .expect("parse clarification state");
+    assert_eq!(
+        clarification_state["blocks"][0]["confirmedData"]["nextPhasePreview"],
+        "下一步确认证券账户规则和页面路径。"
+    );
     assert_eq!(
         state::inspect_request(InspectRequestInput {
             project_root: fixture.root_str().to_string(),
@@ -459,15 +475,15 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             .expect("read source ref registry"),
     );
     assert_eq!(
-        source_ref_registry["fields"]["sourceRefRegistry.sources"][0]["sourceId"],
+        source_ref_registry["fields"]["sourceRefRegistry"]["sources"][0]["sourceId"],
         "req-001"
     );
     assert_eq!(
-        source_ref_registry["fields"]["sourceRefRegistry.sources"][0]["title"],
+        source_ref_registry["fields"]["sourceRefRegistry"]["sources"][0]["title"],
         "request_text"
     );
     assert!(
-        source_ref_registry["fields"]["sourceRefRegistry.sources"][0]
+        source_ref_registry["fields"]["sourceRefRegistry"]["sources"][0]
             .get("textRef")
             .is_none()
     );
@@ -488,16 +504,16 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             .expect("read candidate write contract"),
     );
     assert!(
-        write_contract["fields"]["outputContract.resultTemplate"]["clarificationProgress"]
+        write_contract["fields"]["outputContract"]["resultTemplate"]["clarificationProgress"]
             ["confirmedBlocks"]
             .is_array()
     );
     assert!(
-        write_contract["fields"]["outputContract.resultTemplate"]["clarificationProgress"]
+        write_contract["fields"]["outputContract"]["resultTemplate"]["clarificationProgress"]
             .get("completedBlocks")
             .is_none()
     );
-    let template = &write_contract["fields"]["outputContract.resultTemplate"];
+    let template = &write_contract["fields"]["outputContract"]["resultTemplate"];
     assert!(template["scope"]["deferred"][0].is_object());
     assert!(template["scope"]["assumptions"][0].is_object());
     assert_eq!(
@@ -510,14 +526,14 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     assert!(template["frontendExperience"]["actions"][0]["actionId"].is_string());
     assert!(template["frontendExperience"]["operationPaths"][0]["pathId"].is_string());
     assert_eq!(
-        write_contract["fields"]["enumRefs.conceptPhaseRelevance"][0],
+        write_contract["fields"]["enumRefs"]["conceptPhaseRelevance"][0],
         "current"
     );
     assert_eq!(
-        write_contract["fields"]["enumRefs.conceptPriority"][0],
+        write_contract["fields"]["enumRefs"]["conceptPriority"][0],
         "must_understand"
     );
-    let enum_fields = &write_contract["fields"]["outputContract.schemaProjection"]["enumFields"];
+    let enum_fields = &write_contract["fields"]["outputContract"]["schemaProjection"]["enumFields"];
     assert_eq!(
         enum_fields["requestSummary.complexity"],
         "enumRefs.complexity"
@@ -543,49 +559,49 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
         "enumRefs.frontendInteractionState"
     );
     assert!(
-        !write_contract["fields"]["enumRefs.frontendResultObservationMode"]
+        !write_contract["fields"]["enumRefs"]["frontendResultObservationMode"]
             .as_array()
             .expect("frontend result observation enum")
             .contains(&json!("empty"))
     );
     assert!(
-        write_contract["fields"]["enumRefs.frontendInteractionState"]
+        write_contract["fields"]["enumRefs"]["frontendInteractionState"]
             .as_array()
             .expect("frontend interaction state enum")
             .contains(&json!("empty"))
     );
     assert!(
-        write_contract["fields"]["outputContract.schemaProjection"]["objectShapeRules"]
+        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
             ["frontendExperience.actions[].resultObservation[]"]
             .as_str()
             .expect("result observation shape rule")
             .contains("empty is not a result observation")
     );
     assert!(
-        write_contract["fields"]["outputContract.schemaProjection"]["objectShapeRules"]
+        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
             ["frontendExperience.operationPaths[].requiredStates[]"]
             .as_str()
             .expect("required states shape rule")
             .contains("empty is valid only here")
     );
-    assert!(write_contract["fields"]["enumRefs.conceptRiskFactor"]
+    assert!(write_contract["fields"]["enumRefs"]["conceptRiskFactor"]
         .as_array()
         .expect("concept risk factor enum")
         .contains(&json!("business_invariant")));
-    assert!(write_contract["fields"]["rules.candidateWrite"]
+    assert!(write_contract["fields"]["rules"]["candidateWrite"]
         .to_string()
         .contains("never replace typed object arrays with string arrays"));
-    assert!(write_contract["fields"]["rules.candidateWrite"]
+    assert!(write_contract["fields"]["rules"]["candidateWrite"]
         .to_string()
         .contains("scope.deferred is non-empty"));
-    let candidate_rules = write_contract["fields"]["rules.candidateWrite"].to_string();
+    let candidate_rules = write_contract["fields"]["rules"]["candidateWrite"].to_string();
     assert!(candidate_rules.contains("not from final_summary alone"));
     assert!(candidate_rules.contains("Self-review must verify"));
     assert!(candidate_rules.contains("scope.included"));
     assert!(candidate_rules.contains("domainModel.businessFlows"));
     assert!(candidate_rules.contains("frontendExperience"));
     assert!(candidate_rules.contains("TaskPlan"));
-    let mut candidate = write_contract["fields"]["outputContract.resultTemplate"].clone();
+    let mut candidate = write_contract["fields"]["outputContract"]["resultTemplate"].clone();
     populate_confirmed_brainstorm_candidate(&mut candidate);
 
     let inspected = candidate_request;
@@ -730,8 +746,7 @@ fn run_knowledge_context(
             )
             .expect("read knowledge context plan"),
     );
-    let field_name = format!("knowledgeQueryPlan.blocks.{block}.executionOrder");
-    let steps = knowledge_plan["fields"][field_name]
+    let steps = knowledge_plan["fields"]["knowledgeQueryPlan"]["blocks"][block]["executionOrder"]
         .as_array()
         .expect("knowledge executionOrder");
     for step in steps {
@@ -1140,6 +1155,25 @@ fn populate_confirmed_brainstorm_candidate(candidate: &mut Value) {
         json!("确认证券账户业务规则、状态和边界。");
     candidate["clarificationProgress"]["confirmedBlocks"][2]["summary"] =
         json!("确认工作人员后台证券账户管理页面路径。");
+}
+
+fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {
+    let index_path = std::path::Path::new(project_root)
+        .join(".loom/deliveries")
+        .join(delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let active_phase = index["activePhaseId"].as_str().expect("active phase id");
+    index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .find(|phase| phase["phaseId"] == active_phase)
+        .and_then(|phase| phase["latestRefs"][key].as_str())
+        .unwrap_or_else(|| panic!("missing latest ref {key}"))
+        .to_string()
 }
 
 struct Fixture {

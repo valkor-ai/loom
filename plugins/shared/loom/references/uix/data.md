@@ -1,35 +1,112 @@
-# Data UIX
+# UIX Focus: Data
 
-Load this file for dashboards, tables, analytics, finance, research, charts, maps, metrics, reports, or visualization-heavy screens.
+Load this when the frontend shows lists, tables, details, charts, logs, metrics, account records, transactions, or query results.
 
-## Chart Selection
+## Data Surface Rules
 
-- Choose the simplest view that communicates the decision: bars for categorical comparison, lines for trends, scatter for relationships, histogram or box plot for distribution, heat map for dense matrix patterns.
-- Avoid pie or donut charts except for a few categories where exact comparison is not critical.
-- Use tables when users need lookup, audit, export, exact values, or dense comparison.
-- For mobile, consider summary cards, prioritized tables, or drill-down views instead of shrinking full desktop charts.
+- Show the data object, status, and available action in the same scan path.
+- Provide filters/search/sort/pagination when data volume requires them.
+- Preserve current filters and selected record after mutations.
+- Use tabular numbers for aligned numeric columns.
+- Show units, currency, dates, and timestamps explicitly.
+- Distinguish stale, pending, failed, blocked, and completed states.
+- Keep a stable object identity visible during selection, mutation, loading, and error states.
+- Use the domain's real identifiers rather than generated demo names when identifiers exist.
 
-## Encoding
+## Record Workbench Pattern
 
-- Keep color encoding consistent across related views.
-- Use sequential scales for ordered values, diverging scales for above/below midpoint, and categorical palettes for unrelated groups.
-- Do not rely on color alone. Add labels, patterns, shapes, annotations, or direct values where needed.
-- Start bar-chart axes at zero unless there is a clear, labeled reason not to.
+Use this for CRUD, approval, operations, case management, and account/order/request workflows:
 
-## Interaction
+```html
+<main data-region="record-workbench">
+  <header data-region="page-context"></header>
+  <section data-region="workbench-toolbar"></section>
+  <section data-region="workbench-body">
+    <section data-region="record-list"></section>
+    <aside data-region="record-detail"></aside>
+  </section>
+</main>
+```
 
-- Interactive charts need keyboard-accessible controls, visible focus, touch-friendly targets, and usable tooltip alternatives.
-- Filters, date ranges, legends, and drill-downs should show applied state and provide a clear reset path.
-- Loading, empty, stale, partial-data, and error states must be visible for every data surface.
-- For real-time or finance-like views, show refresh timing, data source, units, and stale-data warnings when relevant.
+The list is for finding and comparing records. The detail panel is for current status, domain fields, related events, and eligible actions. The form or mutation result must update whichever region owns the affected object.
 
-## Accessibility And Trust
+## Tables And Lists
 
-- Provide text alternatives or summaries for charts that carry important information.
-- Label axes, units, currency, date ranges, sample size, benchmark, or target clearly.
-- Do not decorate data in ways that obscure comparison or imply false precision.
-- Test with realistic data, outliers, zero values, missing data, long labels, and dense series.
+- Tables need headers, row identity, overflow behavior, empty/loading/error states, and pagination or virtual/infinite loading when relevant.
+- Lists/cards need enough metadata to support selection without opening every item.
+- Detail views need source context: selected record id/name/status and back/close route.
+- Row actions should not be hidden behind hover only.
+
+## Table Anatomy
+
+```html
+<section data-region="data-surface">
+  <header data-region="data-toolbar"></header>
+  <div data-region="data-feedback" aria-live="polite"></div>
+  <div data-region="data-scroll">
+    <table>
+      <thead></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <footer data-region="pagination-or-selection"></footer>
+</section>
+```
+
+```css
+.data-scroll {
+  min-width: 0;
+  overflow: auto;
+}
+
+.data-scroll table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+}
+
+.data-scroll th,
+.data-scroll td {
+  height: 44px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+```
+
+Mobile record-management flows should prefer cards or drill-down details. Use horizontal table scroll only when users must compare columns.
+
+## Record Card Fallback
+
+```html
+<article data-region="record-card">
+  <header>
+    <strong data-region="record-title"></strong>
+    <span data-region="record-status"></span>
+  </header>
+  <dl data-region="record-facts"></dl>
+  <footer data-region="record-actions"></footer>
+</article>
+```
+
+Use cards for narrow screens when the table's purpose is selection or action. Keep compare-heavy grids scrollable and label the scroll region.
+
+## Charts And Metrics
+
+- Charts need labels, legends, axes or equivalent context, empty/loading/error states, and accessible summaries when practical.
+- Metrics must include context: period, unit, comparison, or source.
+- Avoid decorative charts that do not support a user decision.
+
+## Business Feedback
+
+- Business-blocking rules should attach to the affected row, detail, or action region.
+- Technical errors should be recoverable and separate from domain restrictions.
+- Success should update the row/detail state, not only show a toast.
 
 ## Evidence
 
-- Record chart/table choices, data states covered, responsive behavior, accessibility alternatives, and any manual-review assumptions in TaskResult.
+A completed data UI should cite:
+
+- Data surface files and token consumer files.
+- Query/list/detail/action states that were implemented.
+- Empty, loading, error, and business-blocking placement.
+- Overflow/responsive behavior for dense values and long labels.

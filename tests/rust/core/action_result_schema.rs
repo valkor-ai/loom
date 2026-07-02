@@ -337,6 +337,14 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
             diagnostics_ref: "Read diagnosticsRef only if needed.".to_string(),
             full_log_ref: "Read full logs only if compact evidence is insufficient.".to_string(),
         },
+        deploy_reference_profile: delivery_core::DeployReferenceProfile {
+            reference_ids: vec![
+                "deploy.repair".to_string(),
+                "deploy.compose".to_string(),
+                "deploy.dockerfile".to_string(),
+            ],
+            load_mode: "skill_reference_by_id".to_string(),
+        },
         retry_tool: "loom.deployUp".to_string(),
     })
 }

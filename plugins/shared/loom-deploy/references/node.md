@@ -35,6 +35,14 @@ Use this reference when implementing or repairing loom deploy support for Node-f
 - Use Dockerfile-specific ignore files beside generated Dockerfiles, such as `Dockerfile.dockerignore`.
 - Do not copy `.env` files into build context by default.
 - Generated ignore files should exclude `.next`, `.turbo`, `.vercel`, `out`, `dist`, `build`, and `node_modules` so host-platform build artifacts do not leak into Linux images.
+- For Vite/SPA previews, run a production preview or static server bound to `0.0.0.0`; do not use the development server as the deployed runtime unless the project explicitly only has dev scripts.
+- For frontend/backend deployments, decide whether the frontend is served by a static service, a framework server, or copied into the backend image. Do not leave frontend API calls pointing at `localhost:<backend-port>` when the browser will access the public frontend port.
+
+## Build Context And Workspaces
+
+- For app-local Node projects, context may be the app root and all `COPY` paths should be app-root relative.
+- For Node workspaces, context should usually be the workspace root so the lockfile and workspace manifest are available. The Dockerfile should then set `WORKDIR` to the app package before build/start.
+- With pnpm, copy `pnpm-workspace.yaml`, root `package.json`, and `pnpm-lock.yaml` before installing. With npm/yarn/bun workspaces, copy the root lockfile and package manifests required to resolve the workspace graph.
 
 ## Platform Awareness
 

@@ -504,7 +504,6 @@ fn build_protocol_report(project_root: &str) -> Result<ProtocolSnapshotReport> {
         "plan",
         "continue",
         "readFieldGroup",
-        "readRequestFields",
         "brainstormAcceptFile",
         "knowledgeBuild",
         "knowledgeSearch",
@@ -594,13 +593,47 @@ fn collect_protocol_issues(request_id: &str, root: &Value, issues: &mut Vec<Veri
                 ));
             }
         }
-        let fields = group
-            .get("fields")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str);
+        if group.get("fields").is_some() {
+            issues.push(issue(
+                "READ_PLAN_LEGACY_FIELDS",
+                "requestReadPlan group must use selectors, not fields.",
+                [("requestId", json!(request_id))],
+            ));
+            continue;
+        }
+        let Some(selectors_value) = group.get("selectors").cloned() else {
+            issues.push(issue(
+                "READ_PLAN_SELECTORS_MISSING",
+                "requestReadPlan group must declare selectors.",
+                [("requestId", json!(request_id))],
+            ));
+            continue;
+        };
+        let fields =
+            match serde_json::from_value::<Vec<delivery_core::ReadSelector>>(selectors_value) {
+                Ok(selectors) => delivery_core::expand_read_selectors(&selectors),
+                Err(error) => {
+                    issues.push(issue(
+                        "READ_PLAN_SELECTORS_INVALID",
+                        "requestReadPlan group selectors are invalid.",
+                        [
+                            ("requestId", json!(request_id)),
+                            ("error", json!(error.to_string())),
+                        ],
+                    ));
+                    continue;
+                }
+            };
+        if fields.is_empty() {
+            issues.push(issue(
+                "READ_PLAN_SELECTORS_EMPTY",
+                "requestReadPlan group selectors must expand to at least one field.",
+                [("requestId", json!(request_id))],
+            ));
+            continue;
+        }
         for field in fields {
+            let field = field.as_str();
             if matches!(
                 field,
                 "allowedRefs"
@@ -760,7 +793,9 @@ fn build_token_summary(
         .count();
     let read_request_fields_count = field_audits
         .iter()
-        .filter(|value| value.get("source").and_then(Value::as_str) == Some("readRequestFields"))
+        .filter(|value| {
+            value.get("source").and_then(Value::as_str) == Some("internalReadRequestFields")
+        })
         .count();
     let serialized_audits = serde_json::to_string(&field_audits)?;
     let full_artifact_read_count = serialized_audits.matches(".loom/requests/").count()

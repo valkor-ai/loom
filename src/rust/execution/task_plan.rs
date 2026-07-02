@@ -4,19 +4,19 @@ use std::{
 };
 
 use contracts::{
-    AcceptancePriority, ArchitectureArtifactContract, CoverageStatus, ImplementationAction,
-    TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
-    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
-    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus, VerificationEvidence,
+    ui_quality_enum_refs, AcceptancePriority, ArchitectureArtifactContract, CoverageStatus,
+    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskGroupRunState,
+    TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction,
+    TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary, TaskPlanScopeSnapshot,
+    TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
-    apply_delivery_index, ArtifactKind, DeliveryLifecycleStatus, DomainDispatcher,
-    ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction,
-    LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction, RouteAction, RouteActionKind,
-    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
+    apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
+    DomainDispatcher, ExecuteEditBoundary, ExecuteVerificationPolicy, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, LoomMcpRepairableErrorResult, OperationContext, PostSubmitAction,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -237,6 +237,8 @@ fn build_request_root(
     let runtime_requirement_template =
         runtime_delivery_requirement_template(aac.runtime_delivery.as_ref());
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
+    let frontend_requirement_template = frontend_experience_requirement_template(aac);
+    let engineering_quality_template = engineering_quality_requirement_template(baseline);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
@@ -278,6 +280,14 @@ fn build_request_root(
     if !runtime_closure_template.is_null() {
         output_contract["runtimeDeliveryClosureTaskTemplate"] = runtime_closure_template.clone();
     }
+    if !frontend_requirement_template.is_null() {
+        output_contract["frontendExperienceRequirementTemplate"] =
+            frontend_requirement_template.clone();
+    }
+    if !engineering_quality_template.is_null() {
+        output_contract["engineeringQualityRequirementTemplate"] =
+            engineering_quality_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -304,8 +314,10 @@ fn build_request_root(
         "requestReadPlan": {
             "groups": taskplan_read_groups(
                 &source_refs,
+                &frontend_requirement_template,
                 &runtime_requirement_template,
-                &runtime_closure_template
+                &runtime_closure_template,
+                &engineering_quality_template
             )
         }
     })
@@ -340,8 +352,10 @@ fn has_non_null_key(value: &Value, key: &str) -> bool {
 
 fn taskplan_read_groups(
     source_refs: &Value,
+    frontend_requirement_template: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
+    engineering_quality_template: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.technicalBaselineRef",
@@ -361,6 +375,7 @@ fn taskplan_read_groups(
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
         "contextProjection.architectureArtifactContractId",
+        "contextProjection.technicalBaseline.stack",
         "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
         "contextProjection.requirementDetailTransfer.currentPhaseScope",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
@@ -389,14 +404,14 @@ fn taskplan_read_groups(
             "required": true,
             "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
-            "fields": core_fields
+            "selectors": read_selectors_value_from_paths(core_fields)
         }),
         json!({
             "groupId": "taskplan_generation_rules",
             "required": true,
             "purpose": "Read grouping, reference, verification, frontend, workflow, and runtime rules.",
             "whenToRead": "Read after core context and before writing group files.",
-            "fields": [
+            "selectors": read_selectors_value_from_paths([
                 "generationRules.groupedOutputRules",
                 "generationRules.scopeAndReferenceRules",
                 "generationRules.writeBoundaryRules",
@@ -404,42 +419,54 @@ fn taskplan_read_groups(
                 "generationRules.conceptGroundingRules",
                 "generationRules.frontendExperienceRules",
                 "generationRules.workflowClosureRules",
-                "generationRules.runtimeDeliveryRules"
-            ]
+                "generationRules.runtimeDeliveryRules",
+                "generationRules.engineeringQualityRules"
+            ])
         }),
         json!({
             "groupId": "taskplan_candidate_contract",
             "required": true,
             "purpose": "Read output paths, schema shapes, and enum refs before writing candidates.",
             "whenToRead": "Read before writing output files.",
-            "fields": taskplan_candidate_contract_fields(
+            "selectors": read_selectors_value_from_paths(taskplan_candidate_contract_fields(
+                frontend_requirement_template,
                 runtime_requirement_template,
-                runtime_closure_template
-            )
+                runtime_closure_template,
+                engineering_quality_template
+            ))
         }),
     ];
     Value::Array(groups)
 }
 
 fn taskplan_candidate_contract_fields(
+    frontend_requirement_template: &Value,
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
+    engineering_quality_template: &Value,
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
         "enumRefs.implementationAction",
         "enumRefs.verificationEvidence",
+        "enumRefs.uiQuality",
         "outputContract.outlineFile",
         "outputContract.groupFilePattern",
         "outputContract.pathAuthority",
         "outputContract.outlineResultTemplate",
         "outputContract.groupResultTemplate",
     ];
+    if !frontend_requirement_template.is_null() {
+        fields.push("outputContract.frontendExperienceRequirementTemplate");
+    }
     if !runtime_requirement_template.is_null() {
         fields.push("outputContract.runtimeDeliveryRequirementTemplate");
     }
     if !runtime_closure_template.is_null() {
         fields.push("outputContract.runtimeDeliveryClosureTaskTemplate");
+    }
+    if !engineering_quality_template.is_null() {
+        fields.push("outputContract.engineeringQualityRequirementTemplate");
     }
     fields
 }
@@ -649,7 +676,7 @@ where
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
         let group_value = read_project_json_value(root, &group_file)?;
-        let candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
+        let mut candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
             group_value,
             "group",
             "TASKPLAN_GROUP_SCHEMA_INVALID",
@@ -660,6 +687,7 @@ where
                 return Ok(repairable(input, authorized, group_file, vec![issue], mode));
             }
         };
+        normalize_taskplan_write_boundaries(&mut candidate.tasks);
         issues.extend(validate_group_candidate(
             &candidate,
             group,
@@ -670,6 +698,15 @@ where
         groups.push(candidate.group.clone());
         tasks.extend(candidate.tasks);
     }
+    let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
+    let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
+    let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
+    let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
+    let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
+    let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
+    let engineering_quality_requirements =
+        normalize_engineering_quality_requirements(&baseline, &mut tasks);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -677,14 +714,9 @@ where
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
-    let planning_ref = string_field(&fields, "sourceRefs.planningGenerationContractRef")?;
-    let architecture_ref = string_field(&fields, "sourceRefs.architectureArtifactContractRef")?;
-    let baseline_ref = string_field(&fields, "sourceRefs.technicalBaselineRef")?;
-    let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
-    let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
-    let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     issues.extend(validate_must_acceptance_task_coverage(&tasks, &pgc));
     issues.extend(validate_frontend_task_presence(&tasks, &aac));
+    issues.extend(validate_frontend_quality_requirements(&tasks, &aac));
     issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
     issues.extend(validate_workflow_closure_task_assignments(&tasks, &aac));
     issues.extend(validate_runtime_delivery_closure_task(
@@ -743,6 +775,7 @@ where
         },
         groups,
         tasks,
+        engineering_quality_requirements,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -1305,6 +1338,232 @@ fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition]) {
     }
 }
 
+fn normalize_taskplan_candidate_relationships(
+    groups: &mut Vec<TaskPlanGroup>,
+    tasks: &mut Vec<TaskDefinition>,
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) {
+    normalize_verification_detail_parent_refs(tasks);
+    normalize_task_verification_detail_refs(tasks, pgc, aac);
+    normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
+}
+
+fn normalize_verification_detail_parent_refs(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        let intent_detail_refs = task
+            .verification_intents
+            .iter()
+            .flat_map(|intent| intent.requirement_detail_refs.iter().cloned())
+            .collect::<Vec<_>>();
+        for detail_ref in intent_detail_refs {
+            push_unique(&mut task.requirement_detail_refs, detail_ref);
+        }
+    }
+}
+
+fn normalize_task_verification_detail_refs(
+    tasks: &mut [TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) {
+    let detail_acceptance_refs = current_phase_covered_detail_acceptance_refs(pgc, aac);
+    if detail_acceptance_refs.is_empty() {
+        return;
+    }
+    for task in tasks {
+        let task_detail_refs = task.requirement_detail_refs.clone();
+        for detail_ref in task_detail_refs {
+            let Some(acceptance_refs) = detail_acceptance_refs.get(&detail_ref) else {
+                continue;
+            };
+            if task.verification_intents.iter().any(|intent| {
+                intent
+                    .requirement_detail_refs
+                    .iter()
+                    .any(|item| item == &detail_ref)
+            }) {
+                continue;
+            }
+            if let Some(intent_index) = verification_intent_for_detail(task, acceptance_refs) {
+                push_unique(
+                    &mut task.verification_intents[intent_index].requirement_detail_refs,
+                    detail_ref,
+                );
+            }
+        }
+    }
+}
+
+fn current_phase_covered_detail_acceptance_refs(
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let covered_detail_ids = aac
+        .detail_coverage
+        .iter()
+        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
+        .map(|entry| entry.detail_id.as_str())
+        .collect::<BTreeSet<_>>();
+    pgc.requirement_details
+        .items
+        .iter()
+        .filter(|detail| {
+            detail.required_for_current_phase
+                && covered_detail_ids.contains(detail.detail_id.as_str())
+        })
+        .map(|detail| {
+            (
+                detail.detail_id.clone(),
+                detail
+                    .acceptance_refs
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect()
+}
+
+fn verification_intent_for_detail(
+    task: &TaskDefinition,
+    acceptance_refs: &BTreeSet<String>,
+) -> Option<usize> {
+    if task.verification_intents.len() == 1 {
+        return Some(0);
+    }
+    if acceptance_refs.is_empty() {
+        return None;
+    }
+    let matches = task
+        .verification_intents
+        .iter()
+        .enumerate()
+        .filter_map(|(index, intent)| {
+            intent
+                .acceptance_refs
+                .iter()
+                .any(|item| acceptance_refs.contains(item))
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        matches.first().copied()
+    } else {
+        None
+    }
+}
+
+fn normalize_runtime_delivery_closure_group(
+    groups: &mut Vec<TaskPlanGroup>,
+    tasks: &mut [TaskDefinition],
+    runtime_delivery: Option<&Value>,
+) {
+    let Some(runtime_delivery) = runtime_delivery else {
+        return;
+    };
+    if runtime_delivery.get("status").and_then(Value::as_str) != Some("modified") {
+        return;
+    }
+    let closure_task_indices = tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, task)| {
+            matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if closure_task_indices.len() != 1 {
+        return;
+    }
+
+    let closure_task_index = closure_task_indices[0];
+    let closure_task_id = tasks[closure_task_index].task_id.clone();
+    let current_group_id = tasks[closure_task_index].group_id.clone();
+    let current_group_has_only_closure = groups
+        .iter()
+        .find(|group| group.group_id == current_group_id)
+        .is_some_and(|group| group.task_ids == vec![closure_task_id.clone()]);
+    let closure_group_id = if current_group_has_only_closure {
+        current_group_id
+    } else {
+        next_runtime_closure_group_id(groups)
+    };
+
+    for group in groups.iter_mut() {
+        group.task_ids.retain(|task_id| task_id != &closure_task_id);
+        group
+            .depends_on
+            .retain(|group_id| group_id != &closure_group_id);
+    }
+
+    tasks[closure_task_index].group_id = closure_group_id.clone();
+    tasks[closure_task_index].depends_on.clear();
+    if !groups
+        .iter()
+        .any(|group| group.group_id == closure_group_id)
+    {
+        groups.push(TaskPlanGroup {
+            group_id: closure_group_id.clone(),
+            title: "Runtime delivery closure".to_string(),
+            objective: "Verify the final RuntimeDeliveryContract code-level closure.".to_string(),
+            depends_on: vec![],
+            scope_refs: tasks[closure_task_index].scope_refs.clone(),
+            acceptance_refs: tasks[closure_task_index].acceptance_refs.clone(),
+            task_ids: vec![],
+        });
+    }
+
+    let dependency_group_ids = groups
+        .iter()
+        .filter(|group| group.group_id != closure_group_id && !group.task_ids.is_empty())
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    if let Some(group) = groups
+        .iter_mut()
+        .find(|group| group.group_id == closure_group_id)
+    {
+        group.task_ids = vec![closure_task_id];
+        if group.scope_refs.is_empty() {
+            group.scope_refs = tasks[closure_task_index].scope_refs.clone();
+        }
+        if group.acceptance_refs.is_empty() {
+            group.acceptance_refs = tasks[closure_task_index].acceptance_refs.clone();
+        }
+        group.depends_on = dependency_group_ids;
+    }
+    if let Some(index) = groups
+        .iter()
+        .position(|group| group.group_id == closure_group_id)
+    {
+        let closure_group = groups.remove(index);
+        groups.push(closure_group);
+    }
+}
+
+fn next_runtime_closure_group_id(groups: &[TaskPlanGroup]) -> String {
+    const PREFERRED: &str = "group-runtime-delivery-closure";
+    let existing = groups
+        .iter()
+        .map(|group| group.group_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if !existing.contains(PREFERRED) {
+        return PREFERRED.to_string();
+    }
+    for suffix in 2.. {
+        let candidate = format!("{PREFERRED}-{suffix}");
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded runtime closure group id suffix search should always return")
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|item| item == &value) {
+        values.push(value);
+    }
+}
+
 fn validate_runtime_delivery_requirements(
     tasks: &[TaskDefinition],
 ) -> Vec<delivery_core::RepairIssue> {
@@ -1418,13 +1677,7 @@ fn validate_frontend_task_presence(
     tasks: &[TaskDefinition],
     aac: &ArchitectureArtifactContract,
 ) -> Vec<delivery_core::RepairIssue> {
-    if aac
-        .frontend_experience
-        .as_ref()
-        .and_then(|value| value.get("required"))
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    if !frontend_experience_required(aac) {
         return Vec::new();
     }
     if tasks.iter().any(|task| {
@@ -1441,6 +1694,73 @@ fn validate_frontend_task_presence(
         "frontendExperience.required=true requires a UI/frontend task or a task with frontendExperienceRequirement.",
         None,
     )]
+}
+
+fn validate_frontend_quality_requirements(
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> Vec<delivery_core::RepairIssue> {
+    if !frontend_experience_required(aac) {
+        return Vec::new();
+    }
+    let expected_ui_quality = frontend_ui_quality_contract(aac);
+    let mut issues = Vec::new();
+    for task in tasks {
+        let owns_frontend = matches!(
+            task.task_kind,
+            TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+        ) || task.frontend_experience_requirement.is_some();
+        if !owns_frontend {
+            continue;
+        }
+        let Some(requirement) = task.frontend_experience_requirement.as_ref() else {
+            issues.push(issue(
+                "FRONTEND_REQUIREMENT_REQUIRED",
+                "tasks[].frontendExperienceRequirement",
+                "UI/frontend tasks must carry frontendExperienceRequirement.",
+                Some(&task.task_id),
+            ));
+            continue;
+        };
+        if requirement
+            .get("frontendExperienceRef")
+            .and_then(Value::as_str)
+            != Some("sourceRefs.architectureArtifactContractRef#/frontendExperience")
+        {
+            issues.push(issue(
+                "FRONTEND_REQUIREMENT_REF_INVALID",
+                "tasks[].frontendExperienceRequirement.frontendExperienceRef",
+                "frontendExperienceRequirement.frontendExperienceRef must point to the AAC frontendExperience.",
+                Some(&task.task_id),
+            ));
+        }
+        if expected_ui_quality.is_some()
+            && requirement
+                .get("uiQualityContractRef")
+                .and_then(Value::as_str)
+                != Some(
+                    "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract",
+                )
+        {
+            issues.push(issue(
+                "FRONTEND_UI_QUALITY_REF_REQUIRED",
+                "tasks[].frontendExperienceRequirement.uiQualityContractRef",
+                "frontendExperienceRequirement must carry the AAC uiQualityContract ref.",
+                Some(&task.task_id),
+            ));
+        }
+        if let Some(expected) = expected_ui_quality {
+            if requirement.get("uiQualityContract") != Some(expected) {
+                issues.push(issue(
+                    "FRONTEND_UI_QUALITY_CONTRACT_REQUIRED",
+                    "tasks[].frontendExperienceRequirement.uiQualityContract",
+                    "frontendExperienceRequirement must copy the AAC uiQualityContract exactly instead of redefining UI quality.",
+                    Some(&task.task_id),
+                ));
+            }
+        }
+    }
+    issues
 }
 
 fn validate_requirement_detail_assignments(
@@ -1968,7 +2288,8 @@ fn requirement_detail_transfer(
         "requirementDetailAssignment": {
             "items": requirement_items,
             "assignmentRule": "Every item with coverageStatus=covered must be assigned to at least one task.requirementDetailRefs entry using its detailId.",
-            "verificationRule": "Every assigned covered detail should be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+            "verificationRule": "Every assigned covered detail must be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
+            "verificationSubsetRule": "Every verificationIntents[].requirementDetailRefs entry must also be present in the same parent task.requirementDetailRefs.",
             "insufficientAacRule": "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks."
         },
         "currentPhaseScope": {
@@ -1988,7 +2309,7 @@ fn requirement_detail_transfer(
             "interfaces": aac.interfaces,
             "userFlows": aac.user_flows,
             "stateMachines": aac.state_machines,
-            "frontendOperationPathDetails": aac.frontend_experience
+            "frontendOperationPathDetails": frontend_operation_path_details(aac)
         },
         "workflowClosureRequirements": workflow_closure_requirements(aac),
         "conceptRefs": {
@@ -2001,6 +2322,75 @@ fn requirement_detail_transfer(
             "frontendExperienceRequirement": "Use when the task owns UI surfaces, workflows, states, bindings, or operation paths.",
             "runtimeDeliveryRequirement": "Use when the task touches build, start, runtime entry, static serving, generated artifacts, or runtime surface."
         }
+    })
+}
+
+fn frontend_experience_required(aac: &ArchitectureArtifactContract) -> bool {
+    aac.frontend_experience
+        .as_ref()
+        .and_then(|value| value.get("required"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+fn frontend_ui_quality_contract(aac: &ArchitectureArtifactContract) -> Option<&Value> {
+    aac.frontend_experience
+        .as_ref()
+        .and_then(|frontend| frontend.get("uiQualityContract"))
+}
+
+fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
+    if !frontend_experience_required(aac) {
+        return Value::Null;
+    }
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return Value::Null;
+    };
+    let mut requirement = json!({
+        "frontendExperienceRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience",
+        "experienceLevel": frontend
+            .get("experienceLevel")
+            .and_then(Value::as_str)
+            .unwrap_or("production_internal_product"),
+        "mustSatisfy": true,
+        "uiTaskScope": {
+            "source": "AAC frontendExperience.uiSurfaceRegistry plus frontend surfaces, dataViews, actions, and operationPaths",
+            "selectionRule": "For each frontend task, select only the surfaces, data views, actions, operation paths, states, and backend/API bindings owned by that task. Do not copy unrelated UI surfaces into the task.",
+            "surfacesInScope": ["current-task uiSurfaceRegistry surface object"],
+            "dataViewsInScope": ["current-task frontendExperience.dataViews object"],
+            "actionsInScope": ["current-task frontendExperience.actions object"],
+            "operationPathsInScope": ["current-task frontendExperience.operationPaths object"],
+            "frontendBackendBindings": ["current-task binding between UI action/path and AAC interface when known"],
+            "stateExpectation": ["loading", "success", "error", "empty", "business_blocking"]
+        }
+    });
+    if frontend.get("uiSurfaceRegistry").is_some() {
+        requirement["uiSurfaceRegistryRef"] = json!(
+            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceRegistry"
+        );
+    }
+    if let Some(ui_quality_contract) = frontend.get("uiQualityContract") {
+        requirement["uiQualityContractRef"] = json!(
+            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
+        );
+        requirement["uiQualityContract"] = ui_quality_contract.clone();
+    }
+    requirement
+}
+
+fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value {
+    let Some(frontend) = aac.frontend_experience.as_ref() else {
+        return Value::Null;
+    };
+    json!({
+        "required": frontend.get("required").cloned().unwrap_or(Value::Bool(false)),
+        "experienceLevel": frontend.get("experienceLevel").cloned().unwrap_or(Value::Null),
+        "surfaces": frontend.get("surfaces").cloned().unwrap_or(Value::Array(vec![])),
+        "dataViews": frontend.get("dataViews").cloned().unwrap_or(Value::Array(vec![])),
+        "actions": frontend.get("actions").cloned().unwrap_or(Value::Array(vec![])),
+        "operationPaths": frontend.get("operationPaths").cloned().unwrap_or(Value::Array(vec![])),
+        "uiSurfaceRegistry": frontend.get("uiSurfaceRegistry").cloned().unwrap_or(Value::Null),
+        "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null)
     })
 }
 
@@ -2267,6 +2657,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         "verificationEvidenceRules": [
             "verificationIntents must use enumRefs.verificationEvidence.",
             "Each implementation task must have at least one verification intent.",
+            "Every covered current-phase detailId from contextProjection.requirementDetailTransfer.requirementDetailAssignment.items must appear in at least one task.requirementDetailRefs.",
+            "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
+            "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
             "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
             "Avoid broad snapshots or weak no-op checks as the primary verification evidence."
         ],
@@ -2276,7 +2669,12 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         },
         "frontendExperienceRules": {
             "required": aac.frontend_experience.as_ref().and_then(|value| value.get("required")).and_then(Value::as_bool).unwrap_or(false),
-            "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement."
+            "requirementTemplate": "outputContract.frontendExperienceRequirementTemplate",
+            "uiQualityContractSource": "outputContract.frontendExperienceRequirementTemplate.uiQualityContract",
+            "uiSurfaceRegistrySource": "contextProjection.requirementDetailTransfer.frontendExperienceDetails.uiSurfaceRegistry",
+            "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement.",
+            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must fill frontendExperienceRequirement.uiTaskScope from the AAC uiSurfaceRegistry and related frontend arrays. Select only the current task's surfaces, data views, actions, operation paths, states, and bindings.",
+            "uiQualityRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must copy outputContract.frontendExperienceRequirementTemplate.uiQualityContract into frontendExperienceRequirement; do not reinterpret scenario, qualityLevel, referenceProfile, or forbidden user-visible content."
         },
         "workflowClosureRules": {
             "derivationAuthority": "AAC frontendExperience + userFlows + executable interfaces",
@@ -2294,9 +2692,318 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
         },
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
-            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified."
+            "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified.",
+            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement exactly from that template.",
+            "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
+            "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
+        },
+        "engineeringQualityRules": {
+            "persistenceMappingRequirementSource": "outputContract.engineeringQualityRequirementTemplate",
+            "appliesWhen": "Use this only when the task creates or changes persistence, entities, migrations, repositories, or backend API/business logic that reads or mutates persisted entities.",
+            "notFor": "Do not attach persistence mapping requirements to pure frontend UI tasks, even when they call APIs.",
+            "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level engineeringQualityRequirements and task engineeringQualityRequirementRefs; do not duplicate full quality requirements inside every task.",
+            "taskPlanningRule": "For applicable tasks, verificationIntents should prove storage schema, data-access mapping, DTO/API contract, query/sort/filter fields, and same-provider persistence behavior stay aligned."
         }
     })
+}
+
+fn engineering_quality_requirement_template(
+    baseline: &contracts::TechnicalBaselineContract,
+) -> Value {
+    let stack_signals = stack_signals_from_baseline(&baseline.stack);
+    if !has_persistence_quality_signal(&stack_signals) {
+        return Value::Null;
+    }
+    json!({
+        "requirementId": "eqr-persistence-mapping-001",
+        "kind": "persistence_mapping",
+        "stackSignals": stack_signals,
+        "alignmentTargets": persistence_alignment_targets(),
+        "riskFieldKinds": persistence_risk_field_kinds(),
+        "verificationObligations": persistence_verification_obligations(),
+        "taskRefRule": "Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task."
+    })
+}
+
+fn normalize_engineering_quality_requirements(
+    baseline: &contracts::TechnicalBaselineContract,
+    tasks: &mut [TaskDefinition],
+) -> Vec<EngineeringQualityRequirement> {
+    let stack_signals = stack_signals_from_baseline(&baseline.stack);
+    if !has_persistence_quality_signal(&stack_signals) {
+        for task in tasks {
+            task.engineering_quality_requirement_refs.clear();
+        }
+        return vec![];
+    }
+    let applies_to_task_ids = persistence_quality_task_ids(tasks);
+    let requirement_id = "eqr-persistence-mapping-001".to_string();
+    let applies_set = applies_to_task_ids.iter().cloned().collect::<BTreeSet<_>>();
+    for task in tasks {
+        task.engineering_quality_requirement_refs = if applies_set.contains(&task.task_id) {
+            vec![requirement_id.clone()]
+        } else {
+            vec![]
+        };
+    }
+    if applies_to_task_ids.is_empty() {
+        return vec![];
+    }
+    vec![EngineeringQualityRequirement {
+        requirement_id,
+        kind: "persistence_mapping".to_string(),
+        applies_to_task_ids,
+        stack_signals,
+        alignment_targets: persistence_alignment_targets(),
+        risk_field_kinds: persistence_risk_field_kinds(),
+        verification_obligations: persistence_verification_obligations(),
+    }]
+}
+
+fn stack_signals_from_baseline(stack: &Value) -> BTreeMap<String, String> {
+    let mut signals = BTreeMap::new();
+    for (signal, track) in [
+        ("web", "web"),
+        ("backend", "backend"),
+        ("persistence", "persistence"),
+        ("dataAccess", "dataAccess"),
+        ("externalServices", "externalServices"),
+        ("migrationTool", "migrationTool"),
+        ("testDatabase", "testDatabase"),
+    ] {
+        if let Some(value) = stack_track_selection(stack, track) {
+            signals.insert(signal.to_string(), value);
+        }
+    }
+    for (signal, keys) in [
+        ("backend", &["backend", "server", "api"][..]),
+        (
+            "persistence",
+            &["persistence", "database", "databaseProvider", "db"][..],
+        ),
+        ("dataAccess", &["dataAccess", "orm", "data_access"][..]),
+        (
+            "migrationTool",
+            &["migrationTool", "migration", "migrations"][..],
+        ),
+        (
+            "testDatabase",
+            &["testDatabase", "testDb", "test_database"][..],
+        ),
+    ] {
+        if signals.contains_key(signal) {
+            continue;
+        }
+        if let Some(value) = first_stack_string_for_keys(stack, keys) {
+            signals.insert(signal.to_string(), value);
+        }
+    }
+    signals
+}
+
+fn stack_track_selection(stack: &Value, track: &str) -> Option<String> {
+    let track_value = stack.get("tracks")?.get(track)?;
+    let status = track_value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if matches!(
+        status.as_str(),
+        "not_needed" | "not_applicable" | "none" | "disabled"
+    ) {
+        return None;
+    }
+    let selection = compact_stack_value(track_value.get("selection")?)?;
+    (!selection_is_absent(&selection)).then_some(selection)
+}
+
+fn first_stack_string_for_keys(stack: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = stack.get(*key).and_then(compact_stack_value) {
+            if !selection_is_absent(&value) {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn compact_stack_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Array(items) => {
+            let values = items
+                .iter()
+                .filter_map(compact_stack_value)
+                .collect::<Vec<_>>();
+            (!values.is_empty()).then(|| values.join(", "))
+        }
+        Value::Object(object) => object
+            .get("selection")
+            .and_then(compact_stack_value)
+            .or_else(|| object.get("name").and_then(compact_stack_value)),
+        _ => None,
+    }
+}
+
+fn selection_is_absent(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "no persistence",
+        "no database",
+        "none",
+        "not needed",
+        "not applicable",
+        "n/a",
+        "无",
+        "不需要",
+        "无需",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn has_persistence_quality_signal(signals: &BTreeMap<String, String>) -> bool {
+    signals.contains_key("persistence")
+        || signals.contains_key("dataAccess")
+        || signals.contains_key("migrationTool")
+}
+
+fn persistence_quality_task_ids(tasks: &[TaskDefinition]) -> Vec<String> {
+    let direct_ids = tasks
+        .iter()
+        .filter(|task| task_directly_owns_persistence_mapping(task))
+        .map(|task| task.task_id.clone())
+        .collect::<BTreeSet<_>>();
+    tasks
+        .iter()
+        .filter(|task| {
+            task_directly_owns_persistence_mapping(task)
+                || (task_backend_consumes_persistence_mapping(task)
+                    && task_depends_on_any(task, tasks, &direct_ids))
+        })
+        .map(|task| task.task_id.clone())
+        .collect()
+}
+
+fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::DataModelIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateEntity
+                    | ImplementationAction::CreateOrUpdatePersistence
+                    | ImplementationAction::CreateEntityMigration
+                    | ImplementationAction::CreateEntityRepository
+                    | ImplementationAction::CreateEntityCrud
+            )
+        })
+}
+
+fn task_backend_consumes_persistence_mapping(task: &TaskDefinition) -> bool {
+    if task_is_frontend_task(task) || task.write_boundary.artifact_refs.entities.is_empty() {
+        return false;
+    }
+    matches!(
+        task.task_kind,
+        TaskKind::FeatureIncrement | TaskKind::InterfaceIncrement | TaskKind::IntegrationIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::WireReferenceInApiOrUi
+        )
+    })
+}
+
+fn task_is_frontend_task(task: &TaskDefinition) -> bool {
+    task.frontend_experience_requirement.is_some()
+        || matches!(
+            task.task_kind,
+            TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+        )
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::ImplementFrontendExperienceContract
+                    | ImplementationAction::CreateEntityAdminPage
+            )
+        })
+}
+
+fn task_depends_on_any(
+    task: &TaskDefinition,
+    tasks: &[TaskDefinition],
+    target_ids: &BTreeSet<String>,
+) -> bool {
+    let by_id = tasks
+        .iter()
+        .map(|task| (task.task_id.as_str(), task))
+        .collect::<BTreeMap<_, _>>();
+    let mut stack = task.depends_on.clone();
+    let mut seen = BTreeSet::new();
+    while let Some(task_id) = stack.pop() {
+        if !seen.insert(task_id.clone()) {
+            continue;
+        }
+        if target_ids.contains(&task_id) {
+            return true;
+        }
+        if let Some(dependency) = by_id.get(task_id.as_str()) {
+            stack.extend(dependency.depends_on.clone());
+        }
+    }
+    false
+}
+
+fn persistence_alignment_targets() -> Vec<String> {
+    [
+        "domain_model_field",
+        "storage_schema_field",
+        "data_access_mapping",
+        "dto_json_contract",
+        "query_sort_filter_field",
+        "test_database_provider",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn persistence_risk_field_kinds() -> Vec<String> {
+    [
+        "datetime",
+        "decimal",
+        "enum",
+        "boolean",
+        "json",
+        "foreign_key",
+        "unique_constraint",
+        "nullable_default",
+        "identifier",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn persistence_verification_obligations() -> Vec<String> {
+    [
+        "same_provider_persistence_test",
+        "create_detail_list_roundtrip",
+        "state_change_readback",
+        "error_response_message_contract",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) -> Value {
@@ -2314,6 +3021,13 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
         .collect::<Vec<_>>();
     json!({
         "taskKind": "runtime_delivery_closure",
+        "groupPlacement": {
+            "groupKind": "runtime_delivery_closure",
+            "position": "final_group",
+            "taskIdsRule": "The closure group taskIds array must contain exactly this one runtime_delivery_closure task.",
+            "dependsOnRule": "Use group dependsOn to reference the previous group or groups that make runtime-affecting work transitively complete; no other group may depend on the closure group.",
+            "taskDependsOnRule": "Keep the closure task dependsOn empty unless another task is in the same closure group; the closure group itself should carry cross-group dependencies."
+        },
         "runtimeDeliveryRequirement": {
             "appliesToThisTask": true,
             "reason": "Final code-level closure for the RuntimeDeliveryContract.",
@@ -2431,7 +3145,8 @@ fn enum_refs() -> Value {
     json!({
         "taskKind": TASK_KIND_VALUES,
         "implementationAction": IMPLEMENTATION_ACTION_VALUES,
-        "verificationEvidence": VERIFICATION_EVIDENCE_VALUES
+        "verificationEvidence": VERIFICATION_EVIDENCE_VALUES,
+        "uiQuality": ui_quality_enum_refs()
     })
 }
 

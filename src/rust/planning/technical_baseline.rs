@@ -5,10 +5,10 @@ use contracts::{
     TechnicalBaselineCandidateAgentWritable, TechnicalBaselineContract, TechnicalBaselineStatus,
 };
 use delivery_core::{
-    ArtifactKind, DeliveryIndex, DomainDispatcher, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpFailure, LoomMcpFailureResult, LoomMcpRepairableErrorResult, LoomMcpUserGateResult,
-    OperationContext, ReadRequestFieldsInput, RouteAction, RouteActionKind, SubmitAcceptedEvent,
-    TransitionEngine, TransitionStore,
+    read_selectors_value_from_paths, ArtifactKind, DeliveryIndex, DomainDispatcher,
+    FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, ReadRequestFieldsInput,
+    RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -317,30 +317,30 @@ fn build_request_root(
                     "required": true,
                     "purpose": "Read the confirmed Brainstorm scope, acceptance ids, frontend target, current phase lens, and baseline decision needs before drafting the baseline.",
                     "whenToRead": "Read before producing any TechnicalBaseline recommendation.",
-                    "fields": baseline_context_fields
+                    "selectors": read_selectors_value_from_paths(baseline_context_fields)
                 },
                 {
                     "groupId": "technical_baseline_repo_evidence",
                     "required": false,
                     "purpose": "Read repository evidence before inferring an existing-project baseline or deciding whether reuse applies.",
                     "whenToRead": "Read for existing_project or when repository continuity matters.",
-                    "fields": repo_evidence_fields
+                    "selectors": read_selectors_value_from_paths(repo_evidence_fields)
                 },
                 {
                     "groupId": "technical_baseline_selection_guidance",
                     "required": selection_guidance.is_some(),
                     "purpose": "Read the greenfield confirmation discipline before asking the user to confirm the baseline.",
                     "whenToRead": "Read only when the projectKind is greenfield or the baseline still needs explicit user confirmation.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "selectionGuidance"
-                    ]
+                    ])
                 },
                 {
                     "groupId": "technical_baseline_write_contract",
                     "required": true,
                     "purpose": "Read the candidate schema and write target before writing the TechnicalBaseline candidate.",
                     "whenToRead": "Read only when ready to write the candidate file.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
                         "outputContract.schemaProjection",
@@ -350,7 +350,7 @@ fn build_request_root(
                         "enumRefs.scope",
                         "enumRefs.approvalType",
                         "enumRefs.confidence"
-                    ]
+                    ])
                 }
             ]
         }
@@ -872,7 +872,7 @@ where
     let project_root = Path::new(&input.project_root);
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let raw = state::store::read_json_value(&candidate_file)?;
-    let candidate: TechnicalBaselineCandidateAgentWritable =
+    let mut candidate: TechnicalBaselineCandidateAgentWritable =
         match serde_json::from_value(raw.clone()) {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -889,6 +889,8 @@ where
             }
         };
 
+    let now = state::store::now_string();
+    normalize_user_confirmed_approval(&mut candidate, &now);
     let issues = validate_candidate(&candidate);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
@@ -946,7 +948,6 @@ where
         }
     }
 
-    let now = state::store::now_string();
     let persisted = TechnicalBaselineContract {
         schema_version: "1.0".to_string(),
         technical_baseline_id: format!("tb_{}_{}", phase_id, state::store::now_millis()),
@@ -1047,6 +1048,25 @@ where
             },
         )
         .map_err(to_state_error)
+}
+
+fn normalize_user_confirmed_approval(
+    candidate: &mut TechnicalBaselineCandidateAgentWritable,
+    confirmed_at: &str,
+) {
+    if candidate.approval.r#type != TechnicalBaselineApprovalType::UserConfirmed {
+        return;
+    }
+    if candidate
+        .approval
+        .confirmed_at
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        candidate.approval.confirmed_at = Some(confirmed_at.to_string());
+    }
 }
 
 fn validate_candidate(

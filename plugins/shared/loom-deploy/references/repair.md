@@ -58,6 +58,20 @@ Use this reference when the current Loom MCP deploy action asks for deployment r
 - Do not run migration/bootstrap commands automatically. If diagnostics point to missing tables or pending migrations, explain the command from `bootstrap.tasks` and ask for approval.
 - Do not read, print, or bake real local `.env` values into generated deployment files. Use variable names and safe local placeholders only.
 - Preserve generated file locations under `.loom/deployment/specs/generated/`.
+- Do not use repair to rewrite the provider strategy. If the selected provider is generated, repair generated assets. If an unforced existing provider was unsuitable, Loom should have fallen back to generated before repair. If the user forced an existing provider, report the protected asset issue clearly.
+
+## Generation-First Repair Posture
+
+Repair is a bounded fallback, not the primary template engine. Before patching, compare the failure with:
+
+- `sourceModelRef` for service roots, runtime kinds, working directories, and package managers
+- `topologyRef` for public entry service, API proxy paths, and validation paths
+- `generatedFileRefs` for the actual files the agent may edit
+- `DeploymentSpec.runtime.ports` for real host/container port assignments
+
+If the generated template was structurally wrong, repair the generated asset in the smallest durable way and keep the fix aligned with the source model. Avoid scenario-specific fixes such as hard-coding one framework's port, one folder name, or one database unless the source model or diagnostics proves that exact stack.
+
+Ask the user only when the next action requires real credentials, destructive bootstrap/migration execution, changing protected user-owned Compose/Dockerfile assets, or decisions that cannot be inferred from repository evidence.
 
 ## Retry Rules
 

@@ -1,42 +1,100 @@
-# Design System UIX
+# UIX Focus: System
 
-Load this file for design systems, tokens, component specs, theming, dark mode, localization, icon systems, motion systems, or design-system audits.
+Load this when creating or changing a visual system, app shell, shared components, tokens, or component foundations.
 
-## Tokens
+## System Baseline
 
-- Prefer existing design tokens over raw values. If tokens exist, components should consume semantic or component tokens, not hard-coded colors, spacing, type, radius, elevation, or motion values.
-- Token tiers should stay clear: global raw values, semantic aliases, and component-scoped tokens.
-- Token names should describe purpose, not visual accident. Prefer `color-action-primary` over `blue-500` in component code.
-- If adding tokens, document usage context and keep them compatible with theming and future platform mapping.
+- Start from existing project conventions. Extend them instead of inventing a parallel design system.
+- Define semantic tokens for color, type, spacing, radius, elevation, focus, state, and motion.
+- Create primitives only when they remove repeated implementation: Button, Input, Select, Textarea, Checkbox/Switch, Badge, Alert, Table, Card/Panel, Modal/Dialog, Drawer/Sheet, Tabs, Tooltip, Toast, Pagination, Skeleton.
+- Keep component props semantic. Prefer `variant="danger"` over `color="#ef4444"`.
 
-## Components
+## Minimal Token Contract
 
-- Component work should cover overview, anatomy, variants, props/API, states, behavior, accessibility, and usage rules.
-- Required states usually include default, hover, focus, active, disabled, loading, error, and selected/current when relevant.
-- Specify behavior, not just appearance: keyboard interaction, pointer/touch behavior, responsive behavior, motion, truncation, and edge cases.
-- Reuse existing components and primitives before introducing new ones.
+```css
+:root {
+  --surface: ...;
+  --surface-raised: ...;
+  --text: ...;
+  --text-muted: ...;
+  --border: ...;
+  --primary: ...;
+  --danger-surface: ...;
+  --danger-text: ...;
+  --space-4: 16px;
+  --radius-md: 8px;
+  --focus-ring: ...;
+}
+```
 
-## Theming And Modes
+Use the repo's existing names when present. The important part is that components consume semantic roles rather than raw values.
 
-- Dark mode, high-contrast mode, and brand variants should emerge from semantic tokens, not per-component one-off overrides.
-- Do not rely on color alone for semantic state. Pair color with label, icon, shape, pattern, or position.
-- Check contrast for body text, large text, UI boundaries, focus rings, data marks, and disabled states.
+## Token Asset Workflow
 
-## Motion
+1. Inspect existing style assets before creating files: Tailwind config, global CSS, variables/theme files, component-library theme, native theme, or design-token package.
+2. If a compatible asset exists, extend it in place. If none exists, create the target file declared by `designTokenAssetPlan.targetFiles`.
+3. Import or register the token asset once at the app root. Do not make every page import its own token file.
+4. Convert page-local raw values into semantic aliases when the task creates shared or repeated UI. One-off raw values are acceptable only for asset dimensions or media crop details.
+5. Record token asset files and token consumer files in `frontendQualitySelfCheck.designTokenEvidence`.
 
-- Use a small motion vocabulary: duration tokens, easing tokens, and clear choreography rules.
-- Motion must communicate state, relationship, or feedback. Avoid decorative movement that slows repeated workflows.
-- Respect `prefers-reduced-motion` or platform-equivalent settings globally.
-- Loading spinners and progress indicators may remain when they convey essential state, but sliding, scaling, parallax, and rotation should reduce or disappear.
+Useful alias groups for product UI:
 
-## Localization
+```css
+:root {
+  --surface: var(--color-surface);
+  --surface-raised: var(--color-surface-elevated);
+  --surface-muted: var(--color-surface-tinted);
+  --text: var(--color-on-surface);
+  --text-muted: var(--color-on-surface-muted);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --focus-ring: 0 0 0 3px color-mix(in oklch, var(--color-primary) 28%, transparent);
+  --control-height-sm: 32px;
+  --control-height-md: 40px;
+  --row-height-compact: 40px;
+  --row-height-default: 48px;
+  --shell-sidebar-width: 240px;
+  --shell-detail-width: 380px;
+}
+```
 
-- Design flexible containers for text expansion. Do not size controls to English copy only.
-- Use logical layout properties when possible: inline/block, start/end, and `text-align: start` instead of left/right assumptions.
-- Directional icons mirror in RTL; non-directional icons, logos, numerals, clocks, and brand marks usually do not.
-- Test at least one long-expansion locale and one RTL-like layout when localization is required.
+## Shell
 
-## Handoff
+- Operational apps need stable navigation, page title/context, primary action region, content region, and feedback region.
+- Docs need nav/content/TOC/search.
+- Marketing sites need product/offer signal, proof sections, and conversion routes.
+- Mobile/native surfaces need safe areas and platform navigation.
 
-- Handoff-ready UI evidence should name token usage, component reuse, responsive behavior, state coverage, accessibility requirements, asset handling, and edge cases.
-- When design-system compliance is uncertain, record it as a manual-review risk instead of silently inventing a parallel system.
+## States
+
+Every reusable component that can wait, fail, validate, or disable must expose those states. Avoid forcing feature code to hand-roll inconsistent variants.
+
+Required common states:
+
+- default, hover, focus, active, disabled.
+- loading/submitting.
+- success, warning, danger/error, info.
+- empty and skeleton for data surfaces.
+- business-blocking for domain-rule stops.
+
+## Quality Bar
+
+- Component dimensions are stable across state changes.
+- Focus ring is visible and consistent.
+- Text and icons align cleanly.
+- Tokens are reusable and documented through names, not comments only.
+- Components do not encode delivery process language.
+- New shared components must include the states their consumers need; do not make every feature recreate disabled/loading/error variants.
+
+## Shared Primitive Bar
+
+For a production internal product, the first UI pass should usually establish these primitives or reuse the repo equivalents:
+
+```text
+Button / IconButton / Input / Select / Textarea / Checkbox
+Badge / StatusPill / Alert / EmptyState / Skeleton
+Table / Pagination / Toolbar / Drawer or DetailPanel / Dialog
+FormField / FieldError / Toast or InlineNotice
+```
+
+Do not create decorative primitives before the workflow has the controls above. A business UI that lacks field errors, disabled states, row states, and detail actions is still demo-level even if it looks styled.

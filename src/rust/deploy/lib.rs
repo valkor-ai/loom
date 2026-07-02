@@ -9,6 +9,7 @@ mod logs;
 mod paths;
 mod port_plan;
 mod prepare;
+mod references;
 mod repair;
 mod run;
 mod runtime_contract;

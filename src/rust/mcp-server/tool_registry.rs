@@ -4,7 +4,7 @@ use brainstorm::BrainstormConfirmBlockInput;
 use delivery_core::{
     normalize_project_root, FileSubmitInput, InspectRequestInput, InspectRequestResult,
     LoomMcpActionResult, PlanToolInput, ProjectToolInput, ReadFieldGroupInput,
-    ReadFieldGroupResult, ReadRequestFieldsInput, ReadRequestFieldsResult,
+    ReadFieldGroupResult,
 };
 use deploy::{DeployBootstrapInput, DeployToolInput};
 use knowledge::mcp_models::{
@@ -47,7 +47,6 @@ pub enum ToolInputKind {
     DeployBootstrap,
     InspectRequest,
     ReadFieldGroup,
-    ReadRequestFields,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +54,6 @@ pub enum ToolOutputKind {
     ActionResult,
     InspectRequest,
     ReadFieldGroup,
-    ReadRequestFields,
 }
 
 pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
@@ -106,14 +104,6 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         target_batch: 3,
         input_kind: ToolInputKind::ReadFieldGroup,
         output_kind: ToolOutputKind::ReadFieldGroup,
-        implemented: true,
-    },
-    ToolRegistration {
-        name: "readRequestFields",
-        description: "Read declared request fields by path.",
-        target_batch: 3,
-        input_kind: ToolInputKind::ReadRequestFields,
-        output_kind: ToolOutputKind::ReadRequestFields,
         implemented: true,
     },
     ToolRegistration {
@@ -485,7 +475,6 @@ fn input_schema(kind: ToolInputKind) -> Arc<JsonObject> {
         ToolInputKind::DeployBootstrap => schema_for_type::<DeployBootstrapInput>(),
         ToolInputKind::InspectRequest => schema_for_type::<InspectRequestInput>(),
         ToolInputKind::ReadFieldGroup => schema_for_type::<ReadFieldGroupInput>(),
-        ToolInputKind::ReadRequestFields => schema_for_type::<ReadRequestFieldsInput>(),
     })
 }
 
@@ -494,7 +483,6 @@ fn output_schema(kind: ToolOutputKind) -> JsonObject {
         ToolOutputKind::ActionResult => schema_json_object::<LoomMcpActionResult>(),
         ToolOutputKind::InspectRequest => schema_json_object::<InspectRequestResult>(),
         ToolOutputKind::ReadFieldGroup => schema_json_object::<ReadFieldGroupResult>(),
-        ToolOutputKind::ReadRequestFields => schema_json_object::<ReadRequestFieldsResult>(),
     }
 }
 

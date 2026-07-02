@@ -943,7 +943,9 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "knowledge_context_protocol",
-                        "fields": ["knowledgeQueryPlan"]
+                        "selectors": delivery_core::read_selectors_value_from_paths([
+                            "knowledgeQueryPlan"
+                        ])
                     }]
                 }
             }),
@@ -1006,6 +1008,27 @@ fn brainstorm_context_is_request_scoped_and_uses_inspect_read_plan() {
     assert!(persisted_result.get("querySubject").is_none());
     assert!(persisted_result.get("naturalLanguageQuery").is_none());
     assert!(persisted_result.get("semanticFocus").is_none());
+
+    let irrelevant_context = brainstorm_context(KnowledgeBrainstormContextInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        block: "frontend_experience".to_string(),
+        step_id: "frontend_paths".to_string(),
+        query_id: None,
+        atomic_scope_reason: None,
+        query_subject: "采购审批待办页面".to_string(),
+        natural_language_query: "采购申请 部门审批 财务预算复核 页面路径".to_string(),
+        semantic_focus: vec![
+            "object:采购申请".to_string(),
+            "operation:部门审批".to_string(),
+            "operation:财务预算复核".to_string(),
+            "page:审批待办列表".to_string(),
+        ],
+    })
+    .expect("irrelevant brainstorm context");
+    assert_eq!(irrelevant_context.status, "empty");
+    assert!(irrelevant_context.matched_sources.is_empty());
+    assert!(irrelevant_context.read_plan.chunks.is_empty());
 
     let missing_query_id = brainstorm_context(KnowledgeBrainstormContextInput {
         project_root: fixture.root_str().to_string(),
@@ -1179,7 +1202,9 @@ fn brainstorm_context_adds_block_retrieval_intent_without_agent_facing_bloat() {
                 "requestReadPlan": {
                     "groups": [{
                         "groupId": "knowledge_context_protocol",
-                        "fields": ["knowledgeQueryPlan.blocks.frontend_experience.executionOrder"]
+                        "selectors": delivery_core::read_selectors_value_from_paths([
+                            "knowledgeQueryPlan.blocks.frontend_experience.executionOrder"
+                        ])
                     }]
                 }
             }),

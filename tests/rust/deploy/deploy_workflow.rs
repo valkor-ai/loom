@@ -13,7 +13,7 @@ use contracts::{
     DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
     DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
     DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentRuntimePort,
-    DeploymentShape, DeploymentSpec, PackageManager, SourceModelSource,
+    DeploymentShape, DeploymentSpec, PackageManager, RuntimeKind, SourceModelSource,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -41,6 +41,22 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     });
     let value = serde_json::to_value(result).expect("result json");
     assert_eq!(value["state"], "done", "{value:#}");
+    let reference_ids = &value["details"]["deployReferenceProfile"]["referenceIds"];
+    for expected in [
+        "deploy.providers",
+        "deploy.compose",
+        "deploy.dockerfile",
+        "deploy.environment",
+        "deploy.workspaces",
+        "deploy.stacks.node",
+        "deploy.stacks.java",
+    ] {
+        assert_json_array_contains(reference_ids, expected);
+    }
+    assert_eq!(
+        value["details"]["deployReferenceProfile"]["loadMode"],
+        "skill_reference_by_id"
+    );
 
     let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
         .expect("deployment spec");
@@ -122,12 +138,27 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     );
     assert!(compose.contains("  backend:"));
     assert!(compose.contains("  postgres:"));
-    assert!(compose.contains("      - backend"));
+    assert!(compose.contains("      backend:\n        condition: service_healthy"));
     assert!(compose.contains("      - postgres"));
     assert!(compose.contains("  frontend:\n    build:"), "{compose}");
     assert!(compose.contains("    ports:\n"), "{compose}");
     let backend_block = compose_service_block(&compose, "backend").expect("backend compose block");
     assert!(!backend_block.contains("ports:"), "{backend_block}");
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(
+        frontend_dockerfile.contains("ENV VITE_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
 }
 
 #[test]
@@ -245,6 +276,283 @@ fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
     assert!(serde_json::to_string(&evidence)
         .unwrap()
         .contains("service/build.gradle"));
+}
+
+#[test]
+fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
+    let fixture = Fixture::new("deploy-previous-phase-runtime");
+    fixture.write_runtime_delivery(plugin_style_dual_service_runtime_delivery());
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+    fixture.write_text("backend/mvnw", "#!/bin/sh\n");
+    fixture.write_text(
+        "backend/src/main/resources/application.yml",
+        r#"spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:sqlite:purchase-approval.db}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+"#,
+    );
+
+    let index_path = fixture.root.join(".loom/deliveries/delivery-1/index.json");
+    let mut index: Value = read_json(&index_path).expect("delivery index");
+    index["activePhaseId"] = json!("phase-2");
+    index["phases"].as_array_mut().expect("phases").push(json!({
+        "phaseId": "phase-2",
+        "latestRefs": {}
+    }));
+    write_json_atomic(&index_path, &index).expect("write phase-2 index");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.runtime_contract.source, "accepted_aac");
+    assert!(spec
+        .runtime_contract
+        .r#ref
+        .as_deref()
+        .expect("runtime contract ref")
+        .contains("contracts/architecture/phase-1/aac.json#/runtimeDelivery"));
+    assert_eq!(
+        spec.runtime_contract.deployment_shape,
+        Some(DeploymentShape::FrontendAndBackend)
+    );
+    assert_eq!(spec.source_model.shape, DeploymentShape::FrontendAndBackend);
+    let frontend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    let backend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "backend")
+        .expect("backend service");
+    assert_eq!(frontend.root, "frontend");
+    assert_eq!(frontend.output_directory.as_deref(), Some("frontend/dist"));
+    assert_eq!(frontend.build_command.as_deref(), Some("npm run build"));
+    assert_eq!(frontend.package_manager, Some(PackageManager::Npm));
+    assert!(frontend.has_lockfile);
+    assert_eq!(frontend.framework.as_deref(), Some("vite"));
+    assert_eq!(backend.root, "backend");
+    assert_eq!(backend.runtime_kind, RuntimeKind::Java);
+    assert_eq!(backend.package_manager, Some(PackageManager::Maven));
+    assert!(!backend.has_lockfile);
+    assert_eq!(backend.framework.as_deref(), Some("spring-boot"));
+    assert_eq!(backend.build_command.as_deref(), Some("./mvnw package"));
+    assert_eq!(backend.start_command, None);
+    assert_eq!(backend.healthcheck_path.as_deref(), Some("/api/health"));
+    assert_eq!(
+        spec.environment.generated["DATABASE_URL"],
+        "jdbc:sqlite:/app/data/purchase-approval.db"
+    );
+    assert_eq!(
+        spec.environment.generated["SPRING_JPA_HIBERNATE_DDL_AUTO"],
+        "none"
+    );
+    assert!(
+        spec.environment.missing.is_empty(),
+        "{:#?}",
+        spec.environment
+    );
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.backend"),
+    )
+    .expect("backend dockerfile");
+    assert!(dockerfile.contains("FROM maven:3-eclipse-temurin-21 AS builder"));
+    assert!(dockerfile.contains("WORKDIR /workspace/backend"));
+    assert!(dockerfile.contains("COPY backend/ ./"));
+    assert!(dockerfile.contains("RUN mvn -DskipTests package"));
+    assert!(!dockerfile.contains("RUN ./mvnw package"), "{dockerfile}");
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("curl -fsS http://127.0.0.1:8080/api/health || exit 1"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("      backend:\n        condition: service_healthy"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("DATABASE_URL: jdbc:sqlite:/app/data/purchase-approval.db"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("SPRING_JPA_HIBERNATE_DDL_AUTO: none"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("      - backend-data:/app/data"),
+        "{compose}"
+    );
+    assert!(compose.contains("volumes:\n  backend-data:"), "{compose}");
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(
+        frontend_dockerfile.contains("ENV VITE_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
+        "{frontend_dockerfile}"
+    );
+}
+
+#[test]
+fn prepare_generates_file_database_env_from_code_probe_when_contract_omits_it() {
+    let fixture = Fixture::new("deploy-code-probe-file-db-env");
+    let mut runtime = plugin_style_dual_service_runtime_delivery();
+    runtime["environment"]["required"] = json!([]);
+    fixture.write_runtime_delivery(runtime);
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+    fixture.write_text("backend/mvnw", "#!/bin/sh\n");
+    fixture.write_text(
+        "backend/src/main/resources/application.yml",
+        r#"spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:h2:file:./var/purchase-approval;MODE=PostgreSQL}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert!(
+        spec.environment
+            .required
+            .iter()
+            .all(|variable| variable.name != "DATABASE_URL"),
+        "{:#?}",
+        spec.environment.required
+    );
+    assert_eq!(
+        spec.environment.generated["DATABASE_URL"],
+        "jdbc:h2:file:/app/data/purchase-approval;MODE=PostgreSQL"
+    );
+    assert_eq!(
+        spec.environment.generated["SPRING_JPA_HIBERNATE_DDL_AUTO"],
+        "none"
+    );
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("DATABASE_URL: jdbc:h2:file:/app/data/purchase-approval;MODE=PostgreSQL"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("SPRING_JPA_HIBERNATE_DDL_AUTO: none"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("      - backend-data:/app/data"),
+        "{compose}"
+    );
+}
+
+#[test]
+fn prepare_without_loom_delivery_uses_repository_code_probe() {
+    let fixture = Fixture::new("deploy-no-delivery-code-probe");
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.runtime_contract.source, "heuristic");
+    assert_eq!(spec.runtime_contract.r#ref, None);
+    assert_eq!(spec.source_model.source, SourceModelSource::CodeProbe);
+    let service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(service.package_manager, Some(PackageManager::Maven));
+    assert_eq!(
+        service.build_command.as_deref(),
+        Some("cd backend && mvn -DskipTests package")
+    );
+    assert_eq!(
+        service.workspace_package_json_paths,
+        vec!["frontend/package.json"]
+    );
+    assert_eq!(service.output_directory.as_deref(), Some("frontend/dist"));
 }
 
 #[test]
@@ -625,6 +933,17 @@ exit 0
     });
     let value = serde_json::to_value(result).expect("deploy up json");
     assert_eq!(fixture.read_spec().provider, DeployProvider::Generated);
+    let reference_ids = &value["next"]["deployReferenceProfile"]["referenceIds"];
+    for expected in [
+        "deploy.providers",
+        "deploy.compose",
+        "deploy.dockerfile",
+        "deploy.repair",
+        "deploy.stacks.node",
+    ] {
+        assert_json_array_contains(reference_ids, expected);
+    }
+    assert_json_array_excludes(reference_ids, "deploy.external-references");
     let repair = fixture.repair_action_value();
     assert!(!repair["protectedFiles"]
         .as_array()
@@ -1224,7 +1543,7 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
     assert!(!inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "repairContext"));
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str(),
@@ -1237,12 +1556,12 @@ fn deploy_execution_repair_next_is_request_scoped_and_retries_deploy_after_submi
     assert!(inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field == "outputContract.resultTemplate"));
     assert!(!inspected
         .read_groups
         .iter()
-        .flat_map(|group| group.fields.iter())
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
         .any(|field| field.starts_with("outputContract.schemaShape")));
     let second_result = deploy_repair(DeployToolInput {
         project_root: fixture.root_str(),
@@ -1983,6 +2302,36 @@ fn runtime_delivery() -> Value {
     })
 }
 
+fn plugin_style_dual_service_runtime_delivery() -> Value {
+    json!({
+        "status": "modified",
+        "runtimeKind": "react_vite_plus_spring_boot",
+        "deploymentShape": "dual-service",
+        "build": {
+            "command": "frontend: npm run build; backend: ./mvnw package",
+            "outputs": ["frontend/dist", "backend/target/*.jar"],
+            "workingDirectory": "."
+        },
+        "start": {
+            "command": "frontend: npm run dev; backend: ./mvnw spring-boot:run",
+            "workingDirectory": "."
+        },
+        "httpProbes": {
+            "previewPath": "/",
+            "apiPaths": ["/api/health", "/api/purchase-requests"],
+            "expectedStatus": "2xx_or_3xx"
+        },
+        "runtimeSurfaces": [
+            { "surfaceId": "runtime_surface_1", "kind": "frontend", "urlPath": "/" },
+            { "surfaceId": "runtime_surface_2", "kind": "api", "urlPath": "/api" }
+        ],
+        "environment": {
+            "required": ["DATABASE_URL"],
+            "optional": ["SPRING_PROFILES_ACTIVE"]
+        }
+    })
+}
+
 fn assert_forbidden_cli_fields_absent(value: &Value) {
     match value {
         Value::Object(object) => {
@@ -2012,6 +2361,22 @@ fn assert_forbidden_cli_fields_absent(value: &Value) {
         }
         _ => {}
     }
+}
+
+fn assert_json_array_contains(value: &Value, expected: &str) {
+    let contains = value
+        .as_array()
+        .map(|items| items.iter().any(|item| item == expected))
+        .unwrap_or(false);
+    assert!(contains, "expected {expected} in {value:#}");
+}
+
+fn assert_json_array_excludes(value: &Value, forbidden: &str) {
+    let contains = value
+        .as_array()
+        .map(|items| items.iter().any(|item| item == forbidden))
+        .unwrap_or(false);
+    assert!(!contains, "forbidden {forbidden} appears in {value:#}");
 }
 
 struct Fixture {

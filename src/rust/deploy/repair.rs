@@ -7,11 +7,11 @@ use contracts::{
     DeploymentSpec,
 };
 use delivery_core::{
-    ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary, ExecuteTaskNext,
-    ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput, LoomMcpActionResult,
-    LoomMcpAutoRunnableResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
-    LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult, PostSubmitAction,
-    ReadRequestFieldsResult, RepairContext, RepairIssue, RepairOrigin, WriteMode,
+    read_selectors_value_from_paths, ArtifactKind, DeployRepairAssetsNext, ExecuteEditBoundary,
+    ExecuteTaskNext, ExecuteVerificationPolicy, ExecutionKind, FileSubmitInput,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpBlockedResult, LoomMcpDoneResult,
+    LoomMcpFailure, LoomMcpFailureResult, LoomMcpNextAction, LoomMcpRepairableErrorResult,
+    PostSubmitAction, ReadRequestFieldsResult, RepairContext, RepairIssue, RepairOrigin, WriteMode,
 };
 use schemars::schema_for;
 use serde_json::{json, Value};
@@ -30,6 +30,7 @@ use crate::{
         deploy_execution_repair_action_file, deploy_execution_repair_result_file, deployment_paths,
     },
     prepare::{deployment_generated_file_refs, read_spec},
+    references::reference_profile,
     run::deploy_retry_after_repair,
     DeployToolInput,
 };
@@ -189,6 +190,13 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                         diagnostics_ref: "Read next.diagnosticsRef only when compact diagnostics and errorWindow are insufficient.".to_string(),
                         full_log_ref: "Read full logs only after diagnosticsRef is still insufficient or the retry returns a new failure.".to_string(),
                     },
+                    deploy_reference_profile: spec
+                        .as_ref()
+                        .map(|spec| reference_profile(spec, Some(request.failure_kind), true))
+                        .unwrap_or(delivery_core::DeployReferenceProfile {
+                            reference_ids: vec!["deploy.repair".to_string()],
+                            load_mode: "skill_reference_by_id".to_string(),
+                        }),
                     retry_tool: "loom.deployUp".to_string(),
                 }),
             ))
@@ -568,21 +576,21 @@ fn materialize_deploy_execution_repair(
                     "required": true,
                     "purpose": "Read deploy failure report and edit boundary before editing application code.",
                     "whenToRead": "Read before source edits.",
-                    "fields": deploy_failure_fields
+                    "selectors": read_selectors_value_from_paths(deploy_failure_fields)
                 },
                 {
                     "groupId": "deploy_repair_result_contract",
                     "required": true,
                     "purpose": "Read result path, schema shape, and submit rules before writing repair result.",
                     "whenToRead": "Read before writing the result file.",
-                    "fields": [
+                    "selectors": read_selectors_value_from_paths([
                         "outputContract.repairId",
                         "outputContract.deploymentFailureRef",
                         "outputContract.resultFile",
                         "outputContract.resultTemplate",
                         "outputContract.resultRules",
                         "executionRules.completionBarrier"
-                    ]
+                    ])
                 }
             ]
         }
