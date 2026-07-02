@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use contracts::{DependencyService, PackageManager, RuntimeKind};
 use serde_json::{json, Value};
@@ -23,6 +23,9 @@ pub struct DeploymentCodeProbe {
     pub working_directory: Option<String>,
     pub workspace_package_json_paths: Vec<String>,
     pub services: Vec<DependencyService>,
+    pub env_defaults: BTreeMap<String, String>,
+    pub spring_ddl_auto_validate: bool,
+    pub flyway_detected: bool,
     pub evidence: Value,
 }
 
@@ -43,6 +46,9 @@ impl DeploymentCodeProbe {
             working_directory: None,
             workspace_package_json_paths: vec![],
             services: vec![],
+            env_defaults: BTreeMap::new(),
+            spring_ddl_auto_validate: false,
+            flyway_detected: false,
             evidence: json!({
                 "schemaVersion": 1,
                 "source": "code_probe",
@@ -63,6 +69,9 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     let has_root_gradle = root_gradle.exists() || project_root.join("gradlew").exists();
     let has_root_maven = root_pom.exists() || project_root.join("mvnw").exists();
     let has_root_node = root_package.exists();
+    let env_defaults = collect_env_defaults(project_root);
+    let spring_ddl_auto_validate = spring_ddl_auto_validate(project_root);
+    let flyway_detected = flyway_detected(project_root);
 
     if let Some(backend) = backend {
         let package_manager = Some(backend.package_manager);
@@ -97,6 +106,9 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             working_directory: None,
             workspace_package_json_paths: frontend_package_refs.clone(),
             services: vec![],
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
             evidence: evidence_value(
                 project_root,
                 "multi_application",
@@ -199,6 +211,9 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             working_directory: None,
             workspace_package_json_paths: vec![],
             services: vec![],
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
             evidence: evidence_value(
                 project_root,
                 "single_service",
@@ -255,6 +270,9 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             working_directory: (root != ".").then_some(root.to_string()),
             workspace_package_json_paths: vec![package_path.clone()],
             services: vec![],
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
             evidence: evidence_value(
                 project_root,
                 "node_application",
@@ -389,6 +407,110 @@ fn has_node_lockfile(root: &Path) -> bool {
     ]
     .iter()
     .any(|name| root.join(name).exists())
+}
+
+fn collect_env_defaults(project_root: &Path) -> BTreeMap<String, String> {
+    let mut defaults = BTreeMap::new();
+    for relative in config_file_candidates(project_root) {
+        let Ok(text) = fs::read_to_string(project_root.join(&relative)) else {
+            continue;
+        };
+        collect_env_placeholders(&text, &mut defaults);
+    }
+    defaults
+}
+
+fn config_file_candidates(project_root: &Path) -> Vec<String> {
+    let mut candidates = vec![
+        "application.yml".to_string(),
+        "application.yaml".to_string(),
+        "application.properties".to_string(),
+        ".env.example".to_string(),
+    ];
+    for root in ["backend", "service", "api", "server"] {
+        for name in [
+            "application.yml",
+            "application.yaml",
+            "application.properties",
+        ] {
+            candidates.push(format!("{root}/src/main/resources/{name}"));
+        }
+        candidates.push(format!("{root}/.env.example"));
+    }
+    candidates
+        .into_iter()
+        .filter(|relative| project_root.join(relative).is_file())
+        .collect()
+}
+
+fn collect_env_placeholders(text: &str, defaults: &mut BTreeMap<String, String>) {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while let Some(start) = text[index..].find("${") {
+        let start = index + start + 2;
+        let Some(end_offset) = text[start..].find('}') else {
+            break;
+        };
+        let end = start + end_offset;
+        let expression = &text[start..end];
+        if let Some((name, default_value)) = expression.split_once(':') {
+            let name = name.trim();
+            let default_value = default_value.trim();
+            if is_env_name(name) && !default_value.is_empty() {
+                defaults
+                    .entry(name.to_string())
+                    .or_insert_with(|| default_value.to_string());
+            }
+        }
+        index = end + 1;
+        if index >= bytes.len() {
+            break;
+        }
+    }
+}
+
+fn is_env_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+fn spring_ddl_auto_validate(project_root: &Path) -> bool {
+    config_file_candidates(project_root)
+        .into_iter()
+        .any(|relative| {
+            fs::read_to_string(project_root.join(relative))
+                .map(|text| {
+                    let normalized = text.to_ascii_lowercase().replace([' ', '\t', '\r'], "");
+                    normalized.contains("ddl-auto:validate")
+                        || normalized.contains("ddl-auto=validate")
+                        || normalized.contains("hibernate.ddl-auto=validate")
+                })
+                .unwrap_or(false)
+        })
+}
+
+fn flyway_detected(project_root: &Path) -> bool {
+    config_file_candidates(project_root)
+        .into_iter()
+        .any(|relative| {
+            fs::read_to_string(project_root.join(relative))
+                .map(|text| text.to_ascii_lowercase().contains("flyway"))
+                .unwrap_or(false)
+        })
+        || [
+            "pom.xml",
+            "backend/pom.xml",
+            "service/pom.xml",
+            "api/pom.xml",
+        ]
+        .into_iter()
+        .any(|relative| {
+            fs::read_to_string(project_root.join(relative))
+                .map(|text| text.to_ascii_lowercase().contains("flyway"))
+                .unwrap_or(false)
+        })
 }
 
 fn node_package_manager(root: &Path) -> Option<PackageManager> {

@@ -445,15 +445,24 @@ fn generate_compose(spec: &DeploymentSpec) -> String {
     for dependency in &spec.source_model.dependencies {
         lines.extend(generate_dependency_service(dependency));
     }
-    let volumes = spec
+    let mut volumes = spec
         .source_model
         .dependencies
         .iter()
         .filter_map(|dependency| dependency.volume_name.as_ref())
+        .cloned()
         .collect::<Vec<_>>();
+    volumes.extend(
+        spec.source_model
+            .services
+            .iter()
+            .filter_map(|service| app_data_volume_name(spec, service)),
+    );
+    volumes.sort();
+    volumes.dedup();
     if !volumes.is_empty() {
         lines.push("volumes:".to_string());
-        for volume in volumes {
+        for volume in &volumes {
             lines.push(format!("  {volume}:"));
         }
     }
@@ -521,9 +530,27 @@ fn generate_app_service(spec: &DeploymentSpec, service: &DeploymentSourceService
             }
         }
     }
+    if let Some(volume) = app_data_volume_name(spec, service) {
+        lines.push("    volumes:".to_string());
+        lines.push(format!("      - {volume}:/app/data"));
+    }
     lines.push("    restart: unless-stopped".to_string());
     lines.push(String::new());
     lines
+}
+
+fn app_data_volume_name(
+    spec: &DeploymentSpec,
+    service: &DeploymentSourceService,
+) -> Option<String> {
+    if service.role == SourceServiceRole::Frontend {
+        return None;
+    }
+    spec.environment
+        .generated
+        .values()
+        .any(|value| value.contains("/app/data/"))
+        .then(|| format!("{}-data", service.service_id))
 }
 
 fn service_has_healthcheck_for_id(spec: &DeploymentSpec, service_id: &str) -> bool {

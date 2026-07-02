@@ -277,6 +277,18 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
         r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
     );
     fixture.write_text("backend/mvnw", "#!/bin/sh\n");
+    fixture.write_text(
+        "backend/src/main/resources/application.yml",
+        r#"spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:sqlite:purchase-approval.db}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+"#,
+    );
 
     let index_path = fixture.root.join(".loom/deliveries/delivery-1/index.json");
     let mut index: Value = read_json(&index_path).expect("delivery index");
@@ -335,6 +347,19 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     assert_eq!(backend.build_command.as_deref(), Some("./mvnw package"));
     assert_eq!(backend.start_command, None);
     assert_eq!(backend.healthcheck_path.as_deref(), Some("/api/health"));
+    assert_eq!(
+        spec.environment.generated["DATABASE_URL"],
+        "jdbc:sqlite:/app/data/purchase-approval.db"
+    );
+    assert_eq!(
+        spec.environment.generated["SPRING_JPA_HIBERNATE_DDL_AUTO"],
+        "none"
+    );
+    assert!(
+        spec.environment.missing.is_empty(),
+        "{:#?}",
+        spec.environment
+    );
 
     let dockerfile = read_text(
         &fixture
@@ -362,6 +387,19 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
         compose.contains("      backend:\n        condition: service_healthy"),
         "{compose}"
     );
+    assert!(
+        compose.contains("DATABASE_URL: jdbc:sqlite:/app/data/purchase-approval.db"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("SPRING_JPA_HIBERNATE_DDL_AUTO: none"),
+        "{compose}"
+    );
+    assert!(
+        compose.contains("      - backend-data:/app/data"),
+        "{compose}"
+    );
+    assert!(compose.contains("volumes:\n  backend-data:"), "{compose}");
 
     let frontend_dockerfile = read_text(
         &fixture
@@ -2184,7 +2222,7 @@ fn plugin_style_dual_service_runtime_delivery() -> Value {
             { "surfaceId": "runtime_surface_2", "kind": "api", "urlPath": "/api" }
         ],
         "environment": {
-            "required": [],
+            "required": ["DATABASE_URL"],
             "optional": ["SPRING_PROFILES_ACTIVE"]
         }
     })

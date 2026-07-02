@@ -23,7 +23,7 @@ use state::{
 use crate::{
     active_operation::{acquire_operation, active_operation_result},
     bootstrap::analyze_deployment_bootstrap,
-    code_evidence::build_deployment_code_probe,
+    code_evidence::{build_deployment_code_probe, DeploymentCodeProbe},
     existing::{
         analyze_existing_compose, find_existing_deployment_files, selected_compose_port,
         ExistingDeploymentFiles,
@@ -129,7 +129,7 @@ pub fn deploy_prepare_inner(
     let topology_ref =
         to_project_relative(project_root, &paths.generated_dir.join("topology.json"))?;
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
-    let environment = env_diagnostics(&runtime_contract);
+    let environment = env_diagnostics(&runtime_contract, &code_probe);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
     let runtime = build_deployment_runtime(
         &runtime_contract,
@@ -242,10 +242,29 @@ pub fn read_spec(project_root: &Path) -> StateResult<DeploymentSpec> {
     state::store::read_json(&deployment_paths(project_root).spec_file)
 }
 
-fn env_diagnostics(runtime: &contracts::DeploymentRuntimeContract) -> DeploymentEnvDiagnostics {
+fn env_diagnostics(
+    runtime: &contracts::DeploymentRuntimeContract,
+    code_probe: &DeploymentCodeProbe,
+) -> DeploymentEnvDiagnostics {
     let mut generated = BTreeMap::new();
     for dependency in &runtime.dependency_services {
         generated.extend(dependency.connection_env.clone());
+    }
+    for name in &runtime.environment.required {
+        if std::env::var(name).is_ok() || generated.contains_key(name) {
+            continue;
+        }
+        if let Some(default_value) = code_probe.env_defaults.get(name) {
+            generated.insert(
+                name.clone(),
+                container_env_default(name, default_value).unwrap_or_else(|| default_value.clone()),
+            );
+        }
+    }
+    if should_disable_spring_ddl_validation(code_probe, &generated) {
+        generated
+            .entry("SPRING_JPA_HIBERNATE_DDL_AUTO".to_string())
+            .or_insert_with(|| "none".to_string());
     }
     let required = runtime
         .environment
@@ -276,6 +295,71 @@ fn env_diagnostics(runtime: &contracts::DeploymentRuntimeContract) -> Deployment
         missing,
         warnings: vec![],
     }
+}
+
+fn container_env_default(name: &str, value: &str) -> Option<String> {
+    if !name.to_ascii_uppercase().contains("DATABASE") {
+        return None;
+    }
+    containerize_file_database_url(value)
+}
+
+fn containerize_file_database_url(value: &str) -> Option<String> {
+    for prefix in [
+        "jdbc:sqlite:",
+        "sqlite:",
+        "jdbc:h2:file:",
+        "jdbc:hsqldb:file:",
+    ] {
+        if let Some(path) = value.strip_prefix(prefix) {
+            return containerize_database_path(prefix, path);
+        }
+    }
+    if let Some(path) = value.strip_prefix("jdbc:derby:") {
+        if !path.starts_with("//") {
+            return containerize_database_path("jdbc:derby:", path);
+        }
+    }
+    None
+}
+
+fn containerize_database_path(prefix: &str, path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty()
+        || path.starts_with("/app/data/")
+        || path.starts_with("http:")
+        || path.starts_with("https:")
+        || path.starts_with("tcp:")
+        || path.starts_with("mem:")
+        || path == ":memory:"
+    {
+        return None;
+    }
+    let (path_part, suffix) = split_database_url_suffix(path);
+    let file_name = path_part
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|item| !item.is_empty())
+        .unwrap_or("app.db");
+    Some(format!("{prefix}/app/data/{file_name}{suffix}"))
+}
+
+fn split_database_url_suffix(path: &str) -> (&str, &str) {
+    let index = path.find(['?', ';']).unwrap_or(path.len());
+    path.split_at(index)
+}
+
+fn should_disable_spring_ddl_validation(
+    code_probe: &DeploymentCodeProbe,
+    generated: &BTreeMap<String, String>,
+) -> bool {
+    code_probe.framework.as_deref() == Some("spring-boot")
+        && code_probe.flyway_detected
+        && code_probe.spring_ddl_auto_validate
+        && generated.values().any(|value| {
+            let lower = value.to_ascii_lowercase();
+            containerize_file_database_url(&lower).is_some() || lower.contains("/app/data/")
+        })
 }
 
 fn deployment_root_for(project_root: &Path, app_path: Option<&str>) -> StateResult<PathBuf> {
