@@ -9,6 +9,7 @@ Load this file before frontend review, visual inspection, accessibility checks, 
 - Verify the first viewport: it must show the actual product surface for the selected scenario.
 - Check at least desktop and mobile-responsive widths for web surfaces when the product contract includes responsive behavior.
 - For 3D/canvas/media surfaces, verify the scene or media is nonblank, correctly framed, and still interactive after initial render.
+- Source-only review can catch missing files and obvious copy leaks, but it cannot prove production UI quality. If render verification is skipped, record the blocker and keep the risk visible.
 
 ## State Coverage
 
@@ -53,5 +54,13 @@ TaskResult or ReviewResult evidence should include:
 - Screenshot, Playwright, browser, or manual inspection evidence when available.
 - Accessibility checks performed or explicit environment blockers.
 - Known gaps with business impact, not vague polish notes.
+
+Use this evidence shape in prose or structured fields:
+
+```text
+screen/component -> state checked -> viewport/device -> evidence command or screenshot -> remaining gap
+```
+
+For UI quality, "build passed" is supporting evidence only. It does not replace rendered layout, state, and interaction checks.
 
 If a rendered check cannot run because of missing dependencies, network, auth, credentials, or environment limits, record that as verification blocked. Do not mark it as a product defect unless the UI itself caused the failure.

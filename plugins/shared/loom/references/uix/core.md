@@ -11,6 +11,7 @@ When the request includes `uiQualityContract.referenceProfile.referenceIds`, loa
 | Reference id family | File location | Purpose |
 | --- | --- | --- |
 | `uix.anti-patterns` | `references/uix/anti-patterns.md` | Blocks demo-looking UI and product-boundary failures. |
+| `uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification` | Top-level files under `references/uix/` | Focus rules selected by the MCP contract for system foundations, workflow behavior, copy, data surfaces, responsive/mobile behavior, stack adoption, and rendered verification. |
 | `uix.tokens.*` | `references/uix/tokens/` | Defines semantic color, typography, spacing, grid, radius, elevation, and motion decisions. |
 | `uix.scenarios.*` | `references/uix/scenarios/` | Defines surface layout, density, navigation, component, and state expectations for a product scenario. |
 | `uix.stacks.*` | `references/uix/stacks/` | Defines framework-specific implementation patterns without changing the product contract. |
@@ -18,6 +19,18 @@ When the request includes `uiQualityContract.referenceProfile.referenceIds`, loa
 | `uix.templates.tokens-tailwind` | `references/uix/templates/tokens.tailwind.tpl` | Token asset baseline for Tailwind theme extension. Load only when `uiQualityContract.designTokenAssetPlan.templateId` selects it. |
 
 Do not load unrelated UI skills. Do not copy reference text into task results. Cite reference ids in `frontendQualitySelfCheck.referenceIdsChecked`, then provide concrete evidence from the implemented UI.
+
+## Contract Chain
+
+Loom UIX must work as one chain, not as optional reading:
+
+1. Architecture writes `uiQualityContract` from the confirmed frontend target and repository evidence. It selects compact reference ids and a token asset plan; it does not copy reference prose.
+2. TaskPlan copies the architecture `uiQualityContract` exactly into every task that owns visible UI surfaces, workflows, states, bindings, or frontend foundations.
+3. Execution reads only the selected ids, adapts the token template to the actual project stack/theme, and implements the business surface.
+4. TaskResult fills `frontendQualitySelfCheck` with changed UI files, states, actions, token asset files, token consumer files, viewports, and known gaps.
+5. Review checks the rendered product surface and the evidence; it must not accept a prose-only claim of UI quality.
+
+If a task creates or changes a page, route, screen, panel, modal, drawer, table, form, chart, navigation, shared component, or visible state, it is UI work even when it is not the app first viewport.
 
 ## Reference Compression Rule
 
@@ -28,6 +41,7 @@ Loom UIX references are not meant to be tiny summaries, and they are not meant t
 - Keep examples semantic. Use token names such as `--surface`, `--border`, `--space-4`, and `--radius-md` instead of brand-specific final values.
 - Drop exhaustive component CSS, full template libraries, repeated variants, large brand palettes, decorative examples, and framework-specific boilerplate that belongs in stack references.
 - Drop examples that only demonstrate syntax and do not improve product quality.
+- When a cross-cutting UI idea appears in multiple files, keep it once at the right layer: token asset rules in templates/tokens, scenario anatomy in scenarios, rendered proof in verification, and stack-specific file organization in stacks.
 
 The target size is "operational reference": enough concrete structure for an agent to build a production surface, still small enough to be read only when the MCP contract selects that UIX reference id.
 

@@ -77,9 +77,13 @@ pub const UI_FORBIDDEN_USER_VISIBLE_CONTENT: [&str; 5] = [
 pub const UI_REQUIRED_STATES: [&str; 5] =
     ["loading", "success", "error", "empty", "business_blocking"];
 
-pub const UI_CORE_REFERENCE_IDS: [&str; 8] = [
+pub const UI_CORE_REFERENCE_IDS: [&str; 12] = [
     "uix.core",
     "uix.anti-patterns",
+    "uix.system",
+    "uix.interaction",
+    "uix.content",
+    "uix.verification",
     "uix.tokens.color-system",
     "uix.tokens.typography",
     "uix.tokens.spacing",
@@ -87,6 +91,8 @@ pub const UI_CORE_REFERENCE_IDS: [&str; 8] = [
     "uix.tokens.motion",
     "uix.tokens.radius-elevation",
 ];
+
+pub const UI_FOCUS_REFERENCE_IDS: [&str; 3] = ["uix.data", "uix.mobile", "uix.frameworks"];
 
 pub const UI_SCENARIO_REFERENCE_IDS: [&str; 13] = [
     "uix.scenarios.admin-dashboard",
@@ -186,14 +192,14 @@ pub fn build_ui_quality_seed(
         .iter()
         .map(|item| (*item).to_string())
         .collect::<Vec<_>>();
-    let scenario_ref = scenario_reference_id(primary_scenario).to_string();
-    if !required_reference_ids.contains(&scenario_ref) {
-        required_reference_ids.push(scenario_ref);
+    for scenario_ref in scenario_supporting_reference_ids(primary_scenario) {
+        push_reference_id(&mut required_reference_ids, scenario_ref);
+    }
+    if !stack_refs.is_empty() {
+        push_reference_id(&mut required_reference_ids, "uix.frameworks");
     }
     for stack_ref in &stack_refs {
-        if !required_reference_ids.contains(stack_ref) {
-            required_reference_ids.push(stack_ref.clone());
-        }
+        push_reference_id(&mut required_reference_ids, stack_ref);
     }
     json!({
         "required": required,
@@ -208,7 +214,7 @@ pub fn build_ui_quality_seed(
         "designTokenAssetPlan": design_token_seed,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": UI_REQUIRED_STATES,
-        "selectionRule": "Pick one scenarioKind from scenarioCandidates. Keep requiredReferenceIds in referenceProfile.referenceIds, add only known ids from enumRefs.uiQuality. Preserve or extend existing project token/theme files before creating new token assets. Use designTokenAssetPlan to choose the token strategy and template id; never copy template text into the request artifact. Do not expose runtime commands, stack explanations, progress notes, verification instructions, or Loom/internal workflow terms in user-visible UI."
+        "selectionRule": "Pick one scenarioKind from scenarioCandidates. Keep requiredReferenceIds in referenceProfile.referenceIds, including focus and companion scenario references; add only known ids from enumRefs.uiQuality. Preserve or extend existing project token/theme files before creating new token assets. Use designTokenAssetPlan to choose the token strategy and template id; never copy template text into the request artifact. Do not expose runtime commands, stack explanations, progress notes, verification instructions, or Loom/internal workflow terms in user-visible UI."
     })
 }
 
@@ -429,6 +435,7 @@ pub fn validate_ui_quality_contract(frontend_experience: &Value) -> Vec<RepairIs
 pub fn known_ui_reference_ids() -> Vec<&'static str> {
     let mut ids = Vec::new();
     ids.extend(UI_CORE_REFERENCE_IDS);
+    ids.extend(UI_FOCUS_REFERENCE_IDS);
     ids.extend(UI_SCENARIO_REFERENCE_IDS);
     ids.extend(UI_STACK_REFERENCE_IDS);
     ids.sort_unstable();
@@ -533,6 +540,51 @@ fn scenario_reference_id(scenario: &str) -> &'static str {
         "developer_tool" => "uix.scenarios.developer-tool",
         "immersive_3d" => "uix.scenarios.immersive-3d",
         _ => "uix.core",
+    }
+}
+
+fn scenario_supporting_reference_ids(scenario: &str) -> Vec<&'static str> {
+    let mut refs = vec![scenario_reference_id(scenario)];
+    match scenario {
+        "admin_dashboard" => {
+            refs.extend(["uix.scenarios.data-console", "uix.data", "uix.mobile"]);
+        }
+        "data_console" => {
+            refs.extend(["uix.scenarios.admin-dashboard", "uix.data", "uix.mobile"]);
+        }
+        "fintech_workstation" => {
+            refs.extend([
+                "uix.scenarios.admin-dashboard",
+                "uix.scenarios.data-console",
+                "uix.data",
+                "uix.mobile",
+            ]);
+        }
+        "developer_tool" => {
+            refs.extend(["uix.scenarios.data-console", "uix.data", "uix.mobile"]);
+        }
+        "consumer_app" | "fintech_consumer_app" => {
+            refs.extend(["uix.scenarios.mobile-responsive", "uix.mobile"]);
+        }
+        "mobile_responsive" | "mobile_native" => {
+            refs.push("uix.mobile");
+        }
+        "marketing_site" | "corporate_site" | "docs_site" => {
+            refs.push("uix.mobile");
+        }
+        "immersive_3d" => {
+            refs.push("uix.mobile");
+        }
+        _ => {}
+    }
+    refs.sort_unstable();
+    refs.dedup();
+    refs
+}
+
+fn push_reference_id(ids: &mut Vec<String>, reference_id: &str) {
+    if !ids.iter().any(|id| id == reference_id) {
+        ids.push(reference_id.to_string());
     }
 }
 
@@ -856,15 +908,23 @@ fn validate_reference_ids(
         }
         actual.insert(id.to_string());
     }
-    for required in UI_CORE_REFERENCE_IDS
-        .into_iter()
-        .chain(std::iter::once(expected_scenario_ref))
-    {
+    let scenario_kind = contract
+        .pointer("/scenario/kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut required_refs = UI_CORE_REFERENCE_IDS.to_vec();
+    for reference_id in scenario_supporting_reference_ids(scenario_kind) {
+        required_refs.push(reference_id);
+    }
+    required_refs.push(expected_scenario_ref);
+    required_refs.sort_unstable();
+    required_refs.dedup();
+    for required in required_refs {
         if !actual.contains(required) {
             issues.push(issue(
                 "UI_QUALITY_REFERENCE_ID_REQUIRED",
                 "content.frontendExperience.uiQualityContract.referenceProfile.referenceIds",
-                "referenceProfile.referenceIds must include core, anti-pattern, all core token, and selected scenario UIX references.",
+                "referenceProfile.referenceIds must include core, focus, token, selected scenario, and scenario companion UIX references.",
             ));
             break;
         }
@@ -1224,8 +1284,13 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        build_ui_quality_seed, known_ui_reference_ids, UI_CORE_REFERENCE_IDS,
-        UI_DESIGN_TOKEN_TEMPLATE_IDS,
+        build_ui_quality_seed, known_ui_reference_ids, scenario_supporting_reference_ids,
+        UI_CORE_REFERENCE_IDS, UI_DESIGN_TOKEN_TEMPLATE_IDS,
+    };
+    use crate::{
+        ConfidenceLevel, ProjectKind, TechnicalBaselineApproval, TechnicalBaselineApprovalType,
+        TechnicalBaselineContract, TechnicalBaselineScope, TechnicalBaselineSource,
+        TechnicalBaselineStatus,
     };
 
     #[test]
@@ -1259,6 +1324,67 @@ mod tests {
             assert!(
                 reference_ids.contains(reference_id),
                 "uiQualitySeed.requiredReferenceIds must include {reference_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_quality_scenario_supporting_refs_cover_admin_data_and_mobile() {
+        let reference_ids = scenario_supporting_reference_ids("admin_dashboard")
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        for reference_id in [
+            "uix.scenarios.admin-dashboard",
+            "uix.scenarios.data-console",
+            "uix.data",
+            "uix.mobile",
+        ] {
+            assert!(
+                reference_ids.contains(reference_id),
+                "admin dashboard supporting refs must include {reference_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_quality_seed_adds_frameworks_when_stack_reference_exists() {
+        let baseline = TechnicalBaselineContract {
+            schema_version: "1.0".to_string(),
+            technical_baseline_id: "tbr-test".to_string(),
+            delivery_id: "delivery-test".to_string(),
+            phase_id: "phase-test".to_string(),
+            status: TechnicalBaselineStatus::Confirmed,
+            source: TechnicalBaselineSource::UserConfirmed,
+            project_kind: ProjectKind::Greenfield,
+            scope: TechnicalBaselineScope::Project,
+            stack: serde_json::json!("React + Tailwind"),
+            constraints: vec![],
+            evidence: vec![],
+            approval: TechnicalBaselineApproval {
+                r#type: TechnicalBaselineApprovalType::UserConfirmed,
+                confirmed_at: Some("2026-07-02T00:00:00Z".to_string()),
+                reason: Some("test".to_string()),
+            },
+            confidence: ConfidenceLevel::High,
+            requires_user_confirmation: Some(false),
+            reasoning_summary: vec![],
+            alternatives: vec![],
+            created_at: "2026-07-02T00:00:00Z".to_string(),
+            updated_at: "2026-07-02T00:00:00Z".to_string(),
+        };
+        let seed = build_ui_quality_seed(None, Some(&baseline));
+        let reference_ids = seed
+            .get("requiredReferenceIds")
+            .and_then(serde_json::Value::as_array)
+            .expect("seed must include requiredReferenceIds")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for reference_id in ["uix.frameworks", "uix.stacks.react"] {
+            assert!(
+                reference_ids.contains(reference_id),
+                "stack-aware UI seed must include {reference_id}"
             );
         }
     }
@@ -1312,6 +1438,20 @@ mod tests {
         }
         if reference_id == "uix.anti-patterns" {
             return "anti-patterns.md".to_string();
+        }
+        if let Some(name) = reference_id.strip_prefix("uix.") {
+            if matches!(
+                name,
+                "content"
+                    | "data"
+                    | "frameworks"
+                    | "interaction"
+                    | "mobile"
+                    | "system"
+                    | "verification"
+            ) {
+                return format!("{name}.md");
+            }
         }
         for (prefix, directory) in [
             ("uix.tokens.", "tokens"),

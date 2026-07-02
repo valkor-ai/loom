@@ -23,6 +23,11 @@ Do not scale font size directly with viewport width. Use breakpoint-specific lay
   --container-lg: 1024px;
   --container-xl: 1280px;
   --container-prose: 72ch;
+  --shell-sidebar-width: 240px;
+  --shell-topbar-height: 56px;
+  --shell-detail-width: 380px;
+  --table-min-width: 760px;
+  --drawer-width: min(420px, 92vw);
 }
 
 .container {
@@ -53,6 +58,29 @@ Do not scale font size directly with viewport width. Use breakpoint-specific lay
 - Docs shell with left nav, content, and optional right TOC.
 - Scene-first layout for 3D/canvas experiences, with controls overlaid or docked without covering the scene.
 
+## Workbench Shell
+
+```css
+.workbench-shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+}
+
+.workbench-main {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+}
+
+.workbench-content {
+  min-width: 0;
+  overflow: auto;
+}
+```
+
+Use this pattern for operational pages. Marketing/corporate/docs/3D scenarios have their own layout baselines and should not inherit a workbench shell by accident.
+
 ## Stable Dimensions
 
 Define stable dimensions for:
@@ -74,9 +102,12 @@ Stable dimensions prevent hover, loading text, validation text, and long labels 
 - Detail side panels become drawers or full-screen detail routes on mobile.
 - Toolbars wrap predictably; primary action remains visible.
 - Charts keep legends readable and avoid cramped axes.
+- Fixed side panels become drawers or route details before they squeeze the main workflow below usable width.
+- Header, toolbar, and action regions may wrap, but they must not push the primary task below non-functional explanation content.
 
 ## Self-Check
 
 - The selected layout baseline matches `uiQualityContract.layoutBaseline`.
 - Content does not overlap navigation, sticky bars, side panels, or mobile safe areas.
 - Wide desktop does not stretch text or forms into unreadable lines.
+- The implemented page contains the actual task surface in the first visible viewport for its scenario.

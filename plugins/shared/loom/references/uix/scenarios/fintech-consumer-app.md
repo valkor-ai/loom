@@ -72,6 +72,21 @@ Use for customer-facing financial, trading, banking, wallet, or investment exper
 }
 ```
 
+## Sensitive Action Flow
+
+```html
+<section data-region="financial-action">
+  <section data-region="input-step"></section>
+  <section data-region="review-step"></section>
+  <section data-region="receipt-step"></section>
+</section>
+```
+
+- Review screens should show amount, account, fee/limit, timing, and irreversible consequences when relevant.
+- Receipts should include reference id, timestamp, status, and next action.
+- Security prompts should explain what the user must do, not how the system is implemented.
+- Mask sensitive values when the product requires privacy, but keep enough context for confirmation.
+
 ## States
 
 - Loading preserves balance/transaction layout and never shows misleading zero values.
@@ -79,6 +94,13 @@ Use for customer-facing financial, trading, banking, wallet, or investment exper
 - Error includes recovery and support route for financial actions.
 - Business-blocking distinguishes insufficient balance, eligibility, limit, compliance, and market state restrictions.
 - Success receipt persists long enough to copy/share/reference.
+
+## Verification Signals
+
+- Loading states never imply an incorrect balance/order state.
+- Risk/fee/limit information is visible before confirmation.
+- Error recovery path is visible for failed financial actions.
+- Mobile touch targets and safe areas are checked.
 
 ## Avoid
 

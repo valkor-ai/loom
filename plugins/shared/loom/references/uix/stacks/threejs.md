@@ -32,6 +32,8 @@ ui/
 - Overlay UI must remain readable and must not cover the subject.
 - Dispose resources and avoid runaway animation loops.
 - Respect reduced motion or provide lower-motion controls when practical.
+- Keep DOM overlay controls styled through the same semantic tokens as the rest of the UI.
+- Do not let scene code own business form/table/detail state that belongs in UI overlay components.
 
 ## Render Pattern
 
@@ -48,3 +50,4 @@ ui/
 - Check desktop and mobile framing.
 - Confirm assets load and controls respond.
 - Verify the app remains interactive after resizing or route changes.
+- For generated scenes, inspect both canvas pixels and overlay controls; one without the other is incomplete.

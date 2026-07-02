@@ -26,6 +26,8 @@ styles/
 - Keep forms single-column, touch-friendly, and explicit about validation.
 - Avoid hover-only interactions and tiny table layouts.
 - Handle loading, empty, error, permission, and business-blocking states on the page that triggers them.
+- Translate token template intent into the project's UniApp style variables or theme file; do not add web-only CSS that the target cannot consume.
+- Keep page actions reachable with thumb-friendly spacing and platform keyboard behavior.
 
 ## Page Pattern
 
@@ -43,3 +45,4 @@ Use project-native syntax and components; the pattern is about regions, not exac
 
 - Use the available mini-app/H5 preview target when present.
 - Check safe areas, keyboard behavior, scroll, and platform permission flows.
+- Verify target-specific API limitations or permission prompts do not leave the user on a blank page.

@@ -36,11 +36,25 @@ Root navigation
 - Destructive or financial actions need confirmation, review, or undo based on severity.
 - Empty states should offer the next native action.
 
+## Native State Handling
+
+- Loading should use platform-appropriate progress indicators or skeleton/list placeholders.
+- Permission states should explain the missing permission and route to recovery when possible.
+- Offline states should separate unavailable network from empty data.
+- Keyboard-aware layouts must keep active fields and submit actions reachable.
+
+```text
+screen -> loading/empty/error/content
+action -> pending/success/failure
+navigation -> back/cancel/restore context
+```
+
 ## Verification
 
 - Use simulator/device or framework preview when available.
 - Check safe areas, keyboard behavior, scroll, and touch targets.
 - Check platform back behavior and focus/voiceover labels when possible.
+- Check dark/light mode only when the app supports both.
 
 ## Avoid
 

@@ -6,6 +6,7 @@ Load this file when generating, refining, or reviewing user-visible UI. These ar
 
 - Runtime commands, local ports, dependency commands, stack explanations, verification instructions, delivery progress, Loom block names, MCP tool names, request ids, schema terms, and internal enum values must not appear in normal product UI.
 - Operational products must not open with a marketing hero, feature-summary wall, footer-heavy page, or "how this was built" explanation.
+- Brand intro blocks, footer-like explainer sections, and "system capability" cards are product-boundary failures when the user asked for a workbench, admin console, data surface, or internal product.
 - Developer/runtime products may show technical terms only when the user task is actually about those terms.
 - Empty states may explain the business state and next action; they must not explain the implementation process.
 
@@ -15,6 +16,7 @@ Load this file when generating, refining, or reviewing user-visible UI. These ar
 - Avoid decorative card grids that describe capabilities instead of providing the actual working surface.
 - Avoid repeated "icon + title + paragraph" tiles when users need data, forms, filters, actions, or status.
 - Avoid oversized hero typography inside dashboards, staff consoles, forms, tables, and side panels.
+- Avoid giant logo/brand blocks in the app shell. Navigation identity should be compact unless the scenario is marketing/corporate.
 - Avoid ornamental gradients, blobs, glass panels, background noise, stock-like illustrations, and giant brand blocks when the user must scan or operate data.
 - Avoid arbitrary color sprawl, unrelated radius values, and inconsistent spacing. Use semantic tokens or the existing design system.
 

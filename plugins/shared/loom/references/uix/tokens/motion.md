@@ -37,6 +37,8 @@ Avoid motion for:
   --duration-normal: 180ms;
   --duration-slow: 280ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -57,6 +59,8 @@ Avoid motion for:
 - Use easing that decelerates naturally; avoid elastic/bounce unless the product tone explicitly supports it.
 - Respect `prefers-reduced-motion`; provide instant or near-instant alternatives.
 - Keep animation definitions close to design tokens or existing animation utilities.
+- Loading skeletons should preserve layout dimensions; animation is secondary to stable structure.
+- Long-running operations should expose progress or pending state at the region that is waiting, not through a global decorative spinner.
 
 ## Self-Check
 
@@ -64,3 +68,4 @@ Avoid motion for:
 - Reduced-motion users can complete the same workflow.
 - Long-running operations show progress without blocking the page.
 - No animation causes layout jump, scroll jump, or visual overlap.
+- Motion evidence notes reduced-motion support when new transitions or animations were added.

@@ -68,6 +68,11 @@ module.exports = {
         18: '4.5rem',
         88: '22rem',
         128: '32rem',
+        'shell-sidebar': '240px',
+        'shell-sidebar-compact': '64px',
+        'shell-topbar': '56px',
+        'shell-detail': '380px',
+        'table-min': '760px',
       },
       borderRadius: {
         none: '0',
@@ -115,10 +120,28 @@ module.exports = {
       minHeight: {
         touch: '44px',
         'touch-android': '48px',
+        'row-compact': '40px',
+        row: '48px',
+        'control-sm': '32px',
+        control: '40px',
+        'control-lg': '48px',
       },
       minWidth: {
         touch: '44px',
         'touch-android': '48px',
+        table: '760px',
+      },
+      width: {
+        'shell-sidebar': '240px',
+        'shell-sidebar-compact': '64px',
+        'shell-detail': '380px',
+        drawer: 'min(420px, 92vw)',
+      },
+      ringColor: {
+        focus: 'oklch(0.48 0.15 255 / 0.28)',
+      },
+      ringWidth: {
+        focus: '3px',
       },
       zIndex: {
         hide: '-1',

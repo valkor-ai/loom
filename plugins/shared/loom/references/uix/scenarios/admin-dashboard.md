@@ -186,6 +186,14 @@ On mobile, do not simply shrink this table. Use record cards or a drill-down lis
 - Reserve strong color for primary action, active navigation, focus, and semantic status.
 - KPI cards are allowed only when they support the page task; avoid decorative hero metrics.
 
+## Production Criteria
+
+- The first viewport must contain working navigation, current page context, and at least one real work region such as table/list/form/detail/action panel.
+- App identity stays compact in the sidebar or topbar. Do not add a large brand intro block above the work surface.
+- Header/footer text must be operational: filters, status, user/workspace, primary action, pagination, or help route. Long feature descriptions are not part of a repeat-use console.
+- Mobile fallback must keep the same workflow reachable: list/search first, then detail/action through drawer, card, or route.
+- `frontendQualitySelfCheck.surfacesCovered` should name the admin shell, data/list surface, and mutation/detail surfaces when they were touched.
+
 ## Avoid
 
 - Hero sections, marketing footers, feature-explainer cards, decorative metrics, or long implementation notes.

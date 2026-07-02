@@ -80,6 +80,20 @@ Use when a web product must work well on phones and tablets without being a nati
 - Use `100dvh` for app-like full-height pages.
 - Preserve scroll position when closing drawers/sheets where possible.
 
+## Web-Specific Checks
+
+- Viewport meta must not disable user zoom.
+- Sticky headers/action bars must not cover focused inputs when the software keyboard opens.
+- Scroll locking for drawers/sheets must release correctly.
+- Table/list/detail fallbacks should preserve the same business actions as desktop.
+- Desktop-only hover affordances need visible mobile equivalents.
+
+## Verification Signals
+
+- Check at least one narrow viewport and one desktop/tablet viewport when responsive behavior is in scope.
+- Long labels, validation messages, and business-blocking copy wrap without hiding actions.
+- Primary action remains reachable after scrolling and after validation errors.
+
 ## Avoid
 
 - Horizontal page scroll.

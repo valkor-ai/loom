@@ -53,6 +53,26 @@ Use for company, organization, venue, portfolio, institution, or brand informati
 - Use cards only for repeated content such as cases, people, articles, or resources.
 - Preserve a hint of the next section in the first viewport when practical.
 
+## Content Surfaces
+
+- Identity hero: brand/object/place is visible immediately; supporting copy explains role and audience.
+- Proof: cases, credentials, locations, products, media, team, customers, or outcomes.
+- Resource/news: list items need date/category/title and clear route.
+- Contact: business path, form or contact channels, and validation/success/error states when interactive.
+
+```html
+<section data-region="identity-hero">
+  <div data-region="identity-copy"></div>
+  <figure data-region="identity-media"></figure>
+</section>
+```
+
+## Verification Signals
+
+- Brand/product/place/object is visible in the first viewport.
+- Navigation, contact, and footer links support real stakeholder tasks.
+- Images/media remain inspectable and not only atmospheric.
+
 ## Avoid
 
 - Generic corporate hero with abstract gradients and no concrete identity.

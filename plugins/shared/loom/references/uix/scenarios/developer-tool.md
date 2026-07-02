@@ -48,6 +48,27 @@ Use for IDE-like tools, API explorers, SDK consoles, build/deploy tools, logs, d
 - Errors should separate user configuration problems, environment failures, and tool failures.
 - Keyboard shortcuts may be shown only when implemented and useful.
 
+## Result And Error Surfaces
+
+```html
+<section data-region="tool-runner">
+  <header data-region="tool-controls"></header>
+  <section data-region="tool-output"></section>
+  <aside data-region="tool-diagnostics"></aside>
+</section>
+```
+
+- Output should have status, duration/progress when known, copy/download where useful, and clear empty state.
+- Configuration forms should validate before running costly or destructive actions.
+- Raw JSON/logs can be shown, but only with structure, search, wrapping/scroll, and explanation of what the user should do.
+- Dangerous actions should be separated from routine controls by placement and style.
+
+## Verification Signals
+
+- Keyboard and copy flows work.
+- Long logs or JSON do not overflow the page.
+- Technical errors are useful to the developer without exposing unrelated internal Loom workflow details.
+
 ## Avoid
 
 - Using developer jargon in a non-developer product.

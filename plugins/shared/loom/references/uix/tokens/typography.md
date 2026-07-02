@@ -21,6 +21,7 @@ Use a small, stable type scale. Suggested web baseline:
 - `xl`: 20px for panel titles.
 - `2xl`: 24px for page titles inside workbench UI.
 - Larger sizes are reserved for true landing/editorial/immersive hero contexts.
+- In internal tools, page titles usually stay at 20-24px. Hero-scale type inside tables, forms, drawers, or operational panels is a defect.
 
 ## CSS Token Skeleton
 
@@ -49,6 +50,7 @@ Use tabular numeric variants for finance, tables, metrics, and logs when the sta
 - Docs: readable prose width, clear heading hierarchy, code block typography.
 - Marketing: expressive headline scale is allowed, but supporting copy must stay readable and responsive.
 - Mobile: text must not depend on desktop line length; controls and labels must wrap cleanly.
+- Data/status labels should be short and consistent. Use helper text or detail panels for explanations rather than stuffing paragraphs into table rows.
 
 ## Implementation
 
@@ -63,3 +65,4 @@ Use tabular numeric variants for finance, tables, metrics, and logs when the sta
 - Page titles do not look like marketing heroes inside internal tools.
 - Tables align numbers and statuses.
 - Error/help text is readable at the smallest supported viewport.
+- Font families are declared in one token/theme location or follow the existing project system.

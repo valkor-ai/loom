@@ -60,6 +60,20 @@ Use for landing pages, product marketing, campaigns, pricing, launches, and conv
 - Supporting copy carries descriptive value props.
 - Keep CTA group visible but not floating over unreadable media.
 
+## Conversion Surface Quality
+
+- Hero media should reveal the product, place, person, object, workflow, or outcome when those exist.
+- Proof sections should use concrete evidence: screenshots, real metrics with context, customer logos, comparisons, demos, or examples.
+- Pricing/comparison sections must be scannable and responsive; do not hide plan differences in long prose.
+- Forms and CTAs need validation, success, and error states like any other product UI.
+- The first viewport should hint at the next section so the page feels continuous, not like a full-screen poster.
+
+## Verification Signals
+
+- H1 is the product/offer/category/name, not a vague slogan.
+- Primary and secondary CTAs remain visible and readable across breakpoints.
+- Media has accessible alt/labels and does not obscure text.
+
 ## Avoid
 
 - Generic "hero + 4 features + testimonials + CTA + footer" without product specificity.

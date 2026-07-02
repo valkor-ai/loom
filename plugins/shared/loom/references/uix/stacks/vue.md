@@ -30,6 +30,8 @@ assets|styles/
 - Keep async loading/error states near the view that depends on them.
 - Use slots/components for repeated table actions, status badges, field rows, and empty/error states.
 - Preserve accessibility attributes on custom controls.
+- Adapt token templates into the existing Vue/Nuxt CSS, app config, Tailwind config, or theme plugin. Do not create a second visual system beside existing assets.
+- Keep business formatting and validation in composables/helpers when reused across views.
 
 ## Template Pattern
 
@@ -57,3 +59,4 @@ assets|styles/
 - Run focused build/type/lint commands when present.
 - Render and check responsive behavior.
 - Verify forms and transitions preserve user input and focus.
+- Confirm selected UIX references are reflected in changed view/component files, not only in result prose.

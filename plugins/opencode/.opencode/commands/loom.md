@@ -49,7 +49,7 @@ The current MCP request/result remains the authority. Optional references are in
 
 Protocol:
 - Read `../references/loom/uix/core.md` only when the current action creates, changes, or reviews user-visible frontend work.
-- After reading the current request group, map `uiQualityContract.referenceProfile.referenceIds` to the exact scenario, token, and stack reference files named below. Do not scan the whole `../references/loom/uix` tree.
+- After reading the current request group, map `uiQualityContract.referenceProfile.referenceIds` to the exact focus, scenario, token, and stack reference files named below. Do not scan the whole `../references/loom/uix` tree.
 - When `uiQualityContract.designTokenAssetPlan.templateId` is present, load only the matching token template file. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
 - In `frontendQualitySelfCheck`, report `referenceIdsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
@@ -57,20 +57,16 @@ Protocol:
 MCP-selected references:
 - `uix.core` -> `../references/loom/uix/core.md`.
 - `uix.anti-patterns` -> `../references/loom/uix/anti-patterns.md`.
+- `uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification` -> the matching top-level file under `../references/loom/uix/`.
 - `uix.tokens.color-system`, `uix.tokens.typography`, `uix.tokens.spacing`, `uix.tokens.layout-grid`, `uix.tokens.motion`, `uix.tokens.radius-elevation` -> the matching file under `../references/loom/uix/tokens/`.
 - `uix.scenarios.admin-dashboard`, `uix.scenarios.data-console`, `uix.scenarios.fintech-workstation`, `uix.scenarios.fintech-consumer-app`, `uix.scenarios.consumer-app`, `uix.scenarios.mobile-responsive`, `uix.scenarios.mobile-native`, `uix.scenarios.marketing-site`, `uix.scenarios.corporate-site`, `uix.scenarios.docs-site`, `uix.scenarios.developer-tool`, `uix.scenarios.immersive-3d` -> the matching file under `../references/loom/uix/scenarios/`.
 - `uix.stacks.react`, `uix.stacks.vue`, `uix.stacks.plain-html`, `uix.stacks.native-mobile`, `uix.stacks.threejs`, `uix.stacks.svelte`, `uix.stacks.uniapp` -> the matching file under `../references/loom/uix/stacks/`.
 - `uix.templates.tokens-css` -> `../references/loom/uix/templates/tokens.css.tpl`; `uix.templates.tokens-tailwind` -> `../references/loom/uix/templates/tokens.tailwind.tpl`.
 
-Fallback focused references:
-- These files are not substitutes for MCP-selected `referenceProfile.referenceIds`; use them only when the current action needs that focus and the MCP contract has not selected a more precise scenario/token/stack reference.
-- `../references/loom/uix/interaction.md`: forms, flows, search/filter, loading, empty, error, or recovery states.
-- `../references/loom/uix/system.md`: design system, tokens, components, icons, theming, motion, or localization.
-- `../references/loom/uix/mobile.md`: mobile, tablet, responsive, PWA, or touch behavior.
-- `../references/loom/uix/frameworks.md`: framework or component-library-specific frontend work.
-- `../references/loom/uix/content.md`: UX writing, labels, empty states, errors, CTAs, onboarding, or terminology.
-- `../references/loom/uix/data.md`: tables, dashboards, charts, analytics, research, or visualization-heavy screens.
-- `../references/loom/uix/verification.md`: visual, interaction, accessibility, or screenshot-based verification.
+Reference discipline:
+- Focus references are contract-selected ids, not fallback reading. Load a focus file only when its `uix.*` id appears in `referenceProfile.referenceIds`.
+- If the contract selects companion scenario ids such as `uix.scenarios.data-console` and `uix.scenarios.admin-dashboard`, read both and apply the more specific rule to each surface.
+- Do not load unselected UIX files to compensate for weak implementation planning; ask Loom to repair the contract only when selected references are insufficient for the task.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 

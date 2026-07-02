@@ -101,6 +101,21 @@ Use for documentation, knowledge bases, API references, guides, technical manual
 .docs-content code { font-family: var(--font-mono); }
 ```
 
+## Documentation Interactions
+
+- Search/no-result state should suggest alternate terms or navigation.
+- Code examples need copy controls only when copy is implemented.
+- API reference pages need parameter, response, error, and example sections with stable anchors.
+- Guides need prerequisites, steps, expected result, and troubleshooting.
+- Version, platform, or language switchers should show the current selection.
+
+## Verification Signals
+
+- Left nav active state and page heading agree.
+- Long code blocks scroll without breaking the page.
+- Mobile nav opens/closes and returns to content without losing scroll unexpectedly.
+- The page can be read without marketing content blocking reference lookup.
+
 ## Avoid
 
 - Full-width paragraphs.

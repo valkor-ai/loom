@@ -56,6 +56,27 @@ Use for customer-facing web apps, portals, booking, commerce, content, learning,
 - Recommendations or related content must not hide the user's current task.
 - Notifications and toasts should not be the only record of a completed action.
 
+## Surface Patterns
+
+- Home/task surface: resume current item, start primary task, or show relevant feed.
+- Browse/list surface: searchable/filterable when volume requires it, with clear selected item path.
+- Detail/action surface: primary action, supporting facts, related history, and recovery path.
+- Account/settings surface: user-controlled preferences and status, not hidden behind marketing copy.
+
+```html
+<section data-region="task-surface">
+  <header data-region="task-context"></header>
+  <section data-region="task-body"></section>
+  <footer data-region="task-actions"></footer>
+</section>
+```
+
+## Verification Signals
+
+- The first screen lets the user act or resume, not only read a product promise.
+- Mobile layout keeps primary action, error, and success visible.
+- Long user-generated content and empty states do not break cards/lists.
+
 ## Avoid
 
 - Marketing-only first screen for an app task.

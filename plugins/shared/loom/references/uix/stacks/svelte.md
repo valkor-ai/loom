@@ -25,6 +25,8 @@ src/lib/styles/tokens.css
 - Use semantic tokens in CSS variables, app CSS, Tailwind, or the existing styling system.
 - Keep transitions purposeful and respect reduced motion.
 - Avoid hiding product behavior inside overly clever reactive statements.
+- Merge token templates into existing app CSS, Tailwind config, or SvelteKit layout assets. Do not create per-component parallel token blocks.
+- Keep business actions close to the component that displays the affected object, so success/error can update in place.
 
 ## Template Pattern
 
@@ -44,3 +46,4 @@ src/lib/styles/tokens.css
 
 - Run focused build/type/lint commands when present.
 - Render workflows and check state transitions, focus, and responsive behavior.
+- Confirm stores, forms, and transitions preserve task context across loading/error/success states.

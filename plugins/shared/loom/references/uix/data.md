@@ -10,6 +10,25 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 - Use tabular numbers for aligned numeric columns.
 - Show units, currency, dates, and timestamps explicitly.
 - Distinguish stale, pending, failed, blocked, and completed states.
+- Keep a stable object identity visible during selection, mutation, loading, and error states.
+- Use the domain's real identifiers rather than generated demo names when identifiers exist.
+
+## Record Workbench Pattern
+
+Use this for CRUD, approval, operations, case management, and account/order/request workflows:
+
+```html
+<main data-region="record-workbench">
+  <header data-region="page-context"></header>
+  <section data-region="workbench-toolbar"></section>
+  <section data-region="workbench-body">
+    <section data-region="record-list"></section>
+    <aside data-region="record-detail"></aside>
+  </section>
+</main>
+```
+
+The list is for finding and comparing records. The detail panel is for current status, domain fields, related events, and eligible actions. The form or mutation result must update whichever region owns the affected object.
 
 ## Tables And Lists
 
@@ -56,6 +75,21 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 
 Mobile record-management flows should prefer cards or drill-down details. Use horizontal table scroll only when users must compare columns.
 
+## Record Card Fallback
+
+```html
+<article data-region="record-card">
+  <header>
+    <strong data-region="record-title"></strong>
+    <span data-region="record-status"></span>
+  </header>
+  <dl data-region="record-facts"></dl>
+  <footer data-region="record-actions"></footer>
+</article>
+```
+
+Use cards for narrow screens when the table's purpose is selection or action. Keep compare-heavy grids scrollable and label the scroll region.
+
 ## Charts And Metrics
 
 - Charts need labels, legends, axes or equivalent context, empty/loading/error states, and accessible summaries when practical.
@@ -67,3 +101,12 @@ Mobile record-management flows should prefer cards or drill-down details. Use ho
 - Business-blocking rules should attach to the affected row, detail, or action region.
 - Technical errors should be recoverable and separate from domain restrictions.
 - Success should update the row/detail state, not only show a toast.
+
+## Evidence
+
+A completed data UI should cite:
+
+- Data surface files and token consumer files.
+- Query/list/detail/action states that were implemented.
+- Empty, loading, error, and business-blocking placement.
+- Overflow/responsive behavior for dense values and long labels.

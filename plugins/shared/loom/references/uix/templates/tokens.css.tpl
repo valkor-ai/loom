@@ -110,6 +110,27 @@
   /* Touch targets */
   --touch-target-min: 44px;
   --touch-target-android: 48px;
+
+  /* Product UI layout aliases */
+  --shell-sidebar-width: 240px;
+  --shell-sidebar-compact-width: 64px;
+  --shell-topbar-height: 56px;
+  --shell-detail-width: 380px;
+  --shell-drawer-width: min(420px, 92vw);
+  --table-min-width: 760px;
+  --row-height-compact: 40px;
+  --row-height-default: 48px;
+  --control-height-sm: 32px;
+  --control-height-md: 40px;
+  --control-height-lg: 48px;
+  --pad-page-dense: var(--space-4);
+  --pad-page-default: var(--space-6);
+  --pad-panel: var(--space-4);
+  --pad-control-x: var(--space-3);
+  --pad-control-y: var(--space-2);
+  --pad-cell-x: var(--space-3);
+  --gap-toolbar: var(--space-3);
+  --gap-panel: var(--space-4);
 }
 
 :root,
@@ -137,6 +158,34 @@
   --color-warning-foreground: oklch(0.22 0.03 80);
   --color-info: oklch(0.58 0.15 230);
   --color-info-foreground: oklch(0.99 0.01 230);
+
+  /* Semantic aliases consumed by components. Prefer these over raw color roles. */
+  --surface: var(--color-surface);
+  --surface-muted: var(--color-surface-tinted);
+  --surface-raised: var(--color-surface-elevated);
+  --surface-inset: oklch(0.94 0.008 255);
+  --text: var(--color-on-surface);
+  --text-muted: var(--color-on-surface-muted);
+  --text-inverse: var(--color-primary-foreground);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --primary: var(--color-primary);
+  --primary-hover: var(--color-primary-hover);
+  --primary-contrast: var(--color-primary-foreground);
+  --success-surface: oklch(0.94 0.04 145);
+  --success-border: oklch(0.78 0.08 145);
+  --success-text: oklch(0.34 0.10 145);
+  --warning-surface: oklch(0.96 0.06 80);
+  --warning-border: oklch(0.82 0.10 80);
+  --warning-text: oklch(0.36 0.08 80);
+  --danger-surface: oklch(0.96 0.04 25);
+  --danger-border: oklch(0.78 0.10 25);
+  --danger-text: oklch(0.38 0.13 25);
+  --info-surface: oklch(0.94 0.04 230);
+  --info-border: oklch(0.78 0.08 230);
+  --info-text: oklch(0.34 0.10 230);
+  --focus-ring: 0 0 0 3px color-mix(in oklch, var(--primary) 28%, transparent);
+  --scrim: rgb(15 23 42 / 0.45);
 }
 
 [data-theme="dark"] {
@@ -163,6 +212,33 @@
   --color-warning-foreground: oklch(0.18 0.03 80);
   --color-info: oklch(0.72 0.15 230);
   --color-info-foreground: oklch(0.12 0.02 230);
+
+  --surface: var(--color-surface);
+  --surface-muted: var(--color-surface-tinted);
+  --surface-raised: var(--color-surface-elevated);
+  --surface-inset: oklch(0.14 0.02 255);
+  --text: var(--color-on-surface);
+  --text-muted: var(--color-on-surface-muted);
+  --text-inverse: var(--color-primary-foreground);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --primary: var(--color-primary);
+  --primary-hover: var(--color-primary-hover);
+  --primary-contrast: var(--color-primary-foreground);
+  --success-surface: oklch(0.24 0.06 145);
+  --success-border: oklch(0.44 0.10 145);
+  --success-text: oklch(0.84 0.12 145);
+  --warning-surface: oklch(0.26 0.05 80);
+  --warning-border: oklch(0.52 0.10 80);
+  --warning-text: oklch(0.88 0.12 80);
+  --danger-surface: oklch(0.25 0.06 25);
+  --danger-border: oklch(0.48 0.12 25);
+  --danger-text: oklch(0.84 0.13 25);
+  --info-surface: oklch(0.24 0.06 230);
+  --info-border: oklch(0.44 0.10 230);
+  --info-text: oklch(0.84 0.12 230);
+  --focus-ring: 0 0 0 3px color-mix(in oklch, var(--primary) 34%, transparent);
+  --scrim: rgb(2 6 23 / 0.62);
 }
 
 *,

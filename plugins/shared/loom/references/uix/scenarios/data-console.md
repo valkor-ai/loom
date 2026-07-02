@@ -88,6 +88,22 @@ Use for analytics, monitoring, reporting, logs, query/results pages, operational
 - Logs and query output need monospace alignment, wrapping or horizontal scroll, and copy controls.
 - Metrics need period/source context; do not show giant numbers without decision context.
 
+## Operational Record Variant
+
+When the data console is actually a CRUD/approval/request workbench, combine data-console scanning with admin-dashboard record actions:
+
+- Query/filter region remains visible.
+- Results region owns loading/empty/error/stale states.
+- Inspector/detail region owns selected record facts, action eligibility, history, and business-blocking feedback.
+- Mutations must update both data row/card and detail summary when both are visible.
+
+```html
+<section data-region="results-plus-inspector">
+  <section data-region="record-results"></section>
+  <aside data-region="record-inspector"></aside>
+</section>
+```
+
 ## States
 
 - Loading preserves chart/table dimensions.
@@ -95,6 +111,13 @@ Use for analytics, monitoring, reporting, logs, query/results pages, operational
 - Error separates query/system failure from permission/business restrictions.
 - Stale data displays last updated time and refresh path.
 - Long labels and values remain inspectable through wrapping, truncation with title, or detail reveal.
+
+## Verification Signals
+
+- Filters/search preserve criteria after refresh or mutation.
+- Empty state distinguishes no records from no matches.
+- Overflow is scoped to table/log/code regions, not the full page.
+- Freshness, timestamp, or result count is visible when relevant.
 
 ## Avoid
 

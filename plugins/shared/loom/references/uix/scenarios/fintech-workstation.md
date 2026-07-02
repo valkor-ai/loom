@@ -71,6 +71,21 @@ Use for staff-facing finance, securities, account, risk, compliance, and transac
 }
 ```
 
+## Action And Risk Pattern
+
+```html
+<section data-region="action-eligibility">
+  <dl data-region="risk-facts"></dl>
+  <div data-region="eligible-actions"></div>
+  <div data-region="blocking-rules" aria-live="polite"></div>
+</section>
+```
+
+- Show eligibility before high-risk actions.
+- Separate warning, error, and business-blocking status.
+- Keep actor, timestamp, affected account/order, and latest state visible for audit-sensitive flows.
+- Use explicit confirmation/review steps for irreversible or regulated actions.
+
 ## States
 
 - Loading is scoped to list/detail/action panel.
@@ -78,6 +93,13 @@ Use for staff-facing finance, securities, account, risk, compliance, and transac
 - Technical errors are recoverable and free of stack traces or internal tool names.
 - Business-blocking messages cite the rule and affected object.
 - Success refreshes list/detail and appends or updates the visible event.
+
+## Verification Signals
+
+- Numeric values use tabular alignment and units.
+- Business-blocking copy cites the affected record and rule.
+- Audit/history area changes after successful state transitions when required.
+- No financial/risk state is communicated by color alone.
 
 ## Avoid
 

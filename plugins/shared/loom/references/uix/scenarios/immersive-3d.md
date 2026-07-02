@@ -58,6 +58,13 @@ Use for Three.js/WebGL/canvas scenes, product configurators, spatial tools, game
 - Overlay UI with readable contrast and safe placement.
 - Reduced-motion or performance fallback when practical.
 
+## Control Composition
+
+- Keep primary controls docked or overlaid in predictable zones; avoid covering the object/scene center.
+- Inspector panels should be collapsible or responsive when they compete with the scene.
+- Use labels/tooltips for unfamiliar scene controls.
+- If the scene represents a product/configuration/game state, visible UI must expose the current mode, selected object, and available action.
+
 ## Verification
 
 - Verify canvas pixels are nonblank.
@@ -65,6 +72,7 @@ Use for Three.js/WebGL/canvas scenes, product configurators, spatial tools, game
 - Confirm referenced assets load.
 - Confirm animation/interaction continues after initial render.
 - Check controls do not occlude the subject.
+- Check resize handling and device pixel ratio behavior when practical.
 
 ## Avoid
 

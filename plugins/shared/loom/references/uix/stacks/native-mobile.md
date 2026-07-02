@@ -27,6 +27,8 @@ NavigationContainer
 - Forms need input types, validation, loading/submitting, and error recovery.
 - Lists need empty/loading/error states and stable item identity.
 - Sensitive financial or destructive actions need explicit confirmation/review.
+- Translate web token intent into the platform theme system. Do not create CSS token files for a native-only target.
+- Keep safe-area, keyboard avoidance, and permission states part of the screen implementation, not only review notes.
 
 ## Cross-Platform Notes
 
@@ -39,3 +41,4 @@ NavigationContainer
 
 - Use simulator/device or framework preview when available.
 - Check safe areas, keyboard behavior, scroll, and touch targets.
+- Record platform/device or preview constraints in evidence when full verification is unavailable.

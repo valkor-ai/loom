@@ -31,6 +31,13 @@ Use a consistent spacing scale. Suggested baseline:
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
+  --gap-toolbar: var(--space-3);
+  --gap-panel: var(--space-4);
+  --pad-page-dense: var(--space-4);
+  --pad-page-default: var(--space-6);
+  --pad-control-x: var(--space-3);
+  --pad-control-y: var(--space-2);
+  --pad-cell-x: var(--space-3);
 }
 ```
 
@@ -50,6 +57,7 @@ Use these tokens in layout primitives and component padding before introducing o
 - Toolbars: align icon buttons, filters, and primary actions on a predictable rhythm.
 - Panels/drawers: keep internal padding consistent and preserve scroll boundaries.
 - Empty/error/loading states: occupy the same layout region as the data they replace.
+- Brand or page identity regions in workbench UI should be compact. Do not spend vertical space on non-functional intro copy when users need the working surface.
 
 ## Responsive Rules
 
@@ -57,9 +65,11 @@ Use these tokens in layout primitives and component padding before introducing o
 - Collapse multi-column forms to one column on narrow screens.
 - Keep sticky bars and bottom actions away from safe-area edges on mobile.
 - Avoid horizontal scroll for the page; allow it only inside data tables or code blocks when needed.
+- Mobile page padding usually starts at `space-4`; dense desktop workbenches can also use `space-4` when information volume is high.
 
 ## Self-Check
 
 - No arbitrary one-off margins used to "nudge" many components.
 - Layout remains stable across loading/error/success state changes.
 - Dense surfaces still have enough breathing room to scan repeated actions.
+- Repeated components use the same gap/padding tokens instead of per-component raw values.

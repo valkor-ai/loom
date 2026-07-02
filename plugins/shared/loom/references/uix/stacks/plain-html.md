@@ -39,6 +39,8 @@ Use for static HTML, vanilla JavaScript, simple Tailwind/CDN pages, server-rende
 - Use event delegation or small modules for interactions such as drawers, tabs, filters, toasts, and forms.
 - Provide visible focus states and ARIA only where native semantics are insufficient.
 - Use stable class names for layout primitives, states, and reusable components.
+- Put semantic tokens in one stylesheet or server-rendered theme include. Avoid repeating custom properties in multiple page fragments.
+- Use `data-state` or state classes consistently for loading, empty, error, active, selected, disabled, and business-blocking states.
 
 ## Tailwind Notes
 
@@ -50,3 +52,4 @@ Use for static HTML, vanilla JavaScript, simple Tailwind/CDN pages, server-rende
 - Open the HTML or local server render.
 - Check keyboard navigation, responsive breakpoints, and form validation.
 - Verify no product UI contains setup or verification instructions.
+- Inspect the generated DOM for semantic landmarks, labels, and live regions when feedback changes dynamically.
