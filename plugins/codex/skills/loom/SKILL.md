@@ -53,28 +53,45 @@ For `DeployRepairAssetsNext`, edit only the returned deployment asset files and 
 
 ## Reference Loading
 
-The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
+The current MCP request/result remains the authority. Load no reference by default; load references only when the current action selects a reference profile.
 
 Protocol:
-- Read `references/uix/core.md` only when the current action creates, changes, or reviews user-visible frontend work.
-- After reading the current request group, map `uiQualityContract.referenceProfile.referenceIds` to the exact focus, scenario, token, and stack reference files named below. Do not scan the whole `references/uix` tree.
-- When `uiQualityContract.designTokenAssetPlan.templateId` is present, load only the matching token template file. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
+- After reading the current request group, choose references only from the profiles selected by that request.
+- `architectureQualitySeed.techReferenceProfile.groups` or another explicit `techReferenceProfile.groups` selector selects tech architecture references.
+- `uiQualityContract.referenceProfile.groups` selects UIX core, focus, scenario, token, stack, and template references when the current action creates, changes, or reviews user-visible frontend work.
+- `uiQualityContract.designTokenAssetPlan.templateId` selects one token template item from `referenceProfile.groups.templates`. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
-- In `frontendQualitySelfCheck`, report `referenceIdsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
+- In `frontendQualitySelfCheck`, report `referenceGroupsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
 
 MCP-selected references:
-- `uix.core` -> `references/uix/core.md`.
-- `uix.anti-patterns` -> `references/uix/anti-patterns.md`.
-- `uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification` -> the matching top-level file under `references/uix/`.
-- `uix.tokens.color-system`, `uix.tokens.typography`, `uix.tokens.spacing`, `uix.tokens.layout-grid`, `uix.tokens.motion`, `uix.tokens.radius-elevation` -> the matching file under `references/uix/tokens/`.
-- `uix.scenarios.admin-dashboard`, `uix.scenarios.data-console`, `uix.scenarios.fintech-workstation`, `uix.scenarios.fintech-consumer-app`, `uix.scenarios.consumer-app`, `uix.scenarios.mobile-responsive`, `uix.scenarios.mobile-native`, `uix.scenarios.marketing-site`, `uix.scenarios.corporate-site`, `uix.scenarios.docs-site`, `uix.scenarios.developer-tool`, `uix.scenarios.immersive-3d` -> the matching file under `references/uix/scenarios/`.
-- `uix.stacks.react`, `uix.stacks.vue`, `uix.stacks.plain-html`, `uix.stacks.native-mobile`, `uix.stacks.threejs`, `uix.stacks.svelte`, `uix.stacks.uniapp` -> the matching file under `references/uix/stacks/`.
-- `uix.templates.tokens-css` -> `references/uix/templates/tokens.css.tpl`; `uix.templates.tokens-tailwind` -> `references/uix/templates/tokens.tailwind.tpl`.
+
+Reference profiles:
+- Tech architecture references are selected only by `techReferenceProfile.groups`; map selected group/items to the exact files below. Do not scan the whole `references/tech` tree and do not load an external architecture skill.
+- UIX references are selected only by `uiQualityContract.referenceProfile.groups`; map selected group/items to exact files below. Do not scan the whole `references/uix` tree.
+
+Tech architecture reference map:
+- `techReferenceProfile.groups.arch` item `core` -> `references/tech/arch/core.md`.
+- `techReferenceProfile.groups.arch` item `patterns` -> `references/tech/arch/patterns.md`.
+- `techReferenceProfile.groups.arch` item `system` -> `references/tech/arch/system.md`.
+- `techReferenceProfile.groups.arch` item `data` -> `references/tech/arch/data.md`.
+- `techReferenceProfile.groups.arch` item `nfr` -> `references/tech/arch/nfr.md`.
+- `techReferenceProfile.groups.arch` item `adr` -> `references/tech/arch/adr.md`.
+- `techReferenceProfile.groups.arch` item `failure` -> `references/tech/arch/failure.md`.
+
+UIX reference map:
+- `groups.core`: `core` -> `references/uix/core.md`; `anti-patterns` -> `references/uix/anti-patterns.md`; `system`, `interaction`, `content`, `verification` -> matching top-level files under `references/uix/`.
+- `groups.focus`: `data`, `mobile`, `frameworks` -> matching top-level files under `references/uix/`.
+- `groups.tokens`: `color-system`, `typography`, `spacing`, `layout-grid`, `motion`, `radius-elevation` -> matching files under `references/uix/tokens/`.
+- `groups.scenarios`: scenario items such as `admin-dashboard`, `data-console`, `docs-site` -> matching files under `references/uix/scenarios/`.
+- `groups.stacks`: stack items such as `react`, `vue`, `plain-html`, `native-mobile`, `threejs`, `svelte`, `uniapp` -> matching files under `references/uix/stacks/`.
+- `groups.templates`: `tokens-css` -> `references/uix/templates/tokens.css.tpl`; `tokens-tailwind` -> `references/uix/templates/tokens.tailwind.tpl`.
 
 Reference discipline:
-- Focus references are contract-selected ids, not fallback reading. Load a focus file only when its `uix.*` id appears in `referenceProfile.referenceIds`.
-- If the contract selects companion scenario ids such as `uix.scenarios.data-console` and `uix.scenarios.admin-dashboard`, read both and apply the more specific rule to each surface.
+- Focus references are contract-selected group/items, not fallback reading. Load a focus file only when its item appears in `referenceProfile.groups.focus`.
+- If the contract selects companion scenario items such as `data-console` and `admin-dashboard`, read both and apply the more specific rule to each surface.
 - Do not load unselected UIX files to compensate for weak implementation planning; ask Loom to repair the contract only when selected references are insufficient for the task.
+- For tech references, load only selected group/items from `techReferenceProfile.groups`; never expand `arch` into future `api`, `stack`, `code`, or `test` references unless the MCP contract selects them. In TaskPlan, Execution, and Review requests without a selected tech profile, use the provided `architectureQuality` refs, requirements, evidence, and review signals without reading raw tech references.
+- Do not paste architecture reference text into Architecture, TaskPlan, TaskResult, ReviewResult, source files, or user-facing UI. Use references to produce concrete decisions, NFRs, risks, and evidence.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 

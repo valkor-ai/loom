@@ -952,6 +952,7 @@ fn materialize_taskplan_repair_action(
         "userFlowRefs": value_field(&core_fields, "allowedRefs.userFlowRefs"),
         "stateMachineRefs": value_field(&core_fields, "allowedRefs.stateMachineRefs"),
         "decisionRefs": value_field(&core_fields, "allowedRefs.decisionRefs"),
+        "nfrRefs": value_field(&core_fields, "allowedRefs.nfrRefs"),
         "riskRefs": value_field(&core_fields, "allowedRefs.riskRefs")
     });
     let context_projection = json!({
@@ -985,6 +986,11 @@ fn materialize_taskplan_repair_action(
     if !engineering_quality_rules.is_null() {
         generation_rules["engineeringQualityRules"] = engineering_quality_rules;
     }
+    let architecture_quality_rules =
+        value_field(&rule_fields, "generationRules.architectureQualityRules");
+    if !architecture_quality_rules.is_null() {
+        generation_rules["architectureQualityRules"] = architecture_quality_rules;
+    }
     let enum_refs = json!({
         "taskKind": value_field(&contract_fields, "enumRefs.taskKind"),
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
@@ -1017,6 +1023,10 @@ fn materialize_taskplan_repair_action(
     let engineering_quality_template = value_field(
         &contract_fields,
         "outputContract.engineeringQualityRequirementTemplate",
+    );
+    let architecture_quality_template = value_field(
+        &contract_fields,
+        "outputContract.architectureQualityRequirementTemplate",
     );
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1077,6 +1087,7 @@ fn materialize_taskplan_repair_action(
         "allowedRefs.userFlowRefs",
         "allowedRefs.stateMachineRefs",
         "allowedRefs.decisionRefs",
+        "allowedRefs.nfrRefs",
         "allowedRefs.riskRefs",
     ]);
 
@@ -1106,6 +1117,10 @@ fn materialize_taskplan_repair_action(
     if !engineering_quality_template.is_null() {
         taskplan_repair_write_contract_fields
             .push("outputContract.engineeringQualityRequirementTemplate");
+    }
+    if !architecture_quality_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.architectureQualityRequirementTemplate");
     }
 
     let mut request_root = json!({
@@ -1174,7 +1189,8 @@ fn materialize_taskplan_repair_action(
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",
                         "generationRules.runtimeDeliveryRules",
-                        "generationRules.engineeringQualityRules"
+                        "generationRules.engineeringQualityRules",
+                        "generationRules.architectureQualityRules"
                     ])
                 },
                 {
@@ -1225,6 +1241,16 @@ fn materialize_taskplan_repair_action(
             .insert(
                 "engineeringQualityRequirementTemplate".to_string(),
                 engineering_quality_template,
+            );
+    }
+    if !architecture_quality_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "architectureQualityRequirementTemplate".to_string(),
+                architecture_quality_template,
             );
     }
     let stored = state::write_native_request(
@@ -1751,7 +1777,7 @@ fn ui_quality_seed_from_fields(
         "layoutBaselineCandidates": value_field(fields, "uiQualitySeed.layoutBaselineCandidates"),
         "densityCandidates": value_field(fields, "uiQualitySeed.densityCandidates"),
         "semanticTokenPolicy": value_field(fields, "uiQualitySeed.semanticTokenPolicy"),
-        "requiredReferenceIds": value_field(fields, "uiQualitySeed.requiredReferenceIds"),
+        "requiredReferenceGroups": value_field(fields, "uiQualitySeed.requiredReferenceGroups"),
         "stackReferenceCandidates": value_field(fields, "uiQualitySeed.stackReferenceCandidates"),
         "designTokenAssetPlan": value_field(fields, "uiQualitySeed.designTokenAssetPlan"),
         "forbiddenUserVisibleContent": value_field(fields, "uiQualitySeed.forbiddenUserVisibleContent"),
@@ -1915,7 +1941,7 @@ fn architecture_repair_read_groups(
             "uiQualitySeed.layoutBaselineCandidates",
             "uiQualitySeed.densityCandidates",
             "uiQualitySeed.semanticTokenPolicy",
-            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -2160,11 +2186,8 @@ fn architecture_repair_section_content_template(
                             "local loading, empty, error, success, and business-blocking feedback"
                         ],
                         "forbiddenComposition": [
-                            "marketing or hero introduction",
-                            "runtime command instructions",
-                            "technical stack explanation",
-                            "delivery progress notes",
-                            "tutorial-style explanatory copy unrelated to the business task"
+                            "surface composition unrelated to the task-owned business workflow",
+                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
                         ],
                         "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
                         "dataViewRefs": ["view_1"],
@@ -2276,15 +2299,67 @@ fn coverage_content_template(context_projection: &Value) -> Value {
     json!({
         "acceptanceMatrix": acceptance_matrix,
         "detailCoverage": detail_coverage,
-        "risksAndDecisions": {
-            "decisions": [],
-            "risks": []
-        },
+        "architectureQuality": architecture_quality_repair_template(),
         "handoff": {
             "readyForTaskPlan": true,
             "blockingReasons": [],
             "nextNode": "task_plan"
         }
+    })
+}
+
+fn architecture_quality_repair_template() -> Value {
+    json!({
+        "decisions": [{
+            "decisionId": "adr-current-001",
+            "category": "architecture_style",
+            "title": "Current phase architecture decision",
+            "status": "accepted",
+            "context": "State the current-phase forces from the repair request and accepted planning contract.",
+            "decision": "State the selected architecture approach for this phase.",
+            "alternativesConsidered": [{
+                "name": "alternative architecture approach",
+                "tradeoff": "Concrete trade-off compared with the selected approach.",
+                "rejectedBecause": "Why this alternative is not the best fit for the current phase."
+            }],
+            "consequences": {
+                "positive": ["Implementation or verification benefit."],
+                "negative": ["Implementation or operation cost to watch."],
+                "neutral": ["Known side effect that does not block delivery."]
+            },
+            "sourceRefs": {
+                "scopeRefs": ["allowedRefs.scopeRefs item"],
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
+            },
+            "verificationHints": ["How later tasks or review can prove this decision was respected."]
+        }],
+        "nfrs": [{
+            "nfrId": "nfr-current-001",
+            "category": "maintainability",
+            "target": "Concrete quality target for this phase.",
+            "rationale": "Why this target matters for the current phase.",
+            "architectureRefs": {
+                "decisions": ["adr-current-001"],
+                "risks": ["risk-current-001"]
+            },
+            "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
+        }],
+        "risks": [{
+            "riskId": "risk-current-001",
+            "category": "data_integrity",
+            "severity": "medium",
+            "likelihood": "medium",
+            "impact": "Concrete implementation or operation impact if this risk occurs.",
+            "mitigation": "Concrete design or task-plan mitigation.",
+            "ownerArtifactRefs": {
+                "modules": ["module_1"],
+                "interfaces": ["interface_1"],
+                "decisions": ["adr-current-001"],
+                "nfrs": ["nfr-current-001"]
+            },
+            "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
+        }]
     })
 }
 
@@ -2334,7 +2409,7 @@ fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<
             vec![
                 "acceptanceMatrix",
                 "detailCoverage",
-                "risksAndDecisions",
+                "architectureQuality",
                 "handoff",
             ]
         }

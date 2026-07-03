@@ -4,9 +4,9 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureArtifactContract, EngineeringQualityRequirement, ImplementationAction,
-    TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus,
-    TaskRunStatus, VerificationEvidence,
+    ArchitectureArtifactContract, ArchitectureQualityRequirement, EngineeringQualityRequirement,
+    ImplementationAction, TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction,
+    TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
@@ -254,6 +254,8 @@ fn build_execution_request(
     );
     let engineering_quality_requirements =
         task_scoped_engineering_quality_requirements(task_plan, &request_task);
+    let architecture_quality_requirements =
+        task_scoped_architecture_quality_requirements(task_plan, &request_task);
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -282,6 +284,10 @@ fn build_execution_request(
     }
     if !engineering_quality_requirements.is_empty() {
         source_context["engineeringQualityRequirements"] = json!(engineering_quality_requirements);
+    }
+    if !architecture_quality_requirements.is_empty() {
+        source_context["architectureQualityRequirements"] =
+            json!(architecture_quality_requirements);
     }
     Ok(json!({
         "schemaVersion": "1.0",
@@ -405,6 +411,12 @@ pub(crate) fn task_execution_rules(
         object.insert(
             "engineeringQualityExecutionRules".to_string(),
             engineering_quality_execution_rules(task),
+        );
+    }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        object.insert(
+            "architectureQualityExecutionRules".to_string(),
+            architecture_quality_execution_rules(task),
         );
     }
     rules
@@ -554,6 +566,10 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("For referenced engineeringQualityRequirements, verificationResults summaries must state how implementation kept the declared alignmentTargets aligned for this task.".to_string());
         rules.push("For persistence_mapping requirements, evidence must cover changed risk field kinds across domain model, storage schema or migration, data access mapping, DTO/API contract, and same-provider persistence behavior when those parts are in task scope.".to_string());
     }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        rules.push("For referenced architectureQualityRequirements, include architectureQualityEvidence with the exact requirementId values assigned to this task.".to_string());
+        rules.push("architectureQualityEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files respected the referenced decision, NFR, or risk mitigation.".to_string());
+    }
     json!(rules)
 }
 
@@ -571,6 +587,25 @@ fn engineering_quality_execution_rules(task: &TaskDefinition) -> Value {
             "Use task.verificationIntents as the verification id source.",
             "When implementation touches persistence, prefer same-provider tests or runtime checks over mock-only evidence.",
             "Record concise alignment evidence in verificationResults[].summary and requirementDetailEvidence[].summary."
+        ]
+    })
+}
+
+fn architecture_quality_execution_rules(task: &TaskDefinition) -> Value {
+    json!({
+        "appliesToRequirementRefs": task.architecture_quality_requirement_refs,
+        "requirementSource": "sourceContext.architectureQualityRequirements",
+        "architectureSource": "sourceContext.architectureArtifactProjection.architectureQuality",
+        "scopeRule": "Apply only the listed requirements whose appliesToTaskIds include this task; do not create new architecture requirements inside TaskResult.",
+        "implementationRules": [
+            "Before editing, compare sourceContext.architectureQualityRequirements against the task-owned modules, interfaces, data model, runtime surfaces, and workflows.",
+            "Respect referenced decisions, implement referenced risk mitigations when in scope, and keep referenced NFRs observable through code or verification evidence.",
+            "Do not expand architecture scope beyond the current task to satisfy an unrelated decision, NFR, or risk."
+        ],
+        "verificationRules": [
+            "Use task.verificationIntents as the verification id source.",
+            "Record concise evidence in architectureQualityEvidence for every referenced architecture quality requirement.",
+            "Verification summaries must state how the changed files respected the referenced decision, NFR, or risk mitigation."
         ]
     })
 }
@@ -661,6 +696,14 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "executionRules.engineeringQualityExecutionRules",
         ]);
     }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        core_fields.extend([
+            "task.architectureQualityRequirementRefs",
+            "sourceContext.architectureQualityRequirements",
+            "sourceContext.architectureArtifactProjection.architectureQuality",
+            "executionRules.architectureQualityExecutionRules",
+        ]);
+    }
     if has_dependency_results {
         core_fields.push("sourceContext.dependencyResults");
     }
@@ -711,6 +754,9 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
     if !task.concept_refs.is_empty() {
         result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        result_fields.push("outputContract.schemaShape.properties.architectureQualityEvidence");
+    }
 
     Value::Array(vec![
         json!({
@@ -743,6 +789,25 @@ fn task_scoped_engineering_quality_requirements(
         .collect::<BTreeSet<_>>();
     task_plan
         .engineering_quality_requirements
+        .iter()
+        .filter(|requirement| refs.contains(&requirement.requirement_id))
+        .cloned()
+        .collect()
+}
+
+fn task_scoped_architecture_quality_requirements(
+    task_plan: &TaskPlan,
+    task: &TaskDefinition,
+) -> Vec<ArchitectureQualityRequirement> {
+    if task.architecture_quality_requirement_refs.is_empty() {
+        return vec![];
+    }
+    let refs = task
+        .architecture_quality_requirement_refs
+        .iter()
+        .collect::<BTreeSet<_>>();
+    task_plan
+        .architecture_quality_requirements
         .iter()
         .filter(|requirement| refs.contains(&requirement.requirement_id))
         .cloned()
@@ -870,7 +935,21 @@ fn task_scoped_architecture_projection(
         "entities": selected_entities(&aac.data_model, &refs.entities, task),
         "interfaces": selected_values(&aac.interfaces, "interfaceId", &interface_refs, task, true),
         "userFlows": selected_user_flows,
-        "stateMachines": selected_values(&aac.state_machines, "machineId", &state_machine_refs, task, true)
+        "stateMachines": selected_values(&aac.state_machines, "machineId", &state_machine_refs, task, true),
+        "architectureQuality": {
+            "decisions": aac.architecture_quality.decisions.iter()
+                .filter(|decision| refs.decisions.iter().any(|item| item == &decision.decision_id))
+                .cloned()
+                .collect::<Vec<_>>(),
+            "nfrs": aac.architecture_quality.nfrs.iter()
+                .filter(|nfr| refs.nfrs.iter().any(|item| item == &nfr.nfr_id))
+                .cloned()
+                .collect::<Vec<_>>(),
+            "risks": aac.architecture_quality.risks.iter()
+                .filter(|risk| refs.risks.iter().any(|item| item == &risk.risk_id))
+                .cloned()
+                .collect::<Vec<_>>()
+        }
     });
     if runtime_delivery_evidence_applies(task) {
         projection["runtimeDelivery"] = aac.runtime_delivery.clone().unwrap_or(Value::Null);
@@ -983,13 +1062,13 @@ fn frontend_quality_execution_guidance(task: &TaskDefinition) -> Value {
         "mustCover": [
             "scenario",
             "qualityLevel",
-            "referenceProfile.referenceIds",
+            "referenceProfile.groups",
             "designTokenAssetPlan",
             "requiredUiStates",
             "businessUiRules",
             "forbiddenUserVisibleContent"
         ],
-        "rule": "Implement the UI according to the uiQualityContract fields, apply designTokenAssetPlan by reusing/extending existing token assets before creating new ones, and report evidence in frontendQualitySelfCheck."
+        "rule": "Implement the task-owned UI according to uiQualityContract and selected UIX reference groups; report concrete evidence in frontendQualitySelfCheck."
     })
 }
 
@@ -1384,13 +1463,8 @@ fn style_asset_plan(task: &TaskDefinition) -> Value {
     json!({
         "designTokenAssetPlan": contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
         "semanticTokenPolicy": contract.get("semanticTokenPolicy").cloned().unwrap_or(Value::Null),
-        "referenceIds": contract.pointer("/referenceProfile/referenceIds").cloned().unwrap_or_else(|| json!([])),
-        "implementationRules": [
-            "Load only the listed UIX reference ids and matching token template when the task changes user-visible frontend code.",
-            "Reuse or extend the declared token asset before creating component-local raw styles.",
-            "Do not create a parallel token system or paste UIX reference prose into source files or task results.",
-            "Report concrete token asset files and token consumer files in frontendQualitySelfCheck."
-        ]
+        "referenceGroups": contract.pointer("/referenceProfile/groups").cloned().unwrap_or_else(|| json!({})),
+        "implementationRule": "Load only the selected UIX reference groups and matching token template when this task changes user-visible frontend code."
     })
 }
 
@@ -1437,11 +1511,9 @@ fn default_required_composition() -> Vec<String> {
 
 fn default_forbidden_composition(contract: &Value) -> Vec<String> {
     let mut values = vec![
-        "marketing or hero introduction unrelated to the business task".to_string(),
-        "runtime command instructions".to_string(),
-        "technical stack explanation".to_string(),
-        "delivery progress notes".to_string(),
-        "tutorial-style explanatory copy unrelated to the business task".to_string(),
+        "surface composition unrelated to the task-owned business workflow".to_string(),
+        "decorative or explanatory sections that displace required data, actions, states, or feedback"
+            .to_string(),
     ];
     values.extend(string_array_at(contract, "forbiddenUserVisibleContent"));
     unique_strings(values)

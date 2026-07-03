@@ -4,12 +4,13 @@ use std::{
 };
 
 use contracts::{
-    ui_quality_enum_refs, AcceptancePriority, ArchitectureArtifactContract, CoverageStatus,
-    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskGroupRunState,
-    TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff,
-    TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction,
-    TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary, TaskPlanScopeSnapshot,
-    TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus, VerificationEvidence,
+    ui_quality_enum_refs, AcceptancePriority, ArchitectureArtifactContract,
+    ArchitectureQualityRequirement, CoverageStatus, EngineeringQualityRequirement,
+    ImplementationAction, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
+    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
+    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
+    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -239,6 +240,7 @@ fn build_request_root(
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
+    let architecture_quality_template = architecture_quality_requirement_template(aac);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
@@ -288,6 +290,10 @@ fn build_request_root(
         output_contract["engineeringQualityRequirementTemplate"] =
             engineering_quality_template.clone();
     }
+    if !architecture_quality_template.is_null() {
+        output_contract["architectureQualityRequirementTemplate"] =
+            architecture_quality_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -317,7 +323,8 @@ fn build_request_root(
                 &frontend_requirement_template,
                 &runtime_requirement_template,
                 &runtime_closure_template,
-                &engineering_quality_template
+                &engineering_quality_template,
+                &architecture_quality_template
             )
         }
     })
@@ -356,6 +363,7 @@ fn taskplan_read_groups(
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
+    architecture_quality_template: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.technicalBaselineRef",
@@ -396,6 +404,7 @@ fn taskplan_read_groups(
         "allowedRefs.userFlowRefs",
         "allowedRefs.stateMachineRefs",
         "allowedRefs.decisionRefs",
+        "allowedRefs.nfrRefs",
         "allowedRefs.riskRefs",
     ]);
     let groups = vec![
@@ -420,7 +429,8 @@ fn taskplan_read_groups(
                 "generationRules.frontendExperienceRules",
                 "generationRules.workflowClosureRules",
                 "generationRules.runtimeDeliveryRules",
-                "generationRules.engineeringQualityRules"
+                "generationRules.engineeringQualityRules",
+                "generationRules.architectureQualityRules"
             ])
         }),
         json!({
@@ -432,7 +442,8 @@ fn taskplan_read_groups(
                 frontend_requirement_template,
                 runtime_requirement_template,
                 runtime_closure_template,
-                engineering_quality_template
+                engineering_quality_template,
+                architecture_quality_template
             ))
         }),
     ];
@@ -444,6 +455,7 @@ fn taskplan_candidate_contract_fields(
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
+    architecture_quality_template: &Value,
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
@@ -467,6 +479,9 @@ fn taskplan_candidate_contract_fields(
     }
     if !engineering_quality_template.is_null() {
         fields.push("outputContract.engineeringQualityRequirementTemplate");
+    }
+    if !architecture_quality_template.is_null() {
+        fields.push("outputContract.architectureQualityRequirementTemplate");
     }
     fields
 }
@@ -616,6 +631,7 @@ where
             "allowedRefs.userFlowRefs".to_string(),
             "allowedRefs.stateMachineRefs".to_string(),
             "allowedRefs.decisionRefs".to_string(),
+            "allowedRefs.nfrRefs".to_string(),
             "allowedRefs.riskRefs".to_string(),
             "outputContract.outlineFile".to_string(),
             "outputContract.groupFilePattern".to_string(),
@@ -637,6 +653,7 @@ where
         "userFlowRefs": value_field(&fields, "allowedRefs.userFlowRefs"),
         "stateMachineRefs": value_field(&fields, "allowedRefs.stateMachineRefs"),
         "decisionRefs": value_field(&fields, "allowedRefs.decisionRefs"),
+        "nfrRefs": value_field(&fields, "allowedRefs.nfrRefs"),
         "riskRefs": value_field(&fields, "allowedRefs.riskRefs")
     });
     let outline_value = read_project_json_value(root, &outline_ref)?;
@@ -707,6 +724,8 @@ where
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
     let engineering_quality_requirements =
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
+    let architecture_quality_requirements =
+        normalize_architecture_quality_requirements(&aac, &mut tasks);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -776,6 +795,7 @@ where
         groups,
         tasks,
         engineering_quality_requirements,
+        architecture_quality_requirements,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -1317,6 +1337,14 @@ fn validate_taskplan_refs(
             &allowed_set(allowed_refs, "decisionRefs"),
             "UNKNOWN_DECISION_REF",
             "tasks[].writeBoundary.artifactRefs.decisions",
+            &task.task_id,
+            &mut issues,
+        );
+        validate_ref_list(
+            &task.write_boundary.artifact_refs.nfrs,
+            &allowed_set(allowed_refs, "nfrRefs"),
+            "UNKNOWN_NFR_REF",
+            "tasks[].writeBoundary.artifactRefs.nfrs",
             &task.task_id,
             &mut issues,
         );
@@ -2578,8 +2606,9 @@ fn allowed_refs(
         "interfaceRefs": ids_from_values(&aac.interfaces, "interfaceId"),
         "userFlowRefs": ids_from_values(&aac.user_flows, "flowId"),
         "stateMachineRefs": ids_from_values(&aac.state_machines, "machineId"),
-        "decisionRefs": ids_from_value_array(&aac.risks_and_decisions, "/decisions", "decisionId"),
-        "riskRefs": ids_from_value_array(&aac.risks_and_decisions, "/risks", "riskId")
+        "decisionRefs": aac.architecture_quality.decisions.iter().map(|item| item.decision_id.clone()).collect::<Vec<_>>(),
+        "nfrRefs": aac.architecture_quality.nfrs.iter().map(|item| item.nfr_id.clone()).collect::<Vec<_>>(),
+        "riskRefs": aac.architecture_quality.risks.iter().map(|item| item.risk_id.clone()).collect::<Vec<_>>()
     })
 }
 
@@ -2703,6 +2732,14 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "notFor": "Do not attach persistence mapping requirements to pure frontend UI tasks, even when they call APIs.",
             "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level engineeringQualityRequirements and task engineeringQualityRequirementRefs; do not duplicate full quality requirements inside every task.",
             "taskPlanningRule": "For applicable tasks, verificationIntents should prove storage schema, data-access mapping, DTO/API contract, query/sort/filter fields, and same-provider persistence behavior stay aligned."
+        },
+        "architectureQualityRules": {
+            "requirementSource": "outputContract.architectureQualityRequirementTemplate",
+            "architectureQualitySource": "sourceRefs.architectureArtifactContractRef#/architectureQuality",
+            "referenceRule": "Use task.writeBoundary.artifactRefs.decisions, nfrs, and risks to assign current-phase architecture quality obligations. Do not inline full ADR, NFR, or risk objects inside tasks.",
+            "assignmentRule": "Every current-phase decision, NFR, and risk that affects implementation or verification should be assigned to at least one task that owns the related module, interface, data model, runtime surface, or workflow.",
+            "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level architectureQualityRequirements and task architectureQualityRequirementRefs from task artifact refs.",
+            "verificationRule": "Assigned tasks must include verificationIntents whose summaries can prove the referenced architecture decision, NFR, or risk mitigation was respected."
         }
     })
 }
@@ -2723,6 +2760,92 @@ fn engineering_quality_requirement_template(
         "verificationObligations": persistence_verification_obligations(),
         "taskRefRule": "Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task."
     })
+}
+
+fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
+    if aac.architecture_quality.decisions.is_empty()
+        && aac.architecture_quality.nfrs.is_empty()
+        && aac.architecture_quality.risks.is_empty()
+    {
+        return Value::Null;
+    }
+    json!({
+        "requirementId": "aqr-current-001",
+        "kind": "architecture_quality",
+        "decisionRefs": aac.architecture_quality.decisions.iter().map(|item| item.decision_id.clone()).collect::<Vec<_>>(),
+        "nfrRefs": aac.architecture_quality.nfrs.iter().map(|item| item.nfr_id.clone()).collect::<Vec<_>>(),
+        "riskRefs": aac.architecture_quality.risks.iter().map(|item| item.risk_id.clone()).collect::<Vec<_>>(),
+        "implementationObligations": [
+            "Respect the referenced architecture decision in changed modules, interfaces, data model, runtime, and workflow code.",
+            "Implement the referenced risk mitigation when the task owns the affected artifact.",
+            "Keep the referenced NFR verifiable through task verification evidence when it applies to changed code."
+        ],
+        "verificationObligations": [
+            "Use task.verificationIntents as the verification id source.",
+            "TaskResult architectureQualityEvidence must cite requirementId and verificationIds for the task-owned architecture quality refs.",
+            "Verification summaries should state how implementation respected the referenced decision, NFR, or risk mitigation."
+        ],
+        "taskRefRule": "Tasks reference generated requirements by architectureQualityRequirementRefs; do not inline or duplicate full decisions, NFRs, or risks inside every task."
+    })
+}
+
+fn normalize_architecture_quality_requirements(
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) -> Vec<ArchitectureQualityRequirement> {
+    if aac.architecture_quality.decisions.is_empty()
+        && aac.architecture_quality.nfrs.is_empty()
+        && aac.architecture_quality.risks.is_empty()
+    {
+        for task in tasks {
+            task.architecture_quality_requirement_refs.clear();
+        }
+        return vec![];
+    }
+    let mut requirements = Vec::new();
+    let mut requirement_ids_by_task = BTreeMap::<String, Vec<String>>::new();
+    for task in tasks.iter() {
+        let refs = &task.write_boundary.artifact_refs;
+        let decision_refs = refs.decisions.clone();
+        let nfr_refs = refs.nfrs.clone();
+        let risk_refs = refs.risks.clone();
+        if decision_refs.is_empty() && nfr_refs.is_empty() && risk_refs.is_empty() {
+            continue;
+        }
+        let requirement_id = format!("aqr-{}", task.task_id);
+        requirement_ids_by_task
+            .entry(task.task_id.clone())
+            .or_default()
+            .push(requirement_id.clone());
+        requirements.push(ArchitectureQualityRequirement {
+            requirement_id,
+            kind: "architecture_quality".to_string(),
+            applies_to_task_ids: vec![task.task_id.clone()],
+            decision_refs,
+            nfr_refs,
+            risk_refs,
+            implementation_obligations: vec![
+                "Respect referenced architecture decisions in the task-owned implementation."
+                    .to_string(),
+                "Implement referenced risk mitigations when the task owns affected code or configuration."
+                    .to_string(),
+                "Keep referenced NFRs verifiable through task verification evidence.".to_string(),
+            ],
+            verification_obligations: vec![
+                "Use task.verificationIntents as verification id source.".to_string(),
+                "Record architectureQualityEvidence for every referenced architecture quality requirement."
+                    .to_string(),
+                "Summarize how changed code respected the referenced decision, NFR, or risk mitigation."
+                    .to_string(),
+            ],
+        });
+    }
+    for task in tasks {
+        task.architecture_quality_requirement_refs = requirement_ids_by_task
+            .remove(&task.task_id)
+            .unwrap_or_default();
+    }
+    requirements
 }
 
 fn normalize_engineering_quality_requirements(

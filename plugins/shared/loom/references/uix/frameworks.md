@@ -1,6 +1,6 @@
 # UIX Focus: Frameworks
 
-Load this when choosing how to apply a UI contract in a specific frontend stack. For MCP-driven work, prefer stack references from `uiQualityContract.referenceProfile.referenceIds`.
+Load this when choosing how to apply a UI contract in a specific frontend stack. For MCP-driven work, prefer stack references from `uiQualityContract.referenceProfile.groups.stacks`.
 
 ## Rule
 

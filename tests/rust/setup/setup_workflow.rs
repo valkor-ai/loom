@@ -146,6 +146,15 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root
             .join("skills/loom/references/uix/stacks/uniapp.md")
             .exists());
+        assert!(root
+            .join("skills/loom/references/tech/arch/core.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/tech/arch/nfr.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/tech/arch/adr.md")
+            .exists());
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -163,6 +172,18 @@ fn install_projects_shared_references_to_agent_read_paths() {
     assert!(env
         .opencode_home
         .join("references/loom/uix/templates/tokens.tailwind.tpl")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/arch/core.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/arch/nfr.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/arch/adr.md")
         .exists());
     assert!(!env.opencode_home.join("references/loom/delivery").exists());
     assert!(env
@@ -608,20 +629,20 @@ fn opencode_commands_expose_mcp_result_discipline() {
     for required in [
         "MCP-selected references:",
         "Reference discipline:",
-        "uiQualityContract.referenceProfile.referenceIds",
+        "uiQualityContract.referenceProfile.groups",
         "../references/loom/uix/core.md",
-        "`uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification`",
+        "`groups.core`",
         "../references/loom/uix/anti-patterns.md",
-        "uix.scenarios.admin-dashboard",
-        "uix.tokens.color-system",
-        "uix.stacks.react",
+        "admin-dashboard",
+        "color-system",
+        "react",
         "../references/loom/uix/templates/tokens.css.tpl",
         "../references/loom/uix/templates/tokens.tailwind.tpl",
         "uiQualityContract.designTokenAssetPlan.templateId",
         "do not paste reference prose or template bodies",
         "creates, changes, or reviews user-visible frontend work",
-        "Focus references are contract-selected ids, not fallback reading",
-        "companion scenario ids",
+        "Focus references are contract-selected group/items, not fallback reading",
+        "companion scenario items",
         "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
         "Do not load separate delivery reference files",
     ] {
@@ -676,18 +697,18 @@ fn agent_templates_expose_reference_loading_protocol() {
             "MCP-selected references:",
             "Reference discipline:",
             "After reading the current request group",
-            "uiQualityContract.referenceProfile.referenceIds",
+            "uiQualityContract.referenceProfile.groups",
             "uiQualityContract.designTokenAssetPlan.templateId",
             "Do not scan the whole",
             "If a referenced file is not selected by the MCP contract",
             "frontendQualitySelfCheck",
             "do not paste reference prose or template bodies",
-            "Focus references are contract-selected ids, not fallback reading",
-            "`uix.system`",
-            "`uix.scenarios.admin-dashboard`",
-            "`uix.tokens.color-system`",
-            "`uix.stacks.react`",
-            "`uix.templates.tokens-css`",
+            "Focus references are contract-selected group/items, not fallback reading",
+            "`groups.core`",
+            "`groups.scenarios`",
+            "`groups.tokens`",
+            "`groups.stacks`",
+            "`groups.templates`",
         ] {
             assert!(
                 content.contains(required),
@@ -1079,6 +1100,16 @@ impl Fixture {
                     .package_root
                     .join(format!("plugins/shared/loom/references/uix/{path}")),
                 &format!("/* {path} */\n"),
+            );
+        }
+        for path in [
+            "adr", "core", "data", "failure", "nfr", "patterns", "system",
+        ] {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/arch/{path}.md"
+                )),
+                &format!("# {path} Architecture Reference\n"),
             );
         }
         for name in [

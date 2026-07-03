@@ -1359,7 +1359,7 @@ fn architecture_read_groups_follow_current_section() {
         "uiQualitySeed.required",
         "uiQualitySeed.scenarioCandidates",
         "uiQualitySeed.qualityLevel",
-        "uiQualitySeed.requiredReferenceIds",
+        "uiQualitySeed.requiredReferenceGroups",
         "uiQualitySeed.designTokenAssetPlan",
         "uiQualitySeed.requiredUiStates",
         "uiQualitySeed.selectionRule",
@@ -1385,16 +1385,20 @@ fn architecture_read_groups_follow_current_section() {
     );
     assert_eq!(
         ui_quality_contract["designTokenAssetPlan"]["templateId"],
-        json!("uix.templates.tokens-css")
+        json!("tokens-css")
     );
     assert_eq!(
         ui_quality_contract["designTokenAssetPlan"]["duplicationPolicy"],
         json!("do_not_create_parallel_token_system")
     );
-    assert!(ui_quality_contract["referenceProfile"]["referenceIds"]
+    assert_eq!(
+        ui_quality_contract["referenceProfile"]["loadMode"],
+        json!("skill_reference_by_group")
+    );
+    assert!(ui_quality_contract["referenceProfile"]["groups"]["tokens"]
         .as_array()
-        .expect("ui quality reference ids")
-        .contains(&json!("uix.tokens.layout-grid")));
+        .expect("ui quality token reference items")
+        .contains(&json!("layout-grid")));
     assert!(frontend_template["enumRefs"]
         .pointer("/uiQuality/scenarioKind")
         .and_then(Value::as_array)
@@ -2345,13 +2349,13 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     );
     assert_eq!(
         frontend_requirement_template["uiQualityContract"]["designTokenAssetPlan"]["templateId"],
-        json!("uix.templates.tokens-css")
+        json!("tokens-css")
     );
     assert!(
-        frontend_requirement_template["uiQualityContract"]["referenceProfile"]["referenceIds"]
+        frontend_requirement_template["uiQualityContract"]["referenceProfile"]["groups"]["tokens"]
             .as_array()
-            .expect("ui quality refs")
-            .contains(&json!("uix.tokens.spacing"))
+            .expect("ui quality token refs")
+            .contains(&json!("spacing"))
     );
     let runtime_requirement_template =
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
@@ -2602,8 +2606,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         &"task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string()
     ));
     assert!(core_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
-            .to_string()
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
     ));
     assert!(core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
@@ -2637,7 +2640,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
             "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
                 .to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
                 .to_string(),
@@ -2676,17 +2679,17 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     );
     assert!(
         fields["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"].value
-            ["forbiddenComposition"]
+            ["forbiddenUserVisibleContent"]
             .as_array()
-            .expect("forbidden composition")
-            .contains(&json!("runtime command instructions"))
+            .expect("forbidden user-visible content")
+            .contains(&json!("runtime_commands"))
     );
     assert!(
         fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"].value
-            ["referenceIds"]
+            ["referenceGroups"]["tokens"]
             .as_array()
-            .expect("style reference ids")
-            .contains(&json!("uix.tokens.spacing"))
+            .expect("style token reference items")
+            .contains(&json!("spacing"))
     );
     let interfaces = &fields["sourceContext.architectureArtifactProjection.interfaces"].value;
     assert_eq!(interfaces.as_array().expect("interfaces").len(), 1);
@@ -2716,16 +2719,17 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["selfCheckField"],
         json!("frontendQualitySelfCheck")
     );
-    assert!(fields
-        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"]
-        .value
-        .as_array()
-        .expect("ui quality reference ids")
-        .contains(&json!("uix.tokens.spacing")));
+    assert!(
+        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"]
+            .value["tokens"]
+            .as_array()
+            .expect("ui quality token reference items")
+            .contains(&json!("spacing"))
+    );
     assert_eq!(
         fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
             .value,
-        json!("uix.templates.tokens-css")
+        json!("tokens-css")
     );
     assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["scenarioKind"],
@@ -2737,10 +2741,10 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     );
     assert!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["referenceIdsChecked"]
+            ["referenceGroupsChecked"]["tokens"]
             .as_array()
-            .expect("reference ids checked")
-            .contains(&json!("uix.tokens.spacing"))
+            .expect("reference group items checked")
+            .contains(&json!("spacing"))
     );
     assert!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["statesCovered"]
@@ -2781,7 +2785,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
             ["designTokenEvidence"]["templateIdUsed"],
-        json!("uix.templates.tokens-css")
+        json!("tokens-css")
     );
     assert!(fields["outputContract.resultRules"]
         .value
@@ -2903,9 +2907,8 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         .collect::<BTreeSet<_>>();
     assert!(repair_read_fields
         .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
-    assert!(repair_read_fields.contains(
-        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
-    ));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"));
     assert!(repair_read_fields.contains(
         "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
     ));
@@ -2921,7 +2924,7 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         fields: vec![
             "repairContract.issueConflicts".to_string(),
             "repairContract.minimalRepairRules".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
                 .to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
                 .to_string(),
@@ -2943,16 +2946,16 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
             .contains("frontendQualitySelfCheck")
     );
     assert!(repair_fields
-        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"]
-        .value
+        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"]
+        .value["tokens"]
         .as_array()
-        .expect("reference ids")
-        .contains(&json!("uix.tokens.spacing")));
+        .expect("reference group items")
+        .contains(&json!("spacing")));
     assert_eq!(
         repair_fields
             ["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
             .value,
-        json!("uix.templates.tokens-css")
+        json!("tokens-css")
     );
     assert!(repair_fields["outputContract.resultTemplate"]
         .value
@@ -4308,6 +4311,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/runtime.ts"]);
+    complete_architecture_quality_evidence_for_test(&mut result);
     result["verificationResults"][0]["evidenceType"] = json!("static_check");
     result["runtimeDeliveryEvidence"]["requirementRef"] = json!("wrong-runtime-ref");
     result["runtimeDeliveryEvidence"]["checkedFields"] = json!(["wrong-field"]);
@@ -6833,7 +6837,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         .is_some());
     assert!(frontend_group
         .fields
-        .get("uiQualitySeed.requiredReferenceIds")
+        .get("uiQualitySeed.requiredReferenceGroups")
         .is_some());
     assert!(frontend_group
         .fields
@@ -7660,6 +7664,15 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
     if allowed_read_fields.contains("outputContract.runtimeDeliveryClosureTaskTemplate") {
         fields_to_read.push("outputContract.runtimeDeliveryClosureTaskTemplate".to_string());
     }
+    for field in [
+        "allowedRefs.decisionRefs",
+        "allowedRefs.nfrRefs",
+        "allowedRefs.riskRefs",
+    ] {
+        if allowed_read_fields.contains(field) {
+            fields_to_read.push(field.to_string());
+        }
+    }
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
@@ -7675,8 +7688,14 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
         "entityRefs": field_value(&fields, "allowedRefs.entityRefs"),
         "interfaceRefs": field_value(&fields, "allowedRefs.interfaceRefs"),
         "userFlowRefs": field_value(&fields, "allowedRefs.userFlowRefs"),
-        "stateMachineRefs": field_value(&fields, "allowedRefs.stateMachineRefs")
+        "stateMachineRefs": field_value(&fields, "allowedRefs.stateMachineRefs"),
+        "decisionRefs": field_value(&fields, "allowedRefs.decisionRefs"),
+        "nfrRefs": field_value(&fields, "allowedRefs.nfrRefs"),
+        "riskRefs": field_value(&fields, "allowedRefs.riskRefs")
     });
+    let decision_refs = first_ref_array(&allowed_refs["decisionRefs"]);
+    let nfr_refs = first_ref_array(&allowed_refs["nfrRefs"]);
+    let risk_refs = first_ref_array(&allowed_refs["riskRefs"]);
     let scope_id = allowed_refs["scopeRefs"][0].as_str().expect("scope ref");
     let acceptance_id = allowed_refs["acceptanceRefs"][0]
         .as_str()
@@ -7784,8 +7803,9 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
                         "interfaces": [allowed_refs["interfaceRefs"].get(0).and_then(Value::as_str).unwrap_or("api.account")],
                         "userFlows": [allowed_refs["userFlowRefs"].get(0).and_then(Value::as_str).unwrap_or("flow.account-lifecycle")],
                         "stateMachines": [allowed_refs["stateMachineRefs"].get(0).and_then(Value::as_str).unwrap_or("machine.account-status")],
-                        "decisions": [],
-                        "risks": []
+                        "decisions": decision_refs,
+                        "nfrs": nfr_refs,
+                        "risks": risk_refs
                     }
                 },
                 "verificationIntents": [{
@@ -7845,6 +7865,7 @@ fn write_taskplan_grouped_candidates(fixture: &Fixture, request_ref: &str) {
                             "userFlows": [],
                             "stateMachines": [],
                             "decisions": [],
+                            "nfrs": [],
                             "risks": []
                         }
                     },
@@ -7888,6 +7909,9 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
             "allowedRefs.interfaceRefs".to_string(),
             "allowedRefs.userFlowRefs".to_string(),
             "allowedRefs.stateMachineRefs".to_string(),
+            "allowedRefs.decisionRefs".to_string(),
+            "allowedRefs.nfrRefs".to_string(),
+            "allowedRefs.riskRefs".to_string(),
             "outputContract.outlineFile".to_string(),
             "outputContract.groupFilePattern".to_string(),
         ],
@@ -7918,6 +7942,9 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
     let state_machine_id = fields["allowedRefs.stateMachineRefs"].value[0]
         .as_str()
         .unwrap_or("machine.account-status");
+    let decision_refs = first_ref_array(&fields["allowedRefs.decisionRefs"].value);
+    let nfr_refs = first_ref_array(&fields["allowedRefs.nfrRefs"].value);
+    let risk_refs = first_ref_array(&fields["allowedRefs.riskRefs"].value);
     let outline_file = fields["outputContract.outlineFile"]
         .value
         .as_str()
@@ -8009,8 +8036,9 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
                             "interfaces": [],
                             "userFlows": [],
                             "stateMachines": [state_machine_id],
-                            "decisions": [],
-                            "risks": []
+                            "decisions": decision_refs,
+                            "nfrs": nfr_refs,
+                            "risks": risk_refs
                         }
                     },
                     "verificationIntents": [{
@@ -8050,6 +8078,7 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
                             "userFlows": [],
                             "stateMachines": [state_machine_id],
                             "decisions": [],
+                            "nfrs": [],
                             "risks": []
                         }
                     },
@@ -8116,6 +8145,7 @@ fn write_taskplan_grouped_candidates_with_persistence_quality(
                         "userFlows": [user_flow_id],
                         "stateMachines": [state_machine_id],
                         "decisions": [],
+                        "nfrs": [],
                         "risks": []
                     }
                 },
@@ -8168,6 +8198,15 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
     if allowed_read_fields.contains("outputContract.runtimeDeliveryClosureTaskTemplate") {
         fields_to_read.push("outputContract.runtimeDeliveryClosureTaskTemplate".to_string());
     }
+    for field in [
+        "allowedRefs.decisionRefs",
+        "allowedRefs.nfrRefs",
+        "allowedRefs.riskRefs",
+    ] {
+        if allowed_read_fields.contains(field) {
+            fields_to_read.push(field.to_string());
+        }
+    }
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
@@ -8184,6 +8223,9 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
     let detail_id = fields["allowedRefs.requirementDetailIds"].value[0]
         .as_str()
         .expect("detail id");
+    let decision_refs = first_ref_array(&field_value(&fields, "allowedRefs.decisionRefs"));
+    let nfr_refs = first_ref_array(&field_value(&fields, "allowedRefs.nfrRefs"));
+    let risk_refs = first_ref_array(&field_value(&fields, "allowedRefs.riskRefs"));
     let outline_file = fields["outputContract.outlineFile"]
         .value
         .as_str()
@@ -8255,8 +8297,9 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
                         "interfaces": ["api.account.open"],
                         "userFlows": ["flow.account-lifecycle"],
                         "stateMachines": ["machine.account-status"],
-                        "decisions": [],
-                        "risks": []
+                        "decisions": decision_refs,
+                        "nfrs": nfr_refs,
+                        "risks": risk_refs
                     }
                 },
                 "verificationIntents": [{
@@ -8339,6 +8382,7 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
 }
 
 fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
+    complete_architecture_quality_evidence_for_test(result);
     let Some(evidence) = result
         .pointer_mut("/frontendQualitySelfCheck/designTokenEvidence")
         .and_then(Value::as_object_mut)
@@ -8363,6 +8407,31 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
         );
     }
     evidence.insert("parallelTokenSystemCreated".to_string(), json!(false));
+}
+
+fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
+    let verification_id = result
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("verificationId"))
+        .and_then(Value::as_str)
+        .unwrap_or("verify-account-001")
+        .to_string();
+    let Some(evidence_items) = result
+        .get_mut("architectureQualityEvidence")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for evidence in evidence_items {
+        evidence["status"] = json!("satisfied");
+        evidence["verificationIds"] = json!([verification_id]);
+        evidence["changedFiles"] = json!(["src/main.tsx"]);
+        evidence["summary"] = json!(
+            "The task implementation respects the assigned architecture quality requirement and links it to verification evidence."
+        );
+    }
 }
 
 fn mutate_task_result_candidate<F>(fixture: &Fixture, request_ref: &str, mutate: F)
@@ -9181,6 +9250,14 @@ fn field_value(
         .unwrap_or(Value::Null)
 }
 
+fn first_ref_array(value: &Value) -> Value {
+    value
+        .get(0)
+        .and_then(Value::as_str)
+        .map(|reference| json!([reference]))
+        .unwrap_or_else(|| json!([]))
+}
+
 fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> Value {
     let request_root = read_request_root_value(fixture.root_str(), request_ref);
     let request_id = request_root["requestId"].as_str().expect("requestId");
@@ -9254,6 +9331,12 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .get(0)
         .and_then(Value::as_str)
         .unwrap_or("acc_1")
+        .to_string();
+    let scope_refs = field_value(&fields, "allowedRefs.scopeRefs");
+    let scope_id = scope_refs
+        .get(0)
+        .and_then(Value::as_str)
+        .unwrap_or("scope_1")
         .to_string();
     let requirement_detail_ids = field_value(&fields, "allowedRefs.requirementDetailIds");
     let detail_id = requirement_detail_ids
@@ -9455,8 +9538,57 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                     "acceptanceMatrix": [acceptance_id.clone()]
                 }
             }],
-            "risksAndDecisions": {
-                "decisions": []
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "adr-current-001",
+                    "category": "architecture_style",
+                    "title": "Keep the account slice inside the declared module boundary",
+                    "status": "accepted",
+                    "context": "The current phase needs a coherent architecture handoff for task planning without expanding beyond the accepted account capability.",
+                    "decision": "Implement the phase through the account-service module and expose only the declared account interface surface.",
+                    "alternativesConsidered": [{
+                        "name": "Split the current account slice across unrelated modules",
+                        "tradeoff": "Could look more layered in tests but would duplicate ownership for one phase.",
+                        "rejectedBecause": "The accepted architecture module boundary is sufficient for this phase."
+                    }],
+                    "consequences": {
+                        "positive": ["Task planning can assign one coherent module owner."],
+                        "negative": ["Future phases must add new modules deliberately instead of by accident."],
+                        "neutral": ["The decision can be revisited when a later phase adds a separate runtime boundary."]
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": [scope_id.clone()],
+                        "acceptanceRefs": [acceptance_id.clone()],
+                        "requirementDetailRefs": [detail_id.clone()]
+                    },
+                    "verificationHints": ["TaskPlan must assign this decision to the implementation task that owns module.account-service."]
+                }],
+                "nfrs": [{
+                    "nfrId": "nfr-current-001",
+                    "category": "maintainability",
+                    "target": "Account workflow code remains traceable from accepted requirement detail to module, interface, and verification task.",
+                    "rationale": "The execution chain needs architecture evidence without repeating full architecture prose in every task.",
+                    "architectureRefs": {
+                        "decisions": ["adr-current-001"],
+                        "risks": ["risk-current-001"]
+                    },
+                    "verificationStrategy": "TaskResult architectureQualityEvidence cites the generated requirement and the task verification id."
+                }],
+                "risks": [{
+                    "riskId": "risk-current-001",
+                    "category": "maintainability",
+                    "severity": "medium",
+                    "likelihood": "medium",
+                    "impact": "A task could expand beyond the current account boundary and make review unable to distinguish owned architecture work.",
+                    "mitigation": "Assign the decision, NFR, and risk refs to the task write boundary and require task-level evidence.",
+                    "ownerArtifactRefs": {
+                        "modules": ["module.account-service"],
+                        "interfaces": ["api.account"],
+                        "decisions": ["adr-current-001"],
+                        "nfrs": ["nfr-current-001"]
+                    },
+                    "verificationHints": ["Review should fail approval if the architecture quality refs are not assigned to a task and evidenced."]
+                }]
             },
             "handoff": {
                 "readyForTaskPlan": true,

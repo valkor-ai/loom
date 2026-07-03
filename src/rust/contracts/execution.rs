@@ -80,6 +80,8 @@ pub struct TaskArtifactRefs {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nfrs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risks: Vec<String>,
 }
 
@@ -170,6 +172,25 @@ pub struct EngineeringQualityRequirement {
     pub verification_obligations: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchitectureQualityRequirement {
+    pub requirement_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applies_to_task_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nfr_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risk_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementation_obligations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_obligations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDefinition {
@@ -203,6 +224,8 @@ pub struct TaskDefinition {
     pub runtime_delivery_requirement: Option<TaskRuntimeDeliveryRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub engineering_quality_requirement_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub architecture_quality_requirement_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -319,6 +342,8 @@ pub struct TaskPlan {
     pub tasks: Vec<TaskDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub engineering_quality_requirements: Vec<EngineeringQualityRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub architecture_quality_requirements: Vec<ArchitectureQualityRequirement>,
     pub handoff: TaskPlanHandoff,
     pub created_at: String,
     pub updated_at: String,
@@ -505,6 +530,18 @@ pub struct ConceptEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct ArchitectureQualityEvidence {
+    pub requirement_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendQualityStateCoverage {
     pub state: String,
     pub status: String,
@@ -557,13 +594,13 @@ pub struct FrontendDesignTokenEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendQualitySelfCheck {
     pub status: String,
     pub scenario_kind: String,
     pub quality_level: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reference_ids_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_groups_checked: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub states_covered: Vec<FrontendQualityStateCoverage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -628,6 +665,8 @@ pub struct TaskResult {
     pub requirement_detail_evidence: Vec<RequirementDetailEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub concept_evidence: Vec<ConceptEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub architecture_quality_evidence: Vec<ArchitectureQualityEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<BlockedReason>,
     pub created_at: String,

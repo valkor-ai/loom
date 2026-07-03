@@ -228,6 +228,7 @@ fn build_request_root(
             .as_ref(),
         Some(technical_baseline),
     );
+    let architecture_quality_seed = build_architecture_quality_seed();
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -239,6 +240,7 @@ fn build_request_root(
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
         "uiQualitySeed": ui_quality_seed,
+        "architectureQualitySeed": architecture_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -252,6 +254,7 @@ fn build_request_root(
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
+            "architectureQuality": architecture_quality_enum_refs(),
             "uiQuality": ui_quality_enum_refs()
         },
         "rules": {
@@ -369,6 +372,10 @@ pub(crate) fn architecture_read_groups(
         "contextProjection.technicalBaseline.scope",
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
+        "architectureQualitySeed.required",
+        "architectureQualitySeed.qualityLevel",
+        "architectureQualitySeed.techReferenceProfile.loadMode",
+        "architectureQualitySeed.techReferenceProfile.groups.arch",
     ]);
     if matches!(
         section,
@@ -432,7 +439,8 @@ pub(crate) fn architecture_read_groups(
                 "enumRefs.section",
                 "enumRefs.status",
                 "enumRefs.coverageStatus",
-                "enumRefs.acceptancePriority"
+                "enumRefs.acceptancePriority",
+                "enumRefs.architectureQuality"
             ])
         }),
     ];
@@ -466,7 +474,7 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.layoutBaselineCandidates",
             "uiQualitySeed.densityCandidates",
             "uiQualitySeed.semanticTokenPolicy",
-            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -551,6 +559,52 @@ fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -
         value["repositoryContextRef"] = json!(repository_context_ref);
     }
     value
+}
+
+fn build_architecture_quality_seed() -> Value {
+    json!({
+        "required": true,
+        "qualityLevel": "production_delivery_architecture",
+        "techReferenceProfile": {
+            "loadMode": "skill_reference_by_group",
+            "groups": {
+                "arch": ["core", "patterns", "system", "data", "nfr", "adr", "failure"]
+            }
+        }
+    })
+}
+
+fn architecture_quality_enum_refs() -> Value {
+    json!({
+        "decisionStatus": ["accepted", "needs_user_decision"],
+        "decisionCategory": [
+            "architecture_style",
+            "module_boundary",
+            "data_boundary",
+            "integration_boundary",
+            "runtime_boundary",
+            "security_boundary",
+            "operability"
+        ],
+        "nfrCategory": [
+            "performance",
+            "reliability",
+            "security",
+            "maintainability",
+            "observability",
+            "cost"
+        ],
+        "riskCategory": [
+            "data_integrity",
+            "integration",
+            "runtime",
+            "security",
+            "operability",
+            "maintainability"
+        ],
+        "riskSeverity": ["low", "medium", "high", "critical"],
+        "riskLikelihood": ["low", "medium", "high"]
+    })
 }
 
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
@@ -755,7 +809,7 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
             vec![
                 "acceptanceMatrix",
                 "detailCoverage",
-                "risksAndDecisions",
+                "architectureQuality",
                 "handoff",
             ]
         }
@@ -881,7 +935,58 @@ fn section_content_shape(
                 },
                 "reason": "string"
             }],
-            "risksAndDecisions": "object",
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "string",
+                    "category": "architecture_style | module_boundary | data_boundary | integration_boundary | runtime_boundary | security_boundary | operability",
+                    "title": "string",
+                    "status": "accepted | needs_user_decision",
+                    "context": "string",
+                    "decision": "string",
+                    "alternativesConsidered": [{
+                        "name": "string",
+                        "tradeoff": "string",
+                        "rejectedBecause": "string"
+                    }],
+                    "consequences": {
+                        "positive": ["string"],
+                        "negative": ["string"],
+                        "neutral": ["string"]
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": ["string"],
+                        "acceptanceRefs": ["string"],
+                        "requirementDetailRefs": ["string"]
+                    },
+                    "verificationHints": ["string"]
+                }],
+                "nfrs": [{
+                    "nfrId": "string",
+                    "category": "performance | reliability | security | maintainability | observability | cost",
+                    "target": "string",
+                    "rationale": "string",
+                    "architectureRefs": {
+                        "decisions": ["string"],
+                        "risks": ["string"]
+                    },
+                    "verificationStrategy": "string"
+                }],
+                "risks": [{
+                    "riskId": "string",
+                    "category": "data_integrity | integration | runtime | security | operability | maintainability",
+                    "severity": "low | medium | high | critical",
+                    "likelihood": "low | medium | high",
+                    "impact": "string",
+                    "mitigation": "string",
+                    "ownerArtifactRefs": {
+                        "modules": ["string"],
+                        "interfaces": ["string"],
+                        "decisions": ["string"],
+                        "nfrs": ["string"]
+                    },
+                    "verificationHints": ["string"]
+                }]
+            },
             "handoff": {
                 "readyForTaskPlan": "boolean",
                 "blockingReasons": ["string"],
@@ -1092,11 +1197,8 @@ fn section_content_template(
                             "local loading, empty, error, success, and business-blocking feedback"
                         ],
                         "forbiddenComposition": [
-                            "marketing or hero introduction",
-                            "runtime command instructions",
-                            "technical stack explanation",
-                            "delivery progress notes",
-                            "tutorial-style explanatory copy unrelated to the business task"
+                            "surface composition unrelated to the task-owned business workflow",
+                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
                         ],
                         "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
                         "dataViewRefs": ["view_1"],
@@ -1151,15 +1253,67 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
     json!({
         "acceptanceMatrix": acceptance_matrix,
         "detailCoverage": detail_coverage,
-        "risksAndDecisions": {
-            "decisions": [],
-            "risks": []
-        },
+        "architectureQuality": architecture_quality_template(),
         "handoff": {
             "readyForTaskPlan": true,
             "blockingReasons": [],
             "nextNode": "task_plan"
         }
+    })
+}
+
+fn architecture_quality_template() -> Value {
+    json!({
+        "decisions": [{
+            "decisionId": "adr-current-001",
+            "category": "architecture_style",
+            "title": "Current phase architecture decision",
+            "status": "accepted",
+            "context": "State the current-phase forces from requirementDetailTransfer and the confirmed technical baseline.",
+            "decision": "State the selected architecture approach for this phase.",
+            "alternativesConsidered": [{
+                "name": "alternative architecture approach",
+                "tradeoff": "Concrete trade-off compared with the selected approach.",
+                "rejectedBecause": "Why this alternative is not the best fit for the current phase."
+            }],
+            "consequences": {
+                "positive": ["Implementation or verification benefit."],
+                "negative": ["Implementation or operation cost to watch."],
+                "neutral": ["Known side effect that does not block delivery."]
+            },
+            "sourceRefs": {
+                "scopeRefs": ["allowedRefs.scopeRefs item"],
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
+            },
+            "verificationHints": ["How later tasks or review can prove this decision was respected."]
+        }],
+        "nfrs": [{
+            "nfrId": "nfr-current-001",
+            "category": "maintainability",
+            "target": "Concrete quality target for this phase.",
+            "rationale": "Why this target matters for the current phase.",
+            "architectureRefs": {
+                "decisions": ["adr-current-001"],
+                "risks": ["risk-current-001"]
+            },
+            "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
+        }],
+        "risks": [{
+            "riskId": "risk-current-001",
+            "category": "data_integrity",
+            "severity": "medium",
+            "likelihood": "medium",
+            "impact": "Concrete implementation or operation impact if this risk occurs.",
+            "mitigation": "Concrete design or task-plan mitigation.",
+            "ownerArtifactRefs": {
+                "modules": ["module_1"],
+                "interfaces": ["interface_1"],
+                "decisions": ["adr-current-001"],
+                "nfrs": ["nfr-current-001"]
+            },
+            "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
+        }]
     })
 }
 
@@ -1275,7 +1429,8 @@ fn section_enum_refs(
         ArchitectureSectionGroup::Coverage => json!({
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
-            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
+            "architectureQuality": architecture_quality_enum_refs()
         }),
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
@@ -1295,8 +1450,10 @@ fn section_generation_rules(
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only.".to_string(),
+            "Use architectureQualitySeed.techReferenceProfile.groups.arch as the selected architecture reference profile; do not copy reference prose into the candidate.".to_string(),
+            "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
-            "Add a seam only when it supports current-phase behavior, verification, or meaningful isolation; avoid pass-through wrappers.".to_string(),
+            "Add an abstraction only when it supports current-phase behavior, verification, or meaningful isolation; avoid pass-through wrappers.".to_string(),
             "Use allowedRefs.scopeRefs and allowedRefs.acceptanceRefs exactly; do not invent ids."
                 .to_string(),
         ],
@@ -1305,12 +1462,15 @@ fn section_generation_rules(
                 .to_string(),
             "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
                 .to_string(),
+            "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
+            "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
             "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
                 .to_string(),
         ],
         ArchitectureSectionGroup::Behavior => vec![
             "Represent current-phase user flows, state machines, blockers, and success outcomes."
                 .to_string(),
+            "Include failure paths, recovery behavior, consistency expectations, and business-blocking outcomes for stateful flows.".to_string(),
             "Do not reference future or deferred scope as if it were current-phase behavior."
                 .to_string(),
         ],
@@ -1319,10 +1479,10 @@ fn section_generation_rules(
             "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
-            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; use compact reference ids, not copied reference text.".to_string(),
+            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; use grouped reference profile items, not copied reference text.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
             "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
-            "Business UI surfaces must directly serve the selected scenario and task workflow; do not add marketing hero blocks, runtime commands, stack explanations, Loom progress notes, verification instructions, or tutorial-style explanatory copy to user-visible UI.".to_string(),
+            "Business UI surfaces must directly serve the selected scenario and task workflow; enforce uiQualityContract.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."
@@ -1336,6 +1496,8 @@ fn section_generation_rules(
                 .to_string(),
             "Runtime delivery is a code-level contract. Do not require Docker, clean install, registry access, or deploy success here."
                 .to_string(),
+            "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
+                .to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -1347,6 +1509,14 @@ fn section_generation_rules(
             "detailCoverage must store detailId plus artifact refs; do not copy full detail summaries."
                 .to_string(),
             "Omit reason when coverageStatus=covered; write a non-empty reason when coverageStatus is partial, not_applicable, deferred, or uncovered."
+                .to_string(),
+            "Write content.architectureQuality with non-empty decisions, nfrs, and risks arrays using currentSectionContract.resultTemplate shape."
+                .to_string(),
+            "Each architectureQuality decision must include alternativesConsidered, consequences, sourceRefs, and verificationHints."
+                .to_string(),
+            "Each architectureQuality nfr must be concrete enough for TaskPlan or Review to verify; do not write vague quality words without a verificationStrategy."
+                .to_string(),
+            "Each architectureQuality risk must include severity, likelihood, impact, mitigation, ownerArtifactRefs, and verificationHints."
                 .to_string(),
             "Record only architecture trade-offs that affect later implementation, verification, or repair routing."
                 .to_string(),

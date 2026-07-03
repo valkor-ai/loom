@@ -47,7 +47,7 @@ Check every state that is in scope for the screen:
 
 TaskResult or ReviewResult evidence should include:
 
-- `referenceIdsChecked`: all UIX ids that were loaded for the task.
+- `referenceGroupsChecked`: all UIX group/items that were loaded for the task.
 - Changed screens/components and the user workflow checked.
 - States covered and states not applicable.
 - Viewports or devices checked.
