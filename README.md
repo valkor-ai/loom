@@ -13,7 +13,7 @@
     ·
     <a href="#how-to-use">How to Use</a>
     ·
-    <a href="#token-saving-context">Token Saving</a>
+    <a href="#context-routing">Context Routing</a>
     ·
     <a href="#faq">FAQ</a>
   </p>
@@ -34,7 +34,7 @@ Loom uses dynamic workflows to choose the right delivery path for each goal, the
 
 Instead of a one-shot prompt chain, Loom treats delivery as a loop: route the next step, execute, verify, record evidence, repair when needed, and continue from saved state.
 
-Coding agents can write code. Loom helps them keep the delivery promise from idea to release, with fewer wasted tokens.
+Coding agents can write code. Loom helps them keep the delivery promise from idea to release without rebuilding context from scratch every turn.
 
 Use Loom when a request is larger than a one-shot edit: a feature needs clarification, architecture, task splitting, implementation evidence, review, repair, preview, deployment, or a clean handoff.
 
@@ -49,7 +49,7 @@ Failure mode | Loom response
 Partial completion | Bounded tasks, explicit result files, continue routing, and final-response guards keep agents from declaring done after partial progress.
 Goal drift | Confirmed scope, architecture contracts, task plans, and compact context packs preserve the original objective across sessions.
 Self-check bias | Review, verification, repair requests, and evidence records separate implementation from validation.
-Token waste | Project summaries, task graphs, backend/runtime state, test results, and deployment evidence reduce repeated whole-repo reads.
+Repeated context loading | Project summaries, task graphs, backend/runtime state, test results, and deployment evidence reduce repeated whole-repo reads.
 Handoff gaps | Delivery reports, preview checks, logs, and repair history make the final state inspectable by humans and other agents.
 
 The hard part is the harness around the model: durable state, scoped work, routing, verification, recovery, and human-readable evidence. Loom uses dynamic workflows as the operating pattern, then lifts them to the project level so delivery can survive interruptions, compaction, agent switches, and future handoffs.
@@ -68,7 +68,7 @@ Loom exists to close that gap.
 
 It is an open-source delivery layer for existing coding agents. It helps agents move from one-shot coding to repeatable software delivery: clarify the request, plan the work, split tasks, preserve context, execute checks, repair failures, and report evidence.
 
-The goal is simple: help builders move from vibe-coded demos and personal tools to reliable, production-ready applications with less manual effort and fewer wasted tokens.
+The goal is simple: help builders move from vibe-coded demos and personal tools to reliable, production-ready applications with less manual effort and less repeated context gathering.
 
 Capability | What it changes
 --- | ---
@@ -76,7 +76,7 @@ Dynamic workflows | Turn each delivery goal into an adaptive loop for clarificat
 Delivery harness | Route work through requirement clarification, planning, building, checking, previewing, reviewing, repairing, and reporting.
 Requirement intelligence | Turns clarification from a chat step into a delivery-quality gate: confirmed scope, business rules, lifecycle coverage, and UI operation paths become structured context that planning, execution, and review must preserve.
 Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and let requirement clarification pull only matching chunks into the right step without making the knowledge base a hidden requirement source.
-Token-saving context | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents do not reread the whole repository every turn.
+Context routing | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents can retrieve targeted context instead of rereading the whole repository every turn.
 Task contracts | Turn broad goals into bounded tasks with source refs, acceptance intent, result files, and continuation rules.
 Executable tools | Give agents MCP tools for context collection, task routing, result recording, deployment checks, and delivery evidence.
 Backend readiness | Track databases, auth, storage, functions, environment variables, services, and runtime requirements as part of the delivery state.
@@ -84,7 +84,7 @@ UIX guidance | Preserve visual direction, interaction flows, responsive states, 
 Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
 Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode and other agents.
 
-## Token-Saving Context
+## Context Routing
 
 High-level context path:
 
@@ -111,8 +111,6 @@ Your coding agent / app
         v
 Agent turn / LLM context
 ```
-
-Benchmark cases and results live in [`benchmarks/`](./benchmarks/).
 
 ## Prerequisites
 

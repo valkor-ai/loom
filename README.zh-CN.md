@@ -13,7 +13,7 @@
     ·
     <a href="#如何使用">如何使用</a>
     ·
-    <a href="#省-token-的上下文方案">省 Token</a>
+    <a href="#上下文路由">上下文路由</a>
     ·
     <a href="#相关工作">相关工作</a>
     ·
@@ -36,7 +36,7 @@ Loom 使用 dynamic workflows 为每个交付目标选择合适路径，并让�
 
 Loom 不是一次性的 prompt chain，而是把交付变成一个 loop：路由下一步、执行、验证、记录证据、在需要时修复，并从已保存状态继续推进。
 
-Coding agents 已经会写代码。Loom 帮助它们从 idea 到 release 都守住交付承诺，同时减少无效 token 消耗。
+Coding agents 已经会写代码。Loom 帮助它们从 idea 到 release 都守住交付承诺，同时避免每一轮都从头重建上下文。
 
 当一个需求不只是一次性改代码，而是需要澄清、架构、任务拆分、实现证据、review、修复、预览、部署或清晰交接时，就适合使用 Loom。
 
@@ -51,7 +51,7 @@ Coding agents 已经会写代码。Loom 帮助它们从 idea 到 release 都守�
 只完成一部分就宣布完成 | 有边界的任务、明确结果文件、continue 路由和 final-response guard，避免 agent 在部分进展后提前收工。
 目标漂移 | 已确认 scope、architecture contracts、task plans 和紧凑 context packs，把原始目标保留到多个会话之后。
 自我验证偏差 | Review、验证、修复请求和证据记录，将实现与验证拆开。
-Token 浪费 | 项目摘要、任务图、后端/运行时状态、测试结果和部署证据，减少反复读取全仓库。
+重复加载上下文 | 项目摘要、任务图、后端/运行时状态、测试结果和部署证据，减少反复读取全仓库。
 交付交接缺口 | 交付报告、预览检查、日志和修复历史，让最终状态可以被人和其他 agent 检查。
 
 真正难的是模型外围的 harness：持久状态、有边界的任务、路由、验证、恢复，以及人能读懂的交付证据。Loom 把 dynamic workflows 作为运行模式，再提升到项目级交付 harness，让交付过程可以跨越中断、compaction、agent 切换和后续交接。
@@ -72,7 +72,7 @@ Loom 就是为弥合这条鸿沟而存在的。
 
 我们的目标很简单：
 
-**帮助构建者从 Vibe Coding 的 Demo 和自用工具，走向更可靠、更可维护、更接近生产级的软件产品，同时减少手工交付成本和无效 Token 消耗。**
+**帮助构建者从 Vibe Coding 的 Demo 和自用工具，走向更可靠、更可维护、更接近生产级的软件产品，同时减少手工交付成本和重复上下文整理。**
 
 能力 | 解决的问题
 --- | ---
@@ -80,7 +80,7 @@ Dynamic workflows | 把每个交付目标变成一条可自适应的循环：澄
 Delivery harness | 把需求澄清、规划、构建、检查、预览、review、修复和报告变成稳定流程。
 Requirement intelligence | 把需求澄清从普通聊天确认变成交付质量门：将已确认的阶段范围、业务规则、生命周期覆盖和页面办理路径沉淀为结构化上下文，让后续规划、编码和 review 必须承接。
 Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段，提升业务理解质量，同时避免把知识库变成隐藏需求来源。
-Token-saving context | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，减少 agent 反复读取全仓库。
+Context routing | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，让 agent 按步骤读取目标上下文，而不是反复读取全仓库。
 Task contracts | 将宽泛目标拆成有边界的任务，并带上 source refs、验收意图、结果文件和 continuation rules。
 Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 MCP tools。
 Backend readiness | 将数据库、Auth、Storage、Functions、环境变量、服务和运行时需求纳入交付状态。
@@ -88,7 +88,7 @@ UIX guidance | 将视觉方向、交互流程、响应式状态、可访问性�
 Verification loop | 把 smoke test、Playwright 类验证、日志、错误摘要、修复请求和再次验证串成闭环。
 Multi-agent protocol | 让 Claude Code、Codex、OpenCode 等工具共享同一套交付流程。
 
-## 省 Token 的上下文方案
+## 上下文路由
 
 整体上下文路径：
 
@@ -115,8 +115,6 @@ Your coding agent / app
         v
 Agent turn / LLM context
 ```
-
-Benchmark cases 和结果见 [`benchmarks/`](./benchmarks/)。
 
 ## 前置条件
 
