@@ -86,6 +86,7 @@ Tech API reference map:
 - `techReferenceProfile.groups.api` item `contract` -> `references/tech/api/contract.md`.
 - `techReferenceProfile.groups.api` item `security` -> `references/tech/api/security.md`.
 - `techReferenceProfile.groups.api` item `evolution` -> `references/tech/api/evolution.md`.
+- `techReferenceProfile.groups.api` item `operations` -> `references/tech/api/operations.md`.
 
 UIX reference map:
 - `groups.core`: `core` -> `references/uix/core.md`; `anti-patterns` -> `references/uix/anti-patterns.md`; `system`, `interaction`, `content`, `verification` -> matching top-level files under `references/uix/`.

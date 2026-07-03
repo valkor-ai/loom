@@ -80,11 +80,31 @@ Architecture obligations:
 - Define command source of truth, read model derivation, staleness expectation, and rebuild strategy.
 - Do not introduce CQRS for ordinary CRUD screens with identical read/write needs.
 
+### Background Worker Or Scheduled Job
+
+Use when the current phase has work that should not run inside the request/response path, such as imports, notifications, reconciliation, report generation, cleanup, or periodic synchronization.
+
+Architecture obligations:
+- Define trigger, schedule or queue source, idempotency, retry limit, failure visibility, and ownership of any durable state.
+- Define how users or operators observe job progress, partial failure, and completion.
+- Keep the worker in the same deployable application unless the current phase requires a separate runtime surface.
+
+### Serverless Function
+
+Use only when the selected technical baseline or existing repository already uses function-style runtime, or when current requirements explicitly need event-triggered ephemeral execution.
+
+Architecture obligations:
+- Define trigger source, timeout, cold-start tolerance, state boundary, retries, idempotency, and observability.
+- Keep durable state, secrets, and external calls explicit.
+- Do not introduce serverless solely to avoid designing a normal module or worker.
+
 ## Anti-Patterns
 
 - Choosing microservices for prestige.
 - Choosing event-driven design without a concrete async requirement.
 - Using CQRS to avoid designing good queries.
+- Creating a background worker when synchronous behavior is simpler and acceptable.
+- Introducing serverless without an existing/runtime requirement.
 - Splitting modules while sharing all database tables and domain objects without ownership.
 - Writing "future scalable" as a reason without current verification impact.
 

@@ -615,6 +615,8 @@ fn architecture_quality_enum_refs() -> Value {
         ],
         "nfrCategory": [
             "performance",
+            "scalability",
+            "availability",
             "reliability",
             "security",
             "maintainability",
@@ -1111,12 +1113,20 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
             "businessConflict": ["number"],
             "notFound": ["number"],
             "auth": ["number"],
+            "rateLimit": ["number"],
+            "serviceUnavailable": ["number"],
             "serverError": ["number"]
         },
         "errorSchema": ["object"],
         "paginationPolicy": "optional object for unbounded collection endpoints",
         "authPolicy": "optional object for protected operations",
         "contractFileRefs": ["string"],
+        "idempotencyPolicy": "optional object for retry-sensitive or duplicate-sensitive operations",
+        "cachePolicy": "optional object for cacheable reads",
+        "conditionalRequestPolicy": "optional object for optimistic concurrency or cache validators",
+        "rateLimitPolicy": "optional object for abuse-sensitive endpoints",
+        "retryPolicy": "optional object for retryable dependency/runtime failures",
+        "requestIdPolicy": "optional object for traceable critical APIs",
         "scopeRefs": ["string"],
         "acceptanceRefs": ["string"],
         "requirementDetailRefs": ["string"]
@@ -1522,6 +1532,8 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
             "businessConflict": [409],
             "notFound": [404],
             "auth": [],
+            "rateLimit": [],
+            "serviceUnavailable": [],
             "serverError": [500]
         },
         "errorSchema": [{
@@ -1540,6 +1552,32 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
             "permissionRefs": []
         },
         "contractFileRefs": [],
+        "idempotencyPolicy": {
+            "required": false,
+            "keyHeader": "",
+            "duplicateBehavior": ""
+        },
+        "cachePolicy": {
+            "strategy": "not_applicable",
+            "validators": []
+        },
+        "conditionalRequestPolicy": {
+            "required": false,
+            "staleUpdateStatus": null
+        },
+        "rateLimitPolicy": {
+            "applies": false,
+            "status": null,
+            "headers": []
+        },
+        "retryPolicy": {
+            "retryableStatuses": [],
+            "retryAfterHeader": false
+        },
+        "requestIdPolicy": {
+            "header": "",
+            "includedInErrorBody": false
+        },
         "scopeRefs": [],
         "acceptanceRefs": [],
         "requirementDetailRefs": []
@@ -1601,7 +1639,7 @@ fn section_generation_rules(
             if !api_quality_seed.is_null() {
                 rules.extend([
                     "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and selected techReferenceProfile.groups.api references.".to_string(),
-                    "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution fields only when selected or applicable.".to_string(),
+                    "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);
             }

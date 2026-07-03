@@ -42,3 +42,30 @@ When a breaking change risk exists:
 - TaskPlan should assign it to the task touching that interface.
 - Execution should either preserve compatibility or record the intentional change.
 - Review should route unacknowledged compatibility breaks to architecture or execution repair depending on where the gap lives.
+
+## Deprecation And Sunset
+
+When the current phase intentionally deprecates an accepted API, define the policy rather than only changing code:
+
+- successor endpoint or response shape
+- deprecation signal, such as `Deprecation` response header or documentation note
+- sunset timing when known
+- migration note or compatibility adapter when a separate client exists
+
+Use `Sunset` and `Link: rel="successor-version"` headers only when the product actually has clients that can consume them. Internal apps can record a simpler migration note.
+
+## Version Discovery
+
+Do not create root version discovery endpoints by default. Add discovery only when:
+
+- the existing API already exposes version metadata
+- public or separately deployed clients need to negotiate versions
+- OpenAPI/SDK distribution depends on separate versions
+
+## Contract File Handling
+
+If `contract` is also selected, keep versioning reflected in the contract file:
+
+- separate specs per major version when existing repository convention uses that
+- otherwise a single spec with clear server/path conventions
+- no hidden breaking changes without an architecture risk or decision

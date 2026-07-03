@@ -2154,6 +2154,8 @@ fn architecture_repair_domain_contract_interfaces_template(api_quality_seed: &Va
             "businessConflict": [409],
             "notFound": [404],
             "auth": [],
+            "rateLimit": [],
+            "serviceUnavailable": [],
             "serverError": [500]
         },
         "errorSchema": [{
@@ -2172,6 +2174,32 @@ fn architecture_repair_domain_contract_interfaces_template(api_quality_seed: &Va
             "permissionRefs": []
         },
         "contractFileRefs": [],
+        "idempotencyPolicy": {
+            "required": false,
+            "keyHeader": "",
+            "duplicateBehavior": ""
+        },
+        "cachePolicy": {
+            "strategy": "not_applicable",
+            "validators": []
+        },
+        "conditionalRequestPolicy": {
+            "required": false,
+            "staleUpdateStatus": null
+        },
+        "rateLimitPolicy": {
+            "applies": false,
+            "status": null,
+            "headers": []
+        },
+        "retryPolicy": {
+            "retryableStatuses": [],
+            "retryAfterHeader": false
+        },
+        "requestIdPolicy": {
+            "header": "",
+            "includedInErrorBody": false
+        },
         "scopeRefs": [],
         "acceptanceRefs": [],
         "requirementDetailRefs": []

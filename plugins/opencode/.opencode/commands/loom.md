@@ -78,6 +78,7 @@ Tech API reference map:
 - `techReferenceProfile.groups.api` item `contract` -> `../references/loom/tech/api/contract.md`.
 - `techReferenceProfile.groups.api` item `security` -> `../references/loom/tech/api/security.md`.
 - `techReferenceProfile.groups.api` item `evolution` -> `../references/loom/tech/api/evolution.md`.
+- `techReferenceProfile.groups.api` item `operations` -> `../references/loom/tech/api/operations.md`.
 
 UIX reference map:
 - `groups.core`: `core` -> `../references/loom/uix/core.md`; `anti-patterns` -> `../references/loom/uix/anti-patterns.md`; `system`, `interaction`, `content`, `verification` -> matching top-level files under `../references/loom/uix/`.

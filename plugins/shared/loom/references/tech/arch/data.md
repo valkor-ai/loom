@@ -11,6 +11,10 @@ Examples:
 - If the baseline selected relational storage, define table/entity ownership, constraints, transaction boundaries, and migration expectations.
 - If the baseline selected document storage, define aggregate boundaries, document shape ownership, query shape, and update consistency.
 - If the baseline selected key-value/cache storage, define source of truth, cache invalidation, TTL, and fallback behavior.
+- If the baseline selected search storage, define source-of-truth sync, indexed fields, stale index behavior, and rebuild expectations.
+- If the baseline selected time-series storage, define timestamp ownership, retention, rollups, late-arriving data, and query windows.
+- If the baseline selected graph storage, define node/edge ownership, traversal boundaries, and consistency with source entities.
+- If the baseline selected object/file storage, define metadata ownership, lifecycle, access control, cleanup, and link persistence.
 - If the baseline selected no persistence for this phase, record why state is derived, in-memory, or deferred.
 
 ## Required Decisions
@@ -24,6 +28,22 @@ Examples:
 | Migrations | What schema/data change is needed and which task should own it. |
 | Read models | Which list/detail/search/query views are required and what fields they expose. |
 | Failure behavior | How duplicate, stale, invalid, or partial writes are handled. |
+| Retention and cleanup | Which records/files/events expire, archive, or require manual cleanup when current scope creates durable data. |
+| Derived data | How indexes, projections, cached values, or denormalized fields are rebuilt and verified. |
+
+## Store-Specific Modeling
+
+Use selected storage facts from Technical Baseline; do not select a new product here.
+
+| Store Shape | Architecture Should Define |
+|---|---|
+| Relational | entity/table owner, constraints, joins, transaction boundary, migration owner, index expectation. |
+| Document | aggregate document owner, embedded vs referenced data, update atomicity, schema compatibility, query projections. |
+| Key-value/cache | source of truth, key namespace, TTL, invalidation, fallback, cache miss behavior. |
+| Search | indexed fields, analyzer/search behavior if relevant, sync trigger, stale result tolerance, rebuild strategy. |
+| Time-series | timestamp semantics, retention, aggregation/rollup, late data handling, query window limits. |
+| Graph | node/edge ownership, traversal depth, consistency with source records, cycle or orphan handling. |
+| Object/file | metadata record, storage key ownership, access policy, cleanup on failed writes, orphan detection. |
 
 ## Current Phase Fit
 
@@ -54,6 +74,7 @@ Create risk entries for:
 - partial write across multiple stores
 - read model exposing stale or incomplete business state
 - hidden dependency on default ORM/framework behavior
+- orphaned files, stale search indexes, expired cache surviving source updates, or graph edges drifting from source records
 
 ## Anti-Patterns
 

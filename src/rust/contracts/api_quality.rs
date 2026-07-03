@@ -80,6 +80,37 @@ const EVOLUTION_SIGNAL_WORDS: &[&str] = &[
     "破坏性",
 ];
 
+const OPERATIONS_SIGNAL_WORDS: &[&str] = &[
+    "idempotency",
+    "idempotent",
+    "idempotency-key",
+    "retry",
+    "retry-after",
+    "rate limit",
+    "rate-limit",
+    "throttle",
+    "429",
+    "503",
+    "cache",
+    "etag",
+    "last-modified",
+    "conditional request",
+    "if-match",
+    "if-none-match",
+    "request id",
+    "x-request-id",
+    "幂等",
+    "重复提交",
+    "重试",
+    "限流",
+    "节流",
+    "缓存",
+    "条件请求",
+    "请求id",
+    "请求ID",
+    "追踪",
+];
+
 pub fn build_api_quality_seed(
     planning_contract: &PlanningGenerationContract,
     technical_baseline: &TechnicalBaselineContract,
@@ -102,6 +133,9 @@ pub fn build_api_quality_seed(
     }
     if signals.evolution_signal_count > 0 {
         api_groups.push("evolution".to_string());
+    }
+    if signals.operations_signal_count > 0 {
+        api_groups.push("operations".to_string());
     }
     json!({
         "required": true,
@@ -136,14 +170,21 @@ pub fn build_api_quality_seed(
                 "sortFields",
                 "authPolicy",
                 "contractFileRefs",
-                "compatibilityPolicy"
+                "compatibilityPolicy",
+                "idempotencyPolicy",
+                "cachePolicy",
+                "conditionalRequestPolicy",
+                "rateLimitPolicy",
+                "retryPolicy",
+                "requestIdPolicy"
             ]
         },
         "generationRules": [
             "Use apiQualitySeed only for current-phase API/interface work; do not add API work for deferred scope.",
             "Represent API contracts in Architecture interfaces and downstream apiContractRequirements; do not paste API reference prose into candidates.",
             "Do not add versioned paths or deprecation policy unless techReferenceProfile.groups.api includes evolution.",
-            "Do not require OpenAPI files unless techReferenceProfile.groups.api includes contract or the repository already owns one."
+            "Do not require OpenAPI files unless techReferenceProfile.groups.api includes contract or the repository already owns one.",
+            "Do not add idempotency, cache, rate-limit, retry, or request-id infrastructure unless techReferenceProfile.groups.api includes operations or the repository already owns that convention."
         ]
     })
 }
@@ -151,14 +192,14 @@ pub fn build_api_quality_seed(
 pub fn api_quality_enum_refs() -> Value {
     json!({
         "knownReferenceGroups": {
-            "api": ["core", "resource", "errors", "pagination", "contract", "security", "evolution"]
+            "api": ["core", "resource", "errors", "pagination", "contract", "security", "evolution", "operations"]
         },
         "interfaceType": ["http_api", "service_method", "external_adapter", "event", "job", "cli_command"],
         "httpMethod": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
         "operationKind": ["create", "read_list", "read_detail", "replace", "update", "delete", "state_transition", "domain_action", "search", "export"],
         "paginationStrategy": ["not_applicable", "page_size", "offset_limit", "cursor", "keyset"],
         "authRequirement": ["not_applicable", "required", "optional", "deferred_with_risk"],
-        "statusCodeCategory": ["success", "validation", "business_conflict", "not_found", "auth", "server_error"],
+        "statusCodeCategory": ["success", "validation", "business_conflict", "not_found", "auth", "rate_limit", "service_unavailable", "server_error"],
         "contractArtifact": ["aac_interface", "openapi", "schema_file", "source_code", "test"]
     })
 }
@@ -169,6 +210,7 @@ struct ApiSeedSignals {
     collection_signal_count: usize,
     contract_signal_count: usize,
     evolution_signal_count: usize,
+    operations_signal_count: usize,
     reason: String,
 }
 
@@ -191,6 +233,9 @@ fn collect_api_seed_signals(
         }
         if contains_any(&text, EVOLUTION_SIGNAL_WORDS) {
             signals.evolution_signal_count += 1;
+        }
+        if contains_any(&text, OPERATIONS_SIGNAL_WORDS) {
+            signals.operations_signal_count += 1;
         }
     }
     signals.reason = if signals.api_signal_count > 0 {
@@ -465,6 +510,28 @@ mod tests {
             seed["techReferenceProfile"]["groups"]["api"],
             json!(["core", "resource", "errors", "security", "pagination"])
         );
+    }
+
+    #[test]
+    fn api_quality_seed_selects_operations_reference_from_explicit_operational_text() {
+        let seed = build_api_quality_seed(
+            &planning_contract(
+                "Implement purchase request API",
+                None,
+                "Submission endpoint must prevent duplicate submit with idempotency key and return retry-after on rate limit.",
+            ),
+            &baseline(json!({ "backend": "Spring Boot" })),
+        );
+        assert_eq!(seed["required"], json!(true));
+        assert_eq!(
+            seed["techReferenceProfile"]["groups"]["api"],
+            json!(["core", "resource", "errors", "security", "operations"])
+        );
+        assert!(seed["interfaceContract"]["conditionalFields"]
+            .as_array()
+            .expect("conditional fields")
+            .iter()
+            .any(|field| field.as_str() == Some("idempotencyPolicy")));
     }
 }
 

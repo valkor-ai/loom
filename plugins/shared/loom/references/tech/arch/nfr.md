@@ -9,6 +9,8 @@ NFRs in Loom must be concrete enough for TaskPlan and Review. They are not sloga
 | Category | Good Target Shape |
 |---|---|
 | performance | Bounded API/list/query latency, pagination, payload size, build/start expectation. |
+| scalability | Bounded growth behavior for users, records, background work, queue depth, storage, or read model size. |
+| availability | Runtime surface health, graceful degradation, dependency outage behavior, recovery target, or maintenance behavior. |
 | reliability | Recovery behavior, idempotency, transaction safety, retry limits, data loss boundary. |
 | security | Authentication/authorization boundary, sensitive field handling, error disclosure, audit needs. |
 | maintainability | Module ownership, migration readability, field mapping alignment, testable seams. |
@@ -42,6 +44,38 @@ Good NFR:
 }
 ```
 
+Scalability NFRs should describe the current phase's growth boundary, not a generic future scale claim:
+
+```json
+{
+  "nfrId": "nfr-list-growth-boundary",
+  "category": "scalability",
+  "target": "List reads must remain bounded by pagination and indexed filters as records grow beyond manual review size.",
+  "rationale": "The staff workflow repeatedly scans operational records.",
+  "architectureRefs": {
+    "decisions": ["adr-current-001"],
+    "risks": ["risk-unbounded-list"]
+  },
+  "verificationStrategy": "Task verification should cover bounded query parameters and the declared default/max page size."
+}
+```
+
+Availability NFRs should describe concrete runtime or dependency behavior:
+
+```json
+{
+  "nfrId": "nfr-api-dependency-outage",
+  "category": "availability",
+  "target": "When the downstream approval service is unavailable, the API returns an actionable unavailable response instead of silent success.",
+  "rationale": "Operators need to distinguish retryable outage from business rejection.",
+  "architectureRefs": {
+    "decisions": [],
+    "risks": ["risk-approval-dependency"]
+  },
+  "verificationStrategy": "Task verification should cover the unavailable dependency path or document a known gap."
+}
+```
+
 Weak NFR:
 
 ```json
@@ -59,6 +93,7 @@ When the user did not state explicit NFRs:
 - Infer only minimum product-quality NFRs needed for current-phase delivery.
 - Record them as architecture assumptions with verification strategy.
 - Keep targets modest and implementation-verifiable.
+- Do not invent cloud-scale targets, multi-region availability, or high-throughput assumptions when the current phase is local/internal and no requirement supports them.
 
 ## Review Routing
 

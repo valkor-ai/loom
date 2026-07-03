@@ -23,6 +23,7 @@ API work in Loom is not a standalone specification exercise. It is a task-verifi
 | Pagination/filtering policy | Defines bounded collection behavior when collection endpoints are unbounded. | API task verification and performance NFRs. |
 | Auth policy | States actor/permission requirements when current scope includes protected operations. | Security-sensitive implementation and Review. |
 | Evolution policy | Captures compatibility constraints only when existing/public clients or explicit versioning requirements exist. | Architecture risk and API repair. |
+| Operational policy | Captures idempotency, cache validators, rate limiting, retry behavior, and request tracing only when selected or already used by the repository. | Execution evidence and production behavior review. |
 
 ## Contract Discipline
 
@@ -32,6 +33,7 @@ API work in Loom is not a standalone specification exercise. It is a task-verifi
 - For every collection API, declare pagination/filtering only when the collection can grow beyond a bounded current-phase dataset.
 - Do not require OpenAPI files unless selected by the contract file reference or explicitly required by user/repo context.
 - Do not invent `/v1` or deprecation policy by default.
+- Do not invent idempotency keys, ETags, rate limits, retry headers, or request-id infrastructure by default; apply operations semantics when selected by `techReferenceProfile.groups.api`.
 
 ## Minimum Quality Bar
 
