@@ -4,7 +4,7 @@ use std::{
 };
 
 use contracts::{
-    ui_quality_enum_refs, AcceptancePriority, ArchitectureArtifactContract,
+    ui_quality_enum_refs, AcceptancePriority, ApiContractRequirement, ArchitectureArtifactContract,
     ArchitectureQualityRequirement, CoverageStatus, EngineeringQualityRequirement,
     ImplementationAction, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
     TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
@@ -241,6 +241,7 @@ fn build_request_root(
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
     let architecture_quality_template = architecture_quality_requirement_template(aac);
+    let api_contract_template = api_contract_requirement_template(aac);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
@@ -294,6 +295,9 @@ fn build_request_root(
         output_contract["architectureQualityRequirementTemplate"] =
             architecture_quality_template.clone();
     }
+    if !api_contract_template.is_null() {
+        output_contract["apiContractRequirementTemplate"] = api_contract_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -324,7 +328,8 @@ fn build_request_root(
                 &runtime_requirement_template,
                 &runtime_closure_template,
                 &engineering_quality_template,
-                &architecture_quality_template
+                &architecture_quality_template,
+                &api_contract_template
             )
         }
     })
@@ -364,6 +369,7 @@ fn taskplan_read_groups(
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
     architecture_quality_template: &Value,
+    api_contract_template: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.technicalBaselineRef",
@@ -430,7 +436,8 @@ fn taskplan_read_groups(
                 "generationRules.workflowClosureRules",
                 "generationRules.runtimeDeliveryRules",
                 "generationRules.engineeringQualityRules",
-                "generationRules.architectureQualityRules"
+                "generationRules.architectureQualityRules",
+                "generationRules.apiContractRules"
             ])
         }),
         json!({
@@ -443,7 +450,8 @@ fn taskplan_read_groups(
                 runtime_requirement_template,
                 runtime_closure_template,
                 engineering_quality_template,
-                architecture_quality_template
+                architecture_quality_template,
+                api_contract_template
             ))
         }),
     ];
@@ -456,6 +464,7 @@ fn taskplan_candidate_contract_fields(
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
     architecture_quality_template: &Value,
+    api_contract_template: &Value,
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
@@ -482,6 +491,9 @@ fn taskplan_candidate_contract_fields(
     }
     if !architecture_quality_template.is_null() {
         fields.push("outputContract.architectureQualityRequirementTemplate");
+    }
+    if !api_contract_template.is_null() {
+        fields.push("outputContract.apiContractRequirementTemplate");
     }
     fields
 }
@@ -726,6 +738,7 @@ where
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
+    let api_contract_requirements = normalize_api_contract_requirements(&aac, &mut tasks);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -796,6 +809,7 @@ where
         tasks,
         engineering_quality_requirements,
         architecture_quality_requirements,
+        api_contract_requirements,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -2654,6 +2668,11 @@ fn is_executable_interface(interface: &Value) -> bool {
     )
 }
 
+fn is_http_api_interface(interface: &Value) -> bool {
+    string_at(interface, "type").as_deref() == Some("http_api")
+        || string_at(interface, "kind").as_deref() == Some("http_api")
+}
+
 fn has_interface_shape(interface: &Value) -> bool {
     interface
         .get("requestSchema")
@@ -2740,6 +2759,15 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "assignmentRule": "Every current-phase decision, NFR, and risk that affects implementation or verification should be assigned to at least one task that owns the related module, interface, data model, runtime surface, or workflow.",
             "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level architectureQualityRequirements and task architectureQualityRequirementRefs from task artifact refs.",
             "verificationRule": "Assigned tasks must include verificationIntents whose summaries can prove the referenced architecture decision, NFR, or risk mitigation was respected."
+        },
+        "apiContractRules": {
+            "required": aac.interfaces.iter().any(is_http_api_interface),
+            "requirementSource": "outputContract.apiContractRequirementTemplate",
+            "interfaceSource": "sourceRefs.architectureArtifactContractRef#/interfaces",
+            "assignmentRule": "Tasks that create or change current-phase HTTP API implementations must include owned interface ids in task.writeBoundary.artifactRefs.interfaces. Frontend/client binding tasks may reference interface ids for wiring but must not be treated as API contract owners.",
+            "implementationRule": "API tasks must preserve request schema, response schema, status codes, error schema, auth policy, and pagination policy declared by the AAC interface.",
+            "verificationRule": "API tasks should include verification intents that prove at least the declared success path and important business or validation error path. Collection endpoints should also prove declared pagination/filter behavior.",
+            "nonDuplicationRule": "Do not inline full API requirements inside every task; use interface refs and the generated task apiContractRequirementRefs."
         }
     })
 }
@@ -2786,6 +2814,26 @@ fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract)
             "Verification summaries should state how implementation respected the referenced decision, NFR, or risk mitigation."
         ],
         "taskRefRule": "Tasks reference generated requirements by architectureQualityRequirementRefs; do not inline or duplicate full decisions, NFRs, or risks inside every task."
+    })
+}
+
+fn api_contract_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
+    let interface_refs = aac
+        .interfaces
+        .iter()
+        .filter(|interface| is_http_api_interface(interface))
+        .filter_map(|interface| string_at(interface, "interfaceId"))
+        .collect::<Vec<_>>();
+    if interface_refs.is_empty() {
+        return Value::Null;
+    }
+    json!({
+        "requirementId": "api-contract-current-001",
+        "kind": "api_contract",
+        "interfaceRefs": interface_refs,
+        "implementationObligations": api_contract_implementation_obligations(),
+        "verificationObligations": api_contract_verification_obligations(),
+        "taskRefRule": "Tasks reference generated requirements by apiContractRequirementRefs; do not inline or duplicate full API requirements inside every task."
     })
 }
 
@@ -2846,6 +2894,94 @@ fn normalize_architecture_quality_requirements(
             .unwrap_or_default();
     }
     requirements
+}
+
+fn normalize_api_contract_requirements(
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) -> Vec<ApiContractRequirement> {
+    let http_api_refs = aac
+        .interfaces
+        .iter()
+        .filter(|interface| is_http_api_interface(interface))
+        .filter_map(|interface| string_at(interface, "interfaceId"))
+        .collect::<BTreeSet<_>>();
+    if http_api_refs.is_empty() {
+        for task in tasks {
+            task.api_contract_requirement_refs.clear();
+        }
+        return vec![];
+    }
+    let mut requirements = Vec::new();
+    let mut requirement_ids_by_task = BTreeMap::<String, Vec<String>>::new();
+    for task in tasks.iter() {
+        if !task_owns_api_contract(task) {
+            continue;
+        }
+        let interface_refs = task
+            .write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .filter(|interface_ref| http_api_refs.contains(*interface_ref))
+            .cloned()
+            .collect::<Vec<_>>();
+        if interface_refs.is_empty() {
+            continue;
+        }
+        let requirement_id = format!("api-contract-{}", task.task_id);
+        requirement_ids_by_task
+            .entry(task.task_id.clone())
+            .or_default()
+            .push(requirement_id.clone());
+        requirements.push(ApiContractRequirement {
+            requirement_id,
+            kind: "api_contract".to_string(),
+            applies_to_task_ids: vec![task.task_id.clone()],
+            interface_refs,
+            implementation_obligations: api_contract_implementation_obligations(),
+            verification_obligations: api_contract_verification_obligations(),
+        });
+    }
+    for task in tasks {
+        task.api_contract_requirement_refs = requirement_ids_by_task
+            .remove(&task.task_id)
+            .unwrap_or_default();
+    }
+    requirements
+}
+
+fn task_owns_api_contract(task: &TaskDefinition) -> bool {
+    if task.write_boundary.artifact_refs.interfaces.is_empty() {
+        return false;
+    }
+    matches!(task.task_kind, TaskKind::InterfaceIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateInterface
+                    | ImplementationAction::CreateEntityCrud
+            )
+        })
+}
+
+fn api_contract_implementation_obligations() -> Vec<String> {
+    vec![
+        "Implement or preserve the AAC-declared method, path, resource, request schema, response schema, status codes, and error schema for task-owned HTTP APIs.".to_string(),
+        "Return actionable validation or business-blocking errors instead of silent success or generic server errors.".to_string(),
+        "Apply pagination, filtering, auth, and contract file obligations only when the AAC interface declares them.".to_string(),
+        "Keep frontend/client bindings aligned with the declared API response and error shapes when the task owns the binding.".to_string(),
+    ]
+}
+
+fn api_contract_verification_obligations() -> Vec<String> {
+    vec![
+        "Use task.verificationIntents as verification id source.".to_string(),
+        "Verify at least one declared success path for each task-owned API interface.".to_string(),
+        "Verify important validation or business-blocking error behavior for write/state-transition APIs.".to_string(),
+        "For collection APIs, verify the declared pagination or filtering behavior when present.".to_string(),
+        "Record apiContractEvidence for every assigned API contract requirement.".to_string(),
+    ]
 }
 
 fn normalize_engineering_quality_requirements(

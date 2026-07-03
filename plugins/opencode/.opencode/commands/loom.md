@@ -49,7 +49,7 @@ The current MCP request/result remains the authority. Optional references are in
 
 Protocol:
 - After reading the current request group, choose references only from the profiles selected by that request.
-- `architectureQualitySeed.techReferenceProfile.groups` or another explicit `techReferenceProfile.groups` selector selects tech architecture references.
+- `architectureQualitySeed.techReferenceProfile.groups`, `apiQualitySeed.techReferenceProfile.groups`, or another explicit `techReferenceProfile.groups` selector selects tech references.
 - `uiQualityContract.referenceProfile.groups` selects UIX core, focus, scenario, token, stack, and template references when the current action creates, changes, or reviews user-visible frontend work.
 - `uiQualityContract.designTokenAssetPlan.templateId` selects one token template item from `referenceProfile.groups.templates`. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
@@ -58,7 +58,7 @@ Protocol:
 MCP-selected references:
 
 Reference profiles:
-- Tech architecture references are selected only by `techReferenceProfile.groups`; map selected group/items to the exact files below. Do not scan the whole `../references/loom/tech` tree and do not load an external architecture skill.
+- Tech references are selected only by `techReferenceProfile.groups`; map selected group/items to the exact files below. Do not scan the whole `../references/loom/tech` tree and do not load external architecture or API skills.
 - UIX references are selected only by `uiQualityContract.referenceProfile.groups`; map selected group/items to exact files below. Do not scan the whole `../references/loom/uix` tree.
 
 Tech architecture reference map:
@@ -69,6 +69,15 @@ Tech architecture reference map:
 - `techReferenceProfile.groups.arch` item `nfr` -> `../references/loom/tech/arch/nfr.md`.
 - `techReferenceProfile.groups.arch` item `adr` -> `../references/loom/tech/arch/adr.md`.
 - `techReferenceProfile.groups.arch` item `failure` -> `../references/loom/tech/arch/failure.md`.
+
+Tech API reference map:
+- `techReferenceProfile.groups.api` item `core` -> `../references/loom/tech/api/core.md`.
+- `techReferenceProfile.groups.api` item `resource` -> `../references/loom/tech/api/resource.md`.
+- `techReferenceProfile.groups.api` item `errors` -> `../references/loom/tech/api/errors.md`.
+- `techReferenceProfile.groups.api` item `pagination` -> `../references/loom/tech/api/pagination.md`.
+- `techReferenceProfile.groups.api` item `contract` -> `../references/loom/tech/api/contract.md`.
+- `techReferenceProfile.groups.api` item `security` -> `../references/loom/tech/api/security.md`.
+- `techReferenceProfile.groups.api` item `evolution` -> `../references/loom/tech/api/evolution.md`.
 
 UIX reference map:
 - `groups.core`: `core` -> `../references/loom/uix/core.md`; `anti-patterns` -> `../references/loom/uix/anti-patterns.md`; `system`, `interaction`, `content`, `verification` -> matching top-level files under `../references/loom/uix/`.
@@ -82,8 +91,8 @@ Reference discipline:
 - Focus references are contract-selected group/items, not fallback reading. Load a focus file only when its item appears in `referenceProfile.groups.focus`.
 - If the contract selects companion scenario items such as `data-console` and `admin-dashboard`, read both and apply the more specific rule to each surface.
 - Do not load unselected UIX files to compensate for weak implementation planning; ask Loom to repair the contract only when selected references are insufficient for the task.
-- For tech references, load only selected group/items from `techReferenceProfile.groups`; never expand `arch` into future `api`, `stack`, `code`, or `test` references unless the MCP contract selects them. In TaskPlan, Execution, and Review requests without a selected tech profile, use the provided `architectureQuality` refs, requirements, evidence, and review signals without reading raw tech references.
-- Do not paste architecture reference text into Architecture, TaskPlan, TaskResult, ReviewResult, source files, or user-facing UI. Use references to produce concrete decisions, NFRs, risks, and evidence.
+- For tech references, load only selected group/items from `techReferenceProfile.groups`; never expand `arch` into `api`, or `api` into `arch`, `stack`, `code`, or `test` references unless the MCP contract selects them. In TaskPlan, Execution, and Review requests without a selected tech profile, use the provided quality refs, requirements, evidence, and review signals without reading raw tech references.
+- Do not paste tech reference text into Architecture, TaskPlan, TaskResult, ReviewResult, source files, or user-facing UI. Use references to produce concrete decisions, interface contracts, NFRs, risks, and evidence.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 

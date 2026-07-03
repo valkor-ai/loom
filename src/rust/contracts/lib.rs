@@ -1,3 +1,4 @@
+pub mod api_quality;
 pub mod architecture;
 pub mod brainstorm;
 pub mod deploy;
@@ -6,6 +7,7 @@ pub mod planning;
 pub mod review;
 pub mod ui_quality;
 
+pub use api_quality::*;
 pub use architecture::*;
 pub use brainstorm::*;
 pub use deploy::*;

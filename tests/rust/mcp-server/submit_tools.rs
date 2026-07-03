@@ -3940,9 +3940,17 @@ fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
         backend_api["engineeringQualityRequirementRefs"],
         json!(["eqr-persistence-mapping-001"])
     );
+    assert_eq!(
+        backend_api["apiContractRequirementRefs"],
+        json!(["api-contract-task-backend-api-001"])
+    );
     assert!(
         frontend.get("engineeringQualityRequirementRefs").is_none(),
         "pure frontend task must not receive persistence quality refs: {frontend:#}"
+    );
+    assert!(
+        frontend.get("apiContractRequirementRefs").is_none(),
+        "frontend API binding task must not receive API contract owner refs: {frontend:#}"
     );
 
     let execution_request_ref = accepted["next"]["requestRef"]
@@ -8434,6 +8442,33 @@ fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
     }
 }
 
+fn complete_api_contract_evidence_for_test(result: &mut Value) {
+    let verification_id = result
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("verificationId"))
+        .and_then(Value::as_str)
+        .unwrap_or("verify-account-001")
+        .to_string();
+    let Some(evidence_items) = result
+        .get_mut("apiContractEvidence")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for evidence in evidence_items {
+        evidence["status"] = json!("satisfied");
+        evidence["verificationIds"] = json!([verification_id]);
+        evidence["changedFiles"] = json!(["src/main.tsx"]);
+        evidence["successPaths"] = json!(["declared API success path verified"]);
+        evidence["errorPaths"] = json!(["declared API validation or business error path verified"]);
+        evidence["summary"] = json!(
+            "The task implementation preserves the declared API request, response, status, and error contract and links it to verification evidence."
+        );
+    }
+}
+
 fn mutate_task_result_candidate<F>(fixture: &Fixture, request_ref: &str, mutate: F)
 where
     F: FnOnce(&mut Value),
@@ -8592,6 +8627,7 @@ fn write_task_result_candidate_with_detail_evidence(
         );
     }
     complete_frontend_quality_token_evidence_for_test(&mut result);
+    complete_api_contract_evidence_for_test(&mut result);
     write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
 }
 

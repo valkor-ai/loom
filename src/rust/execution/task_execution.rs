@@ -4,9 +4,9 @@ use std::{
 };
 
 use contracts::{
-    ArchitectureArtifactContract, ArchitectureQualityRequirement, EngineeringQualityRequirement,
-    ImplementationAction, TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction,
-    TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
+    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
+    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskKind, TaskPlan,
+    TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
@@ -256,6 +256,7 @@ fn build_execution_request(
         task_scoped_engineering_quality_requirements(task_plan, &request_task);
     let architecture_quality_requirements =
         task_scoped_architecture_quality_requirements(task_plan, &request_task);
+    let api_contract_requirements = task_scoped_api_contract_requirements(task_plan, &request_task);
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -288,6 +289,9 @@ fn build_execution_request(
     if !architecture_quality_requirements.is_empty() {
         source_context["architectureQualityRequirements"] =
             json!(architecture_quality_requirements);
+    }
+    if !api_contract_requirements.is_empty() {
+        source_context["apiContractRequirements"] = json!(api_contract_requirements);
     }
     Ok(json!({
         "schemaVersion": "1.0",
@@ -417,6 +421,12 @@ pub(crate) fn task_execution_rules(
         object.insert(
             "architectureQualityExecutionRules".to_string(),
             architecture_quality_execution_rules(task),
+        );
+    }
+    if !task.api_contract_requirement_refs.is_empty() {
+        object.insert(
+            "apiContractExecutionRules".to_string(),
+            api_contract_execution_rules(task),
         );
     }
     rules
@@ -570,6 +580,10 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("For referenced architectureQualityRequirements, include architectureQualityEvidence with the exact requirementId values assigned to this task.".to_string());
         rules.push("architectureQualityEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files respected the referenced decision, NFR, or risk mitigation.".to_string());
     }
+    if !task.api_contract_requirement_refs.is_empty() {
+        rules.push("For referenced apiContractRequirements, include apiContractEvidence with the exact requirementId values assigned to this task.".to_string());
+        rules.push("apiContractEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
+    }
     json!(rules)
 }
 
@@ -606,6 +620,27 @@ fn architecture_quality_execution_rules(task: &TaskDefinition) -> Value {
             "Use task.verificationIntents as the verification id source.",
             "Record concise evidence in architectureQualityEvidence for every referenced architecture quality requirement.",
             "Verification summaries must state how the changed files respected the referenced decision, NFR, or risk mitigation."
+        ]
+    })
+}
+
+fn api_contract_execution_rules(task: &TaskDefinition) -> Value {
+    json!({
+        "appliesToRequirementRefs": task.api_contract_requirement_refs,
+        "requirementSource": "sourceContext.apiContractRequirements",
+        "interfaceSource": "sourceContext.architectureArtifactProjection.interfaces",
+        "scopeRule": "Apply only the listed API contract requirements whose appliesToTaskIds include this task; do not create new API requirements inside TaskResult.",
+        "implementationRules": [
+            "Before editing API or client binding code, compare sourceContext.apiContractRequirements with the task-owned AAC interfaces.",
+            "Keep method, path, request schema, response schema, status code categories, error schema, auth policy, and pagination policy aligned with the AAC interface.",
+            "Do not replace business errors with generic 500 responses or silent success.",
+            "Do not add versioned paths or OpenAPI files unless the AAC interface or requirement explicitly declares them."
+        ],
+        "verificationRules": [
+            "Use task.verificationIntents as the verification id source.",
+            "Record concise evidence in apiContractEvidence for every referenced API contract requirement.",
+            "For write or state-transition APIs, verification should cover one success path and one validation or business-blocking error path when feasible.",
+            "For collection APIs, verification should cover declared pagination or filtering behavior when present."
         ]
     })
 }
@@ -704,6 +739,14 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "executionRules.architectureQualityExecutionRules",
         ]);
     }
+    if !task.api_contract_requirement_refs.is_empty() {
+        core_fields.extend([
+            "task.apiContractRequirementRefs",
+            "sourceContext.apiContractRequirements",
+            "sourceContext.architectureArtifactProjection.interfaces",
+            "executionRules.apiContractExecutionRules",
+        ]);
+    }
     if has_dependency_results {
         core_fields.push("sourceContext.dependencyResults");
     }
@@ -757,6 +800,9 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
     if !task.architecture_quality_requirement_refs.is_empty() {
         result_fields.push("outputContract.schemaShape.properties.architectureQualityEvidence");
     }
+    if !task.api_contract_requirement_refs.is_empty() {
+        result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
+    }
 
     Value::Array(vec![
         json!({
@@ -808,6 +854,25 @@ fn task_scoped_architecture_quality_requirements(
         .collect::<BTreeSet<_>>();
     task_plan
         .architecture_quality_requirements
+        .iter()
+        .filter(|requirement| refs.contains(&requirement.requirement_id))
+        .cloned()
+        .collect()
+}
+
+fn task_scoped_api_contract_requirements(
+    task_plan: &TaskPlan,
+    task: &TaskDefinition,
+) -> Vec<ApiContractRequirement> {
+    if task.api_contract_requirement_refs.is_empty() {
+        return vec![];
+    }
+    let refs = task
+        .api_contract_requirement_refs
+        .iter()
+        .collect::<BTreeSet<_>>();
+    task_plan
+        .api_contract_requirements
         .iter()
         .filter(|requirement| refs.contains(&requirement.requirement_id))
         .cloned()

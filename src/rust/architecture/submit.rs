@@ -1706,12 +1706,14 @@ fn update_request_for_next_section(
         .get("frontendExperienceSource")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let api_quality_seed = root.get("apiQualitySeed").cloned().unwrap_or(Value::Null);
     root["requestReadPlan"]["groups"] = architecture_read_groups(
         next_section,
         include_repair_context,
         include_repair_source_ref,
         source_refs,
         &frontend_experience_source,
+        &api_quality_seed,
     );
     Ok(root)
 }

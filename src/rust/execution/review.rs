@@ -208,6 +208,7 @@ fn build_review_request(
         build_engineering_quality_review_matrix(task_plan, task_results);
     let architecture_quality_review_matrix =
         build_architecture_quality_review_matrix(task_plan, task_results, architecture_contract);
+    let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
         build_frontend_quality_review_matrix(task_plan, task_results);
     let review_matrix_summary = compact_review_matrix_summary(
@@ -215,6 +216,7 @@ fn build_review_request(
         &detail_review_matrix,
         &engineering_quality_review_matrix,
         &architecture_quality_review_matrix,
+        &api_contract_review_matrix,
         &frontend_quality_review_matrix,
     );
     Ok(json!({
@@ -258,6 +260,7 @@ fn build_review_request(
         "detailReviewMatrix": detail_review_matrix,
         "engineeringQualityReviewMatrix": engineering_quality_review_matrix,
         "architectureQualityReviewMatrix": architecture_quality_review_matrix,
+        "apiContractReviewMatrix": api_contract_review_matrix,
         "frontendQualityReviewMatrix": frontend_quality_review_matrix,
         "reviewMatrixSummary": review_matrix_summary,
         "enumRefs": {
@@ -275,6 +278,7 @@ fn build_review_request(
                 "frontend_experience",
                 "architecture_design_gap",
                 "architecture_quality",
+                "api_contract",
                 "task_scope_mismatch",
                 "task_verification_mapping_issue",
                 "environment_or_dependency",
@@ -292,7 +296,7 @@ fn build_review_request(
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, frontend workflow closure, or frontend UI quality.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "If outputContract.reviewSignals contains architecture_quality with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
@@ -1456,6 +1460,10 @@ fn validate_review_signals(
                 .and_then(Value::as_bool)
                 == Some(false)
     });
+    let unsatisfied_api_contract = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("api_contract")
+            && item.get("apiContractSatisfied").and_then(Value::as_bool) == Some(false)
+    });
     let missing_workflow_task_assignment = signals.as_array().into_iter().flatten().any(|item| {
         item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
             && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
@@ -1472,12 +1480,13 @@ fn validate_review_signals(
         && (unsatisfied_detail
             || unsatisfied_frontend
             || unsatisfied_frontend_quality
-            || unsatisfied_architecture_quality)
+            || unsatisfied_architecture_quality
+            || unsatisfied_api_contract)
     {
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
             "decision",
-            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, or architecture quality.",
+            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, architecture quality, or API contract.",
         ));
     }
     if missing_workflow_task_assignment || missing_architecture_quality_task_assignment {
@@ -2534,6 +2543,67 @@ fn build_architecture_quality_review_matrix(
     items
 }
 
+fn build_api_contract_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .api_contract_requirements
+        .iter()
+        .flat_map(|requirement| {
+            requirement.applies_to_task_ids.iter().map(|task_id| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == *task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .api_contract_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
+                let passed_verification_ids = result
+                    .map(|result| {
+                        result
+                            .verification_results
+                            .iter()
+                            .filter(|verification| verification.status == "passed")
+                            .map(|verification| verification.verification_id.clone())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                let evidence_verifications = evidence
+                    .map(|evidence| evidence.verification_ids.clone())
+                    .unwrap_or_default();
+                let verification_supported = !evidence_verifications.is_empty()
+                    && evidence_verifications
+                        .iter()
+                        .all(|id| passed_verification_ids.contains(id));
+                let satisfied = evidence
+                    .map(|evidence| {
+                        evidence.status == "satisfied"
+                            && evidence.known_gaps.is_empty()
+                            && verification_supported
+                    })
+                    .unwrap_or(false);
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "qualityKind": requirement.kind,
+                    "taskId": task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "interfaceRefs": requirement.interface_refs,
+                    "implementationObligations": requirement.implementation_obligations,
+                    "verificationObligations": requirement.verification_obligations,
+                    "apiContractEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "verificationSupported": verification_supported,
+                    "knownGapCount": evidence.map(|evidence| evidence.known_gaps.len()).unwrap_or(0),
+                    "contractSatisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
 fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
     result
         .verification_results
@@ -2708,6 +2778,7 @@ fn compact_review_matrix_summary(
     detail_matrix: &[Value],
     engineering_quality_matrix: &[Value],
     architecture_quality_matrix: &[Value],
+    api_contract_matrix: &[Value],
     frontend_quality_matrix: &[Value],
 ) -> Value {
     json!({
@@ -2747,6 +2818,15 @@ fn compact_review_matrix_summary(
                 "qualityKind": item.get("qualityKind").cloned().unwrap_or(Value::Null),
                 "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
                 "missingTaskAssignment": item.get("missingTaskAssignment").cloned().unwrap_or(Value::Bool(false)),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "apiContract": api_contract_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
+                "interfaceRefs": item.get("interfaceRefs").cloned().unwrap_or_else(|| json!([])),
+                "contractSatisfied": item.get("contractSatisfied").cloned().unwrap_or(Value::Null),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
@@ -2934,6 +3014,38 @@ fn build_review_signals(
                 "TaskResult contains supported architecture quality evidence for the referenced requirement."
             } else {
                 "TaskResult is missing supported architecture quality evidence for the referenced requirement."
+            }
+        }));
+    }
+    for item in build_api_contract_review_matrix(task_plan, task_results) {
+        let requirement_id = item
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or("api_contract");
+        let task_id = item.get("taskId").and_then(Value::as_str).unwrap_or("task");
+        let contract_satisfied = item
+            .get("contractSatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-api-contract-{}-{}",
+                safe_signal_id(requirement_id),
+                safe_signal_id(task_id)
+            ),
+            "kind": "api_contract",
+            "requirementId": requirement_id,
+            "qualityKind": item.get("qualityKind").cloned().unwrap_or(Value::Null),
+            "taskRefs": [task_id],
+            "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "interfaceRefs": item.get("interfaceRefs").cloned().unwrap_or_else(|| json!([])),
+            "apiContractSatisfied": contract_satisfied,
+            "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
+            "recommendedNextAction": if contract_satisfied { "none" } else { "execution_repair" },
+            "reason": if contract_satisfied {
+                "TaskResult contains supported API contract evidence for the referenced requirement."
+            } else {
+                "TaskResult is missing supported API contract evidence for the referenced requirement."
             }
         }));
     }
@@ -3209,7 +3321,8 @@ fn compact_task_summaries(tasks: &[TaskDefinition]) -> Vec<Value> {
                 "frontendExperienceRequired": task.frontend_experience_requirement.is_some(),
                 "runtimeDeliveryRequired": task.runtime_delivery_requirement.is_some(),
                 "engineeringQualityRequirementRefs": task.engineering_quality_requirement_refs,
-                "architectureQualityRequirementRefs": task.architecture_quality_requirement_refs
+                "architectureQualityRequirementRefs": task.architecture_quality_requirement_refs,
+                "apiContractRequirementRefs": task.api_contract_requirement_refs
             })
         })
         .collect()
@@ -3250,6 +3363,14 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                     json!({
                         "requirementId": evidence.requirement_id,
                         "status": evidence.status,
+                        "verificationIds": evidence.verification_ids
+                    })
+                }).collect::<Vec<_>>(),
+                "apiContractEvidence": result.api_contract_evidence.iter().map(|evidence| {
+                    json!({
+                        "requirementId": evidence.requirement_id,
+                        "status": evidence.status,
+                        "interfaceRefs": evidence.interface_refs,
                         "verificationIds": evidence.verification_ids
                     })
                 }).collect::<Vec<_>>(),

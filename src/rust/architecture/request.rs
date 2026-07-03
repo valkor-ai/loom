@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use contracts::{
-    build_ui_quality_seed, ui_quality_contract_shape, ui_quality_contract_template,
-    ui_quality_enum_refs, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
+    ui_quality_contract_shape, ui_quality_contract_template, ui_quality_enum_refs,
+    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
     PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
@@ -126,6 +127,7 @@ fn materialize_request_inner(
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
     let frontend_experience_source = build_frontend_experience_source(phase);
+    let api_quality_seed = build_api_quality_seed(&planning_contract, &technical_baseline);
     let section_outputs = build_section_outputs(
         root,
         &request_id,
@@ -135,6 +137,7 @@ fn materialize_request_inner(
         &frontend_experience_source,
         &planning_contract,
         &technical_baseline,
+        &api_quality_seed,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
@@ -155,6 +158,7 @@ fn materialize_request_inner(
         &frontend_experience_source,
         &current_output,
         &section_outputs,
+        &api_quality_seed,
     )?;
     let request_file = to_project_relative(
         root,
@@ -209,6 +213,7 @@ fn build_request_root(
     frontend_experience_source: &Value,
     current_output: &SectionOutput,
     section_outputs: &[SectionOutput],
+    api_quality_seed: &Value,
 ) -> Result<Value, state::store::StateError> {
     let candidate_schema =
         serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
@@ -229,7 +234,7 @@ fn build_request_root(
         Some(technical_baseline),
     );
     let architecture_quality_seed = build_architecture_quality_seed();
-    Ok(json!({
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
         "requestId": request_id,
@@ -309,10 +314,16 @@ fn build_request_root(
                 false,
                 false,
                 &source_refs,
-                frontend_experience_source
+                frontend_experience_source,
+                api_quality_seed
             )
         }
-    }))
+    });
+    if !api_quality_seed.is_null() {
+        root["apiQualitySeed"] = api_quality_seed.clone();
+        root["enumRefs"]["apiQuality"] = api_quality_enum_refs();
+    }
+    Ok(root)
 }
 
 pub(crate) fn architecture_read_groups(
@@ -321,6 +332,7 @@ pub(crate) fn architecture_read_groups(
     include_repair_source_ref: bool,
     source_refs: &Value,
     frontend_experience_source: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
@@ -377,6 +389,17 @@ pub(crate) fn architecture_read_groups(
         "architectureQualitySeed.techReferenceProfile.loadMode",
         "architectureQualitySeed.techReferenceProfile.groups.arch",
     ]);
+    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+        core_fields.extend([
+            "apiQualitySeed.required",
+            "apiQualitySeed.qualityLevel",
+            "apiQualitySeed.selectionReason",
+            "apiQualitySeed.techReferenceProfile.loadMode",
+            "apiQualitySeed.techReferenceProfile.groups.api",
+            "apiQualitySeed.interfaceContract",
+            "apiQualitySeed.generationRules",
+        ]);
+    }
     if matches!(
         section,
         ArchitectureSectionGroup::Foundation
@@ -395,6 +418,26 @@ pub(crate) fn architecture_read_groups(
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
         ]);
+    }
+    let mut contract_fields = vec![
+        "sectionState.currentSection",
+        "currentSectionContract.section",
+        "currentSectionContract.candidateFile",
+        "currentSectionContract.schemaRef",
+        "currentSectionContract.resultTemplate",
+        "currentSectionContract.enumRefs",
+        "currentSectionContract.generationRules",
+        "outputContract.writeTargets",
+        "outputContract.submitTool",
+        "outputContract.schemaProjection",
+        "enumRefs.section",
+        "enumRefs.status",
+        "enumRefs.coverageStatus",
+        "enumRefs.acceptancePriority",
+        "enumRefs.architectureQuality",
+    ];
+    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+        contract_fields.push("enumRefs.apiQuality");
     }
     let mut groups = vec![
         json!({
@@ -425,23 +468,7 @@ pub(crate) fn architecture_read_groups(
             } else {
                 "Read immediately before writing the current Architecture section candidate."
             },
-            "selectors": read_selectors_value_from_paths([
-                "sectionState.currentSection",
-                "currentSectionContract.section",
-                "currentSectionContract.candidateFile",
-                "currentSectionContract.schemaRef",
-                "currentSectionContract.resultTemplate",
-                "currentSectionContract.enumRefs",
-                "currentSectionContract.generationRules",
-                "outputContract.writeTargets",
-                "outputContract.submitTool",
-                "outputContract.schemaProjection",
-                "enumRefs.section",
-                "enumRefs.status",
-                "enumRefs.coverageStatus",
-                "enumRefs.acceptancePriority",
-                "enumRefs.architectureQuality"
-            ])
+            "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
@@ -745,6 +772,7 @@ fn build_section_outputs(
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
     technical_baseline: &TechnicalBaselineContract,
+    api_quality_seed: &Value,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
     let ui_quality_seed = build_ui_quality_seed(
         planning_contract
@@ -764,7 +792,11 @@ fn build_section_outputs(
                     &architecture_candidate_file(project_root, request_id, section),
                 )?,
                 schema_ref: format!("architecture-section-{}-v1", section_name(section)),
-                schema_shape: section_schema_shape(section, has_previous_runtime_delivery),
+                schema_shape: section_schema_shape(
+                    section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
                 result_template: section_result_template(
                     request_id,
                     delivery_id,
@@ -774,9 +806,18 @@ fn build_section_outputs(
                     frontend_experience_source,
                     planning_contract,
                     &ui_quality_seed,
+                    api_quality_seed,
                 ),
-                enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
-                generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
+                enum_refs: section_enum_refs(
+                    section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
+                generation_rules: section_generation_rules(
+                    section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
             })
         })
         .collect()
@@ -819,6 +860,7 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
 fn section_schema_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -827,7 +869,7 @@ fn section_schema_shape(
         "phaseId": "string",
         "section": section,
         "status": "ready | blocked",
-        "content": section_content_shape(section, has_previous_runtime_delivery),
+        "content": section_content_shape(section, has_previous_runtime_delivery, api_quality_seed),
         "blockedReasons": [{
             "code": "string",
             "message": "string",
@@ -840,6 +882,7 @@ fn section_schema_shape(
 fn section_content_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -860,7 +903,7 @@ fn section_content_shape(
                 "relationships": ["object"],
                 "constraints": ["object"]
             },
-            "interfaces": ["object"]
+            "interfaces": domain_contract_interfaces_shape(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": ["object"],
@@ -1048,6 +1091,38 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
     })
 }
 
+fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return json!(["object"]);
+    }
+    json!([{
+        "interfaceId": "string",
+        "name": "string",
+        "type": "http_api | service_method | external_adapter | event | job | cli_command",
+        "resource": "string when type=http_api",
+        "operationKind": "create | read_list | read_detail | replace | update | delete | state_transition | domain_action | search | export",
+        "method": "GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS when type=http_api",
+        "path": "string when type=http_api",
+        "requestSchema": ["object"],
+        "responseSchema": ["object"],
+        "statusCodes": {
+            "success": ["number"],
+            "validation": ["number"],
+            "businessConflict": ["number"],
+            "notFound": ["number"],
+            "auth": ["number"],
+            "serverError": ["number"]
+        },
+        "errorSchema": ["object"],
+        "paginationPolicy": "optional object for unbounded collection endpoints",
+        "authPolicy": "optional object for protected operations",
+        "contractFileRefs": ["string"],
+        "scopeRefs": ["string"],
+        "acceptanceRefs": ["string"],
+        "requirementDetailRefs": ["string"]
+    }])
+}
+
 fn section_result_template(
     request_id: &str,
     delivery_id: &str,
@@ -1057,6 +1132,7 @@ fn section_result_template(
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -1070,7 +1146,8 @@ fn section_result_template(
             has_previous_runtime_delivery,
             frontend_experience_source,
             planning_contract,
-            ui_quality_seed
+            ui_quality_seed,
+            api_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -1083,6 +1160,7 @@ fn section_content_template(
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -1127,14 +1205,7 @@ fn section_content_template(
                 "relationships": [],
                 "constraints": []
             },
-            "interfaces": [{
-                "interfaceId": "interface_1",
-                "name": "",
-                "kind": "",
-                "operations": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
+            "interfaces": domain_contract_interfaces_template(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": [{
@@ -1421,9 +1492,64 @@ fn runtime_delivery_authority(has_previous_runtime_delivery: bool) -> &'static s
     }
 }
 
+fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return json!([]);
+    }
+    json!([{
+        "interfaceId": "api_current_001",
+        "name": "Current phase API or service interface",
+        "type": "http_api",
+        "resource": "",
+        "operationKind": "create",
+        "method": "POST",
+        "path": "/api/current-resources",
+        "requestSchema": [{
+            "field": "replace_with_request_field",
+            "required": true,
+            "kind": "string",
+            "validation": "business validation rule"
+        }],
+        "responseSchema": [{
+            "field": "id",
+            "required": true,
+            "kind": "identifier",
+            "meaning": "Created or affected resource id"
+        }],
+        "statusCodes": {
+            "success": [201],
+            "validation": [400, 422],
+            "businessConflict": [409],
+            "notFound": [404],
+            "auth": [],
+            "serverError": [500]
+        },
+        "errorSchema": [{
+            "field": "message",
+            "required": true,
+            "kind": "user_actionable_message"
+        }],
+        "paginationPolicy": {
+            "strategy": "not_applicable",
+            "requestFields": [],
+            "responseFields": []
+        },
+        "authPolicy": {
+            "required": "not_applicable",
+            "actorRefs": [],
+            "permissionRefs": []
+        },
+        "contractFileRefs": [],
+        "scopeRefs": [],
+        "acceptanceRefs": [],
+        "requirementDetailRefs": []
+    }])
+}
+
 fn section_enum_refs(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Coverage => json!({
@@ -1435,6 +1561,9 @@ fn section_enum_refs(
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
         }),
+        ArchitectureSectionGroup::DomainContract if !api_quality_seed.is_null() => {
+            json!({ "apiQuality": api_quality_enum_refs() })
+        }
         ArchitectureSectionGroup::FrontendExperience => json!({
             "uiQuality": ui_quality_enum_refs()
         }),
@@ -1445,6 +1574,7 @@ fn section_enum_refs(
 fn section_generation_rules(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Vec<String> {
     match section {
         ArchitectureSectionGroup::Foundation => vec![
@@ -1457,16 +1587,26 @@ fn section_generation_rules(
             "Use allowedRefs.scopeRefs and allowedRefs.acceptanceRefs exactly; do not invent ids."
                 .to_string(),
         ],
-        ArchitectureSectionGroup::DomainContract => vec![
-            "Represent current-phase business objects, key fields, relationships, constraints, and interfaces."
-                .to_string(),
-            "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
-                .to_string(),
-            "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
-            "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
-            "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
-                .to_string(),
-        ],
+        ArchitectureSectionGroup::DomainContract => {
+            let mut rules = vec![
+                "Represent current-phase business objects, key fields, relationships, constraints, and interfaces."
+                    .to_string(),
+                "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
+                    .to_string(),
+                "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
+                "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
+                "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
+                    .to_string(),
+            ];
+            if !api_quality_seed.is_null() {
+                rules.extend([
+                    "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and selected techReferenceProfile.groups.api references.".to_string(),
+                    "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution fields only when selected or applicable.".to_string(),
+                    "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
+                ]);
+            }
+            rules
+        }
         ArchitectureSectionGroup::Behavior => vec![
             "Represent current-phase user flows, state machines, blockers, and success outcomes."
                 .to_string(),

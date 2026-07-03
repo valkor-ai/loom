@@ -29,8 +29,9 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        architecture_quality_evidence_applies, frontend_quality_self_check_applies,
-        frontend_self_check_applies, runtime_delivery_evidence_applies, task_result_template,
+        api_contract_evidence_applies, architecture_quality_evidence_applies,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, task_result_template,
         FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
@@ -148,6 +149,8 @@ where
     for optional_field in [
         "task.conceptRefs",
         "task.architectureQualityRequirementRefs",
+        "task.apiContractRequirementRefs",
+        "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
     ] {
@@ -186,6 +189,12 @@ where
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
     let frontend_experience_requirement = frontend_experience_requirement_from_fields(&fields);
+    let artifact_refs = value_field(&fields, "task.writeBoundary.artifactRefs");
+    let artifact_refs = if artifact_refs.is_object() {
+        artifact_refs
+    } else {
+        json!({})
+    };
     let task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
@@ -199,7 +208,7 @@ where
         "requirementDetailRefs": array_field(&fields, "task.requirementDetailRefs"),
         "writeBoundary": {
             "forbiddenPaths": [],
-            "artifactRefs": {}
+            "artifactRefs": artifact_refs
         },
         "verificationIntents": array_field(&fields, "task.verificationIntents"),
         "conceptRefs": array_field(&fields, "task.conceptRefs"),
@@ -207,7 +216,8 @@ where
         "conceptVerificationIntents": [],
         "frontendExperienceRequirement": frontend_experience_requirement,
         "runtimeDeliveryRequirement": runtime_delivery_requirement_from_fields(&fields),
-        "architectureQualityRequirementRefs": array_field(&fields, "task.architectureQualityRequirementRefs")
+        "architectureQualityRequirementRefs": array_field(&fields, "task.architectureQualityRequirementRefs"),
+        "apiContractRequirementRefs": array_field(&fields, "task.apiContractRequirementRefs")
     }))
     .map_err(state::store::StateError::Json)?;
     let required_top_level_fields =
@@ -503,6 +513,7 @@ fn validate_result(
     validate_frontend_experience_self_check(result, task, &mut issues);
     validate_frontend_quality_self_check(result, task, &mut issues);
     validate_architecture_quality_evidence(result, task, &mut issues);
+    validate_api_contract_evidence(result, task, &mut issues);
     validate_blocked_reasons(result, blocked_output, &mut issues);
     if result
         .execution_continuity
@@ -548,6 +559,7 @@ fn task_result_required_field_applies_to_status(field: &str, status: &TaskResult
             | "runtimeDeliveryEvidence"
             | "conceptEvidence"
             | "architectureQualityEvidence"
+            | "apiContractEvidence"
             | "requirementDetailEvidence"
     )
 }
@@ -1239,6 +1251,123 @@ fn validate_architecture_quality_evidence(
                 "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
                 "architectureQualityEvidence[].status",
                 "Completed TaskResult architectureQualityEvidence must be satisfied.",
+            ));
+        }
+    }
+}
+
+fn validate_api_contract_evidence(
+    result: &TaskResult,
+    task: &TaskDefinition,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if matches!(
+        result.status,
+        TaskResultStatus::Failed | TaskResultStatus::Blocked
+    ) {
+        return;
+    }
+    if !api_contract_evidence_applies(task) {
+        if !result.api_contract_evidence.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence",
+                "TaskResult must not include apiContractEvidence when the task has no apiContractRequirementRefs.",
+            ));
+        }
+        return;
+    }
+    let requirement_refs = task
+        .api_contract_requirement_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let task_interface_refs = task
+        .write_boundary
+        .artifact_refs
+        .interfaces
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let verification_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for evidence in &result.api_contract_evidence {
+        if !requirement_refs.contains(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].requirementId",
+                "apiContractEvidence.requirementId must reference task.apiContractRequirementRefs.",
+            ));
+        }
+        if evidence.verification_ids.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].verificationIds",
+                "apiContractEvidence must link to verification results.",
+            ));
+        }
+        for verification_id in &evidence.verification_ids {
+            if !verification_ids.contains(verification_id.as_str()) {
+                issues.push(issue(
+                    "TASK_RESULT_API_CONTRACT_INVALID",
+                    "apiContractEvidence[].verificationIds",
+                    "apiContractEvidence verificationIds must reference task verification intents.",
+                ));
+            }
+        }
+        for interface_ref in &evidence.interface_refs {
+            if !task_interface_refs.is_empty()
+                && !task_interface_refs.contains(interface_ref.as_str())
+            {
+                issues.push(issue(
+                    "TASK_RESULT_API_CONTRACT_INVALID",
+                    "apiContractEvidence[].interfaceRefs",
+                    "apiContractEvidence interfaceRefs must reference task writeBoundary interface refs.",
+                ));
+            }
+        }
+        if evidence.summary.trim().is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].summary",
+                "apiContractEvidence summary must explain how the task implemented or preserved the referenced API contract.",
+            ));
+        }
+    }
+    if !matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) {
+        return;
+    }
+    for requirement_id in &task.api_contract_requirement_refs {
+        let Some(evidence) = result
+            .api_contract_evidence
+            .iter()
+            .find(|evidence| &evidence.requirement_id == requirement_id)
+        else {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence",
+                "Completed TaskResult must include apiContractEvidence for every assigned API contract requirement.",
+            ));
+            continue;
+        };
+        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].status",
+                "Completed TaskResult apiContractEvidence must be satisfied.",
+            ));
+        }
+        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].knownGaps",
+                "Completed TaskResult apiContractEvidence cannot contain known gaps.",
             ));
         }
     }
@@ -2015,6 +2144,9 @@ fn materialize_task_result_repair(
     if architecture_quality_evidence_applies(&context.task) {
         context_fields.push("task.architectureQualityRequirementRefs");
     }
+    if api_contract_evidence_applies(&context.task) {
+        context_fields.push("task.apiContractRequirementRefs");
+    }
     if frontend_self_check_applies(&context.task) {
         context_fields
             .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
@@ -2063,6 +2195,9 @@ fn materialize_task_result_repair(
     if architecture_quality_evidence_applies(&context.task) {
         write_contract_fields
             .push("outputContract.schemaShape.properties.architectureQualityEvidence");
+    }
+    if api_contract_evidence_applies(&context.task) {
+        write_contract_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
     }
     let root_value = json!({
         "schemaVersion": "1.0",
@@ -2211,6 +2346,9 @@ fn task_result_issue_conflicts(
             if issue.code == "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID" {
                 return task_result_architecture_quality_conflict(context, base);
             }
+            if issue.code == "TASK_RESULT_API_CONTRACT_INVALID" {
+                return task_result_api_contract_conflict(context, base);
+            }
             base
         })
         .collect()
@@ -2355,6 +2493,22 @@ fn task_result_architecture_quality_conflict(
     base
 }
 
+fn task_result_api_contract_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    base["expectedApiContractRequirementRefs"] = json!(context.task.api_contract_requirement_refs);
+    base["current"] = json!({
+        "apiContractEvidence": context
+            .submitted_result
+            .get("apiContractEvidence")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    base["validRepairChoices"] = json!([
+        "If the implementation satisfies the referenced API contract requirements, add apiContractEvidence entries for every task.apiContractRequirementRefs item and cite task verificationIds.",
+        "If API behavior or evidence is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
+    ]);
+    base
+}
+
 fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Vec<&'static str> {
     let mut rules = vec![
         "Repair the same TaskResult JSON file only.",
@@ -2389,6 +2543,15 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
     {
         rules.push("architectureQualityEvidence must cover every task.architectureQualityRequirementRefs item when the task is completed or completed_with_notes.");
         rules.push("architectureQualityEvidence.verificationIds must use exact task.verificationIntents ids.");
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_API_CONTRACT_INVALID")
+    {
+        rules.push("apiContractEvidence must cover every task.apiContractRequirementRefs item when the task is completed or completed_with_notes.");
+        rules.push(
+            "apiContractEvidence.verificationIds must use exact task.verificationIntents ids.",
+        );
     }
     rules
 }

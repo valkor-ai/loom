@@ -113,7 +113,8 @@ pub(crate) fn taskplan_group_result_template(
                 "evidenceType": "static_check",
                 "intent": "How verification will prove this task preserved or implemented that concept."
             }],
-            "architectureQualityRequirementRefs": []
+            "architectureQualityRequirementRefs": [],
+            "apiContractRequirementRefs": []
         }],
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -239,6 +240,12 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             architecture_quality_evidence_template(task),
         );
     }
+    if api_contract_evidence_applies(task) {
+        object.insert(
+            "apiContractEvidence".to_string(),
+            api_contract_evidence_template(task),
+        );
+    }
     template
 }
 
@@ -297,11 +304,18 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
     if architecture_quality_evidence_applies(task) {
         fields.push("architectureQualityEvidence");
     }
+    if api_contract_evidence_applies(task) {
+        fields.push("apiContractEvidence");
+    }
     fields
 }
 
 pub(crate) fn architecture_quality_evidence_applies(task: &TaskDefinition) -> bool {
     !task.architecture_quality_requirement_refs.is_empty()
+}
+
+pub(crate) fn api_contract_evidence_applies(task: &TaskDefinition) -> bool {
+    !task.api_contract_requirement_refs.is_empty()
 }
 
 pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
@@ -363,6 +377,29 @@ fn architecture_quality_evidence_template(task: &TaskDefinition) -> Value {
                     "status": "satisfied",
                     "verificationIds": template_verification_ids_for_architecture_quality(task),
                     "changedFiles": [],
+                    "summary": ""
+                })
+            })
+            .collect(),
+    )
+}
+
+fn api_contract_evidence_template(task: &TaskDefinition) -> Value {
+    Value::Array(
+        task.api_contract_requirement_refs
+            .iter()
+            .map(|requirement_id| {
+                json!({
+                    "requirementId": requirement_id,
+                    "status": "satisfied",
+                    "interfaceRefs": task.write_boundary.artifact_refs.interfaces.clone(),
+                    "verificationIds": template_verification_ids_for_architecture_quality(task),
+                    "changedFiles": [],
+                    "successPaths": [],
+                    "errorPaths": [],
+                    "paginationPaths": [],
+                    "contractFileRefs": [],
+                    "knownGaps": [],
                     "summary": ""
                 })
             })

@@ -191,6 +191,21 @@ pub struct ArchitectureQualityRequirement {
     pub verification_obligations: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiContractRequirement {
+    pub requirement_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applies_to_task_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interface_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementation_obligations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_obligations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDefinition {
@@ -226,6 +241,8 @@ pub struct TaskDefinition {
     pub engineering_quality_requirement_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub architecture_quality_requirement_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_contract_requirement_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -344,6 +361,8 @@ pub struct TaskPlan {
     pub engineering_quality_requirements: Vec<EngineeringQualityRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub architecture_quality_requirements: Vec<ArchitectureQualityRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_contract_requirements: Vec<ApiContractRequirement>,
     pub handoff: TaskPlanHandoff,
     pub created_at: String,
     pub updated_at: String,
@@ -542,6 +561,30 @@ pub struct ArchitectureQualityEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct ApiContractEvidence {
+    pub requirement_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interface_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub success_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub error_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pagination_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contract_file_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_gaps: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendQualityStateCoverage {
     pub state: String,
     pub status: String,
@@ -667,6 +710,8 @@ pub struct TaskResult {
     pub concept_evidence: Vec<ConceptEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub architecture_quality_evidence: Vec<ArchitectureQualityEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_contract_evidence: Vec<ApiContractEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<BlockedReason>,
     pub created_at: String,
