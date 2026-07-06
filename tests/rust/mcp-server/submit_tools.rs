@@ -1393,8 +1393,13 @@ fn architecture_read_groups_follow_current_section() {
     );
     assert_eq!(
         ui_quality_contract["referenceProfile"]["loadMode"],
-        json!("skill_reference_by_group")
+        json!("mcp_reference_load_plan")
     );
+    assert!(ui_quality_contract["referenceProfile"]["referenceLoadPlan"]
+        .as_array()
+        .expect("ui quality reference load plan")
+        .iter()
+        .any(|item| item["path"] == json!("uix/tokens/layout-grid.md")));
     assert!(ui_quality_contract["referenceProfile"]["groups"]["tokens"]
         .as_array()
         .expect("ui quality token reference items")
@@ -2609,6 +2614,10 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
     ));
     assert!(core_fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
+            .to_string()
+    ));
+    assert!(core_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
             .to_string()
     ));
@@ -2641,6 +2650,8 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
+                .to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
                 .to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
                 .to_string(),
@@ -2726,6 +2737,14 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             .expect("ui quality token reference items")
             .contains(&json!("spacing"))
     );
+    assert!(
+        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"]
+            .value
+            .as_array()
+            .expect("ui reference load plan")
+            .iter()
+            .any(|item| item["path"] == json!("uix/tokens/spacing.md"))
+    );
     assert_eq!(
         fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
             .value,
@@ -2745,6 +2764,13 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             .as_array()
             .expect("reference group items checked")
             .contains(&json!("spacing"))
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
+            ["referenceFilesChecked"]
+            .as_array()
+            .expect("reference files checked")
+            .contains(&json!("uix/tokens/spacing.md"))
     );
     assert!(
         fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["statesCovered"]
@@ -2910,6 +2936,9 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
     assert!(repair_read_fields
         .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"));
     assert!(repair_read_fields.contains(
+        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
+    ));
+    assert!(repair_read_fields.contains(
         "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
     ));
     assert!(!repair_read_fields
@@ -2925,6 +2954,8 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
             "repairContract.issueConflicts".to_string(),
             "repairContract.minimalRepairRules".to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
+                .to_string(),
+            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
                 .to_string(),
             "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
                 .to_string(),
@@ -2951,6 +2982,13 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         .as_array()
         .expect("reference group items")
         .contains(&json!("spacing")));
+    assert!(repair_fields
+        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"]
+        .value
+        .as_array()
+        .expect("reference load plan")
+        .iter()
+        .any(|item| item["path"] == json!("uix/tokens/spacing.md")));
     assert_eq!(
         repair_fields
             ["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]

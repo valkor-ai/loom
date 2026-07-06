@@ -1,6 +1,6 @@
 # API Pagination And Collection Reads
 
-Load this file only when `techReferenceProfile.groups.api` includes `pagination`.
+Load this file only when the current MCP request lists `tech/api/pagination.md` in `referenceLoadPlan`.
 
 ## When Pagination Is Required
 

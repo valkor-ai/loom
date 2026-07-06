@@ -209,6 +209,7 @@ fn build_review_request(
     let architecture_quality_review_matrix =
         build_architecture_quality_review_matrix(task_plan, task_results, architecture_contract);
     let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
+    let code_quality_review_matrix = build_code_quality_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
         build_frontend_quality_review_matrix(task_plan, task_results);
     let review_matrix_summary = compact_review_matrix_summary(
@@ -217,6 +218,7 @@ fn build_review_request(
         &engineering_quality_review_matrix,
         &architecture_quality_review_matrix,
         &api_contract_review_matrix,
+        &code_quality_review_matrix,
         &frontend_quality_review_matrix,
     );
     Ok(json!({
@@ -261,6 +263,7 @@ fn build_review_request(
         "engineeringQualityReviewMatrix": engineering_quality_review_matrix,
         "architectureQualityReviewMatrix": architecture_quality_review_matrix,
         "apiContractReviewMatrix": api_contract_review_matrix,
+        "codeQualityReviewMatrix": code_quality_review_matrix,
         "frontendQualityReviewMatrix": frontend_quality_review_matrix,
         "reviewMatrixSummary": review_matrix_summary,
         "enumRefs": {
@@ -279,6 +282,7 @@ fn build_review_request(
                 "architecture_design_gap",
                 "architecture_quality",
                 "api_contract",
+                "code_quality",
                 "task_scope_mismatch",
                 "task_verification_mapping_issue",
                 "environment_or_dependency",
@@ -296,7 +300,7 @@ fn build_review_request(
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, frontend workflow closure, or frontend UI quality.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "If outputContract.reviewSignals contains architecture_quality with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
@@ -402,13 +406,15 @@ fn build_review_request(
                 {
                     "groupId": "review_matrices",
                     "required": true,
-                    "purpose": "Read compact concept, requirement detail, engineering quality, architecture quality, frontend quality, and runtime review signals.",
+                    "purpose": "Read compact concept, requirement detail, engineering quality, architecture quality, API contract, code quality, frontend quality, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
                     "selectors": read_selectors_value_from_paths([
                         "reviewMatrixSummary.concept",
                         "reviewMatrixSummary.detail",
                         "reviewMatrixSummary.engineeringQuality",
                         "reviewMatrixSummary.architectureQuality",
+                        "reviewMatrixSummary.apiContract",
+                        "reviewMatrixSummary.codeQuality",
                         "reviewMatrixSummary.frontendQuality",
                         "outputContract.reviewSignals.items"
                     ])
@@ -2425,6 +2431,81 @@ fn build_engineering_quality_review_matrix(
         .collect()
 }
 
+fn build_code_quality_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .code_quality_requirements
+        .iter()
+        .flat_map(|requirement| {
+            requirement.applies_to_task_ids.iter().map(|task_id| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == *task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .code_quality_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
+                let satisfied = result
+                    .map(|result| {
+                        matches!(
+                            result.status,
+                            contracts::TaskResultStatus::Completed
+                                | contracts::TaskResultStatus::CompletedWithNotes
+                        ) && evidence
+                            .map(|evidence| {
+                                let expected_paths = requirement
+                                    .reference_load_plan
+                                    .iter()
+                                    .map(|item| item.path.as_str())
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                let checked_paths = evidence
+                                    .reference_files_checked
+                                    .iter()
+                                    .map(String::as_str)
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                let files_satisfied = expected_paths.is_empty()
+                                    || (expected_paths.is_subset(&checked_paths)
+                                        && checked_paths.is_subset(&expected_paths));
+                                evidence.status == "satisfied"
+                                    && !evidence.reference_groups_checked.is_empty()
+                                    && files_satisfied
+                                    && !evidence.verification_ids.is_empty()
+                            })
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "kind": requirement.kind,
+                    "taskId": task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "referenceGroups": requirement.reference_groups,
+                    "referenceLoadPlan": requirement.reference_load_plan,
+                    "focusTags": requirement.focus_tags,
+                    "implementationObligations": requirement.implementation_obligations,
+                    "verificationObligations": requirement.verification_obligations,
+                    "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "referenceGroupsChecked": evidence
+                        .map(|evidence| json!(evidence.reference_groups_checked.clone()))
+                        .unwrap_or_else(|| json!({})),
+                    "referenceFilesChecked": evidence
+                        .map(|evidence| json!(evidence.reference_files_checked.clone()))
+                        .unwrap_or_else(|| json!([])),
+                    "knownGapCount": evidence
+                        .map(|evidence| evidence.known_gaps.len())
+                        .unwrap_or(0),
+                    "qualitySatisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
 fn build_architecture_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
@@ -2661,6 +2742,12 @@ fn build_frontend_quality_review_matrix(
                 "groups",
             );
             let checked_refs = reference_groups(&self_check, "referenceGroupsChecked");
+            let expected_reference_files = reference_load_plan_paths(
+                ui_quality_contract
+                    .get("referenceProfile")
+                    .unwrap_or(&Value::Null),
+            );
+            let checked_reference_files = string_array_field(&self_check, "referenceFilesChecked");
             let expected_states =
                 object_array_string_field(ui_quality_contract, "requiredUiStates", "state");
             let covered_states = object_array_string_field(&self_check, "statesCovered", "state");
@@ -2669,6 +2756,8 @@ fn build_frontend_quality_review_matrix(
             let checked_rules =
                 object_array_string_field(&self_check, "businessUiRulesChecked", "ruleId");
             let missing_reference_groups = missing_reference_groups(&expected_refs, &checked_refs);
+            let missing_reference_files =
+                missing_strings(&expected_reference_files, &checked_reference_files);
             let missing_ui_states = missing_strings(&expected_states, &covered_states);
             let missing_business_ui_rule_ids = missing_strings(&expected_rules, &checked_rules);
             let forbidden_violation_count = self_check
@@ -2737,6 +2826,7 @@ fn build_frontend_quality_review_matrix(
                 && scenario_matches
                 && quality_level_matches
                 && missing_reference_groups.is_empty()
+                && missing_reference_files.is_empty()
                 && missing_ui_states.is_empty()
                 && missing_business_ui_rule_ids.is_empty()
                 && token_asset_satisfied
@@ -2752,6 +2842,9 @@ fn build_frontend_quality_review_matrix(
                 "actualStatus": self_check.get("status").and_then(Value::as_str),
                 "qualitySatisfied": quality_satisfied,
                 "missingReferenceGroups": missing_reference_groups,
+                "referenceFiles": expected_reference_files,
+                "referenceFilesChecked": checked_reference_files,
+                "missingReferenceFiles": missing_reference_files,
                 "missingUiStates": missing_ui_states,
                 "missingBusinessUiRuleIds": missing_business_ui_rule_ids,
                 "designTokenAsset": {
@@ -2779,6 +2872,7 @@ fn compact_review_matrix_summary(
     engineering_quality_matrix: &[Value],
     architecture_quality_matrix: &[Value],
     api_contract_matrix: &[Value],
+    code_quality_matrix: &[Value],
     frontend_quality_matrix: &[Value],
 ) -> Value {
     json!({
@@ -2827,6 +2921,15 @@ fn compact_review_matrix_summary(
                 "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
                 "interfaceRefs": item.get("interfaceRefs").cloned().unwrap_or_else(|| json!([])),
                 "contractSatisfied": item.get("contractSatisfied").cloned().unwrap_or(Value::Null),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "codeQuality": code_quality_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
+                "referenceGroups": item.get("referenceGroups").cloned().unwrap_or_else(|| json!({})),
+                "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
@@ -3049,6 +3152,41 @@ fn build_review_signals(
             }
         }));
     }
+    for item in build_code_quality_review_matrix(task_plan, task_results) {
+        let requirement_id = item
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or("code_quality");
+        let task_id = item.get("taskId").and_then(Value::as_str).unwrap_or("task");
+        let quality_satisfied = item
+            .get("qualitySatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-code-quality-{}-{}",
+                safe_signal_id(requirement_id),
+                safe_signal_id(task_id)
+            ),
+            "kind": "code_quality",
+            "requirementId": requirement_id,
+            "qualityKind": item.get("kind").cloned().unwrap_or(Value::Null),
+            "taskRefs": [task_id],
+            "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "referenceGroups": item.get("referenceGroups").cloned().unwrap_or_else(|| json!({})),
+            "referenceLoadPlan": item.get("referenceLoadPlan").cloned().unwrap_or_else(|| json!([])),
+            "referenceGroupsChecked": item.get("referenceGroupsChecked").cloned().unwrap_or_else(|| json!({})),
+            "referenceFilesChecked": item.get("referenceFilesChecked").cloned().unwrap_or_else(|| json!([])),
+            "codeQualitySatisfied": quality_satisfied,
+            "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
+            "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
+            "reason": if quality_satisfied {
+                "TaskResult contains supported code quality evidence for selected language references."
+            } else {
+                "TaskResult is missing supported code quality evidence for selected language references."
+            }
+        }));
+    }
     if let Some(architecture_contract) = architecture_contract {
         for requirement in crate::task_plan::workflow_closure_requirements(architecture_contract) {
             if task_plan
@@ -3218,6 +3356,26 @@ fn object_array_string_field(value: &Value, array_key: &str, field_key: &str) ->
         .collect()
 }
 
+fn string_array_field(value: &Value, array_key: &str) -> Vec<String> {
+    value
+        .get(array_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+fn reference_load_plan_paths(value: &Value) -> Vec<String> {
+    value
+        .get("referenceLoadPlan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
 fn missing_strings(expected: &[String], actual: &[String]) -> Vec<String> {
     let actual = actual.iter().collect::<BTreeSet<_>>();
     expected
@@ -3322,7 +3480,8 @@ fn compact_task_summaries(tasks: &[TaskDefinition]) -> Vec<Value> {
                 "runtimeDeliveryRequired": task.runtime_delivery_requirement.is_some(),
                 "engineeringQualityRequirementRefs": task.engineering_quality_requirement_refs,
                 "architectureQualityRequirementRefs": task.architecture_quality_requirement_refs,
-                "apiContractRequirementRefs": task.api_contract_requirement_refs
+                "apiContractRequirementRefs": task.api_contract_requirement_refs,
+                "codeQualityRequirementRefs": task.code_quality_requirement_refs
             })
         })
         .collect()
@@ -3371,6 +3530,15 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                         "requirementId": evidence.requirement_id,
                         "status": evidence.status,
                         "interfaceRefs": evidence.interface_refs,
+                        "verificationIds": evidence.verification_ids
+                    })
+                }).collect::<Vec<_>>(),
+                "codeQualityEvidence": result.code_quality_evidence.iter().map(|evidence| {
+                    json!({
+                        "requirementId": evidence.requirement_id,
+                        "status": evidence.status,
+                        "referenceGroupsChecked": evidence.reference_groups_checked,
+                        "referenceFilesChecked": evidence.reference_files_checked,
                         "verificationIds": evidence.verification_ids
                     })
                 }).collect::<Vec<_>>(),

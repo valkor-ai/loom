@@ -388,6 +388,7 @@ pub(crate) fn architecture_read_groups(
         "architectureQualitySeed.qualityLevel",
         "architectureQualitySeed.techReferenceProfile.loadMode",
         "architectureQualitySeed.techReferenceProfile.groups.arch",
+        "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
     ]);
     if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
         core_fields.extend([
@@ -396,6 +397,7 @@ pub(crate) fn architecture_read_groups(
             "apiQualitySeed.selectionReason",
             "apiQualitySeed.techReferenceProfile.loadMode",
             "apiQualitySeed.techReferenceProfile.groups.api",
+            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
             "apiQualitySeed.interfaceContract",
             "apiQualitySeed.generationRules",
         ]);
@@ -502,6 +504,7 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.densityCandidates",
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
+            "uiQualitySeed.referenceLoadPlan",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -589,14 +592,24 @@ fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -
 }
 
 fn build_architecture_quality_seed() -> Value {
+    let arch_groups = vec![
+        "core", "patterns", "system", "data", "nfr", "adr", "failure",
+    ];
     json!({
         "required": true,
         "qualityLevel": "production_delivery_architecture",
         "techReferenceProfile": {
-            "loadMode": "skill_reference_by_group",
+            "loadMode": "mcp_reference_load_plan",
             "groups": {
-                "arch": ["core", "patterns", "system", "data", "nfr", "adr", "failure"]
-            }
+                "arch": arch_groups.clone()
+            },
+            "referenceLoadPlan": arch_groups.iter().map(|item| {
+                json!({
+                    "refId": format!("tech.arch.{item}"),
+                    "path": format!("tech/arch/{item}.md"),
+                    "reason": format!("Selected architecture {item} quality reference for this architecture section.")
+                })
+            }).collect::<Vec<_>>()
         }
     })
 }
@@ -1618,7 +1631,7 @@ fn section_generation_rules(
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only.".to_string(),
-            "Use architectureQualitySeed.techReferenceProfile.groups.arch as the selected architecture reference profile; do not copy reference prose into the candidate.".to_string(),
+            "Read only files listed in architectureQualitySeed.techReferenceProfile.referenceLoadPlan; selected architecture groups are evidence labels only and do not copy reference prose into the candidate.".to_string(),
             "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
             "Add an abstraction only when it supports current-phase behavior, verification, or meaningful isolation; avoid pass-through wrappers.".to_string(),
@@ -1638,7 +1651,7 @@ fn section_generation_rules(
             ];
             if !api_quality_seed.is_null() {
                 rules.extend([
-                    "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and selected techReferenceProfile.groups.api references.".to_string(),
+                    "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
                     "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);
@@ -1657,7 +1670,7 @@ fn section_generation_rules(
             "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
-            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; use grouped reference profile items, not copied reference text.".to_string(),
+            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; copy uiQualitySeed.referenceLoadPlan into referenceProfile.referenceLoadPlan and do not copy reference text.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
             "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
             "Business UI surfaces must directly serve the selected scenario and task workflow; enforce uiQualityContract.forbiddenUserVisibleContent without repeating reference prose.".to_string(),

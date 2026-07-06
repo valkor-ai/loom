@@ -1,6 +1,6 @@
 # API Error Handling
 
-Load this file only when `techReferenceProfile.groups.api` includes `errors`.
+Load this file only when the current MCP request lists `tech/api/errors.md` in `referenceLoadPlan`.
 
 ## Error Contract Purpose
 

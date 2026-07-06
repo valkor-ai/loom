@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::CodeStackSignal;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPlanStatus {
@@ -206,6 +208,35 @@ pub struct ApiContractRequirement {
     pub verification_obligations: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceLoadPlanItem {
+    pub ref_id: String,
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeQualityRequirement {
+    pub requirement_id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applies_to_task_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stack_signals: Vec<CodeStackSignal>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_groups: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_load_plan: Vec<ReferenceLoadPlanItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub focus_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementation_obligations: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_obligations: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDefinition {
@@ -243,6 +274,8 @@ pub struct TaskDefinition {
     pub architecture_quality_requirement_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_contract_requirement_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_quality_requirement_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -363,6 +396,8 @@ pub struct TaskPlan {
     pub architecture_quality_requirements: Vec<ArchitectureQualityRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_contract_requirements: Vec<ApiContractRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_quality_requirements: Vec<CodeQualityRequirement>,
     pub handoff: TaskPlanHandoff,
     pub created_at: String,
     pub updated_at: String,
@@ -585,6 +620,26 @@ pub struct ApiContractEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct CodeQualityEvidence {
+    pub requirement_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_groups_checked: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_files_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands_run: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_gaps: Vec<String>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendQualityStateCoverage {
     pub state: String,
     pub status: String,
@@ -644,6 +699,8 @@ pub struct FrontendQualitySelfCheck {
     pub quality_level: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reference_groups_checked: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_files_checked: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub states_covered: Vec<FrontendQualityStateCoverage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -712,6 +769,8 @@ pub struct TaskResult {
     pub architecture_quality_evidence: Vec<ArchitectureQualityEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub api_contract_evidence: Vec<ApiContractEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_quality_evidence: Vec<CodeQualityEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<BlockedReason>,
     pub created_at: String,

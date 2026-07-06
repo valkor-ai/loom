@@ -1,6 +1,6 @@
 # API Resource Design
 
-Load this file only when `techReferenceProfile.groups.api` includes `resource`.
+Load this file only when the current MCP request lists `tech/api/resource.md` in `referenceLoadPlan`.
 
 ## Resource Modeling
 

@@ -27,9 +27,10 @@ use crate::{
     },
     task_plan::{execute_task_next_from_request, update_run_summary},
     templates::{
-        frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_template, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        code_quality_requirements_for_task, frontend_quality_self_check_applies,
+        frontend_self_check_applies, runtime_delivery_evidence_applies,
+        task_result_required_top_level_fields, task_result_template_with_code_quality,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -257,6 +258,7 @@ fn build_execution_request(
     let architecture_quality_requirements =
         task_scoped_architecture_quality_requirements(task_plan, &request_task);
     let api_contract_requirements = task_scoped_api_contract_requirements(task_plan, &request_task);
+    let code_quality_requirements = code_quality_requirements_for_task(task_plan, &request_task);
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -292,6 +294,9 @@ fn build_execution_request(
     }
     if !api_contract_requirements.is_empty() {
         source_context["apiContractRequirements"] = json!(api_contract_requirements);
+    }
+    if !code_quality_requirements.is_empty() {
+        source_context["codeQualityRequirements"] = json!(code_quality_requirements);
     }
     Ok(json!({
         "schemaVersion": "1.0",
@@ -341,7 +346,7 @@ fn build_execution_request(
                 {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
             "schemaShape": schema_shape,
-            "resultTemplate": task_result_template(&task_plan.task_plan_id, &request_task),
+            "resultTemplate": task_result_template_with_code_quality(&task_plan.task_plan_id, &request_task, &code_quality_requirements),
             "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
@@ -427,6 +432,12 @@ pub(crate) fn task_execution_rules(
         object.insert(
             "apiContractExecutionRules".to_string(),
             api_contract_execution_rules(task),
+        );
+    }
+    if !task.code_quality_requirement_refs.is_empty() {
+        object.insert(
+            "codeQualityExecutionRules".to_string(),
+            code_quality_execution_rules(task),
         );
     }
     rules
@@ -584,6 +595,10 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("For referenced apiContractRequirements, include apiContractEvidence with the exact requirementId values assigned to this task.".to_string());
         rules.push("apiContractEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
     }
+    if !task.code_quality_requirement_refs.is_empty() {
+        rules.push("For referenced codeQualityRequirements, include codeQualityEvidence with the exact requirementId values assigned to this task.".to_string());
+        rules.push("codeQualityEvidence.referenceFilesChecked must list exactly the files read from sourceContext.codeQualityRequirements[].referenceLoadPlan; verificationIds must reference task.verificationIntents and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
+    }
     json!(rules)
 }
 
@@ -641,6 +656,25 @@ fn api_contract_execution_rules(task: &TaskDefinition) -> Value {
             "Record concise evidence in apiContractEvidence for every referenced API contract requirement.",
             "For write or state-transition APIs, verification should cover one success path and one validation or business-blocking error path when feasible.",
             "For collection APIs, verification should cover declared pagination or filtering behavior when present."
+        ]
+    })
+}
+
+fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
+    json!({
+        "appliesToRequirementRefs": task.code_quality_requirement_refs,
+        "requirementSource": "sourceContext.codeQualityRequirements",
+        "scopeRule": "Apply only listed code quality requirements whose appliesToTaskIds include this task; do not create new language requirements inside TaskResult.",
+        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityRequirements[].referenceLoadPlan. Do not derive paths from referenceGroups, scan the tech/code tree, or load external language skills.",
+        "implementationRules": [
+            "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
+            "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
+            "When a selected language reference is not applicable to the changed file, record the reason in codeQualityEvidence.knownGaps or summary instead of inventing work."
+        ],
+        "verificationRules": [
+            "Use task.verificationIntents as the verification id source.",
+            "Run the smallest available compile, type, lint, unit, or integration check that proves the changed code.",
+            "Record selected reference groups, reference files checked, changed files, commands, and remaining gaps in codeQualityEvidence."
         ]
     })
 }
@@ -747,6 +781,13 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "executionRules.apiContractExecutionRules",
         ]);
     }
+    if !task.code_quality_requirement_refs.is_empty() {
+        core_fields.extend([
+            "task.codeQualityRequirementRefs",
+            "sourceContext.codeQualityRequirements",
+            "executionRules.codeQualityExecutionRules",
+        ]);
+    }
     if has_dependency_results {
         core_fields.push("sourceContext.dependencyResults");
     }
@@ -802,6 +843,9 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
     }
     if !task.api_contract_requirement_refs.is_empty() {
         result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
+    }
+    if !task.code_quality_requirement_refs.is_empty() {
+        result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
     }
 
     Value::Array(vec![
@@ -1529,7 +1573,8 @@ fn style_asset_plan(task: &TaskDefinition) -> Value {
         "designTokenAssetPlan": contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
         "semanticTokenPolicy": contract.get("semanticTokenPolicy").cloned().unwrap_or(Value::Null),
         "referenceGroups": contract.pointer("/referenceProfile/groups").cloned().unwrap_or_else(|| json!({})),
-        "implementationRule": "Load only the selected UIX reference groups and matching token template when this task changes user-visible frontend code."
+        "referenceLoadPlan": contract.pointer("/referenceProfile/referenceLoadPlan").cloned().unwrap_or_else(|| json!([])),
+        "implementationRule": "Load only UIX files listed in referenceLoadPlan when this task changes user-visible frontend code; referenceGroups are evidence labels, not path mappings."
     })
 }
 

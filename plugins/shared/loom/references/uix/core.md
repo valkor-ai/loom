@@ -6,18 +6,9 @@ This reference set is a Loom-owned rewrite. It absorbs proven UI craft categorie
 
 ## Routing Contract
 
-When the request includes `uiQualityContract.referenceProfile.groups`, load only the listed group/items in addition to this core file.
+Load UIX references only from the current MCP request's `referenceLoadPlan` entries. Do not derive file paths from group names, scenario names, stack names, token names, or this reference file. Selected groups are evidence labels only; `referenceLoadPlan[].path` is the loading authority.
 
-| Reference group | Items | File location | Purpose |
-| --- | --- | --- | --- |
-| `core` | `core`, `anti-patterns`, `system`, `interaction`, `content`, `verification` | Top-level files under `references/uix/` | Core UIX rules, product-boundary failures, system foundations, workflow behavior, copy, and rendered verification. |
-| `focus` | `data`, `mobile`, `frameworks` | Top-level files under `references/uix/` | Cross-scenario focus rules for data surfaces, responsive/mobile behavior, and stack adoption. |
-| `tokens` | `color-system`, `typography`, `spacing`, `layout-grid`, `motion`, `radius-elevation` | `references/uix/tokens/` | Defines semantic color, typography, spacing, grid, radius, elevation, and motion decisions. |
-| `scenarios` | scenario item names such as `admin-dashboard` or `docs-site` | `references/uix/scenarios/` | Defines surface layout, density, navigation, component, and state expectations for a product scenario. |
-| `stacks` | stack item names such as `react`, `vue`, or `plain-html` | `references/uix/stacks/` | Defines framework-specific implementation patterns without changing the product contract. |
-| `templates` | `tokens-css`, `tokens-tailwind` | `references/uix/templates/` | Token asset baselines selected by `uiQualityContract.designTokenAssetPlan.templateId`. |
-
-Do not load unrelated UI skills. Do not copy reference text into task results. Cite loaded group/items in `frontendQualitySelfCheck.referenceGroupsChecked`, then provide concrete evidence from the implemented UI.
+Do not load unrelated UI skills or scan the UIX reference tree. Do not copy reference text into task results. Cite loaded group/items in `frontendQualitySelfCheck.referenceGroupsChecked`, list exact loaded paths in `frontendQualitySelfCheck.referenceFilesChecked`, then provide concrete evidence from the implemented UI.
 
 ## Contract Chain
 

@@ -4,9 +4,11 @@ use std::{
 };
 
 use contracts::{
-    ui_quality_enum_refs, AcceptancePriority, ApiContractRequirement, ArchitectureArtifactContract,
-    ArchitectureQualityRequirement, CoverageStatus, EngineeringQualityRequirement,
-    ImplementationAction, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
+    build_code_quality_seed, code_quality_enum_refs, code_reference_load_plan,
+    code_reference_selection_for_task, ui_quality_enum_refs, AcceptancePriority,
+    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
+    CodeQualityRequirement, CoverageStatus, EngineeringQualityRequirement, ImplementationAction,
+    TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
     TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
     TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
     TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
@@ -242,6 +244,8 @@ fn build_request_root(
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
     let architecture_quality_template = architecture_quality_requirement_template(aac);
     let api_contract_template = api_contract_requirement_template(aac);
+    let code_quality_seed = build_code_quality_seed(baseline);
+    let code_quality_template = code_quality_requirement_template(&code_quality_seed);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
     let outline_result_template =
         taskplan_outline_result_template(request_id, delivery_id, phase_id);
@@ -298,6 +302,9 @@ fn build_request_root(
     if !api_contract_template.is_null() {
         output_contract["apiContractRequirementTemplate"] = api_contract_template.clone();
     }
+    if !code_quality_template.is_null() {
+        output_contract["codeQualityRequirementTemplate"] = code_quality_template.clone();
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -318,8 +325,9 @@ fn build_request_root(
             "requirementDetailTransfer": requirement_transfer
         },
         "allowedRefs": allowed_refs(pgc, aac),
-        "generationRules": generation_rules(aac),
+        "generationRules": generation_rules(aac, &code_quality_seed),
         "enumRefs": enum_refs(),
+        "codeQualitySeed": code_quality_seed,
         "outputContract": output_contract,
         "requestReadPlan": {
             "groups": taskplan_read_groups(
@@ -329,7 +337,9 @@ fn build_request_root(
                 &runtime_closure_template,
                 &engineering_quality_template,
                 &architecture_quality_template,
-                &api_contract_template
+                &api_contract_template,
+                &code_quality_template,
+                &code_quality_seed
             )
         }
     })
@@ -370,6 +380,8 @@ fn taskplan_read_groups(
     engineering_quality_template: &Value,
     architecture_quality_template: &Value,
     api_contract_template: &Value,
+    code_quality_template: &Value,
+    code_quality_seed: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.technicalBaselineRef",
@@ -413,6 +425,18 @@ fn taskplan_read_groups(
         "allowedRefs.nfrRefs",
         "allowedRefs.riskRefs",
     ]);
+    if !code_quality_seed.is_null() {
+        core_fields.extend([
+            "codeQualitySeed.required",
+            "codeQualitySeed.qualityLevel",
+            "codeQualitySeed.codeStackSignals",
+            "codeQualitySeed.unmappedSignals",
+            "codeQualitySeed.techReferenceProfile.loadMode",
+            "codeQualitySeed.techReferenceProfile.groups.code",
+            "codeQualitySeed.techReferenceProfile.referenceLoadPlan",
+            "codeQualitySeed.generationRules",
+        ]);
+    }
     let groups = vec![
         json!({
             "groupId": "taskplan_core_context",
@@ -437,7 +461,8 @@ fn taskplan_read_groups(
                 "generationRules.runtimeDeliveryRules",
                 "generationRules.engineeringQualityRules",
                 "generationRules.architectureQualityRules",
-                "generationRules.apiContractRules"
+                "generationRules.apiContractRules",
+                "generationRules.codeQualityRules"
             ])
         }),
         json!({
@@ -451,7 +476,8 @@ fn taskplan_read_groups(
                 runtime_closure_template,
                 engineering_quality_template,
                 architecture_quality_template,
-                api_contract_template
+                api_contract_template,
+                code_quality_template
             ))
         }),
     ];
@@ -465,6 +491,7 @@ fn taskplan_candidate_contract_fields(
     engineering_quality_template: &Value,
     architecture_quality_template: &Value,
     api_contract_template: &Value,
+    code_quality_template: &Value,
 ) -> Vec<&'static str> {
     let mut fields = vec![
         "enumRefs.taskKind",
@@ -494,6 +521,9 @@ fn taskplan_candidate_contract_fields(
     }
     if !api_contract_template.is_null() {
         fields.push("outputContract.apiContractRequirementTemplate");
+    }
+    if !code_quality_template.is_null() {
+        fields.push("outputContract.codeQualityRequirementTemplate");
     }
     fields
 }
@@ -739,6 +769,7 @@ where
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements = normalize_api_contract_requirements(&aac, &mut tasks);
+    let code_quality_requirements = normalize_code_quality_requirements(&baseline, &mut tasks);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -810,6 +841,7 @@ where
         engineering_quality_requirements,
         architecture_quality_requirements,
         api_contract_requirements,
+        code_quality_requirements,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -2686,7 +2718,7 @@ fn has_interface_shape(interface: &Value) -> bool {
             .unwrap_or(false)
 }
 
-fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
+fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Value) -> Value {
     json!({
         "groupedOutputRules": [
             "First write outputContract.outlineFile.",
@@ -2768,7 +2800,36 @@ fn generation_rules(aac: &ArchitectureArtifactContract) -> Value {
             "implementationRule": "API tasks must preserve request schema, response schema, status codes, error schema, auth policy, and pagination policy declared by the AAC interface.",
             "verificationRule": "API tasks should include verification intents that prove at least the declared success path and important business or validation error path. Collection endpoints should also prove declared pagination/filter behavior.",
             "nonDuplicationRule": "Do not inline full API requirements inside every task; use interface refs and the generated task apiContractRequirementRefs."
+        },
+        "codeQualityRules": {
+            "required": code_quality_seed.get("required").and_then(Value::as_bool).unwrap_or(false),
+            "seedSource": "codeQualitySeed",
+            "requirementSource": "outputContract.codeQualityRequirementTemplate",
+            "assignmentRule": "loom.taskPlanAcceptFile derives task codeQualityRequirementRefs from TechnicalBaseline stack signals and task scope; do not inline full code quality requirements inside every task.",
+            "referenceRule": "Use codeQualitySeed.codeStackSignals to understand available language/framework signals, then assign task-scoped codeQualityRequirementRefs with their own referenceLoadPlan; groups are semantic evidence labels and must not be used as path maps.",
+            "nonDuplicationRule": "Do not repeat language best-practice prose in task objective or verification intents; use codeQualityRequirementRefs and TaskResult codeQualityEvidence."
         }
+    })
+}
+
+fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
+    if code_quality_seed.is_null()
+        || !code_quality_seed
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        return Value::Null;
+    }
+    json!({
+        "requirementId": "code-quality-{taskId}",
+        "kind": "language_implementation_quality",
+        "codeStackSignalSource": "codeQualitySeed.codeStackSignals",
+        "referenceGroupSource": "codeQualitySeed.techReferenceProfile.groups.code",
+        "referenceLoadPlanSource": "Generated by loom.taskPlanAcceptFile from selected reference groups; agents must read only files listed in each requirement referenceLoadPlan.",
+        "implementationObligations": code_quality_implementation_obligations(),
+        "verificationObligations": code_quality_verification_obligations(),
+        "taskRefRule": "Tasks reference generated requirements by codeQualityRequirementRefs; do not inline language reference prose inside tasks."
     })
 }
 
@@ -2949,6 +3010,60 @@ fn normalize_api_contract_requirements(
             .unwrap_or_default();
     }
     requirements
+}
+
+fn normalize_code_quality_requirements(
+    baseline: &contracts::TechnicalBaselineContract,
+    tasks: &mut [TaskDefinition],
+) -> Vec<CodeQualityRequirement> {
+    let mut requirements = Vec::new();
+    let mut requirement_ids_by_task = BTreeMap::<String, Vec<String>>::new();
+    for task in tasks.iter() {
+        let Some(selection) = code_reference_selection_for_task(baseline, task) else {
+            continue;
+        };
+        if selection.reference_groups.is_empty() {
+            continue;
+        }
+        let requirement_id = format!("code-quality-{}", task.task_id);
+        requirement_ids_by_task
+            .entry(task.task_id.clone())
+            .or_default()
+            .push(requirement_id.clone());
+        requirements.push(CodeQualityRequirement {
+            requirement_id,
+            kind: "language_implementation_quality".to_string(),
+            applies_to_task_ids: vec![task.task_id.clone()],
+            stack_signals: selection.stack_signals,
+            reference_load_plan: code_reference_load_plan(&selection.reference_groups),
+            reference_groups: selection.reference_groups,
+            focus_tags: selection.focus_tags,
+            implementation_obligations: code_quality_implementation_obligations(),
+            verification_obligations: code_quality_verification_obligations(),
+        });
+    }
+    for task in tasks {
+        task.code_quality_requirement_refs = requirement_ids_by_task
+            .remove(&task.task_id)
+            .unwrap_or_default();
+    }
+    requirements
+}
+
+fn code_quality_implementation_obligations() -> Vec<String> {
+    vec![
+        "Load only the files listed in sourceContext.codeQualityRequirements[].referenceLoadPlan for this task; do not scan the whole tech/code tree or infer group-to-file mappings.".to_string(),
+        "Follow existing repository structure and style before introducing new language or framework patterns.".to_string(),
+        "Keep API, UI, architecture, and persistence obligations in their own dedicated quality contracts; use code quality only for language and framework implementation discipline.".to_string(),
+    ]
+}
+
+fn code_quality_verification_obligations() -> Vec<String> {
+    vec![
+        "Use task.verificationIntents as verification id source.".to_string(),
+        "Run the smallest available language-appropriate compile, type, lint, unit, or integration check that proves the changed code.".to_string(),
+        "Record codeQualityEvidence for every assigned code quality requirement, including selected reference groups, reference files checked, changed files, commands, and known gaps.".to_string(),
+    ]
 }
 
 fn task_owns_api_contract(task: &TaskDefinition) -> bool {
@@ -3405,7 +3520,8 @@ fn enum_refs() -> Value {
         "taskKind": TASK_KIND_VALUES,
         "implementationAction": IMPLEMENTATION_ACTION_VALUES,
         "verificationEvidence": VERIFICATION_EVIDENCE_VALUES,
-        "uiQuality": ui_quality_enum_refs()
+        "uiQuality": ui_quality_enum_refs(),
+        "codeQuality": code_quality_enum_refs()
     })
 }
 

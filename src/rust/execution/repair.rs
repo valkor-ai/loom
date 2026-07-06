@@ -38,11 +38,11 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
-        task_result_required_top_level_fields, task_result_template,
-        taskplan_group_result_template, taskplan_outline_result_template,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        code_quality_requirements_for_task, frontend_quality_self_check_applies,
+        frontend_self_check_applies, runtime_delivery_evidence_applies,
+        runtime_delivery_requirement_template, task_result_required_top_level_fields,
+        task_result_template_with_code_quality, taskplan_group_result_template,
+        taskplan_outline_result_template, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -594,7 +594,12 @@ fn build_repair_execution_request(
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let result_template = task_result_template(&task_plan.task_plan_id, task);
+    let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
+    let result_template = task_result_template_with_code_quality(
+        &task_plan.task_plan_id,
+        task,
+        &code_quality_requirements,
+    );
     let mut execution_rules = task_execution_rules(result_file, task, None);
     if let Some(object) = execution_rules.as_object_mut() {
         object.insert(
@@ -707,6 +712,13 @@ fn build_repair_execution_request(
             "executionRules.runtimeDeliveryExecutionRules",
         ]);
     }
+    if !task.code_quality_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.codeQualityRequirementRefs",
+            "sourceContext.codeQualityRequirements",
+            "executionRules.codeQualityExecutionRules",
+        ]);
+    }
     if execution_rules
         .get("frontendImplementationOrganizationRules")
         .is_some()
@@ -763,6 +775,9 @@ fn build_repair_execution_request(
     if !task.concept_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
+    if !task.code_quality_requirement_refs.is_empty() {
+        repair_result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
+    }
     let mut repair_context = json!({
         "sourceTaskId": task.task_id,
         "repairOrigin": repair_origin,
@@ -776,7 +791,7 @@ fn build_repair_execution_request(
     if !finding_refs.is_empty() {
         repair_context["findingRefs"] = json!(finding_refs);
     }
-    json!({
+    let mut root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "delivery_execution_repair",
         "requestId": request_id,
@@ -839,7 +854,13 @@ fn build_repair_execution_request(
                 }
             ]
         }
-    })
+    });
+    if !code_quality_requirements.is_empty() {
+        root_value["sourceContext"] = json!({
+            "codeQualityRequirements": code_quality_requirements
+        });
+    }
+    root_value
 }
 
 pub fn materialize_taskplan_repair(
@@ -1811,6 +1832,7 @@ fn ui_quality_seed_from_fields(
         "densityCandidates": value_field(fields, "uiQualitySeed.densityCandidates"),
         "semanticTokenPolicy": value_field(fields, "uiQualitySeed.semanticTokenPolicy"),
         "requiredReferenceGroups": value_field(fields, "uiQualitySeed.requiredReferenceGroups"),
+        "referenceLoadPlan": value_field(fields, "uiQualitySeed.referenceLoadPlan"),
         "stackReferenceCandidates": value_field(fields, "uiQualitySeed.stackReferenceCandidates"),
         "designTokenAssetPlan": value_field(fields, "uiQualitySeed.designTokenAssetPlan"),
         "forbiddenUserVisibleContent": value_field(fields, "uiQualitySeed.forbiddenUserVisibleContent"),
@@ -1901,6 +1923,7 @@ fn architecture_repair_read_groups(
             "apiQualitySeed.selectionReason",
             "apiQualitySeed.techReferenceProfile.loadMode",
             "apiQualitySeed.techReferenceProfile.groups.api",
+            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
             "apiQualitySeed.interfaceContract",
             "apiQualitySeed.generationRules",
         ]);
@@ -1991,6 +2014,7 @@ fn architecture_repair_read_groups(
             "uiQualitySeed.densityCandidates",
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
+            "uiQualitySeed.referenceLoadPlan",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",

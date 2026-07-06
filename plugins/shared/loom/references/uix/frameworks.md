@@ -1,6 +1,6 @@
 # UIX Focus: Frameworks
 
-Load this when choosing how to apply a UI contract in a specific frontend stack. For MCP-driven work, prefer stack references from `uiQualityContract.referenceProfile.groups.stacks`.
+Load this only when the current MCP request lists `uix/frameworks.md` in `referenceLoadPlan`. For MCP-driven work, stack-specific UIX files must also come from `referenceLoadPlan`; do not infer them from stack names or group labels.
 
 ## Rule
 

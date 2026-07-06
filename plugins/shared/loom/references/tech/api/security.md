@@ -1,6 +1,6 @@
 # API Security And Authorization
 
-Load this file only when `techReferenceProfile.groups.api` includes `security`.
+Load this file only when the current MCP request lists `tech/api/security.md` in `referenceLoadPlan`.
 
 ## Scope Rule
 

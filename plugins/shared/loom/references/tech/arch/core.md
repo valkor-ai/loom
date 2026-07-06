@@ -7,7 +7,7 @@ Loom architecture work is not a standalone design essay. It is a delivery contra
 ## Operating Model
 
 1. Read the current MCP request groups first. The MCP request remains the source of truth.
-2. Load only the architecture references selected by `architectureQualitySeed.techReferenceProfile.groups.arch`.
+2. Load only architecture references listed in the current request's `referenceLoadPlan`; selected groups are evidence labels, not path mappings.
 3. Convert the confirmed requirement scope and technical baseline into implementation-facing architecture constraints.
 4. Write Architecture section artifacts only in the returned target files.
 5. Do not copy reference prose into Loom JSON artifacts. Use the references to make concrete decisions.

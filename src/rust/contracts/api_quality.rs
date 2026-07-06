@@ -137,15 +137,17 @@ pub fn build_api_quality_seed(
     if signals.operations_signal_count > 0 {
         api_groups.push("operations".to_string());
     }
+    let reference_load_plan = api_reference_load_plan(&api_groups);
     json!({
         "required": true,
         "qualityLevel": "production_api_contract",
         "selectionReason": signals.reason,
         "techReferenceProfile": {
-            "loadMode": "skill_reference_by_group",
+            "loadMode": "mcp_reference_load_plan",
             "groups": {
                 "api": api_groups
-            }
+            },
+            "referenceLoadPlan": reference_load_plan
         },
         "interfaceContract": {
             "appliesTo": "Architecture content.interfaces entries with type=http_api or task-owned HTTP API bindings.",
@@ -182,11 +184,25 @@ pub fn build_api_quality_seed(
         "generationRules": [
             "Use apiQualitySeed only for current-phase API/interface work; do not add API work for deferred scope.",
             "Represent API contracts in Architecture interfaces and downstream apiContractRequirements; do not paste API reference prose into candidates.",
-            "Do not add versioned paths or deprecation policy unless techReferenceProfile.groups.api includes evolution.",
-            "Do not require OpenAPI files unless techReferenceProfile.groups.api includes contract or the repository already owns one.",
-            "Do not add idempotency, cache, rate-limit, retry, or request-id infrastructure unless techReferenceProfile.groups.api includes operations or the repository already owns that convention."
+            "Read only files listed in techReferenceProfile.referenceLoadPlan; selected API groups are semantic evidence labels, not path maps.",
+            "Do not add versioned paths or deprecation policy unless techReferenceProfile.referenceLoadPlan selects tech/api/evolution.md.",
+            "Do not require OpenAPI files unless techReferenceProfile.referenceLoadPlan selects tech/api/contract.md or the repository already owns one.",
+            "Do not add idempotency, cache, rate-limit, retry, or request-id infrastructure unless techReferenceProfile.referenceLoadPlan selects tech/api/operations.md or the repository already owns that convention."
         ]
     })
+}
+
+pub fn api_reference_load_plan(api_groups: &[String]) -> Vec<Value> {
+    api_groups
+        .iter()
+        .map(|group| {
+            json!({
+                "refId": format!("tech.api.{group}"),
+                "path": format!("tech/api/{group}.md"),
+                "reason": format!("Selected API {group} quality reference for current-phase interface design.")
+            })
+        })
+        .collect()
 }
 
 pub fn api_quality_enum_refs() -> Value {

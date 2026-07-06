@@ -1,6 +1,6 @@
 # API Evolution And Compatibility
 
-Load this file only when `techReferenceProfile.groups.api` includes `evolution`.
+Load this file only when the current MCP request lists `tech/api/evolution.md` in `referenceLoadPlan`.
 
 ## Default Position
 

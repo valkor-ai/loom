@@ -164,8 +164,13 @@ pub fn ui_quality_contract_shape() -> Value {
         "density": UI_DENSITIES.join(" | "),
         "semanticTokenPolicy": UI_SEMANTIC_TOKEN_POLICIES.join(" | "),
         "referenceProfile": {
-            "loadMode": "skill_reference_by_group",
-            "groups": known_ui_reference_groups()
+            "loadMode": "mcp_reference_load_plan",
+            "groups": known_ui_reference_groups(),
+            "referenceLoadPlan": [{
+                "refId": "uix.core.core",
+                "path": "uix/core.md",
+                "reason": "Selected UIX reference file."
+            }]
         },
         "designTokenAssetPlan": {
             "strategy": UI_DESIGN_TOKEN_STRATEGIES.join(" | "),
@@ -203,6 +208,7 @@ pub fn build_ui_quality_seed(
     let design_token_seed = design_token_asset_seed(baseline);
     let required_reference_groups =
         required_reference_groups(primary_scenario, &stack_items, &design_token_seed);
+    let reference_load_plan = ui_reference_load_plan(&required_reference_groups);
     json!({
         "required": required,
         "scenarioCandidates": scenario_candidates(primary_scenario),
@@ -212,11 +218,12 @@ pub fn build_ui_quality_seed(
         "densityCandidates": density_candidates(primary_scenario),
         "semanticTokenPolicy": "semantic_tokens_required",
         "requiredReferenceGroups": required_reference_groups,
+        "referenceLoadPlan": reference_load_plan,
         "stackReferenceCandidates": stack_items,
         "designTokenAssetPlan": design_token_seed,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": UI_REQUIRED_STATES,
-        "selectionRule": "Pick one scenarioKind from scenarioCandidates, then copy requiredReferenceGroups into referenceProfile.groups and add only known group items from enumRefs.uiQuality. Use references for UI craft rules; keep this request artifact to concrete contract fields."
+        "selectionRule": "Pick one scenarioKind from scenarioCandidates, copy requiredReferenceGroups into referenceProfile.groups, copy referenceLoadPlan into referenceProfile.referenceLoadPlan, and add only known group items from enumRefs.uiQuality. Use referenceLoadPlan as the only file-loading authority; groups are evidence labels."
     })
 }
 
@@ -260,6 +267,11 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
                 .unwrap_or_else(default_design_token_asset_plan);
             required_reference_groups(scenario, &[], &design_token_asset_plan)
         });
+    let reference_load_plan = ui_quality_seed
+        .get("referenceLoadPlan")
+        .cloned()
+        .filter(|plan| plan.as_array().is_some_and(|items| !items.is_empty()))
+        .unwrap_or_else(|| ui_reference_load_plan(&reference_groups));
     let design_token_asset_plan = ui_quality_seed
         .get("designTokenAssetPlan")
         .cloned()
@@ -277,8 +289,9 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
         "density": density,
         "semanticTokenPolicy": semantic_token_policy,
         "referenceProfile": {
-            "loadMode": "skill_reference_by_group",
-            "groups": reference_groups
+            "loadMode": "mcp_reference_load_plan",
+            "groups": reference_groups,
+            "referenceLoadPlan": reference_load_plan
         },
         "designTokenAssetPlan": design_token_asset_plan,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
@@ -929,7 +942,7 @@ fn validate_reference_groups(contract: &Value, issues: &mut Vec<RepairIssue>) {
         issues.push(issue(
             "UI_QUALITY_LEGACY_REFERENCE_FIELD_NOT_ALLOWED",
             "content.frontendExperience.uiQualityContract.referenceProfile.referenceIds",
-            "referenceProfile.referenceIds is not allowed; use referenceProfile.groups instead.",
+            "referenceProfile.referenceIds is not allowed; use referenceProfile.referenceLoadPlan and groups instead.",
         ));
     }
     let Some(groups) = contract
@@ -1030,13 +1043,14 @@ fn validate_reference_groups(contract: &Value, issues: &mut Vec<RepairIssue>) {
     let load_mode = contract
         .pointer("/referenceProfile/loadMode")
         .and_then(Value::as_str);
-    if load_mode != Some("skill_reference_by_group") {
+    if load_mode != Some("mcp_reference_load_plan") {
         issues.push(issue(
             "UI_QUALITY_REFERENCE_LOAD_MODE_INVALID",
             "content.frontendExperience.uiQualityContract.referenceProfile.loadMode",
-            "referenceProfile.loadMode must be skill_reference_by_group.",
+            "referenceProfile.loadMode must be mcp_reference_load_plan.",
         ));
     }
+    validate_reference_load_plan(contract, &actual, issues);
 }
 
 fn known_reference_group_sets() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
@@ -1054,6 +1068,96 @@ fn known_reference_group_sets() -> BTreeMap<&'static str, BTreeSet<&'static str>
         UI_DESIGN_TOKEN_TEMPLATE_IDS.into_iter().collect(),
     );
     groups
+}
+
+pub fn ui_reference_load_plan(reference_groups: &Value) -> Value {
+    let Some(groups) = reference_groups.as_object() else {
+        return Value::Array(vec![]);
+    };
+    let mut items = Vec::new();
+    for (group, value) in groups {
+        let Some(group_items) = value.as_array() else {
+            continue;
+        };
+        for item in group_items.iter().filter_map(Value::as_str) {
+            if let Some(path) = ui_reference_path(group, item) {
+                items.push(json!({
+                    "refId": format!("uix.{group}.{item}"),
+                    "path": path,
+                    "reason": format!("Selected UIX {group}.{item} reference for the current frontend quality contract.")
+                }));
+            }
+        }
+    }
+    Value::Array(items)
+}
+
+fn ui_reference_path(group: &str, item: &str) -> Option<String> {
+    match group {
+        "core" | "focus" => Some(format!("uix/{item}.md")),
+        "tokens" => Some(format!("uix/tokens/{item}.md")),
+        "scenarios" => Some(format!("uix/scenarios/{item}.md")),
+        "stacks" => Some(format!("uix/stacks/{item}.md")),
+        "templates" => match item {
+            "tokens-css" => Some("uix/templates/tokens.css.tpl".to_string()),
+            "tokens-tailwind" => Some("uix/templates/tokens.tailwind.tpl".to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn validate_reference_load_plan(
+    contract: &Value,
+    actual_groups: &BTreeMap<String, BTreeSet<String>>,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let expected = ui_reference_load_plan(&json!(actual_groups));
+    let expected_paths = expected
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let Some(plan) = contract
+        .pointer("/referenceProfile/referenceLoadPlan")
+        .and_then(Value::as_array)
+    else {
+        issues.push(issue(
+            "UI_QUALITY_REFERENCE_LOAD_PLAN_REQUIRED",
+            "content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan",
+            "referenceProfile.referenceLoadPlan must list exact UIX files selected by referenceProfile.groups.",
+        ));
+        return;
+    };
+    let mut actual_paths = BTreeSet::new();
+    for (index, item) in plan.iter().enumerate() {
+        let Some(path) = item.get("path").and_then(Value::as_str) else {
+            issues.push(issue(
+                "UI_QUALITY_REFERENCE_LOAD_PLAN_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan[{index}].path"),
+                "referenceLoadPlan entries must include a path.",
+            ));
+            continue;
+        };
+        if item.get("refId").and_then(Value::as_str).is_none()
+            || item.get("reason").and_then(Value::as_str).is_none()
+        {
+            issues.push(issue(
+                "UI_QUALITY_REFERENCE_LOAD_PLAN_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan[{index}]"),
+                "referenceLoadPlan entries must include refId, path, and reason.",
+            ));
+        }
+        actual_paths.insert(path);
+    }
+    if actual_paths != expected_paths {
+        issues.push(issue(
+            "UI_QUALITY_REFERENCE_LOAD_PLAN_INVALID",
+            "content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan",
+            "referenceLoadPlan must exactly match the UIX files implied by referenceProfile.groups.",
+        ));
+    }
 }
 
 fn validate_required_string_array(

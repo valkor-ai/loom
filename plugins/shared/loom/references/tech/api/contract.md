@@ -1,6 +1,6 @@
 # API Contract Artifacts
 
-Load this file only when `techReferenceProfile.groups.api` includes `contract`.
+Load this file only when the current MCP request lists `tech/api/contract.md` in `referenceLoadPlan`.
 
 ## Role In Loom
 

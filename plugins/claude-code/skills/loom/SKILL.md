@@ -43,50 +43,19 @@ The current MCP request/result remains the authority. Load no reference by defau
 
 Protocol:
 - After reading the current request group, choose references only from the profiles selected by that request.
-- `architectureQualitySeed.techReferenceProfile.groups`, `apiQualitySeed.techReferenceProfile.groups`, or another explicit `techReferenceProfile.groups` selector selects tech references.
-- `uiQualityContract.referenceProfile.groups` selects UIX core, focus, scenario, token, stack, and template references when the current action creates, changes, or reviews user-visible frontend work.
-- `uiQualityContract.designTokenAssetPlan.templateId` selects one token template item from `referenceProfile.groups.templates`. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
+- Read reference files only from `referenceLoadPlan` arrays in the current MCP request/result.
+- Treat any selected group fields as semantic labels for scope and evidence, not as path mappings.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
-- In `frontendQualitySelfCheck`, report `referenceGroupsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
-
-MCP-selected references:
+- In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
-- Tech references are selected only by `techReferenceProfile.groups`; map selected group/items to the exact files below. Do not scan the whole `references/tech` tree and do not load external architecture or API skills.
-- UIX references are selected only by `uiQualityContract.referenceProfile.groups`; map selected group/items to exact files below. Do not scan the whole `references/uix` tree.
-
-Tech architecture reference map:
-- `techReferenceProfile.groups.arch` item `core` -> `references/tech/arch/core.md`.
-- `techReferenceProfile.groups.arch` item `patterns` -> `references/tech/arch/patterns.md`.
-- `techReferenceProfile.groups.arch` item `system` -> `references/tech/arch/system.md`.
-- `techReferenceProfile.groups.arch` item `data` -> `references/tech/arch/data.md`.
-- `techReferenceProfile.groups.arch` item `nfr` -> `references/tech/arch/nfr.md`.
-- `techReferenceProfile.groups.arch` item `adr` -> `references/tech/arch/adr.md`.
-- `techReferenceProfile.groups.arch` item `failure` -> `references/tech/arch/failure.md`.
-
-Tech API reference map:
-- `techReferenceProfile.groups.api` item `core` -> `references/tech/api/core.md`.
-- `techReferenceProfile.groups.api` item `resource` -> `references/tech/api/resource.md`.
-- `techReferenceProfile.groups.api` item `errors` -> `references/tech/api/errors.md`.
-- `techReferenceProfile.groups.api` item `pagination` -> `references/tech/api/pagination.md`.
-- `techReferenceProfile.groups.api` item `contract` -> `references/tech/api/contract.md`.
-- `techReferenceProfile.groups.api` item `security` -> `references/tech/api/security.md`.
-- `techReferenceProfile.groups.api` item `evolution` -> `references/tech/api/evolution.md`.
-- `techReferenceProfile.groups.api` item `operations` -> `references/tech/api/operations.md`.
-
-UIX reference map:
-- `groups.core`: `core` -> `references/uix/core.md`; `anti-patterns` -> `references/uix/anti-patterns.md`; `system`, `interaction`, `content`, `verification` -> matching top-level files under `references/uix/`.
-- `groups.focus`: `data`, `mobile`, `frameworks` -> matching top-level files under `references/uix/`.
-- `groups.tokens`: `color-system`, `typography`, `spacing`, `layout-grid`, `motion`, `radius-elevation` -> matching files under `references/uix/tokens/`.
-- `groups.scenarios`: scenario items such as `admin-dashboard`, `data-console`, `docs-site` -> matching files under `references/uix/scenarios/`.
-- `groups.stacks`: stack items such as `react`, `vue`, `plain-html`, `native-mobile`, `threejs`, `svelte`, `uniapp` -> matching files under `references/uix/stacks/`.
-- `groups.templates`: `tokens-css` -> `references/uix/templates/tokens.css.tpl`; `tokens-tailwind` -> `references/uix/templates/tokens.tailwind.tpl`.
+- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to the installed Loom references root for this agent.
+- Load exactly the listed paths for the current action. Do not derive paths from group names, scan reference directories, or load external language/API/architecture/UI skills.
+- Treat token template paths as merge baselines for project files, not as text to copy into Loom artifacts.
 
 Reference discipline:
-- Focus references are contract-selected group/items, not fallback reading. Load a focus file only when its item appears in `referenceProfile.groups.focus`.
-- If the contract selects companion scenario items such as `data-console` and `admin-dashboard`, read both and apply the more specific rule to each surface.
-- Do not load unselected UIX files to compensate for weak implementation planning; ask Loom to repair the contract only when selected references are insufficient for the task.
-- For tech references, load only selected group/items from `techReferenceProfile.groups`; never expand `arch` into `api`, or `api` into `arch`, `stack`, `code`, or `test` references unless the MCP contract selects them. In TaskPlan, Execution, and Review requests without a selected tech profile, use the provided quality refs, requirements, evidence, and review signals without reading raw tech references.
+- Do not load unselected references to compensate for weak implementation planning; ask Loom to repair the contract only when the selected `referenceLoadPlan` is insufficient for the task.
+- In TaskPlan, Execution, Review, and Repair requests without a selected load plan, use the provided quality refs, requirements, evidence, and review signals without reading raw references.
 - Do not paste tech reference text into Architecture, TaskPlan, TaskResult, ReviewResult, source files, or user-facing UI. Use references to produce concrete decisions, interface contracts, NFRs, risks, and evidence.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
