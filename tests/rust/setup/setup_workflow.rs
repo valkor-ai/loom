@@ -83,6 +83,38 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "typescript/types",
 ];
 
+const BACKEND_REFERENCE_FILES: &[&str] = &[
+    "aspnetcore/architecture",
+    "aspnetcore/data",
+    "aspnetcore/minimal",
+    "aspnetcore/runtime",
+    "aspnetcore/security",
+    "aspnetcore/testing",
+    "django/models",
+    "django/security",
+    "django/serializers",
+    "django/testing",
+    "django/views",
+    "fastapi/data",
+    "fastapi/migration",
+    "fastapi/routing",
+    "fastapi/schemas",
+    "fastapi/security",
+    "fastapi/testing",
+    "nestjs/controllers",
+    "nestjs/dtos",
+    "nestjs/migration",
+    "nestjs/security",
+    "nestjs/services",
+    "nestjs/testing",
+    "springboot/cloud",
+    "springboot/data",
+    "springboot/runtime",
+    "springboot/security",
+    "springboot/testing",
+    "springboot/web",
+];
+
 #[test]
 fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
     let fixture = Fixture::new("install_cleans_legacy");
@@ -242,6 +274,11 @@ fn install_projects_shared_references_to_agent_read_paths() {
                 .join(format!("skills/loom/references/tech/code/{file}.md"))
                 .exists());
         }
+        for file in BACKEND_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/backend/{file}.md"))
+                .exists());
+        }
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -288,6 +325,12 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(env
             .opencode_home
             .join(format!("references/loom/tech/code/{file}.md"))
+            .exists());
+    }
+    for file in BACKEND_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/backend/{file}.md"))
             .exists());
     }
     assert!(!env.opencode_home.join("references/loom/delivery").exists());
@@ -878,6 +921,7 @@ fn agent_templates_expose_reference_loading_protocol() {
 fn loom_code_references_are_operational_and_load_plan_driven() {
     let repo = repo_root();
     let code_root = repo.join("plugins/shared/loom/references/tech/code");
+    let backend_root = repo.join("plugins/shared/loom/references/tech/backend");
     let common = fs::read_to_string(code_root.join("common.md")).unwrap();
     for required in [
         "Position In Loom",
@@ -936,6 +980,35 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             assert!(
                 !content.contains(forbidden),
                 "{} retained old group-to-path reference loading fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+
+    let mut backend_files = Vec::new();
+    collect_markdown_files(&backend_root, &mut backend_files);
+    assert!(
+        backend_files.len() >= BACKEND_REFERENCE_FILES.len(),
+        "expected backend framework reference coverage for selected framework profiles"
+    );
+    for path in backend_files {
+        let content = fs::read_to_string(&path).unwrap();
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 25,
+            "{} is too thin to act as a backend framework reference: {line_count} lines",
+            path.display()
+        );
+        for required in [
+            "referenceLoadPlan",
+            "When To Use",
+            "Implementation Focus",
+            "Verification Focus",
+            "Evidence Notes",
+        ] {
+            assert!(
+                content.contains(required),
+                "{} missing backend framework reference section or boundary {required}",
                 path.display()
             );
         }
@@ -1343,6 +1416,14 @@ impl Fixture {
                     "plugins/shared/loom/references/tech/code/{path}.md"
                 )),
                 &format!("# {path} Code Reference\n"),
+            );
+        }
+        for path in BACKEND_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/backend/{path}.md"
+                )),
+                &format!("# {path} Backend Reference\n"),
             );
         }
         for name in [

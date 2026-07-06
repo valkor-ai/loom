@@ -664,12 +664,12 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
     json!({
         "appliesToRequirementRefs": task.code_quality_requirement_refs,
         "requirementSource": "sourceContext.codeQualityRequirements",
-        "scopeRule": "Apply only listed code quality requirements whose appliesToTaskIds include this task; do not create new language requirements inside TaskResult.",
-        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityRequirements[].referenceLoadPlan. Do not derive paths from referenceGroups, scan the tech/code tree, or load external language skills.",
+        "scopeRule": "Apply only listed code quality requirements whose appliesToTaskIds include this task; do not create new language or framework requirements inside TaskResult.",
+        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityRequirements[].referenceLoadPlan. Do not derive paths from referenceGroups, scan the tech/code or tech/backend trees, or load external language/framework skills.",
         "implementationRules": [
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
-            "When a selected language reference is not applicable to the changed file, record the reason in codeQualityEvidence.knownGaps or summary instead of inventing work."
+            "When a selected language or framework reference is not applicable to the changed file, record the reason in codeQualityEvidence.knownGaps or summary instead of inventing work."
         ],
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",

@@ -73,6 +73,11 @@ pub fn code_quality_enum_refs() -> Value {
         "knownReferenceGroups": {
             "code": {
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
+                "springboot": ["web", "data", "security", "testing", "runtime", "cloud"],
+                "django": ["models", "serializers", "views", "security", "testing"],
+                "fastapi": ["schemas", "data", "routing", "security", "testing", "migration"],
+                "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime"],
+                "nestjs": ["controllers", "dtos", "services", "security", "testing", "migration"],
                 "typescript": ["core", "types", "guards", "config", "patterns", "testing"],
                 "javascript": ["core", "async", "modules", "node", "browser", "testing"],
                 "python": ["core", "typing", "async", "packaging", "testing"],
@@ -86,7 +91,7 @@ pub fn code_quality_enum_refs() -> Value {
                 "sql": ["schema", "queries", "dialects", "optimization", "windows"]
             }
         },
-        "focusTag": ["api", "frontend", "persistence", "security", "async", "performance", "configuration", "testing", "sql", "generics", "analytics", "memory"],
+        "focusTag": ["api", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -113,12 +118,16 @@ pub fn code_reference_selection_for_task(
             continue;
         }
         let items = reference_items_for_signal(&signal, &focus_tags);
-        if !items.is_empty() {
+        let backend_items = backend_reference_items_for_signal(&signal, &focus_tags);
+        if !items.is_empty() || !backend_items.is_empty() {
             selected_signals.push(signal.clone());
             reference_groups
                 .entry(language.clone())
                 .or_default()
                 .extend(items);
+            for (framework, items) in backend_items {
+                reference_groups.entry(framework).or_default().extend(items);
+            }
         }
     }
 
@@ -147,14 +156,10 @@ pub fn code_reference_load_plan(
             reason: "Common Loom code quality rules for repository adaptation, delivery evidence, and verification.".to_string(),
         });
     }
-    load_plan.extend(reference_groups.iter().flat_map(|(language, groups)| {
-        groups.iter().map(move |group| ReferenceLoadPlanItem {
-            ref_id: format!("tech.code.{language}.{group}"),
-            path: format!("tech/code/{language}/{group}.md"),
-            reason: format!(
-                "Selected {language}.{group} implementation quality reference for this task."
-            ),
-        })
+    load_plan.extend(reference_groups.iter().flat_map(|(group_key, groups)| {
+        groups
+            .iter()
+            .map(move |group| reference_load_plan_item(group_key, group))
     }));
     load_plan
 }
@@ -215,6 +220,9 @@ fn baseline_reference_groups(signals: &[CodeStackSignal]) -> BTreeMap<String, Ve
             .entry(language.clone())
             .or_default()
             .extend(reference_items_for_signal(signal, &focus_tags));
+        for (framework, items) in backend_reference_items_for_signal(signal, &focus_tags) {
+            groups.entry(framework).or_default().extend(items);
+        }
     }
     groups
         .into_iter()
@@ -315,6 +323,19 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_if_contains(
             &haystack,
             &mut frameworks,
+            "spring_cloud",
+            &[
+                "spring cloud",
+                "cloud gateway",
+                "spring cloud gateway",
+                "config server",
+                "spring cloud config",
+                "eureka",
+            ],
+        );
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
             "spring_data_jpa",
             &["spring data", "jpa", "hibernate"],
         );
@@ -336,7 +357,13 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
             &haystack,
             &mut frameworks,
             "aspnet_core",
-            &["asp.net", "aspnet"],
+            &[
+                "asp.net",
+                "aspnet",
+                "aspnet core",
+                "asp.net core",
+                "minimal api",
+            ],
         );
         push_if_contains(
             &haystack,
@@ -357,11 +384,32 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_unique(&mut roles, "backend");
     } else if contains_any(
         &haystack,
-        &["python", "fastapi", "django", "flask", "sqlalchemy"],
+        &[
+            "python",
+            "fastapi",
+            "django",
+            "drf",
+            "flask",
+            "sqlalchemy",
+            "pydantic",
+        ],
     ) {
         language = Some("python".to_string());
         push_if_contains(&haystack, &mut frameworks, "fastapi", &["fastapi"]);
         push_if_contains(&haystack, &mut frameworks, "django", &["django"]);
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
+            "django_rest_framework",
+            &["django rest framework", "drf"],
+        );
+        push_if_contains(&haystack, &mut frameworks, "pydantic", &["pydantic"]);
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
+            "sqlalchemy",
+            &["sqlalchemy", "sql alchemy"],
+        );
         push_if_contains(&haystack, &mut frameworks, "flask", &["flask"]);
         push_backend_unless_persistence_track(&mut roles);
     } else if contains_any(&haystack, &["rust", "cargo", "tokio", "axum", "actix"]) {
@@ -556,6 +604,99 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     if contains_any(
         &text,
         &[
+            "runtime",
+            "actuator",
+            "health",
+            "profile",
+            "configuration",
+            "config",
+            "startup",
+            "shutdown",
+            "logging",
+            "tracing",
+            "observability",
+            "resilience",
+            "运行",
+            "健康检查",
+            "启动",
+            "关闭",
+            "日志",
+            "链路追踪",
+        ],
+    ) {
+        push_unique(&mut tags, "runtime");
+    }
+    if contains_any(
+        &text,
+        &[
+            "integration",
+            "external service",
+            "downstream",
+            "webclient",
+            "spring cloud",
+            "cloud gateway",
+            "gateway",
+            "config server",
+            "service discovery",
+            "discovery",
+            "eureka",
+            "circuit breaker",
+            "retry",
+            "timeout",
+            "resilience",
+            "集成",
+            "外部服务",
+            "下游",
+            "网关",
+            "服务发现",
+            "熔断",
+            "重试",
+            "超时",
+        ],
+    ) {
+        push_unique(&mut tags, "integration");
+    }
+    if contains_any(
+        &text,
+        &[
+            "migration",
+            "migrate",
+            "port from",
+            "from django",
+            "from drf",
+            "迁移",
+            "迁出",
+            "迁到",
+        ],
+    ) {
+        push_unique(&mut tags, "migration");
+    }
+    if contains_any(
+        &text,
+        &[
+            "architecture",
+            "clean architecture",
+            "cqrs",
+            "mediatr",
+            "layer",
+            "layers",
+            "use case",
+            "handler",
+            "module boundary",
+            "dependency injection",
+            "provider",
+            "providers",
+            "架构",
+            "分层",
+            "用例",
+            "依赖注入",
+        ],
+    ) {
+        push_unique(&mut tags, "architecture");
+    }
+    if contains_any(
+        &text,
+        &[
             "generic",
             "generics",
             "type parameter",
@@ -641,6 +782,10 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     || has_focus("async")
                     || has_focus("performance")
                     || has_focus("configuration")
+                    || has_focus("runtime")
+                    || has_focus("integration")
+                    || has_focus("migration")
+                    || has_focus("architecture")
             } else if roles.contains("persistence") {
                 has_focus("persistence")
             } else {
@@ -801,6 +946,132 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
         _ => {}
     }
     items
+}
+
+fn backend_reference_items_for_signal(
+    signal: &CodeStackSignal,
+    focus_tags: &[String],
+) -> BTreeMap<String, BTreeSet<String>> {
+    let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
+    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
+    if signal.frameworks.iter().any(|item| item == "spring_boot") {
+        let items = groups.entry("springboot".to_string()).or_default();
+        items.insert("testing".to_string());
+        if has_focus("api") {
+            items.insert("web".to_string());
+        }
+        if has_focus("persistence") {
+            items.insert("data".to_string());
+        }
+        if has_focus("security") {
+            items.insert("security".to_string());
+        }
+        if has_focus("configuration") || has_focus("runtime") || has_focus("performance") {
+            items.insert("runtime".to_string());
+        }
+        if has_focus("integration") || signal.frameworks.iter().any(|item| item == "spring_cloud") {
+            items.insert("cloud".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "django") {
+        let items = groups.entry("django".to_string()).or_default();
+        items.insert("testing".to_string());
+        if has_focus("api") {
+            items.insert("views".to_string());
+            items.insert("serializers".to_string());
+        }
+        if has_focus("persistence") || has_focus("performance") {
+            items.insert("models".to_string());
+        }
+        if has_focus("security") {
+            items.insert("security".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "fastapi") {
+        let items = groups.entry("fastapi".to_string()).or_default();
+        items.insert("testing".to_string());
+        if has_focus("api") {
+            items.insert("routing".to_string());
+            items.insert("schemas".to_string());
+        }
+        if has_focus("persistence")
+            || (has_focus("migration") && signal.frameworks.iter().any(|item| item == "sqlalchemy"))
+        {
+            items.insert("data".to_string());
+        }
+        if has_focus("security") {
+            items.insert("security".to_string());
+        }
+        if has_focus("migration") {
+            items.insert("migration".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "aspnet_core") {
+        let items = groups.entry("aspnetcore".to_string()).or_default();
+        items.insert("testing".to_string());
+        if has_focus("api") {
+            items.insert("minimal".to_string());
+        }
+        if has_focus("architecture") {
+            items.insert("architecture".to_string());
+        }
+        if has_focus("persistence") {
+            items.insert("data".to_string());
+        }
+        if has_focus("security") {
+            items.insert("security".to_string());
+        }
+        if has_focus("configuration")
+            || has_focus("runtime")
+            || has_focus("performance")
+            || has_focus("integration")
+        {
+            items.insert("runtime".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "nestjs") {
+        let items = groups.entry("nestjs".to_string()).or_default();
+        items.insert("testing".to_string());
+        if has_focus("api") {
+            items.insert("controllers".to_string());
+            items.insert("dtos".to_string());
+            items.insert("services".to_string());
+        }
+        if has_focus("backend") || has_focus("persistence") || has_focus("architecture") {
+            items.insert("services".to_string());
+        }
+        if has_focus("security") {
+            items.insert("security".to_string());
+        }
+        if has_focus("migration") {
+            items.insert("migration".to_string());
+        }
+    }
+    groups
+}
+
+fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanItem {
+    if let Some((ref_prefix, path_group, label)) = match group_key {
+        "springboot" => Some(("bk.spring", "springboot", "Spring Boot")),
+        "django" => Some(("bk.django", "django", "Django")),
+        "fastapi" => Some(("bk.fastapi", "fastapi", "FastAPI")),
+        "aspnetcore" => Some(("bk.aspnet", "aspnetcore", "ASP.NET Core")),
+        "nestjs" => Some(("bk.nest", "nestjs", "NestJS")),
+        _ => None,
+    } {
+        return ReferenceLoadPlanItem {
+            ref_id: format!("{ref_prefix}.{group}"),
+            path: format!("tech/backend/{path_group}/{group}.md"),
+            reason: format!("Selected {label} {group} framework quality reference for this task."),
+        };
+    }
+    ReferenceLoadPlanItem {
+        ref_id: format!("tech.code.{group_key}.{group}"),
+        path: format!("tech/code/{group_key}/{group}.md"),
+        reason: format!(
+            "Selected {group_key}.{group} implementation quality reference for this task."
+        ),
+    }
 }
 
 fn task_is_frontend_task(task: &TaskDefinition) -> bool {
@@ -1033,6 +1304,8 @@ mod tests {
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(selection.reference_groups["java"].contains(&"testing".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"schema".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"dialects".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -1042,6 +1315,9 @@ mod tests {
         assert!(load_plan
             .iter()
             .any(|item| item.path == "tech/code/common.md"));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.data" && item.path == "tech/backend/springboot/data.md"
+        }));
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/code/java/security.md"));
@@ -1157,6 +1433,7 @@ mod tests {
         task.objective = "Add JWT login endpoint and role-based permission checks.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"security".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"security".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan
             .iter()
@@ -1167,10 +1444,13 @@ mod tests {
         assert!(load_plan
             .iter()
             .any(|item| item.ref_id == "tech.code.java.security"));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.ref_id == "bk.spring.security"));
     }
 
     #[test]
-    fn pure_api_task_does_not_load_persistence_or_sql_references() {
+    fn spring_boot_api_task_loads_web_without_persistence_or_sql_references() {
         let baseline = baseline(json!({
             "tracks": {
                 "backend": {"selection": "Java + Spring Boot + Spring Data JPA"},
@@ -1183,15 +1463,279 @@ mod tests {
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"spring".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(!selection.reference_groups.contains_key("sql"));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.web" && item.path == "tech/backend/springboot/web.md"
+        }));
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/code/java/persistence.md"));
         assert!(!load_plan
             .iter()
             .any(|item| item.path.starts_with("tech/code/sql/")));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/data.md"));
+    }
+
+    #[test]
+    fn spring_boot_runtime_reference_is_configuration_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        task.objective =
+            "Add actuator health startup logging and typed runtime configuration.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"web".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.runtime" && item.path == "tech/backend/springboot/runtime.md"
+        }));
+    }
+
+    #[test]
+    fn spring_boot_cloud_reference_is_integration_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot + Spring Cloud"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        task.objective =
+            "Add WebClient downstream integration with timeout retry and gateway fallback."
+                .to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"cloud".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.cloud" && item.path == "tech/backend/springboot/cloud.md"
+        }));
+    }
+
+    #[test]
+    fn django_api_task_loads_views_and_serializers_without_models() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django + Django REST Framework"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["python"].contains(&"core".to_string()));
+        assert!(selection.reference_groups["django"].contains(&"views".to_string()));
+        assert!(selection.reference_groups["django"].contains(&"serializers".to_string()));
+        assert!(selection.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["django"].contains(&"models".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.django.views" && item.path == "tech/backend/django/views.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.django.serializers"
+                && item.path == "tech/backend/django/serializers.md"
+        }));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/django/models.md"));
+    }
+
+    #[test]
+    fn django_persistence_task_loads_models_without_security() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django"},
+                "persistence": {"selection": "PostgreSQL"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityMigration,
+            ],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["django"].contains(&"models".to_string()));
+        assert!(selection.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["django"].contains(&"security".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.django.models" && item.path == "tech/backend/django/models.md"
+        }));
+    }
+
+    #[test]
+    fn fastapi_api_task_loads_routing_and_schemas_without_data() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + FastAPI + SQLAlchemy"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(selection.reference_groups["fastapi"].contains(&"routing".to_string()));
+        assert!(selection.reference_groups["fastapi"].contains(&"schemas".to_string()));
+        assert!(selection.reference_groups["fastapi"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["fastapi"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["fastapi"].contains(&"migration".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.fastapi.routing" && item.path == "tech/backend/fastapi/routing.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.fastapi.schemas" && item.path == "tech/backend/fastapi/schemas.md"
+        }));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/fastapi/data.md"));
+    }
+
+    #[test]
+    fn fastapi_migration_reference_is_explicitly_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + FastAPI + SQLAlchemy"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        task.objective = "Migrate the existing Django REST Framework order endpoint to FastAPI while preserving response behavior.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["fastapi"].contains(&"migration".to_string()));
+        assert!(selection.reference_groups["fastapi"].contains(&"data".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.fastapi.migration"
+                && item.path == "tech/backend/fastapi/migration.md"
+        }));
+    }
+
+    #[test]
+    fn aspnet_core_api_task_loads_minimal_without_data_or_architecture() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": ".NET 8 + ASP.NET Core + Entity Framework Core"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["csharp"].contains(&"aspnet".to_string()));
+        assert!(selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
+        assert!(selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["aspnetcore"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["aspnetcore"].contains(&"architecture".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.aspnet.minimal" && item.path == "tech/backend/aspnetcore/minimal.md"
+        }));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/aspnetcore/data.md"));
+    }
+
+    #[test]
+    fn aspnet_core_architecture_reference_is_task_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": ".NET 8 + ASP.NET Core"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        task.objective =
+            "Introduce clean architecture CQRS handlers and dependency injection boundaries."
+                .to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["aspnetcore"].contains(&"architecture".to_string()));
+        assert!(selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.aspnet.architecture"
+                && item.path == "tech/backend/aspnetcore/architecture.md"
+        }));
+    }
+
+    #[test]
+    fn nestjs_api_task_loads_controller_dto_service_without_migration() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "TypeScript + NestJS + Prisma"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["typescript"].contains(&"core".to_string()));
+        assert!(selection.reference_groups["nestjs"].contains(&"controllers".to_string()));
+        assert!(selection.reference_groups["nestjs"].contains(&"dtos".to_string()));
+        assert!(selection.reference_groups["nestjs"].contains(&"services".to_string()));
+        assert!(selection.reference_groups["nestjs"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["nestjs"].contains(&"migration".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.nest.controllers"
+                && item.path == "tech/backend/nestjs/controllers.md"
+        }));
+        assert!(load_plan.iter().any(
+            |item| item.ref_id == "bk.nest.dtos" && item.path == "tech/backend/nestjs/dtos.md"
+        ));
+    }
+
+    #[test]
+    fn nestjs_express_migration_reference_is_explicitly_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "TypeScript + NestJS"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        task.objective =
+            "Migrate existing Express routers and middleware into NestJS modules and controllers."
+                .to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["nestjs"].contains(&"migration".to_string()));
+        assert!(selection.reference_groups["nestjs"].contains(&"services".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.nest.migration" && item.path == "tech/backend/nestjs/migration.md"
+        }));
     }
 
     #[test]

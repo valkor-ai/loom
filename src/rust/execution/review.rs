@@ -3181,9 +3181,9 @@ fn build_review_signals(
             "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
             "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
             "reason": if quality_satisfied {
-                "TaskResult contains supported code quality evidence for selected language references."
+                "TaskResult contains supported code quality evidence for selected language/framework references."
             } else {
-                "TaskResult is missing supported code quality evidence for selected language references."
+                "TaskResult is missing supported code quality evidence for selected language/framework references."
             }
         }));
     }

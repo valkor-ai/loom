@@ -1441,7 +1441,7 @@ fn validate_code_quality_evidence(
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].referenceGroupsChecked",
-                "codeQualityEvidence must record the selected language reference groups checked for this task.",
+                "codeQualityEvidence must record the selected language/framework reference groups checked for this task.",
             ));
         }
         if let Some(requirement) = requirements_by_id.get(evidence.requirement_id.as_str()) {
@@ -1541,7 +1541,7 @@ fn validate_code_quality_reference_groups(
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].referenceGroupsChecked",
-                "codeQualityEvidence.referenceGroupsChecked must include every selected language from the assigned code quality requirement.",
+                "codeQualityEvidence.referenceGroupsChecked must include every selected language/framework group key from the assigned code quality requirement.",
             ));
             continue;
         };
@@ -1560,7 +1560,7 @@ fn validate_code_quality_reference_groups(
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].referenceGroupsChecked",
-                "codeQualityEvidence.referenceGroupsChecked must not add languages that were not selected by the assigned code quality requirement.",
+                "codeQualityEvidence.referenceGroupsChecked must not add language/framework group keys that were not selected by the assigned code quality requirement.",
             ));
             continue;
         };
@@ -2839,7 +2839,7 @@ fn task_result_code_quality_conflict(context: &RepairContextInput, mut base: Val
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced code quality requirements, add codeQualityEvidence entries for every task.codeQualityRequirementRefs item and cite task verificationIds.",
-        "If selected language reference evidence or verification is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
+        "If selected language or framework reference evidence or verification is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
     ]);
     base
 }
@@ -2894,7 +2894,7 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
         .any(|issue| issue.code == "TASK_RESULT_CODE_QUALITY_INVALID")
     {
         rules.push("codeQualityEvidence must cover every task.codeQualityRequirementRefs item when the task is completed or completed_with_notes.");
-        rules.push("codeQualityEvidence.referenceGroupsChecked must exactly match the selected language groups for the assigned code quality requirement.");
+        rules.push("codeQualityEvidence.referenceGroupsChecked must exactly match the selected language/framework groups for the assigned code quality requirement.");
         rules.push("codeQualityEvidence.referenceFilesChecked must exactly list files from sourceContext.codeQualityRequirements[].referenceLoadPlan that were read for the task.");
         rules.push(
             "codeQualityEvidence.verificationIds must use exact task.verificationIntents ids.",
