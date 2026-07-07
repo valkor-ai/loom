@@ -361,13 +361,7 @@ Loom is informed by adjacent work in coding-agent skills, agentic engineering wo
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=valkor-ai%2Floom&type=date&legend=top-left">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&theme=dark&legend=top-left&sealed_token=sZiB34_--zGHYVIPJwY-4rmGxT49HUV_Kt6Giu2lfC3CHhbS5BJhmd-pytGrJ60mxNXZt9AewwJlAzY" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=sZiB34_--zGHYVIPJwY-4rmGxT49HUV_Kt6Giu2lfC3CHhbS5BJhmd-pytGrJ60mxNXZt9AewwJlAzY" />
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=sZiB34_--zGHYVIPJwY-4rmGxT49HUV_Kt6Giu2lfC3CHhbS5BJhmd-pytGrJ60mxNXZt9AewwJlAzY" />
-  </picture>
-</a>
+[![Star History Chart](./assets/star-history-2026.png)](https://www.star-history.com/?repos=valkor-ai%2Floom&type=date&legend=top-left)
 
 ## License
 
