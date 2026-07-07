@@ -364,11 +364,11 @@ Loom 关注 coding-agent skills、agentic engineering workflows 和软件工程�
 
 ## Star History
 
-<a href="https://www.star-history.com/#valkor-ai/loom&Date">
+<a href="https://www.star-history.com/?repos=valkor-ai%2Floom&type=date&legend=top-left">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=valkor-ai/loom&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=valkor-ai/loom&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=valkor-ai/loom&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&theme=dark&legend=top-left&sealed_token=5MYi3OcSUtRp4x6YK1R8aypDmnYGgKJzQFbpOKuZ_WqAAsbR0-Khe10eNwZOsVOEhvqb3rkfjOWSmvM" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=5MYi3OcSUtRp4x6YK1R8aypDmnYGgKJzQFbpOKuZ_WqAAsbR0-Khe10eNwZOsVOEhvqb3rkfjOWSmvM" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=5MYi3OcSUtRp4x6YK1R8aypDmnYGgKJzQFbpOKuZ_WqAAsbR0-Khe10eNwZOsVOEhvqb3rkfjOWSmvM" />
   </picture>
 </a>
 
