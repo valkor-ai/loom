@@ -1,8 +1,6 @@
 # Swift Concurrency Quality
 
-Use this topic reference when `tech/code/swift/concurrency.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies to Swift async/await and concurrency isolation.
+This file applies to Swift async/await and concurrency isolation.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies to Swift async/aw
 - Compile with concurrency warnings or warnings-as-errors when the project enables them.
 - For task groups or fan-out, verify partial failure and ordering behavior.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `swift.concurrency` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/swift/concurrency.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the concurrency decision: actor isolation, MainActor boundary, async let/task group, task ownership, cancellation, AsyncSequence cleanup, continuation safety, or Sendable proof.

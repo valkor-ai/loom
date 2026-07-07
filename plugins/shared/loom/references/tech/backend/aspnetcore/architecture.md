@@ -1,8 +1,6 @@
 # ASP.NET Core Clean Architecture Quality
 
-Use this topic reference when `tech/backend/aspnetcore/architecture.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected architecture references, and selected C# references. This file applies Clean Architecture, CQRS, MediatR, dependency inversion, and layer-boundary rules to task-owned .NET code.
+This file applies Clean Architecture, CQRS, MediatR, dependency inversion, and layer-boundary rules to task-owned .NET code.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected architecture references, a
 - Verify DI composition and pipeline behavior when adding handlers, validators, or infrastructure adapters.
 - Record any intentional deviation from existing layer convention as a known gap.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `aspnetcore.architecture` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/aspnetcore/architecture.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the architecture decision: layer boundary, CQRS handler, MediatR pipeline, dependency inversion, use-case service, transaction ownership, or DI composition proof.

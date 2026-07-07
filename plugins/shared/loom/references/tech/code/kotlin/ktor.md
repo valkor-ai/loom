@@ -1,9 +1,5 @@
 # Kotlin Ktor Server Quality
 
-Use this topic reference when `tech/code/kotlin/ktor.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Ktor routing, plugins, serialization, authentication, CORS, StatusPages, WebSockets, database integration, request validation, or server tests.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Run the Gradle test/build task for the server module.
 - For WebSockets or long-lived sessions, test connect/disconnect cleanup or at least smoke the lifecycle path.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `kotlin.ktor` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/kotlin/ktor.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Ktor decision: route module, serialization, validation boundary, StatusPages mapping, auth config, CORS, database boundary, WebSocket lifecycle, or DTO separation.

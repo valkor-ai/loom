@@ -1,8 +1,6 @@
 # Spring Boot Testing Quality
 
-Use this topic reference when `tech/backend/springboot/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected Java testing references. This file applies Spring Boot test-slice and integration-test rules to task-owned changes.
+This file applies Spring Boot test-slice and integration-test rules to task-owned changes.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md` and selected Java testing references
 - For persistence changes, assert database state rather than only service return values.
 - For security changes, test allowed, unauthenticated, and unauthorized cases.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `springboot.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/springboot/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: unit test, `@WebMvcTest`, `@DataJpaTest`, `@SpringBootTest`, Testcontainers, MockMvc, WebTestClient, security test, or configuration binding proof.

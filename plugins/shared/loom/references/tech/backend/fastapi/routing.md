@@ -1,8 +1,6 @@
 # FastAPI Routing Quality
 
-Use this topic reference when `tech/backend/fastapi/routing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected schema references, and selected API references. This file applies APIRouter, dependency injection, response, and endpoint rules to task-owned HTTP behavior.
+This file applies APIRouter, dependency injection, response, and endpoint rules to task-owned HTTP behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected schema references, and sel
 - Verify OpenAPI docs or schema generation when public routes or models change.
 - For dependency changes, test override behavior and cleanup in the test suite.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `fastapi.routing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/fastapi/routing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the FastAPI routing decision: router boundary, dependency, response model, status code, pagination, error mapping, background task, WebSocket, or OpenAPI proof.

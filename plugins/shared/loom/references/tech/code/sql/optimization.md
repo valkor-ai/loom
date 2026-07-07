@@ -1,8 +1,6 @@
 # SQL Optimization Quality
 
-Use this topic reference when `tech/code/sql/optimization.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies to query and schema changes made for performance.
+This file applies to query and schema changes made for performance.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies to query and sche
 - Record before/after timing or plan shape when feasible. If production-scale data is unavailable, say what was verified and what remains a volume risk.
 - Run affected integration/repository/API tests to ensure the optimized path still returns the expected user-facing data.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `sql.optimization` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/sql/optimization.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the optimization decision: query rewrite, index design, plan finding, set-based replacement, partial index, materialized view, partitioning, statistics, or measured proof.

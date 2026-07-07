@@ -1,8 +1,6 @@
 # ASP.NET Core Minimal API Quality
 
-Use this topic reference when `tech/backend/aspnetcore/minimal.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected C# references, and selected API references. This file applies ASP.NET Core Minimal API and endpoint routing rules to task-owned HTTP behavior.
+This file applies ASP.NET Core Minimal API and endpoint routing rules to task-owned HTTP behavior.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected C# references, and selecte
 - Verify route group metadata and OpenAPI generation when public endpoint contract changes.
 - Run `dotnet build` and the relevant `dotnet test` target after endpoint changes.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `aspnetcore.minimal` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/aspnetcore/minimal.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the ASP.NET Core API decision: endpoint boundary, route group, DTO mapping, validation filter, typed result, OpenAPI metadata, middleware order, or endpoint proof.

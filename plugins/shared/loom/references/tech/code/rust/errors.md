@@ -1,9 +1,5 @@
 # Rust Error Handling Quality
 
-Use this topic reference when `tech/code/rust/errors.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes `Result`, `Option`, custom error enums, `thiserror`, `anyhow`, error conversions, user-facing error mapping, logging, recovery, or panic behavior.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm no new production `unwrap` handles recoverable errors.
 - For typed errors, assert variants with pattern matching instead of brittle full display strings unless display text is the public contract.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `rust.errors` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/rust/errors.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the error decision: Result/Option split, typed error, anyhow context, conversion, boundary mapping, cancellation semantics, panic policy, or logging boundary.

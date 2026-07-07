@@ -1,9 +1,5 @@
 # JavaScript Testing Quality
 
-Use this topic reference when `tech/code/javascript/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes JavaScript tests, fixtures, test setup, mocks, runtime smoke checks, module import checks, or behavior implemented in plain JavaScript.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For browser tests, include the relevant user interaction or runtime API path; for Node tests, include configuration and filesystem/process error paths when touched.
 - Record unsupported runtime or browser gaps only when they are outside the task boundary or blocked by repository infrastructure.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `javascript.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/javascript/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the JavaScript behavior verified and the commands run.

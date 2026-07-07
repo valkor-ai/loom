@@ -1,9 +1,5 @@
 # C# Entity Framework Quality
 
-Use this topic reference when `tech/code/csharp/persistence.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes EF Core DbContext setup, entities, configurations, migrations, repositories, query projections, transactions, tracking behavior, interceptors, or database-backed business rules.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Test write/read round-trip for changed persistence behavior, including transaction rollback or failure branches when relevant.
 - Test filters, sorting, pagination, projection fields, not-found/empty results, and soft-delete/global-filter behavior touched by the task.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `csharp.persistence` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/csharp/persistence.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the persistence decision: entity mapping, DTO projection, tracking choice, transaction boundary, migration review, query optimization, or concurrency handling.

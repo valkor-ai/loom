@@ -1,8 +1,6 @@
 # Java JPA Persistence Quality
 
-Use this topic reference when `tech/code/java/persistence.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file turns JPA/Hibernate guidance into task-level persistence rules.
+This file turns JPA/Hibernate guidance into task-level persistence rules.
 
 ## When To Use
 
@@ -31,8 +29,6 @@ Read it together with `tech/code/common.md`. This file turns JPA/Hibernate guida
 - For migrations, run the migration/app startup path and confirm Hibernate validation does not fail because of mismatched column names, nullability, enum storage, or database-specific type affinity.
 - For N+1 or performance fixes, include query-shape evidence when feasible: projection query, fetch join/entity graph, or a test that exercises the association path.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `java.persistence` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/java/persistence.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the persistence decision made: entity mapping, transaction boundary, projection/read model, migration alignment, query optimization, or write/read proof.

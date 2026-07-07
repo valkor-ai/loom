@@ -1,16 +1,13 @@
 # Loom API Contract Core
 
-Load this file only when the current MCP request lists `tech/api/core.md` in `referenceLoadPlan`.
-
 API work in Loom is not a standalone specification exercise. It is a task-verifiable contract that connects Architecture interface design, TaskPlan assignment, Execution implementation, TaskResult evidence, Review routing, and later deploy/runtime probes.
 
 ## Operating Model
 
-1. Read the current MCP request groups first. The MCP request is the source of truth.
-2. Load only API reference files listed in the current request's `referenceLoadPlan`; selected groups are evidence labels, not path mappings.
-3. Model only current-phase APIs that are required by confirmed scope, frontend bindings, business workflows, runtime probes, or integration boundaries.
-4. Express API decisions through AAC `interfaces[]` and downstream `apiContractRequirements`; do not paste reference text into Loom JSON artifacts.
-5. Keep API quality evidence concrete: changed files, endpoint paths, status/error behavior, request/response DTOs, tests, runtime probes, or contract files.
+1. Use the confirmed Loom request, AAC artifacts, and current task scope as the authority for API ownership, ids, and boundaries.
+2. Model only current-phase APIs that are required by confirmed scope, frontend bindings, business workflows, runtime probes, or integration boundaries.
+3. Express API decisions through AAC `interfaces[]` and downstream `apiContractRequirements`; use references to make concrete decisions rather than copying reference prose.
+4. Keep API quality evidence concrete: changed files, endpoint paths, status/error behavior, request/response DTOs, tests, runtime probes, or contract files.
 
 ## Required API Contract Assets
 
@@ -33,7 +30,7 @@ API work in Loom is not a standalone specification exercise. It is a task-verifi
 - For every collection API, declare pagination/filtering only when the collection can grow beyond a bounded current-phase dataset.
 - Do not require OpenAPI files unless selected by the contract file reference or explicitly required by user/repo context.
 - Do not invent `/v1` or deprecation policy by default.
-- Do not invent idempotency keys, ETags, rate limits, retry headers, or request-id infrastructure by default; apply operations semantics only when the current load plan selects the operations reference or the repository already owns that convention.
+- Do not invent idempotency keys, ETags, rate limits, retry headers, or request-id infrastructure by default; apply operations semantics only when explicitly selected for the current API work or already owned by the repository.
 
 ## Minimum Quality Bar
 

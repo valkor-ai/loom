@@ -1,8 +1,6 @@
 # Spring Boot Cloud And Integration Quality
 
-Use this topic reference when `tech/backend/springboot/cloud.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Java async/security references, and selected API references when present. This file applies Spring Cloud, gateway, service discovery, WebClient, and resilience rules to task-owned integration behavior.
+This file applies Spring Cloud, gateway, service discovery, WebClient, and resilience rules to task-owned integration behavior.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`, selected Java async/security refere
 - For resilience policies, verify retry counts, timeout behavior, fallback result, circuit-open behavior, and that non-idempotent operations are not retried unsafely.
 - For Config/Discovery changes, run context startup with local/test profile and assert missing external infrastructure fails only when the architecture requires fail-fast.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `springboot.cloud` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/springboot/cloud.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the integration decision: Spring Cloud Config, discovery, gateway route, WebClient/downstream client, load balancing, timeout, retry, circuit breaker, fallback, rate limit, or integration failure mapping.

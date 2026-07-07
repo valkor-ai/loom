@@ -1,8 +1,6 @@
 # NestJS Controller Quality
 
-Use this topic reference when `tech/backend/nestjs/controllers.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected TypeScript references, and selected API references. This file applies NestJS controller, route, pipe, and Swagger rules to task-owned HTTP behavior.
+This file applies NestJS controller, route, pipe, and Swagger rules to task-owned HTTP behavior.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected TypeScript references, and
 - Verify Swagger/OpenAPI generation when public route contract changes.
 - Run lint/build/test targets for affected NestJS project scope.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `nestjs.controllers` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/nestjs/controllers.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the NestJS controller decision: controller boundary, route binding, pipe usage, guard scope, status code, Swagger metadata, or E2E route proof.

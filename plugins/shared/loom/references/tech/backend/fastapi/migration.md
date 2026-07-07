@@ -1,8 +1,6 @@
 # Django To FastAPI Migration Quality
 
-Use this topic reference when `tech/backend/fastapi/migration.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Django references, and selected FastAPI references. This file applies migration rules when a task explicitly ports behavior from Django/DRF to FastAPI.
+This file applies migration rules when a task explicitly ports behavior from Django/DRF to FastAPI.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected Django references, and sel
 - Verify database migration or data-access parity for relationships and constraints that existed in Django.
 - Record intentional behavior differences as known gaps rather than silently changing the contract.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `fastapi.migration` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/fastapi/migration.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the migration decision: serializer-to-schema mapping, ViewSet-to-router mapping, permission parity, ORM query parity, test parity, or accepted behavior difference.

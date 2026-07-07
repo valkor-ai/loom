@@ -1,8 +1,6 @@
 # Spring Boot Data Quality
 
-Use this topic reference when `tech/backend/springboot/data.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Java persistence references, and selected SQL references. This file applies Spring Data and migration rules to task-owned persistence behavior.
+This file applies Spring Data and migration rules to task-owned persistence behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected Java persistence reference
 - Test repository filters, projections, sorting, pagination/counts, not-found, duplicate/unique constraint, and transaction rollback branches when relevant.
 - For migrations, verify the app starts with schema validation enabled when the repository uses it, and record any dialect limitation as a known gap.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `springboot.data` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/springboot/data.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Spring Data decision: repository query, transaction boundary, projection, entity lifecycle, migration alignment, dialect compatibility, auditing, or persistence proof.

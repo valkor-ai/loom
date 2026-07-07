@@ -1,9 +1,5 @@
 # TypeScript Configuration Quality
 
-Use this topic reference when `tech/code/typescript/config.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes `tsconfig` files, package build settings, module resolution, declaration output, project references, path aliases, framework TypeScript integration, or strictness flags.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - If declaration output changed, run the package build and confirm generated declarations reference valid public paths.
 - Confirm no changed config silently removes source coverage by excluding files that were previously typechecked.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `typescript.config` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/typescript/config.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the config decision: strictness, module resolution, alias ownership, project references, declaration output, framework layering, or include/exclude scope.

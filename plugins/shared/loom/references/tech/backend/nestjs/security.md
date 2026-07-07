@@ -1,8 +1,6 @@
 # NestJS Security Quality
 
-Use this topic reference when `tech/backend/nestjs/security.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected TypeScript security references, and selected API security references when present. This file applies NestJS JWT, Passport, guards, roles, and auth-module rules to task-owned security behavior.
+This file applies NestJS JWT, Passport, guards, roles, and auth-module rules to task-owned security behavior.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected TypeScript security refere
 - Test password hashing and sensitive field exclusion.
 - Run module compilation tests after strategy, guard, or AuthModule provider changes.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `nestjs.security` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/nestjs/security.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the NestJS security decision: JWT strategy, AuthGuard, RolesGuard, public-route metadata, auth service, password hashing, module dependency, or protected route proof.

@@ -1,8 +1,6 @@
 # Swift Protocol Quality
 
-Use this topic reference when `tech/code/swift/protocols.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies protocol-oriented design to Swift task changes.
+This file applies protocol-oriented design to Swift task changes.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`. This file applies protocol-oriented
 - For type erasure, test forwarding of success and failure behavior and ensure identity/equality semantics are intentional.
 - Verify protocol extension defaults do not bypass concrete type invariants.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `swift.protocols` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/swift/protocols.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the protocol decision: capability boundary, associated type/generic constraint, composition, default extension, type erasure, opaque return, conditional conformance, or substitution test.

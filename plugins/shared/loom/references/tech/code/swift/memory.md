@@ -1,8 +1,6 @@
 # Swift Memory Quality
 
-Use this topic reference when `tech/code/swift/memory.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies ARC, ownership, and performance guidance to Swift changes.
+This file applies ARC, ownership, and performance guidance to Swift changes.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`. This file applies ARC, ownership, a
 - For performance claims, record measured timing/memory or explicitly state that the change is structural and not benchmarked.
 - Verify observers, timers, tasks, and subscriptions are cancelled or released in owner teardown.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `swift.memory` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/swift/memory.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the memory decision: weak/unowned ownership, closure capture, observer/task cleanup, value semantics, collection allocation, cache boundary, memory warning, or profiling proof.

@@ -1,8 +1,6 @@
 # Express To NestJS Migration Quality
 
-Use this topic reference when `tech/backend/nestjs/migration.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected NestJS references, and selected TypeScript/JavaScript references. This file applies migration rules when a task explicitly ports Express behavior into NestJS.
+This file applies migration rules when a task explicitly ports Express behavior into NestJS.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected NestJS references, and sel
 - Verify module compilation and provider injection for migrated services.
 - Record intentional behavior differences as known gaps rather than silently changing the contract.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `nestjs.migration` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/nestjs/migration.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the migration decision: router-to-controller mapping, middleware-to-guard/pipe/filter mapping, DI conversion, validation parity, error parity, test parity, or accepted behavior difference.

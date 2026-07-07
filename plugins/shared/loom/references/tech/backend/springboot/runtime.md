@@ -1,8 +1,6 @@
 # Spring Boot Runtime Quality
 
-Use this topic reference when `tech/backend/springboot/runtime.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies Spring Boot runtime behavior rules; deployment assets remain under Loom deploy references.
+This file applies Spring Boot runtime behavior rules; deployment assets remain under Loom deploy references.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies Spring Boot runti
 - Probe the exact actuator/health/runtime endpoint changed by the task.
 - For external client resilience, verify timeout/error mapping and ensure retries do not duplicate unsafe operations.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `springboot.runtime` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/springboot/runtime.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the runtime decision: typed config, profile/default, actuator exposure, health indicator, logging/tracing, resilience, startup task, shutdown, or runtime smoke.

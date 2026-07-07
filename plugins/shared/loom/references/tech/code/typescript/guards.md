@@ -1,9 +1,5 @@
 # TypeScript Runtime Guard Quality
 
-Use this topic reference when `tech/code/typescript/guards.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task consumes unknown data from APIs, form submissions, URL/query params, local or session storage, files, environment variables, web messages, or third-party libraries.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For storage or API guards, test malformed persisted or remote data rather than only happy-path fixtures created by the same code.
 - Run typecheck to confirm branches narrow without `as` assertions after the guard.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `typescript.guards` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/typescript/guards.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the protected boundary and the invalid cases covered.

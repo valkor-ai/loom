@@ -1,9 +1,5 @@
 # JavaScript Module Quality
 
-Use this topic reference when `tech/code/javascript/modules.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes imports, exports, package entry points, `package.json` `type` or `exports`, dynamic imports, bundling boundaries, CommonJS/ESM interop, or module layout.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Verify both Node and browser targets when the module is consumed in both environments.
 - Confirm no unintended circular dependency, missing extension, broken `exports` path, or default/named export mismatch was introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `javascript.modules` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/javascript/modules.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the module decision: ESM/CJS convention, public exports, dynamic import, interop adapter, side-effect boundary, or circular dependency removal.

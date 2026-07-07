@@ -1,7 +1,5 @@
 # API Error Handling
 
-Load this file only when the current MCP request lists `tech/api/errors.md` in `referenceLoadPlan`.
-
 ## Error Contract Purpose
 
 API errors are part of product behavior. They should let the caller or UI explain what happened and what can be done next without exposing implementation internals.

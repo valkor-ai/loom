@@ -1,9 +1,5 @@
 # Rust Ownership Quality
 
-Use this topic reference when `tech/code/rust/ownership.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes lifetime relationships, borrowed/owned APIs, smart pointer choice, interior mutability, RAII/drop cleanup, `Cow`, `Pin`, shared state, or ownership-sensitive data structures.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Use clippy to catch needless clones, deref issues, and lock/ownership smells when available.
 - If unsafe, pinning, or custom drop behavior changed, add focused tests and record any Miri/sanitizer check that was run.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `rust.ownership` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/rust/ownership.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the ownership decision: borrowed API, lifetime relationship, pointer type, interior mutability, Cow, RAII/Drop, lock scope, Pin, leak avoidance, or builder ownership.

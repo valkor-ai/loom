@@ -1,8 +1,6 @@
 # ASP.NET Core EF Core Quality
 
-Use this topic reference when `tech/backend/aspnetcore/data.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected C# persistence references, and selected SQL references. This file applies EF Core, DbContext, migrations, and query rules to task-owned persistence behavior.
+This file applies EF Core, DbContext, migrations, and query rules to task-owned persistence behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected C# persistence references,
 - For migrations, verify a clean database can apply them and the app starts with the configured provider.
 - For performance-sensitive queries, test result correctness and query shape/query count when the repository supports it.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `aspnetcore.data` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/aspnetcore/data.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the EF Core decision: entity configuration, migration, DbContext boundary, query projection, relationship loading, transaction boundary, provider behavior, or persistence proof.

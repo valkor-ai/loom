@@ -1,9 +1,5 @@
 # C++ Template Quality
 
-Use this topic reference when `tech/code/cpp/templates.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes templates, variadic templates, concepts/constraints, type traits, CRTP, SFINAE, expression templates, compile-time computation, or generic library APIs.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add negative constraint tests when the repository has compile-fail or static assertion test infrastructure.
 - Check compile errors remain understandable for invalid use, especially for public templates.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.templates` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/templates.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the template decision: concept constraint, variadic API, if constexpr branch, CRTP mixin, expression template, type trait, compile-time computation, or code-bloat containment.

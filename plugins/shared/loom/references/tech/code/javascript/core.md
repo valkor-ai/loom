@@ -1,9 +1,5 @@
 # JavaScript Core Quality
 
-Use this topic reference when `tech/code/javascript/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes JavaScript source in apps, libraries, Node services, browser modules, build scripts, or shared runtime utilities.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for data validation, defaulting behavior, and side-effect boundaries that changed.
 - Confirm no new unhandled promise rejections, unsupported syntax for the target runtime, or module-system mixing was introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `javascript.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/javascript/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the JavaScript decision made: runtime target, module convention, defaulting behavior, validation boundary, JSDoc contract, or side-effect separation.

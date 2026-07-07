@@ -1,8 +1,6 @@
 # SQL Schema Quality
 
-Use this topic reference when `tech/code/sql/schema.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies to relational schema and migration work.
+This file applies to relational schema and migration work.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies to relational sch
 - For ORM-backed changes, prove write/read mapping, enum/state conversion, nullable/default handling, and relation loading needed by the task.
 - For soft delete/audit/history changes, test active query behavior and recorded historical data.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `sql.schema` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/sql/schema.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the schema decision: normalization, key strategy, constraint, data type, cascade behavior, index, soft delete, audit/history, migration compatibility, or ORM alignment.

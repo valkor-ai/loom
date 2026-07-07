@@ -1,7 +1,5 @@
 # API Security And Authorization
 
-Load this file only when the current MCP request lists `tech/api/security.md` in `referenceLoadPlan`.
-
 ## Scope Rule
 
 Declare only the authentication and authorization behavior required by the current phase, existing repository pattern, or confirmed technical baseline. Do not invent OAuth/JWT/session systems for phases that only require local scaffolding or unauthenticated internal prototypes.

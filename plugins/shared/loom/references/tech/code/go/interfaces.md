@@ -1,9 +1,5 @@
 # Go Interface Quality
 
-Use this topic reference when `tech/code/go/interfaces.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Go interfaces, dependency boundaries, constructors, adapters, mocks, standard I/O integration, or package contracts.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm the interface does not include methods unused by the consuming code.
 - For functional options or constructors, test defaults, supplied options, and missing required dependency behavior.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `go.interfaces` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/go/interfaces.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the interface decision: consumer-side seam, standard interface reuse, constructor injection, functional option, compile-time assertion, or interface split.

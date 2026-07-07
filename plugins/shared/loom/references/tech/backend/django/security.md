@@ -1,8 +1,6 @@
 # Django Security Quality
 
-Use this topic reference when `tech/backend/django/security.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Python security references, and selected API security references when present. This file applies Django, DRF, and SimpleJWT security rules to task-owned authentication and authorization behavior.
+This file applies Django, DRF, and SimpleJWT security rules to task-owned authentication and authorization behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected Python security references
 - Test password hashing and registration validation for auth flows.
 - Run security-related API tests with real DRF permission evaluation rather than bypassing all auth through mocks.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `django.security` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/django/security.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Django security decision: auth class, permission, object permission, JWT setting, password handling, CSRF/CORS behavior, ownership check, or protected endpoint proof.

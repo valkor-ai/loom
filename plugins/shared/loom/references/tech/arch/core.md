@@ -1,16 +1,15 @@
 # Loom Architecture Core
 
-Load this file when a Loom request includes `architectureQualitySeed`, `architectureQuality`, Architecture section generation, architecture repair, TaskPlan architecture quality assignment, or Review architecture quality signals.
+Use this file when Loom architecture work needs to turn confirmed scope, technical baseline, and repository context into implementation-facing decisions.
 
 Loom architecture work is not a standalone design essay. It is a delivery contract that must be carried from Architecture into TaskPlan, Execution, TaskResult, Review, and Repair.
 
 ## Operating Model
 
-1. Read the current MCP request groups first. The MCP request remains the source of truth.
-2. Load only architecture references listed in the current request's `referenceLoadPlan`; selected groups are evidence labels, not path mappings.
-3. Convert the confirmed requirement scope and technical baseline into implementation-facing architecture constraints.
-4. Write Architecture section artifacts only in the returned target files.
-5. Do not copy reference prose into Loom JSON artifacts. Use the references to make concrete decisions.
+1. Use the confirmed requirement scope, technical baseline, and repository context as source facts.
+2. Convert those source facts into implementation-facing architecture constraints.
+3. Keep Architecture section artifacts compact, decision-oriented, and consumable by TaskPlan and Execution.
+4. Use references to make concrete decisions rather than copying reference prose into Loom JSON artifacts.
 
 ## Required Architecture Assets
 

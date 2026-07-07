@@ -1,9 +1,5 @@
 # C# ASP.NET Core Quality
 
-Use this topic reference when `tech/code/csharp/aspnet.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes ASP.NET Core Minimal APIs, controllers, route groups, middleware, authentication, authorization, validation filters, health checks, caching, rate limiting, or host configuration.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Run `dotnet test` and a startup/config smoke when middleware, options, auth, or health checks changed.
 - Confirm generated OpenAPI metadata or endpoint names remain consistent when the repository uses them.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `csharp.aspnet` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/csharp/aspnet.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the ASP.NET decision: endpoint style, validation boundary, middleware order, auth policy, options validation, problem response, caching/rate limiting, or health check.

@@ -1,8 +1,6 @@
 # NestJS DTO And Validation Quality
 
-Use this topic reference when `tech/backend/nestjs/dtos.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected TypeScript type references. This file applies NestJS DTO, class-validator, class-transformer, and mapped-type rules to task-owned input/output models.
+This file applies NestJS DTO, class-validator, class-transformer, and mapped-type rules to task-owned input/output models.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md` and selected TypeScript type referen
 - Verify Swagger schema for DTO changes that affect the public contract.
 - Run lint/typecheck so DTO mapped types and decorators compile correctly.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `nestjs.dtos` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/nestjs/dtos.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the DTO decision: validation decorator, mapped type, transform, nested validation, query DTO, response DTO, ValidationPipe behavior, or schema proof.

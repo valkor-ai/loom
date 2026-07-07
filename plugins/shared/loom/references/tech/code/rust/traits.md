@@ -1,9 +1,5 @@
 # Rust Trait Quality
 
-Use this topic reference when `tech/code/rust/traits.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes traits, generic bounds, associated types, trait objects, derive macros, conversion traits, extension traits, marker traits, or trait-based dependency boundaries.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm object-safety when using `dyn Trait`.
 - For public traits, include documentation or examples that show required invariants and expected implementor behavior.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `rust.traits` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/rust/traits.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the trait decision: associated type, generic bound, trait object, derive/manual impl, conversion trait, sealed trait, extension trait, marker trait, or coherence boundary.

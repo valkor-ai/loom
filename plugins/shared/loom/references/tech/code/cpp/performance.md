@@ -1,9 +1,5 @@
 # C++ Performance Quality
 
-Use this topic reference when `tech/code/cpp/performance.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes performance-sensitive C++ paths, allocation behavior, memory layout, hot loops, SIMD, allocators, move semantics, cache-sensitive data, or benchmarks.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Run benchmarks/profiling for performance claims and record the measured comparison.
 - Test edge sizes, empty inputs, non-aligned data, fallback paths, and error handling for SIMD/allocator/memory layout changes.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.performance` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/performance.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the performance decision: measured hotspot, move/copy reduction, container sizing, data layout, SIMD fallback, allocator ownership, alignment, sanitizer proof, or benchmark result.

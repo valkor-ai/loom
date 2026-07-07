@@ -1,8 +1,6 @@
 # PHP Laravel Quality
 
-Use this topic reference when `tech/code/php/laravel.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies Laravel conventions to task-owned behavior.
+This file applies Laravel conventions to task-owned behavior.
 
 ## When To Use
 
@@ -30,8 +28,6 @@ Read it together with `tech/code/common.md`. This file applies Laravel conventio
 - For queues/events, use the repository's fake/test helpers to prove dispatch timing and payload, and test handler behavior when the handler owns business work.
 - For Eloquent queries, test filters, pagination, sorting, relationship loading/counts, and empty/not-found behavior touched by the task.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `php.laravel` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/php/laravel.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Laravel decision: Form Request, DTO conversion, resource shape, transaction boundary, Eloquent query, policy/gate, migration constraint, job/event, or feature-test proof.

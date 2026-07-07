@@ -1,8 +1,6 @@
 # Java Testing Quality
 
-Use this topic reference when `tech/code/java/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file guides test selection for Java/Spring tasks; it is not a requirement to add every test type.
+This file guides test selection for Java/Spring tasks; it is not a requirement to add every test type.
 
 ## When To Use
 
@@ -31,8 +29,6 @@ Read it together with `tech/code/common.md`. This file guides test selection for
 - For persistence changes, prove write/read or query behavior against the configured test database.
 - For security changes, prove both authorization success and denial.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `java.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/java/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the test level used, commands run, and why that level was sufficient for the changed Java behavior.

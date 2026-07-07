@@ -1,8 +1,6 @@
 # PHP Modern PHP Quality
 
-Use this topic reference when `tech/code/php/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file turns modern PHP language guidance into task-level implementation rules.
+This file turns modern PHP language guidance into task-level implementation rules.
 
 ## When To Use
 
@@ -30,8 +28,6 @@ Read it together with `tech/code/common.md`. This file turns modern PHP language
 - Test invalid input, impossible state, enum mapping, exception/result behavior, and one successful business path touched by the task.
 - If a framework route or command is changed, verify the real entry point, not only the service in isolation.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `php.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/php/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the PHP decision: strict typing, DTO/value object, enum, readonly immutability, attribute metadata, DI boundary, domain exception, or static-analysis proof.

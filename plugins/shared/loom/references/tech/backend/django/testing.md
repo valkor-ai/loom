@@ -1,8 +1,6 @@
 # Django Testing Quality
 
-Use this topic reference when `tech/backend/django/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected Python testing references. This file applies Django, DRF, and pytest-django test rules to task-owned changes.
+This file applies Django, DRF, and pytest-django test rules to task-owned changes.
 
 ## When To Use
 
@@ -26,8 +24,6 @@ Read it together with `tech/code/common.md` and selected Python testing referenc
 - Verify database side effects for create/update/delete flows, including defaults, constraints, and rollback behavior.
 - For JWT/auth changes, test token obtain/refresh/protected endpoint behavior with real auth components.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `django.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/django/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: model test, serializer test, APITestCase, pytest-django, factory/fixture, auth test, query-count check, or migration check.

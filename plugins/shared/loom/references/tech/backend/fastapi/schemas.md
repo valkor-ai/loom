@@ -1,8 +1,6 @@
 # FastAPI Pydantic Schema Quality
 
-Use this topic reference when `tech/backend/fastapi/schemas.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected Python typing references. This file applies Pydantic V2 and FastAPI schema rules to task-owned request and response models.
+This file applies Pydantic V2 and FastAPI schema rules to task-owned request and response models.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md` and selected Python typing reference
 - Test settings binding defaults and invalid configuration when settings models are added or changed.
 - Pair schema tests with endpoint tests when HTTP status codes or error payloads depend on validation.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `fastapi.schemas` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/fastapi/schemas.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Pydantic decision: input/read/update split, validator, field constraint, `from_attributes`, aliasing, settings model, sensitive-field exclusion, or OpenAPI schema proof.

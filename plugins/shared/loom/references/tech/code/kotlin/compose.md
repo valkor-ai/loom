@@ -1,9 +1,5 @@
 # Kotlin Compose Quality
 
-Use this topic reference when `tech/code/kotlin/compose.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Jetpack Compose UI, Compose Multiplatform UI, ViewModels, state holders, navigation, Material theme usage, effects, lists, animation, or UI tests.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For ViewModel/Flow-backed screens, test state transitions and cancellation using coroutine test support.
 - For lists and effects, verify stable keys and cleanup behavior when inputs change or the screen is disposed.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `kotlin.compose` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/kotlin/compose.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Compose decision: state hoisting, screen state model, lifecycle collection, side effect key, lazy list keys, theme consistency, cleanup, or UI state verification.

@@ -1,9 +1,5 @@
 # Go Concurrency Quality
 
-Use this topic reference when `tech/code/go/concurrency.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes goroutines, channels, worker pools, queues, pipelines, timers, rate limiters, shutdown paths, shared mutable state, or async server/worker behavior.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Use timeouts in tests to catch leaked goroutines or blocked channels without making the suite flaky.
 - For rate limiting or worker pools, test concurrency bounds or queue behavior with deterministic hooks rather than sleep-only assertions when possible.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `go.concurrency` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/go/concurrency.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the concurrency decision: goroutine lifecycle, cancellation, channel ownership, worker pool, pipeline, sync primitive, rate limit, or race proof.

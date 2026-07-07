@@ -1,8 +1,6 @@
 # NestJS Testing Quality
 
-Use this topic reference when `tech/backend/nestjs/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected TypeScript testing references. This file applies NestJS TestingModule, unit, controller, service, and E2E test rules to task-owned changes.
+This file applies NestJS TestingModule, unit, controller, service, and E2E test rules to task-owned changes.
 
 ## When To Use
 
@@ -26,8 +24,6 @@ Read it together with `tech/code/common.md` and selected TypeScript testing refe
 - Verify global ValidationPipe and guards in E2E tests when endpoint behavior depends on them.
 - For service changes, assert repository/client calls and exception mapping.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `nestjs.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/nestjs/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: service unit test, controller test, TestingModule compile, E2E Supertest, guard test, pipe validation test, mocked provider, or lint/test command.

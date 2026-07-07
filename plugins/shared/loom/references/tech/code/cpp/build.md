@@ -1,9 +1,5 @@
 # C++ Build Quality
 
-Use this topic reference when `tech/code/cpp/build.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes CMake, build scripts, compiler flags, dependency managers, test targets, sanitizer targets, static analysis, install/export rules, or C++ project layout.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Run sanitizer or static-analysis targets when the task changed those paths or when memory/concurrency risk requires them.
 - Confirm dependency and lock/manifest changes are required by the task and do not introduce duplicate package-manager ownership.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.build` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/build.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the build decision: target-scoped config, standard selection, dependency manager, test wiring, sanitizer target, static analysis, platform guard, or install/export rule.

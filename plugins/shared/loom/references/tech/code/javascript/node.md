@@ -1,9 +1,5 @@
 # JavaScript Node Runtime Quality
 
-Use this topic reference when `tech/code/javascript/node.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Node.js services, CLIs, scripts, filesystem work, streams, environment configuration, HTTP servers, worker threads, child processes, or package runtime behavior.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For servers or long-running processes, test or manually smoke shutdown behavior if lifecycle code changed.
 - For filesystem, stream, child-process, or worker changes, cover error paths and cleanup of temporary resources.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `javascript.node` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/javascript/node.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Node decision: config validation, async filesystem, path portability, stream pipeline, server shutdown, child process boundary, worker use, or secret-safe logging.

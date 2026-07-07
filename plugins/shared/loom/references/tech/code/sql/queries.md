@@ -1,8 +1,6 @@
 # SQL Query Quality
 
-Use this topic reference when `tech/code/sql/queries.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies to hand-written SQL and query-builder logic.
+This file applies to hand-written SQL and query-builder logic.
 
 ## When To Use
 
@@ -30,8 +28,6 @@ Read it together with `tech/code/common.md`. This file applies to hand-written S
 - For pagination and sorting, test stable order across multiple rows with same primary sort value.
 - For recursive, aggregate, or reporting queries, include fixtures that prove the edge case the query was introduced to handle.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `sql.queries` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/sql/queries.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the query decision: result shape, join cardinality, CTE, recursive guard, aggregation, EXISTS, NULL handling, pagination, parameterization, or mutation readback.

@@ -1,9 +1,5 @@
 # TypeScript Implementation Pattern Quality
 
-Use this topic reference when `tech/code/typescript/patterns.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes API clients, repositories, service layers, factories, builders, reducers, state machines, dependency wiring, mappers, or reusable TypeScript abstractions.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For reducers/state machines, test every allowed transition and at least one disallowed transition.
 - Run typecheck to prove the pattern improves call-site safety without requiring broad assertions.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `typescript.patterns` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/typescript/patterns.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the pattern decision and why it was needed for this task.

@@ -1,7 +1,5 @@
 # API Contract Artifacts
 
-Load this file only when the current MCP request lists `tech/api/contract.md` in `referenceLoadPlan`.
-
 ## Role In Loom
 
 Loom's primary API contract lives in AAC `interfaces[]`. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.

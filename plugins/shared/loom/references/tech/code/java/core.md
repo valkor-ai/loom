@@ -1,8 +1,6 @@
 # Java Core Implementation Quality
 
-Use this topic reference when `tech/code/java/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file is not a Java style guide; it tells the agent how to make Java implementation decisions inside a Loom task.
+This file is not a Java style guide; it tells the agent how to make Java implementation decisions inside a Loom task.
 
 ## When To Use
 
@@ -31,8 +29,6 @@ Read it together with `tech/code/common.md`. This file is not a Java style guide
 - If configuration is added, verify the default local value and one override path when feasible.
 - If the change uses Java 21 language features, the compile step must prove the configured source/target supports them.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `java.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/java/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Java boundary that was kept clean, such as `controller -> service -> repository`, DTO/entity separation, validation ownership, or exception mapping.

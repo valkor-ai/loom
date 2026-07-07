@@ -1,9 +1,5 @@
 # Python Testing Quality
 
-Use this topic reference when `tech/code/python/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes Python tests, pytest fixtures, mocks, async tests, integration tests, snapshot/golden data, coverage configuration, or behavior implemented in Python.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For async code, verify the test runner uses the correct async plugin and leaves no pending tasks.
 - For integration tests, record the marker/command used or why it was not run.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `python.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/python/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the Python commands run.

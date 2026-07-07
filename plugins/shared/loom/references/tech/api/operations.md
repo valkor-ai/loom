@@ -1,7 +1,5 @@
 # API Operational Semantics
 
-Load this file only when the current MCP request lists `tech/api/operations.md` in `referenceLoadPlan`.
-
 Use this reference for API behavior that affects repeated calls, retries, caching, rate limiting, request tracing, or conditional updates. These rules are not mandatory for every endpoint; apply them only when the current phase, repository convention, or selected AAC interface needs them.
 
 ## Idempotency

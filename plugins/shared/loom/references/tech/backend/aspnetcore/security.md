@@ -1,8 +1,6 @@
 # ASP.NET Core Security Quality
 
-Use this topic reference when `tech/backend/aspnetcore/security.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected C# security references, and selected API security references when present. This file applies ASP.NET Core authentication, authorization, JWT, Identity, and password rules to task-owned security behavior.
+This file applies ASP.NET Core authentication, authorization, JWT, Identity, and password rules to task-owned security behavior.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected C# security references, an
 - Run integration tests through real middleware when verifying route protection.
 - Verify configuration binding and app startup after auth service registration changes.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `aspnetcore.security` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/aspnetcore/security.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the security decision: JWT bearer, Identity, authorization policy, role/claim check, password hashing, middleware order, ownership check, or protected endpoint proof.

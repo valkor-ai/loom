@@ -1,9 +1,5 @@
 # C++ Concurrency Quality
 
-Use this topic reference when `tech/code/cpp/concurrency.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes threads, thread pools, atomics, mutexes, condition variables, futures, async work, parallel algorithms, queues, coroutines, or shared state.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for full/empty queue behavior, cancellation/shutdown, error propagation, and no work after stop where relevant.
 - Use timeouts carefully in tests to catch deadlocks without creating flaky sleeps-only checks.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.concurrency` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/concurrency.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the concurrency decision: thread ownership, mutex/condition variable, atomic ordering, worker pool, queue backpressure, parallel algorithm, coroutine ownership, or TSan proof.

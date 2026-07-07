@@ -1,9 +1,5 @@
 # Go Project Structure Quality
 
-Use this topic reference when `tech/code/go/structure.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Go module layout, `go.mod`, `go.work`, `cmd`, `internal`, package boundaries, build tags, generated code, configuration packages, version injection, or release/build wiring.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Verify `go.mod` and `go.sum` only changed for dependencies actually needed by this task.
 - For platform or tag-specific files, run the relevant tagged test/build command or record why it could not be run.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `go.structure` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/go/structure.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the structure decision: entry point layout, internal boundary, package cohesion, module ownership, build tag, generated code, config boundary, or version injection.

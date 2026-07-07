@@ -1,8 +1,6 @@
 # Spring Boot Web Quality
 
-Use this topic reference when `tech/backend/springboot/web.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and the selected Java references. This file applies Spring MVC/Spring Boot web-layer rules to task-owned HTTP behavior.
+This file applies Spring MVC/Spring Boot web-layer rules to task-owned HTTP behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md` and the selected Java references. Th
 - For list endpoints, verify filtering, sorting, pagination, empty result, and stable response DTO shape when touched.
 - For external HTTP clients, test success, non-2xx/error mapping, timeout behavior when configured, and no hardcoded environment values.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `springboot.web` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/springboot/web.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Spring web decision: controller boundary, DTO mapping, validation split, exception advice, pagination, CORS, WebClient behavior, or web-layer proof.

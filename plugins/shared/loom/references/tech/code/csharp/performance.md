@@ -1,9 +1,5 @@
 # C# Performance Quality
 
-Use this topic reference when `tech/code/csharp/performance.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes performance-sensitive C# paths, allocation-heavy processing, streams, serialization, LINQ-heavy code, EF queries, caching, AOT/source generation, or benchmarked hotspots.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For allocation-sensitive changes, verify buffer ownership, stream disposal, and no use-after-return of pooled arrays.
 - For EF performance changes, test query output and include projection/query-shape evidence when feasible.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `csharp.performance` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/csharp/performance.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the performance decision: measured hotspot, collection choice, LINQ enumeration, pooled buffer, stream handling, EF query optimization, caching, source generation, or benchmark result.

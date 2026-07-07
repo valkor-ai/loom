@@ -1,9 +1,5 @@
 # Python Async Quality
 
-Use this topic reference when `tech/code/python/async.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes `async`/`await`, asyncio tasks, TaskGroup usage, async clients, queues, streams, background jobs, async context managers, or sync/async boundaries.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add checks that blocking work is not executed on the event loop path when that risk is part of the change.
 - Confirm background tasks, clients, queues, locks, and temporary resources are closed or cancelled after tests.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `python.async` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/python/async.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the async decision: structured concurrency, bounded concurrency, cancellation, timeout, async context manager, sync/async boundary, background task lifecycle, or queue shutdown.

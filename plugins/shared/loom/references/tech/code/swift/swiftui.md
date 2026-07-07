@@ -1,8 +1,6 @@
 # Swift SwiftUI Quality
 
-Use this topic reference when `tech/code/swift/swiftui.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies SwiftUI implementation guidance to task-owned UI changes.
+This file applies SwiftUI implementation guidance to task-owned UI changes.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies SwiftUI implement
 - For async UI work, test or manually verify cancellation/reload behavior and that UI state updates stay on the main actor.
 - Check accessibility labels/roles for new controls when the repository has UI accessibility standards.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `swift.swiftui` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/swift/swiftui.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the SwiftUI decision: state owner, view-model split, composition, async task lifecycle, MainActor boundary, environment value, list performance, state coverage, or UI proof.

@@ -1,9 +1,5 @@
 # Python Core Quality
 
-Use this topic reference when `tech/code/python/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Python application, library, CLI, service, data processing, configuration, or shared module code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for validation, exception paths, resource cleanup, configuration defaults/overrides, and domain transformations changed by the task.
 - Confirm no mutable defaults, bare `except`, secret logging, or scattered configuration reads were introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `python.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/python/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Python decision made: version compatibility, pathlib/resource handling, dataclass/enum modeling, exception contract, logging boundary, config boundary, or standard library use.

@@ -1,8 +1,6 @@
 # FastAPI Security Quality
 
-Use this topic reference when `tech/backend/fastapi/security.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Python security references, and selected API security references when present. This file applies FastAPI OAuth2, JWT, dependency, and password-handling rules to task-owned authentication and authorization behavior.
+This file applies FastAPI OAuth2, JWT, dependency, and password-handling rules to task-owned authentication and authorization behavior.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`, selected Python security references
 - Verify protected routers cannot be reached without the expected dependencies.
 - Run endpoint tests with real security dependencies unless the test is explicitly about downstream business logic.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `fastapi.security` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/fastapi/security.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the FastAPI security decision: OAuth2 flow, JWT claim, password hashing, current-user dependency, role dependency, CORS/security middleware, or protected endpoint proof.

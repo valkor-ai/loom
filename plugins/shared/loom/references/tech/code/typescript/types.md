@@ -1,9 +1,5 @@
 # TypeScript Type Modeling Quality
 
-Use this topic reference when `tech/code/typescript/types.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes generic APIs, reusable type helpers, mapped or conditional types, template literal types, route/event key types, package-level contracts, or complex DTO variants.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - If declaration files are emitted, run the library build and inspect that public `.d.ts` output does not expose private helper names or unusable generic signatures.
 - Watch for typecheck performance regressions when adding recursive, distributive conditional, or large union types.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `typescript.types` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/typescript/types.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the modeling choice: utility DTO, constrained generic, discriminated result, template key, config map with `satisfies`, recursive type, or public declaration shape.

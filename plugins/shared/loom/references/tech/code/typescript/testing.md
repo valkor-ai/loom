@@ -1,9 +1,5 @@
 # TypeScript Testing Quality
 
-Use this topic reference when `tech/code/typescript/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes TypeScript tests, fixtures, test utilities, component/service tests, typecheck scripts, generated contract checks, or behavior covered by typed boundaries.
@@ -28,8 +24,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - When tests use DOM or browser APIs, confirm the configured environment matches the code path: Node, jsdom, happy-dom, browser, or framework runner.
 - Record any untested gap only when it is outside the task boundary or blocked by missing infrastructure.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `typescript.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/typescript/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the commands run.

@@ -1,9 +1,5 @@
 # JavaScript Async Quality
 
-Use this topic reference when `tech/code/javascript/async.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes promises, `async`/`await`, fetch flows, timers, retries, cancellation, queues, streams, workers, background jobs, or event-driven JavaScript.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Check that rejected promises are observed by tests or callers; no new unhandled rejection should appear in runtime output.
 - For retries, verify retry count, backoff/stop condition, and non-retry behavior for unsafe or non-retryable errors.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `javascript.async` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/javascript/async.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the async decision: sequential flow, parallel batch, cancellation, timeout, retry policy, concurrency limit, stream handling, or cleanup guarantee.

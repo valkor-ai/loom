@@ -1,9 +1,5 @@
 # Rust Testing Quality
 
-Use this topic reference when `tech/code/rust/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes Rust tests, doctests, integration tests, async tests, property tests, snapshots, mocks/fakes, benchmarks, fuzz targets, or behavior implemented in Rust.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Run doctests, async tests, snapshot review, benchmarks, Miri, or fuzzing only when the task touches that risk area or the repository requires it.
 - Confirm tests do not rely on order, global state, or external services unless explicitly marked as integration tests.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `rust.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/rust/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the Cargo commands run.

@@ -1,8 +1,6 @@
 # FastAPI Async Testing Quality
 
-Use this topic reference when `tech/backend/fastapi/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected Python testing references. This file applies pytest, httpx, dependency override, and async database test rules to task-owned FastAPI changes.
+This file applies pytest, httpx, dependency override, and async database test rules to task-owned FastAPI changes.
 
 ## When To Use
 
@@ -26,8 +24,6 @@ Read it together with `tech/code/common.md` and selected Python testing referenc
 - Verify OpenAPI route exposure when routes or response models change.
 - For dependency changes, assert overrides are scoped and cleaned up.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `fastapi.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/fastapi/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: async endpoint test, schema validation test, dependency override, async database fixture, auth fixture, OpenAPI check, or CRUD/service test.

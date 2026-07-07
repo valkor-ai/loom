@@ -1,8 +1,6 @@
 # Swift Testing Quality
 
-Use this topic reference when `tech/code/swift/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies Swift testing guidance to task-owned changes.
+This file applies Swift testing guidance to task-owned changes.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`. This file applies Swift testing gui
 - For UI changes, verify at least the changed interaction path plus one error/empty/disabled state when those states exist.
 - Record platform or simulator limitations if the local environment cannot run the required UI/device test.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `swift.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/swift/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: XCTest/Swift Testing unit test, async test, actor concurrency test, UI test, snapshot test, performance metric, test double, or platform limitation.

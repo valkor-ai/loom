@@ -1,8 +1,6 @@
 # FastAPI Async Data Quality
 
-Use this topic reference when `tech/backend/fastapi/data.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Python async references, and selected SQL references. This file applies async SQLAlchemy, session, migration, and CRUD rules to task-owned persistence behavior.
+This file applies async SQLAlchemy, session, migration, and CRUD rules to task-owned persistence behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected Python async references, a
 - For migrations, verify a clean database can upgrade and the app starts against the configured test database.
 - Test async behavior without leaking sessions or leaving dependency overrides active across tests.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `fastapi.data` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/fastapi/data.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the async data decision: session dependency, transaction boundary, SQLAlchemy model, query shape, relationship loading, migration, integrity handling, or persistence proof.

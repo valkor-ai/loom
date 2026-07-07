@@ -1,8 +1,6 @@
 # Java Spring Security Quality
 
-Use this topic reference when `tech/code/java/security.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies only to task-owned authentication, authorization, credential, CORS/CSRF, or security error behavior.
+This file applies only to task-owned authentication, authorization, credential, CORS/CSRF, or security error behavior.
 
 ## When To Use
 
@@ -31,8 +29,6 @@ Read it together with `tech/code/common.md`. This file applies only to task-owne
 - For CORS/CSRF changes, run a targeted test or probe that matches the actual frontend/client behavior.
 - Run the Spring test/build command after security changes because filter chain wiring often fails at context startup.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `java.security` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/java/security.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, state the protected routes/methods, allowed/denied cases verified, and how credentials/secrets are externalized.

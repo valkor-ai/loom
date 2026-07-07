@@ -1,8 +1,6 @@
 # Django REST Framework View Quality
 
-Use this topic reference when `tech/backend/django/views.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected serializer references, and selected API references. This file applies DRF viewset, generic view, router, and Django async view rules to task-owned HTTP behavior.
+This file applies DRF viewset, generic view, router, and Django async view rules to task-owned HTTP behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`, selected serializer references, and
 - Verify route names and router registration when URLs are added or changed.
 - For async views, test the async path and verify synchronous ORM work is isolated correctly.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `django.views` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/django/views.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the DRF view decision: ViewSet/generic view, queryset scoping, action serializer, action permission, pagination/filtering, custom action, route registration, or async view boundary.

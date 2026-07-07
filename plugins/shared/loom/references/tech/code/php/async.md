@@ -1,8 +1,6 @@
 # PHP Async Quality
 
-Use this topic reference when `tech/code/php/async.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies only to PHP async runtimes and async I/O boundaries.
+This file applies only to PHP async runtimes and async I/O boundaries.
 
 ## When To Use
 
@@ -30,8 +28,6 @@ Read it together with `tech/code/common.md`. This file applies only to PHP async
 - For server/request handlers, exercise at least one real request path and one invalid/error request path.
 - Check that the changed async path does not contain obvious blocking calls such as `sleep`, synchronous HTTP clients, blocking PDO calls, or file I/O in an event-loop callback unless explicitly offloaded.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `php.async` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/php/async.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the async decision: runtime owner, coroutine boundary, event-loop cleanup, non-blocking client, timeout/cancellation, backpressure, or shutdown proof.

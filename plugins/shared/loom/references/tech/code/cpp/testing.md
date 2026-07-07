@@ -1,9 +1,5 @@
 # C++ Testing Quality
 
-Use this topic reference when `tech/code/cpp/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes C++ tests, fixtures, test target wiring, sanitizer/static-analysis verification, benchmarks, mocks, integration tests, or behavior implemented in C++.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm test targets are discoverable by the build system when new tests are added.
 - Record skipped platform, sanitizer, or integration checks only when unavailable infrastructure prevents them.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the C++ commands run.

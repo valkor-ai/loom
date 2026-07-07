@@ -1,8 +1,6 @@
 # NestJS Service And DI Quality
 
-Use this topic reference when `tech/backend/nestjs/services.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected TypeScript references. This file applies NestJS provider, module, service, dependency injection, and business orchestration rules to task-owned backend code.
+This file applies NestJS provider, module, service, dependency injection, and business orchestration rules to task-owned backend code.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md` and selected TypeScript references. 
 - Test success, not found, conflict, validation-driven service rejection, transaction behavior, and external-boundary failures when touched.
 - Run lint/typecheck to catch circular imports, missing providers, and type leaks.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `nestjs.services` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/nestjs/services.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the NestJS service decision: provider boundary, module export, DI token, business rule, transaction, repository adapter, typed exception, or module compilation proof.

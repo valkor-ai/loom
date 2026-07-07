@@ -1,9 +1,5 @@
 # Go Testing Quality
 
-Use this topic reference when `tech/code/go/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes Go tests, test fixtures, fakes, integration tests, race-sensitive code, benchmarks, fuzz tests, golden files, or behavior implemented in Go.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Run tagged integration tests, fuzz tests, or benchmarks only when the task touches that risk area or the repository already requires them.
 - Confirm fixtures, temp files, env variables, and goroutines are cleaned up after tests.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `go.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/go/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the Go commands run.

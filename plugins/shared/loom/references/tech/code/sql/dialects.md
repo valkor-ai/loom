@@ -1,8 +1,6 @@
 # SQL Dialect Quality
 
-Use this topic reference when `tech/code/sql/dialects.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies when SQL must match a specific database engine.
+This file applies when SQL must match a specific database engine.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies when SQL must mat
 - Execute the changed native query, pagination, upsert, JSON expression, or date/time expression with representative data.
 - If the target database is unavailable, record the exact dialect behavior that could not be verified and keep the SQL conservative.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `sql.dialects` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/sql/dialects.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the dialect decision: identity, type mapping, timestamp/date arithmetic, pagination, JSON, upsert, collation, ORM compatibility, or target-database proof.

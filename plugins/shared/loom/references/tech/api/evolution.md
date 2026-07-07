@@ -1,7 +1,5 @@
 # API Evolution And Compatibility
 
-Load this file only when the current MCP request lists `tech/api/evolution.md` in `referenceLoadPlan`.
-
 ## Default Position
 
 Loom does not require API versioning by default. Do not add `/v1`, deprecation headers, migration guides, or version routers unless the current contract actually needs API lifecycle management.

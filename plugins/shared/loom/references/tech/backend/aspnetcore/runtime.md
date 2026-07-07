@@ -1,8 +1,6 @@
 # ASP.NET Core Runtime Quality
 
-Use this topic reference when `tech/backend/aspnetcore/runtime.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies ASP.NET Core runtime configuration, health, logging, and diagnostics rules; deployment assets remain under Loom deploy references.
+This file applies ASP.NET Core runtime configuration, health, logging, and diagnostics rules; deployment assets remain under Loom deploy references.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md`. This file applies ASP.NET Core runt
 - Test invalid configuration behavior when new required options are introduced.
 - For external clients/resilience, verify timeout/error mapping and avoid unsafe retries for non-idempotent operations.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `aspnetcore.runtime` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/aspnetcore/runtime.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the runtime decision: options binding, environment behavior, health check, logging/tracing, HttpClientFactory, resilience, AOT/trimming, middleware order, or startup smoke.

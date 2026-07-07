@@ -1,8 +1,6 @@
 # Swift Core Quality
 
-Use this topic reference when `tech/code/swift/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies core Swift language quality to task-owned changes.
+This file applies core Swift language quality to task-owned changes.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`. This file applies core Swift langua
 - Run tests that cover success, optional absence, error paths, serialization/mapping, and platform availability touched by the task.
 - Treat compiler warnings, deprecation warnings, and concurrency/sendability warnings as signals to fix or explicitly record.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `swift.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/swift/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Swift decision: value/reference semantics, optional handling, error API, access control, Codable separation, property wrapper, platform availability, or compile proof.

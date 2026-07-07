@@ -1,9 +1,5 @@
 # Kotlin Testing Quality
 
-Use this topic reference when `tech/code/kotlin/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes Kotlin tests, coroutine tests, Flow assertions, Ktor route tests, Compose tests, KMP tests, mocks/fakes, or behavior implemented in Kotlin.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - For coroutine/Flow changes, verify cancellation and pending job cleanup.
 - For KMP, record platform targets run and explicitly name any unavailable target.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `kotlin.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/kotlin/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the Kotlin/Gradle commands run.

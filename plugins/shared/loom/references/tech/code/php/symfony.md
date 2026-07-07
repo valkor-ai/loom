@@ -1,8 +1,6 @@
 # PHP Symfony Quality
 
-Use this topic reference when `tech/code/php/symfony.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies Symfony conventions to task-owned behavior.
+This file applies Symfony conventions to task-owned behavior.
 
 ## When To Use
 
@@ -30,8 +28,6 @@ Read it together with `tech/code/common.md`. This file applies Symfony conventio
 - For Messenger, test handler behavior and dispatch shape using the project's configured transport test helpers.
 - For console commands, run or test the command with success and failure inputs, including exit code expectations.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `php.symfony` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/php/symfony.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Symfony decision: DTO validation, controller/service split, Doctrine boundary, voter, event subscriber, Messenger handler, console command, serializer shape, or kernel-test proof.

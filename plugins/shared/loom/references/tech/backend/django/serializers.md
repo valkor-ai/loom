@@ -1,8 +1,6 @@
 # Django REST Framework Serializer Quality
 
-Use this topic reference when `tech/backend/django/serializers.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected API references. This file applies DRF serializer rules to task-owned request validation and response shaping.
+This file applies DRF serializer rules to task-owned request validation and response shaping.
 
 ## When To Use
 
@@ -27,8 +25,6 @@ Read it together with `tech/code/common.md` and selected API references. This fi
 - For serializer-driven create/update overrides, assert database side effects and transaction behavior.
 - Pair serializer tests with view/API tests when status codes or permission behavior depend on serializer errors.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `django.serializers` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/django/serializers.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the serializer decision: read/write split, field validation, object validation, nested write, computed field, partial update, or sensitive-field exclusion.

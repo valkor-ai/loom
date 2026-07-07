@@ -1,9 +1,5 @@
 # Python Packaging Quality
 
-Use this topic reference when `tech/code/python/packaging.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes `pyproject.toml`, package layout, dependency declarations, lock files, CLI entry points, build metadata, type package markers, import paths, or distribution settings.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Validate CLI entry points by invoking the installed or local command when added or changed.
 - Confirm runtime dependencies, optional/dev dependencies, lock files, and package data changed only for task-relevant reasons.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `python.packaging` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/python/packaging.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the packaging decision: build backend, dependency scope, package layout, typed marker, CLI entry point, version source, lock update, package data, or import compatibility.

@@ -1,8 +1,6 @@
 # PHP Testing Quality
 
-Use this topic reference when `tech/code/php/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies PHP testing and static-analysis guidance to task-owned changes.
+This file applies PHP testing and static-analysis guidance to task-owned changes.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md`. This file applies PHP testing and s
 - For service/domain code, verify edge cases, invalid states, and dependency failure behavior.
 - For test-only changes, make sure the new/changed test fails for the intended reason before the implementation would satisfy it when feasible.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `php.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/php/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: PHPUnit/Pest unit test, framework feature test, database assertion, static analysis, data-provider matrix, mock/fake boundary, queue/event proof, or known verification gap.

@@ -1,8 +1,6 @@
 # Django Models And ORM Quality
 
-Use this topic reference when `tech/backend/django/models.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected Python/SQL references. This file applies Django model, migration, and QuerySet rules to task-owned persistence behavior.
+This file applies Django model, migration, and QuerySet rules to task-owned persistence behavior.
 
 ## When To Use
 
@@ -28,8 +26,6 @@ Read it together with `tech/code/common.md` and selected Python/SQL references. 
 - For query changes, verify result correctness and, when performance-sensitive, query count or generated query shape.
 - For migrations, verify a clean test database can migrate and the application imports models successfully.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `django.models` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/django/models.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Django ORM decision: model field, constraint, index, migration, manager/queryset, relationship loading, transaction boundary, or query optimization.

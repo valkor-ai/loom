@@ -1,9 +1,5 @@
 # Go Core Quality
 
-Use this topic reference when `tech/code/go/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Go application, library, service, CLI, handler, repository, worker, or shared package code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for new error branches, config validation, context cancellation where relevant, and public behavior that changed.
 - Confirm no changed path ignores errors, loses cancellation, or relies on panic for recoverable failures.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `go.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/go/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Go decision made: error wrapping, context propagation, config validation, exported API docs, standard interface use, logging boundary, or reflection avoidance.

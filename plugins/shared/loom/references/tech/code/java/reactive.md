@@ -1,8 +1,6 @@
 # Java Reactive WebFlux Quality
 
-Use this topic reference when `tech/code/java/reactive.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies to WebFlux, Reactor, R2DBC, WebClient, and reactive endpoint changes.
+This file applies to WebFlux, Reactor, R2DBC, WebClient, and reactive endpoint changes.
 
 ## When To Use
 
@@ -31,8 +29,6 @@ Read it together with `tech/code/common.md`. This file applies to WebFlux, React
 - Run build/test and ensure no blocking API is introduced in reactive request paths. If BlockHound or similar tooling exists, use it.
 - For R2DBC changes, test against the configured reactive database driver or repository slice.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `java.reactive` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/java/reactive.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the reactive chain or endpoint and the success/empty/error/cancellation behavior verified.

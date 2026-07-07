@@ -6,8 +6,7 @@ This file is selected for every `language_implementation_quality` requirement. I
 
 - These references are task-scoped implementation aids, not standalone skills and not technology selection documents.
 - TechnicalBaseline remains the source of stack facts. Code references only refine how confirmed languages/frameworks should be implemented.
-- MCP `referenceLoadPlan` is the only loading authority. `referenceGroups` are evidence labels, not file maps.
-- Load this common file plus only the topic files listed in the current task's `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
+- Treat the current task's selected code references as the loading boundary; do not browse sibling language, framework, or database topics unless they are selected for that task.
 
 ## Repository Adaptation
 
@@ -32,14 +31,12 @@ This file is selected for every `language_implementation_quality` requirement. I
 
 ## Evidence Rules
 
-- `codeQualityEvidence.referenceGroupsChecked` must match the selected language/topic groups.
-- `codeQualityEvidence.referenceFilesChecked` must include `tech/code/common.md` and every selected topic path that was read.
-- Link evidence to exact `task.verificationIntents[].verificationId` values.
-- Summaries should state how changed files followed both repository style and the selected topic references.
+- Use the generated TaskResult template and validator messages for exact evidence field names and required values.
+- Evidence summaries should state how changed files followed both repository style and the selected topic references.
 
 ## Common Anti-Patterns
 
-- Loading sibling language/topic files that are not listed in `referenceLoadPlan`.
+- Loading sibling language/topic files outside the task-selected reference set.
 - Reselecting the technology stack after TechnicalBaseline is accepted.
 - Adding framework boilerplate without task-owned behavior.
 - Silencing compiler, type, lint, or test failures to make delivery appear complete.

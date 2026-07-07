@@ -1,9 +1,5 @@
 # TypeScript Core Quality
 
-Use this topic reference when `tech/code/typescript/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes TypeScript application, library, API client, UI state, domain model, or shared contract code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Verify invalid and partial data paths when static types are backed by runtime validation.
 - Confirm no new unchecked `any`, broad assertions, or type-only/runtime import mistakes were introduced in changed files.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `typescript.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/typescript/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the TypeScript decision made: boundary validation, exported API typing, discriminated state, DTO/domain separation, branded ID, import boundary, or assertion containment.

@@ -1,8 +1,6 @@
 # Spring Boot Security Quality
 
-Use this topic reference when `tech/backend/springboot/security.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`, selected Java security references, and selected API security references when present. This file applies Spring Security 6 rules to task-owned authentication and authorization behavior.
+This file applies Spring Security 6 rules to task-owned authentication and authorization behavior.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`, selected Java security references, 
 - Verify password hashing, invalid credentials, disabled/locked user behavior, and method-security denial when touched.
 - Run Spring context startup after security configuration changes so filter chain and bean wiring failures are caught.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `springboot.security` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/springboot/security.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Spring Security decision: filter chain, auth endpoint, JWT/resource server, method security, password handling, CSRF/CORS, auth error mapping, or protected-path proof.

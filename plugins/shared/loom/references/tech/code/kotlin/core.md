@@ -1,9 +1,5 @@
 # Kotlin Core Quality
 
-Use this topic reference when `tech/code/kotlin/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Kotlin application, library, domain, service, Android, server, or shared module code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for null branches, sealed state transitions, validation failures, Java interop boundaries, and extension behavior touched by the task.
 - Confirm no new undocumented `!!`, impossible state combinations, or lifecycle-free mutable singletons were introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `kotlin.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/kotlin/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Kotlin decision made: null safety, sealed state, data/domain split, extension boundary, scope function use, value class, Java interop, explicit API, or lifecycle ownership.

@@ -1,8 +1,6 @@
 # ASP.NET Core Testing Quality
 
-Use this topic reference when `tech/backend/aspnetcore/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md` and selected C# testing references. This file applies .NET build, unit test, integration test, and WebApplicationFactory rules to task-owned ASP.NET Core changes.
+This file applies .NET build, unit test, integration test, and WebApplicationFactory rules to task-owned ASP.NET Core changes.
 
 ## When To Use
 
@@ -26,8 +24,6 @@ Read it together with `tech/code/common.md` and selected C# testing references. 
 - For EF changes, assert database state rather than only service return values.
 - For Minimal API changes, verify status codes, headers, response DTO shape, and OpenAPI metadata when contract changes.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `aspnetcore.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/backend/aspnetcore/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the proof type: unit test, handler test, WebApplicationFactory integration test, EF provider test, auth middleware test, options binding test, or build/test command.

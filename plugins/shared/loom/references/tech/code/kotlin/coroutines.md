@@ -1,9 +1,5 @@
 # Kotlin Coroutines Quality
 
-Use this topic reference when `tech/code/kotlin/coroutines.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes suspend functions, coroutine scopes, dispatchers, Flow, StateFlow, SharedFlow, channels, background work, cancellation, retries, or async integration.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Test cancellation, timeout, first-error/partial-success policy, dispatcher-sensitive boundaries, and lifecycle cleanup where touched.
 - Confirm no `GlobalScope`, `runBlocking` in production paths, swallowed cancellation, or unbounded parallelism was introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `kotlin.coroutines` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/kotlin/coroutines.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the coroutine decision: scope ownership, dispatcher, cancellation, supervisor policy, Flow type, buffering/backpressure, retry policy, or lifecycle cleanup.

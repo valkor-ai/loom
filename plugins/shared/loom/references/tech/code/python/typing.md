@@ -1,9 +1,5 @@
 # Python Typing Quality
 
-Use this topic reference when `tech/code/python/typing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Python public APIs, dataclasses, protocols, typed dictionaries, validation boundaries, generics, callbacks, decorators, or type checker configuration.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm new annotations do not hide errors through `Any`, broad casts, or global ignore rules.
 - For protocols and decorators, include usage through the typed seam so the checker exercises the intended call shape.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `python.typing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/python/typing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the typing decision: public API annotations, collections abstraction, protocol seam, TypedDict/dataclass choice, finite status, Any containment, or checker command.

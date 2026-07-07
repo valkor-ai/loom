@@ -1,9 +1,5 @@
 # C# Testing Quality
 
-Use this topic reference when `tech/code/csharp/testing.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task adds or changes C# tests, xUnit/NUnit/MSTest setup, WebApplicationFactory tests, EF tests, Blazor component tests, mocks/fakes, async/cancellation tests, or behavior implemented in C#.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm tests clean up database state, temp files, servers, DI scopes, async tasks, and disposable clients.
 - Record skipped integration tests only when they require unavailable infrastructure and the task cannot reasonably provide it.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `csharp.testing` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/csharp/testing.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the behavior verified and the .NET commands run.

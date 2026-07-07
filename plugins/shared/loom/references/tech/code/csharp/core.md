@@ -1,9 +1,5 @@
 # C# Core Quality
 
-Use this topic reference when `tech/code/csharp/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes C# application, library, domain, service, API, worker, CLI, or shared contract code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for domain branches, null/invalid input handling, async cancellation or error propagation where touched.
 - Confirm no new blocking async calls, broad null-forgiving operators, or service lifetime violations were introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `csharp.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/csharp/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the C# decision made: nullability, async/cancellation, DI lifetime, result/error style, options validation, DTO/domain split, or public API surface.

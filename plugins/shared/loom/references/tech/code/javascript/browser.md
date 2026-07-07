@@ -1,9 +1,5 @@
 # JavaScript Browser API Quality
 
-Use this topic reference when `tech/code/javascript/browser.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes browser fetch logic, DOM integration, storage, workers, service workers, observers, permissions, timers, animation, clipboard, media, or browser-only runtime code.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Verify cleanup for observers, workers, timers, and event listeners when lifecycle code changed.
 - For UI-facing browser behavior, smoke the relevant viewport or interaction path rather than relying only on unit tests.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `javascript.browser` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/javascript/browser.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the browser decision: fetch boundary, cancellation, lifecycle cleanup, storage strategy, permission flow, main-thread protection, DOM integration, or target compatibility.

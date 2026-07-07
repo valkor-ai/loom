@@ -1,9 +1,5 @@
 # C# Blazor Quality
 
-Use this topic reference when `tech/code/csharp/blazor.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Blazor Server, WebAssembly, components, forms, validation, cascading state, routing, authorization UI, JS interop, SignalR, virtualization, or component lifecycle behavior.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Verify JS interop and SignalR paths clean up handles or subscriptions when the component is disposed.
 - For large lists or virtualization, test or smoke the paging/provider behavior rather than only rendering a tiny fixture.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `csharp.blazor` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/csharp/blazor.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Blazor decision: parameter contract, form model, lifecycle fetch, validation feedback, JS interop cleanup, cascading state, auth UI, virtualization, or SignalR disposal.

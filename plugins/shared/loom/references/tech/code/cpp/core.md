@@ -1,9 +1,5 @@
 # C++ Core Quality
 
-Use this topic reference when `tech/code/cpp/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes C++ application, library, embedded, systems, CLI, service, or shared module code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for ownership-sensitive paths, error branches, boundary checks, and resource cleanup touched by the task.
 - Run sanitizers when memory lifetime, pointer arithmetic, undefined behavior, or low-level resource handling changed and the project supports sanitizer builds.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the C++ decision made: standard compatibility, RAII owner, smart pointer choice, const-correct API, header hygiene, error strategy, cast boundary, or UB prevention.

@@ -1,9 +1,5 @@
 # C++ Modern Feature Quality
 
-Use this topic reference when `tech/code/cpp/modern.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes code that may benefit from C++17/20/23 features such as concepts, ranges, coroutines, modules, spaceship comparisons, designated initializers, `constexpr`, `std::format`, or `std::expected`.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm no feature requires a newer standard/library than declared in build files.
 - Record any platform/compiler limitation when a modern feature is guarded or avoided.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `cpp.modern` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/cpp/modern.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the feature decision: concepts, ranges, coroutine support, comparison, designated initializer, constexpr, formatting, modules, or compatibility guard.

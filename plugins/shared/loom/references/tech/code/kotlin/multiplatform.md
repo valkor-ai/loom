@@ -1,9 +1,5 @@
 # Kotlin Multiplatform Quality
 
-Use this topic reference when `tech/code/kotlin/multiplatform.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Kotlin Multiplatform source sets, common code, platform-specific code, `expect`/`actual`, shared clients, serialization, native interop, Gradle KMP setup, or multiplatform tests.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for common behavior and platform-specific actual implementations when they contain logic.
 - Confirm no platform APIs or dependencies leaked into common source sets.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `kotlin.multiplatform` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/kotlin/multiplatform.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the KMP decision: common/platform split, expect/actual boundary, source set hierarchy, shared serialization/client, native interop isolation, dependency scope, or platform verification.

@@ -1,7 +1,5 @@
 # API Resource Design
 
-Load this file only when the current MCP request lists `tech/api/resource.md` in `referenceLoadPlan`.
-
 ## Resource Modeling
 
 Model APIs around business resources and state transitions.

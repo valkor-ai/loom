@@ -1,9 +1,5 @@
 # Rust Async Quality
 
-Use this topic reference when `tech/code/rust/async.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes async functions, Tokio/async-std runtime usage, spawned tasks, channels, streams, async traits, shared async state, timeouts, cancellation, or graceful shutdown.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Confirm no blocking call sits in an async hot path and no task is spawned without an owner.
 - For streams/channels, test backpressure, closed sender/receiver, and dropped consumer behavior when relevant.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `rust.async` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/rust/async.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the async decision: runtime selection, task lifecycle, blocking boundary, join/try_join, cancellation, channel type, lock scope, timeout, async trait, or shutdown proof.

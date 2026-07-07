@@ -1,8 +1,6 @@
 # SQL Window Function Quality
 
-Use this topic reference when `tech/code/sql/windows.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file applies to ranking, analytic, and per-partition SQL calculations.
+This file applies to ranking, analytic, and per-partition SQL calculations.
 
 ## When To Use
 
@@ -29,8 +27,6 @@ Read it together with `tech/code/common.md`. This file applies to ranking, analy
 - For deduplication/top-N, prove deterministic selection with tie-breakers.
 - For large analytic paths, review query plan or timing evidence when feasible.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `sql.windows` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/sql/windows.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the window decision: partition/order/frame, ranking choice, tie-breaker, lag/lead null handling, running/rolling aggregate, filter stage, dialect support, or plan proof.

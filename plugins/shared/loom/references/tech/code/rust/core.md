@@ -1,9 +1,5 @@
 # Rust Core Quality
 
-Use this topic reference when `tech/code/rust/core.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Rust application, library, CLI, service, systems, parser, worker, or shared crate code.
@@ -30,8 +26,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add tests for domain states, parse/serialize boundaries, invalid inputs, ownership-sensitive behavior, and invariant failures touched by the task.
 - Confirm no new production `unwrap`, undocumented `unsafe`, broad public visibility, or unnecessary clone-heavy workaround was introduced.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `rust.core` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/rust/core.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the Rust decision made: borrowed API, clone justification, visibility boundary, domain enum/newtype, iterator-vs-loop choice, panic policy, unsafe boundary, or serialization/domain split.

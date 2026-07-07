@@ -1,8 +1,6 @@
 # Java Spring Boot Service Quality
 
-Use this topic reference when `tech/code/java/spring.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. This file focuses on Spring Boot wiring and service delivery, not broad architecture reselection.
+This file focuses on Spring Boot wiring and service delivery, not broad architecture reselection.
 
 ## When To Use
 
@@ -30,8 +28,6 @@ Read it together with `tech/code/common.md`. This file focuses on Spring Boot wi
 - For new configuration properties, test binding or run a startup smoke with default local values.
 - For runtime/actuator changes, probe the exact endpoint or startup path that consumes the new configuration.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `java.spring` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/java/spring.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, state which Spring boundary was changed: controller mapping, service wiring, configuration binding, exception handling, startup/runtime behavior, or dependency setup.

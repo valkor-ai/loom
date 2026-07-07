@@ -1,7 +1,5 @@
 # API Pagination And Collection Reads
 
-Load this file only when the current MCP request lists `tech/api/pagination.md` in `referenceLoadPlan`.
-
 ## When Pagination Is Required
 
 Pagination is required when a collection endpoint can grow beyond a small bounded current-phase dataset or when the UI supports repeated list scanning/searching.

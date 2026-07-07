@@ -1,9 +1,5 @@
 # Go Generics Quality
 
-Use this topic reference when `tech/code/go/generics.md` is listed in `sourceContext.codeQualityRequirements[].referenceLoadPlan`.
-
-Read it together with `tech/code/common.md`. Do not read sibling topic files unless they are also listed in the same load plan.
-
 ## When To Use
 
 - The task changes Go type parameters, constraints, generic collections, reusable algorithms, typed adapters, or package APIs that support multiple concrete types.
@@ -29,8 +25,6 @@ Read it together with `tech/code/common.md`. Do not read sibling topic files unl
 - Add absence/zero-value tests for generic containers or lookup helpers.
 - Confirm the implementation did not introduce reflection, unsafe code, or type assertions as a shortcut around the generic contract.
 
-## Evidence Notes
+## Evidence Focus
 
-- Record `go.generics` in `codeQualityEvidence.referenceGroupsChecked`.
-- Record `tech/code/go/generics.md` in `codeQualityEvidence.referenceFilesChecked` when this file influenced the implementation.
 - In the evidence summary, name the generic decision: constraint design, reusable algorithm, typed collection, zero-value contract, or interface-vs-generic choice.
