@@ -366,9 +366,9 @@ Loom 关注 coding-agent skills、agentic engineering workflows 和软件工程�
 
 <a href="https://www.star-history.com/?repos=valkor-ai%2Floom&type=date&legend=top-left">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&theme=dark&legend=top-left&sealed_token=5MYi3OcSUtRp4x6YK1R8aypDmnYGgKJzQFbpOKuZ_WqAAsbR0-Khe10eNwZOsVOEhvqb3rkfjOWSmvM" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=5MYi3OcSUtRp4x6YK1R8aypDmnYGgKJzQFbpOKuZ_WqAAsbR0-Khe10eNwZOsVOEhvqb3rkfjOWSmvM" />
-    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=5MYi3OcSUtRp4x6YK1R8aypDmnYGgKJzQFbpOKuZ_WqAAsbR0-Khe10eNwZOsVOEhvqb3rkfjOWSmvM" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&theme=dark&legend=top-left&sealed_token=sZiB34_--zGHYVIPJwY-4rmGxT49HUV_Kt6Giu2lfC3CHhbS5BJhmd-pytGrJ60mxNXZt9AewwJlAzY" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=sZiB34_--zGHYVIPJwY-4rmGxT49HUV_Kt6Giu2lfC3CHhbS5BJhmd-pytGrJ60mxNXZt9AewwJlAzY" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=sZiB34_--zGHYVIPJwY-4rmGxT49HUV_Kt6Giu2lfC3CHhbS5BJhmd-pytGrJ60mxNXZt9AewwJlAzY" />
   </picture>
 </a>
 
