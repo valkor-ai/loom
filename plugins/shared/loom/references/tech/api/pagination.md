@@ -30,7 +30,7 @@ Total count is optional. Do not force expensive `COUNT(*)` behavior for large or
 
 ## Contract Fields
 
-An AAC `http_api` interface for a paginated collection should include:
+A paginated collection contract should include:
 
 - `paginationPolicy.strategy`
 - `paginationPolicy.requestFields`
@@ -40,19 +40,7 @@ An AAC `http_api` interface for a paginated collection should include:
 - `filterFields` and `sortFields` when applicable
 - whether total count is returned, omitted, or client-requested
 
-Example:
-
-```json
-{
-  "paginationPolicy": {
-    "strategy": "page_size",
-    "requestFields": ["page", "size"],
-    "responseFields": ["items", "page", "size", "totalElements", "totalPages"],
-    "defaultLimit": 20,
-    "maxLimit": 100
-  }
-}
-```
+For example, a page/size admin table should name the `page` and `size` request fields, the collection and metadata response fields, a default page size, and a maximum page size.
 
 ## Filter And Sort Semantics
 

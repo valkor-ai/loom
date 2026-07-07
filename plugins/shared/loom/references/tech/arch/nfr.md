@@ -1,8 +1,8 @@
 # Non-Functional Requirements In Loom Architecture
 
-Use this reference when writing `architectureQuality.nfrs` or reviewing whether an architecture gives later tasks verifiable quality targets.
+Use this reference when writing architecture NFRs or reviewing whether an architecture gives later tasks verifiable quality targets.
 
-NFRs in Loom must be concrete enough for TaskPlan and Review. They are not slogans.
+NFRs in Loom must be concrete enough for task planning and review. They are not slogans.
 
 ## Supported Categories
 
@@ -21,7 +21,7 @@ NFRs in Loom must be concrete enough for TaskPlan and Review. They are not sloga
 
 Each NFR must include:
 
-- `nfrId`
+- stable NFR id
 - category
 - target
 - rationale
@@ -30,60 +30,25 @@ Each NFR must include:
 
 Good NFR:
 
-```json
-{
-  "nfrId": "nfr-query-pagination",
-  "category": "performance",
-  "target": "List endpoints must support bounded pagination and must not require loading all records.",
-  "rationale": "The staff list page is a repeated operational workflow.",
-  "architectureRefs": {
-    "decisions": ["adr-current-001"],
-    "risks": ["risk-unbounded-list"]
-  },
-  "verificationStrategy": "Task verification should cover paginated query parameters and result metadata."
-}
-```
+- category: performance
+- target: list endpoints support bounded pagination and do not require loading all records
+- rationale: the staff list page is a repeated operational workflow
+- related decisions/risks: pagination decision and unbounded-list risk records
+- verification strategy: task verification covers paginated query parameters and result metadata
 
 Scalability NFRs should describe the current phase's growth boundary, not a generic future scale claim:
 
-```json
-{
-  "nfrId": "nfr-list-growth-boundary",
-  "category": "scalability",
-  "target": "List reads must remain bounded by pagination and indexed filters as records grow beyond manual review size.",
-  "rationale": "The staff workflow repeatedly scans operational records.",
-  "architectureRefs": {
-    "decisions": ["adr-current-001"],
-    "risks": ["risk-unbounded-list"]
-  },
-  "verificationStrategy": "Task verification should cover bounded query parameters and the declared default/max page size."
-}
-```
+- target: list reads remain bounded by pagination and indexed filters as records grow beyond manual review size
+- verification strategy: task verification covers bounded query parameters and the declared default/max page size
 
 Availability NFRs should describe concrete runtime or dependency behavior:
 
-```json
-{
-  "nfrId": "nfr-api-dependency-outage",
-  "category": "availability",
-  "target": "When the downstream approval service is unavailable, the API returns an actionable unavailable response instead of silent success.",
-  "rationale": "Operators need to distinguish retryable outage from business rejection.",
-  "architectureRefs": {
-    "decisions": [],
-    "risks": ["risk-approval-dependency"]
-  },
-  "verificationStrategy": "Task verification should cover the unavailable dependency path or document a known gap."
-}
-```
+- target: when a downstream approval service is unavailable, the API returns an actionable unavailable response instead of silent success
+- rationale: operators need to distinguish retryable outage from business rejection
+- related risk: approval dependency outage
+- verification strategy: task verification covers the unavailable dependency path or documents a known gap
 
-Weak NFR:
-
-```json
-{
-  "category": "performance",
-  "target": "The system should be fast."
-}
-```
+Weak NFR: "The system should be fast."
 
 ## Missing User NFRs
 
@@ -95,11 +60,11 @@ When the user did not state explicit NFRs:
 - Keep targets modest and implementation-verifiable.
 - Do not invent cloud-scale targets, multi-region availability, or high-throughput assumptions when the current phase is local/internal and no requirement supports them.
 
-## Review Routing
+## Repair Ownership
 
-- Missing NFR structure in AAC -> architecture repair.
-- NFR not assigned to a task -> taskplan repair.
-- Assigned task lacks evidence -> execution repair.
+- Missing NFR structure -> architecture owner.
+- NFR not assigned to a task -> task planning owner.
+- Assigned task lacks evidence -> implementation owner.
 
 ## Anti-Patterns
 

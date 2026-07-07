@@ -37,9 +37,9 @@ Usually breaking:
 When a breaking change risk exists:
 
 - Architecture should record a risk or decision.
-- TaskPlan should assign it to the task touching that interface.
-- Execution should either preserve compatibility or record the intentional change.
-- Review should route unacknowledged compatibility breaks to architecture or execution repair depending on where the gap lives.
+- Task planning should assign it to the task touching that interface.
+- Implementation should either preserve compatibility or record the intentional change.
+- Review should flag unacknowledged compatibility breaks and identify the responsible repair owner.
 
 ## Deprecation And Sunset
 

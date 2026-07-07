@@ -84,7 +84,7 @@ Create risk entries for:
 - Deferring validation until UI or tests only.
 - Omitting migration impact for persistent fields.
 
-## TaskPlan Implications
+## Planning Implications
 
 Data-affecting tasks should usually own:
 

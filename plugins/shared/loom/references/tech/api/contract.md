@@ -2,7 +2,7 @@
 
 ## Role In Loom
 
-Loom's primary API contract lives in AAC `interfaces[]`. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.
+Loom's primary API contract lives in the accepted architecture/API contract. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.
 
 ## When To Create Or Update OpenAPI
 
@@ -24,7 +24,7 @@ When OpenAPI is required:
 - Keep operation ids stable and resource-oriented.
 - Group operations with tags that match business resources or modules.
 - Reuse component schemas for request bodies, responses, errors, pagination, and auth when that reduces drift.
-- Include success and error response schemas for the status categories declared in AAC `interfaces[]`.
+- Include success and error response schemas for the status categories declared in the accepted API contract.
 - Include examples only when they clarify business behavior, important validation, or state transitions.
 - Validate with the project's existing command if available; otherwise record static evidence and known gaps rather than adding heavy tooling.
 
@@ -39,7 +39,7 @@ When a separate contract file is selected, the agent should preserve or create:
 - `components.responses` for shared errors when the repo convention supports them
 - security schemes only when the current phase or existing repo actually requires auth
 
-Do not add a generated OpenAPI file that disagrees with source code, AAC interfaces, or tests just to satisfy documentation style.
+Do not add a generated OpenAPI file that disagrees with source code, the accepted API contract, or tests just to satisfy documentation style.
 
 ## Existing Contract Files
 
@@ -48,8 +48,8 @@ If the repository already owns an OpenAPI/schema file:
 - update it in the existing style and version
 - avoid reformatting unrelated paths
 - preserve existing servers/security conventions unless the task changes them
-- cite the file in `apiContractEvidence.contractFileRefs`
+- cite the file in implementation evidence
 
-## TaskResult Evidence
+## Implementation Evidence
 
-For tasks that touch API contracts, `apiContractEvidence.contractFileRefs` should list generated or updated contract files. If no separate contract file is expected, leave the list empty and cite source code/tests instead.
+For tasks that touch API contracts, implementation evidence should name generated or updated contract files. If no separate contract file is expected, cite source code and tests instead.

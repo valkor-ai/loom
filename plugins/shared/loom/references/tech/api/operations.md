@@ -1,6 +1,6 @@
 # API Operational Semantics
 
-Use this reference for API behavior that affects repeated calls, retries, caching, rate limiting, request tracing, or conditional updates. These rules are not mandatory for every endpoint; apply them only when the current phase, repository convention, or selected AAC interface needs them.
+Use this reference for API behavior that affects repeated calls, retries, caching, rate limiting, request tracing, or conditional updates. These rules are not mandatory for every endpoint; apply them only when the current phase, repository convention, or accepted API contract needs them.
 
 ## Idempotency
 
@@ -11,7 +11,7 @@ Use this reference for API behavior that affects repeated calls, retries, cachin
 | `PATCH` | Usually not idempotent unless designed that way. | Partial update can be retried by clients or workers. |
 | `POST` | Not idempotent by default. | Payment, submission, workflow transition, import, or duplicate-click scenarios can create duplicate side effects. |
 
-For retry-sensitive `POST` operations, declare an `idempotencyPolicy` in the AAC interface:
+For retry-sensitive `POST` operations, record an idempotency policy in the accepted API contract:
 
 ```json
 {
@@ -95,4 +95,4 @@ For APIs with background work, external dependencies, or important business side
 }
 ```
 
-TaskResult evidence should cite tests, runtime probes, logs, or source files proving the selected operational policy. Do not claim operational semantics only in prose.
+Implementation evidence should cite tests, runtime probes, logs, or source files proving the selected operational policy. Do not claim operational semantics only in prose.

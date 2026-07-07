@@ -1,14 +1,14 @@
 # ADR Guidance For Loom Architecture
 
-Use this reference when writing `architectureQuality.decisions`.
+Use this reference when writing architecture decision records.
 
-Loom ADRs are structured JSON entries inside the AAC, not Markdown files unless the user's project explicitly asks for ADR documents.
+Loom ADRs are structured architecture decision entries, not Markdown files unless the user's project explicitly asks for ADR documents.
 
 ## Required Shape
 
 Each decision must include:
 
-- `decisionId`
+- stable decision id
 - category
 - title
 - status
@@ -53,7 +53,7 @@ Neutral consequences can capture follow-up awareness without creating current ta
 
 ## Verification Hints
 
-Verification hints should tell TaskPlan/Review what evidence would prove the decision was respected:
+Verification hints should tell planning and review what evidence would prove the decision was respected:
 
 - changed module files align with module ownership
 - API paths use declared interface boundary
@@ -71,4 +71,4 @@ Verification hints should tell TaskPlan/Review what evidence would prove the dec
 
 ## Current Phase Rule
 
-An ADR belongs in the current phase only when it affects current implementation, verification, or repair routing. General future architecture notes should stay out of current TaskPlan.
+An ADR belongs in the current phase only when it affects current implementation, verification, or repair ownership. General future architecture notes should stay out of the current task plan.

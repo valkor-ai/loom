@@ -2,37 +2,37 @@
 
 Use this file when Loom architecture work needs to turn confirmed scope, technical baseline, and repository context into implementation-facing decisions.
 
-Loom architecture work is not a standalone design essay. It is a delivery contract that must be carried from Architecture into TaskPlan, Execution, TaskResult, Review, and Repair.
+Loom architecture work is not a standalone design essay. It is a delivery contract that must be carried into planning, implementation, evidence, review, and repair.
 
 ## Operating Model
 
 1. Use the confirmed requirement scope, technical baseline, and repository context as source facts.
 2. Convert those source facts into implementation-facing architecture constraints.
-3. Keep Architecture section artifacts compact, decision-oriented, and consumable by TaskPlan and Execution.
-4. Use references to make concrete decisions rather than copying reference prose into Loom JSON artifacts.
+3. Keep Architecture section artifacts compact, decision-oriented, and consumable by planning and implementation.
+4. Use references to make concrete decisions rather than copying reference prose into delivery artifacts.
 
 ## Required Architecture Assets
 
 Production-grade Loom architecture output must produce implementation-facing assets:
 
-| Asset | Purpose | Later Consumer |
+| Asset | Purpose | Used By |
 |---|---|---|
-| Architecture style | Explains the selected structural approach for the current phase. | TaskPlan grouping and execution boundaries. |
+| Architecture style | Explains the selected structural approach for the current phase. | Task grouping and implementation boundaries. |
 | Module boundary | Defines responsibilities and ownership for code changes. | Task write boundaries and review scope. |
 | Data architecture | Defines ownership, invariants, transaction boundaries, and migration impact for the already selected stack. | Persistence tasks and engineering quality checks. |
-| Behavior model | Defines workflows, state transitions, blocking paths, and success outcomes. | Execution and runtime/UI verification. |
+| Behavior model | Defines workflows, state transitions, blocking paths, and success outcomes. | Implementation and runtime/UI verification. |
 | Runtime boundary | Defines build/start/probe/environment expectations. | Runtime delivery tasks and deploy. |
-| ADR decision | Captures context, decision, alternatives, consequences, and verification hints. | TaskPlan architecture quality requirements. |
-| NFR target | Captures concrete quality targets and verification strategy. | Task verification and Review. |
-| Risk/failure mode | Captures impact, mitigation, owner artifacts, and verification hints. | Task assignment and Review routing. |
+| ADR decision | Captures context, decision, alternatives, consequences, and verification hints. | Planning and implementation quality requirements. |
+| NFR target | Captures concrete quality targets and verification strategy. | Task verification and review. |
+| Risk/failure mode | Captures impact, mitigation, owner artifacts, and verification hints. | Task assignment and review. |
 
 ## Contract Discipline
 
 - Architecture sections should use compact ids and references, not long prose repeated across tasks.
-- Coverage must emit `architectureQuality.decisions`, `architectureQuality.nfrs`, and `architectureQuality.risks`.
-- TaskPlan must reference architecture quality items by id. Do not inline full ADR, NFR, or risk records inside every task.
-- TaskResult must report `architectureQualityEvidence` only when the task has `architectureQualityRequirementRefs`.
-- Review must route missing architecture quality structure to architecture repair, missing task assignment to taskplan repair, and missing implementation evidence to execution repair.
+- Coverage should include decision, NFR, and risk records with stable ids.
+- Task planning should reference architecture quality items by id. Do not inline full ADR, NFR, or risk records inside every task.
+- Implementation evidence should mention only the architecture quality items that task owned.
+- Review should identify whether a gap belongs to architecture structure, task assignment, or implementation evidence.
 
 ## Decision Inputs
 
@@ -45,7 +45,7 @@ Use these inputs. Ignore unselected or unavailable context.
 | Requirement details | Defines invariants, workflows, actors, and data behaviors. |
 | Technical baseline | Defines selected runtime/framework/storage facts. Consume it; do not redo technology selection here. |
 | Repository context | Defines existing code boundaries and style when available. |
-| UIX contract | Defines frontend quality only for frontend surfaces; do not mix UI references into architecture references. |
+| Frontend quality contract | Defines frontend quality only for frontend surfaces; do not mix UI references into architecture references. |
 
 ## Must Not
 
@@ -65,4 +65,4 @@ A usable Architecture section lets a later agent answer:
 - Which architecture decision or risk is this task responsible for?
 - Which verification evidence proves the architecture constraint is respected?
 
-If those answers are missing, repair the Architecture artifact instead of pushing ambiguity into execution.
+If those answers are missing, repair the architecture output instead of pushing ambiguity into implementation.

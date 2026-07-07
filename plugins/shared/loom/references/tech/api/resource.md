@@ -14,35 +14,20 @@ Model APIs around business resources and state transitions.
 | Delete/close/cancel | `DELETE` or `POST` subresource | `/resources/{id}` or `/resources/{id}/cancellations` | state transition, conflict/blocking errors |
 | Domain action | `POST` subresource | `/resources/{id}/actions` | use only when the domain operation is not a simple CRUD state mutation |
 
-## AAC Interface Shape
+## Interface Shape
 
-For HTTP APIs, Architecture `interfaces[]` should include the fields that are known in the current phase:
+For HTTP APIs, the accepted API contract should preserve the semantic fields known in the current phase:
 
-```json
-{
-  "interfaceId": "api_purchase_request_create",
-  "name": "Create purchase request",
-  "type": "http_api",
-  "resource": "purchase_requests",
-  "operationKind": "create",
-  "method": "POST",
-  "path": "/api/purchase-requests",
-  "requestSchema": [{ "field": "title", "required": true, "kind": "string" }],
-  "responseSchema": [{ "field": "id", "required": true, "kind": "identifier" }],
-  "statusCodes": {
-    "success": [201],
-    "validation": [400, 422],
-    "businessConflict": [409],
-    "notFound": [],
-    "auth": [401, 403]
-  },
-  "errorSchema": [{ "field": "message", "required": true, "kind": "user_actionable_message" }],
-  "scopeRefs": [],
-  "acceptanceRefs": []
-}
-```
+- stable endpoint id and human-readable operation name
+- resource name and operation kind
+- HTTP method and path
+- request body, query, and path fields
+- success response fields and readback fields
+- success, validation, business-blocking, not-found, and auth status behavior
+- stable error body fields such as code and user-actionable message
+- requirement or acceptance links when the delivery contract provides them
 
-Use project conventions for exact JSON field naming. The Loom contract should preserve the semantic fields even when the implementation uses framework-specific DTO names.
+Use project conventions for exact JSON field naming. The contract should preserve the semantic fields even when the implementation uses framework-specific DTO names.
 
 ## Path Rules
 

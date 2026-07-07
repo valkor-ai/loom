@@ -1,6 +1,6 @@
 # System Design For Loom Architecture
 
-Use this reference when defining Architecture `foundation`, `domain_contract`, `behavior`, or `runtime_delivery` sections.
+Use this reference when defining architecture foundation, domain/interface contracts, behavior, or runtime delivery sections.
 
 ## System Boundary
 
@@ -65,7 +65,7 @@ Each stateful flow should identify:
 - partial write or inconsistent state risk
 - recovery or user-visible blocking response
 
-When a failure affects implementation or verification, create an `architectureQuality.risks[]` entry.
+When a failure affects implementation or verification, create an architecture risk record.
 
 ## Anti-Patterns
 

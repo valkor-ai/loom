@@ -17,7 +17,7 @@ This file is selected for every `language_implementation_quality` requirement. I
 
 ## Delivery Rules
 
-- Translate selected references into concrete edits. Do not paste reference prose into source files, TaskResult, ReviewResult, or user-facing UI.
+- Translate selected references into concrete edits. Do not paste reference prose into source files, delivery evidence, review findings, or user-facing UI.
 - Keep domain behavior in domain/service code and keep transport/UI glue thin.
 - Make invalid states hard to express where the language or framework supports that without excessive ceremony.
 - Remove dead scaffolding after implementation; do not leave demo-only placeholders in production_code_implementation tasks.
@@ -27,11 +27,11 @@ This file is selected for every `language_implementation_quality` requirement. I
 - Run the smallest existing compile/type/lint/test command that proves the changed files.
 - Add or update tests for new business branches, validation failures, persistence behavior, async lifecycle, or public API behavior touched by the task.
 - Do not claim commands that were not run. Put blocked or unavailable verification in known gaps with the reason.
-- Summarize command outcomes; do not paste large logs into TaskResult.
+- Summarize command outcomes; do not paste large logs into delivery evidence.
 
 ## Evidence Rules
 
-- Use the generated TaskResult template and validator messages for exact evidence field names and required values.
+- Use the current result contract and validator messages for exact evidence field names and required values.
 - Evidence summaries should state how changed files followed both repository style and the selected topic references.
 
 ## Common Anti-Patterns

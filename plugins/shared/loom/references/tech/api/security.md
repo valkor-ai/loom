@@ -4,23 +4,17 @@
 
 Declare only the authentication and authorization behavior required by the current phase, existing repository pattern, or confirmed technical baseline. Do not invent OAuth/JWT/session systems for phases that only require local scaffolding or unauthenticated internal prototypes.
 
-## Contract Fields
+## Auth Policy Facts
 
-For protected HTTP APIs, AAC `interfaces[]` may include:
+For protected HTTP APIs, the accepted API contract should state:
 
-```json
-{
-  "authPolicy": {
-    "required": "required",
-    "actorRefs": ["actor_staff"],
-    "permissionRefs": ["purchase_request:create"],
-    "unauthenticatedStatus": 401,
-    "unauthorizedStatus": 403
-  }
-}
-```
+- whether authentication is required
+- which actors or roles may perform the operation
+- which permission or ownership rule applies
+- the unauthenticated and unauthorized status behavior
+- whether sensitive resource existence should be hidden
 
-Use existing repository roles/permissions when available.
+Use existing repository roles and permissions when available.
 
 ## Implementation Expectations
 

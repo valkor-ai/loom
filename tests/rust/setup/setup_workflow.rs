@@ -162,6 +162,14 @@ const FRONTEND_REFERENCE_FILES: &[&str] = &[
     "vue/typescript",
 ];
 
+const REVIEW_REFERENCE_FILES: &[&str] = &[
+    "core",
+    "defect-patterns",
+    "finding-quality",
+    "spec-compliance",
+    "test-evidence",
+];
+
 #[test]
 fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
     let fixture = Fixture::new("install_cleans_legacy");
@@ -313,6 +321,11 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root
             .join("skills/loom/references/tech/api/contract.md")
             .exists());
+        for file in REVIEW_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/review/{file}.md"))
+                .exists());
+        }
         assert!(root
             .join("skills/loom/references/tech/code/common.md")
             .exists());
@@ -369,6 +382,12 @@ fn install_projects_shared_references_to_agent_read_paths() {
         .opencode_home
         .join("references/loom/tech/api/contract.md")
         .exists());
+    for file in REVIEW_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/review/{file}.md"))
+            .exists());
+    }
     assert!(env
         .opencode_home
         .join("references/loom/tech/code/common.md")
@@ -1144,6 +1163,111 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     }
 }
 
+#[test]
+fn loom_review_references_are_operational_without_protocol_duplication() {
+    let repo = repo_root();
+    let review_root = repo.join("plugins/shared/loom/references/tech/review");
+    let expected = [
+        ("core.md", "Review Posture"),
+        ("spec-compliance.md", "Missing Requirement Checks"),
+        ("defect-patterns.md", "Functional Correctness"),
+        ("test-evidence.md", "Strong Evidence"),
+        ("finding-quality.md", "Finding Content"),
+    ];
+
+    for (file, required_section) in expected {
+        let path = review_root.join(file);
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read review reference {}: {error}", path.display()));
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 30,
+            "{} is too thin to guide review decisions: {line_count} lines",
+            path.display()
+        );
+        for required in ["Use this reference", required_section] {
+            assert!(
+                content.contains(required),
+                "{} missing review reference section {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Full Review Report Template",
+            "Code Review: [PR Title]",
+            "Receiving Feedback",
+            "Load this file only",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained protocol, markdown report template, or human-feedback fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn loom_tech_references_do_not_duplicate_mcp_contract_terms() {
+    let repo = repo_root();
+    let tech_root = repo.join("plugins/shared/loom/references/tech");
+    let mut files = Vec::new();
+    collect_markdown_files(&tech_root, &mut files);
+    let forbidden = [
+        "TaskResult",
+        "ReviewResult",
+        "TaskPlan",
+        "AAC",
+        "PGC",
+        "apiContractEvidence",
+        "apiContractRequirements",
+        "architectureQualityEvidence",
+        "architectureQualityRequirementRefs",
+        "architectureQuality.",
+        "interfaces[]",
+        "interfaceId",
+        "type: \"http_api\"",
+        "recommendedNextAction",
+        "nextAction",
+        "execution_repair",
+        "taskplan_repair",
+        "architecture_artifact_repair",
+        "manual_review",
+        "continue_to_next_phase",
+        "needs_user_decision",
+        "approved_with_notes",
+        "changes_requested",
+        "requestReadPlan",
+        "readFieldGroup",
+        "referenceLoadPlan",
+        "techReferenceProfile",
+        "outputContract",
+        "resultTemplate",
+        "enumRefs",
+        "schemaShape",
+        "writeTargets",
+        "MCP request",
+        ".loom",
+        "loom.",
+    ];
+
+    for path in files {
+        let content = fs::read_to_string(&path).unwrap();
+        for term in forbidden {
+            assert!(
+                !content.contains(term),
+                "{} must not duplicate MCP contract term {term}",
+                path.display()
+            );
+        }
+    }
+}
+
 fn collect_markdown_files(dir: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -1531,6 +1655,14 @@ impl Fixture {
                     .package_root
                     .join(format!("plugins/shared/loom/references/tech/api/{path}.md")),
                 &format!("# {path} API Reference\n"),
+            );
+        }
+        for path in REVIEW_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/review/{path}.md"
+                )),
+                &format!("# {path} Review Reference\n"),
             );
         }
         write_file(

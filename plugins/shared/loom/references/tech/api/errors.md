@@ -60,7 +60,7 @@ When the API touches critical state, background work, or external dependencies, 
 - error body field such as `requestId` or `request_id`
 - log correlation in the backend implementation
 
-For retryable failures, declare retry behavior in the interface or evidence:
+For retryable failures, declare retry behavior in the accepted API contract or implementation evidence:
 
 - `429` should include `Retry-After` when a meaningful delay exists
 - `503` may include `Retry-After` for maintenance or dependency recovery
@@ -74,6 +74,6 @@ For retryable failures, declare retry behavior in the interface or evidence:
 - Do not return success with an error message body for a failed business operation.
 - Do not expose stack traces, SQL messages, class names, filesystem paths, tokens, or dependency internals.
 
-## TaskResult Evidence
+## Implementation Evidence
 
-For API tasks, `apiContractEvidence` should mention the important error categories covered by code or tests. If the selected interface includes retry, rate-limit, request-id, or dependency-unavailable behavior, cite that evidence under `errorPaths` or `knownGaps`.
+For API tasks, implementation evidence should mention the important error categories covered by code or tests. If the selected interface includes retry, rate-limit, request-id, or dependency-unavailable behavior, name the covered paths and any known gaps.

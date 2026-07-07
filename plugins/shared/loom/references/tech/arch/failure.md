@@ -1,6 +1,6 @@
 # Failure Modes And Architecture Risks
 
-Use this reference when writing behavior failure paths, runtime failure expectations, or `architectureQuality.risks`.
+Use this reference when writing behavior failure paths, runtime failure expectations, or architecture risk records.
 
 Failure modes are part of architecture, not a Review afterthought.
 
@@ -19,7 +19,7 @@ Failure modes are part of architecture, not a Review afterthought.
 
 Each risk must include:
 
-- `riskId`
+- stable risk id
 - category
 - severity
 - likelihood
@@ -45,7 +45,7 @@ For each stateful or externally visible flow, consider:
 - runtime surface starts but API is unreachable
 - user-visible feedback hides the real blocking reason
 
-Only record risks that affect current implementation, verification, or repair routing.
+Only record risks that affect current implementation, verification, or repair ownership.
 
 ## Mitigation Quality
 
@@ -62,11 +62,11 @@ Weak mitigation:
 - "make it robust"
 - "monitor later"
 
-## Review Routing
+## Repair Ownership
 
-- Risk missing from AAC when failure mode is architectural -> architecture repair.
-- Risk exists but no task owns mitigation -> taskplan repair.
-- Task owns risk but result gives no evidence -> execution repair.
+- Missing architectural failure-mode risk -> architecture owner.
+- Risk exists but no task owns mitigation -> task planning owner.
+- Task owns risk but implementation gives no evidence -> implementation owner.
 
 ## Anti-Patterns
 

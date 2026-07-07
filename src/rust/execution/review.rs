@@ -221,7 +221,7 @@ fn build_review_request(
         &code_quality_review_matrix,
         &frontend_quality_review_matrix,
     );
-    Ok(json!({
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "review_gate",
         "requestId": review_id,
@@ -419,6 +419,7 @@ fn build_review_request(
                         "outputContract.reviewSignals.items"
                     ])
                 },
+                review_quality_read_group(),
                 {
                     "groupId": "review_rules",
                     "required": true,
@@ -471,7 +472,64 @@ fn build_review_request(
                 }
             ]
         }
-    }))
+    });
+    root["reviewQualityProfile"] = review_quality_profile();
+    Ok(root)
+}
+
+fn review_quality_read_group() -> Value {
+    json!({
+        "groupId": "review_quality_profile",
+        "required": true,
+        "purpose": "Read the review quality method and selected review references.",
+        "whenToRead": "Read after review matrices and before writing findings.",
+        "selectors": read_selectors_value_from_paths([
+            "reviewQualityProfile.loadMode",
+            "reviewQualityProfile.reviewMode",
+            "reviewQualityProfile.reviewStageOrder",
+            "reviewQualityProfile.referenceLoadPlan"
+        ])
+    })
+}
+
+fn review_quality_profile() -> Value {
+    json!({
+        "loadMode": "mcp_reference_load_plan",
+        "reviewMode": "phase_run_review",
+        "reviewStageOrder": [
+            "spec_compliance",
+            "implementation_quality",
+            "evidence_quality",
+            "routing_decision"
+        ],
+        "referenceLoadPlan": [
+            {
+                "refId": "rv.core",
+                "path": "tech/review/core.md",
+                "reason": "Review gate posture, order, decision discipline, and route selection."
+            },
+            {
+                "refId": "rv.spec",
+                "path": "tech/review/spec-compliance.md",
+                "reason": "Current-phase requirement compliance before implementation quality review."
+            },
+            {
+                "refId": "rv.defects",
+                "path": "tech/review/defect-patterns.md",
+                "reason": "Common correctness, security, persistence, reliability, performance, and maintainability defects."
+            },
+            {
+                "refId": "rv.evidence",
+                "path": "tech/review/test-evidence.md",
+                "reason": "Verification and evidence sufficiency review."
+            },
+            {
+                "refId": "rv.findings",
+                "path": "tech/review/finding-quality.md",
+                "reason": "Actionable ReviewFinding severity, category, evidence, and repair route guidance."
+            }
+        ]
+    })
 }
 
 fn review_result_template(

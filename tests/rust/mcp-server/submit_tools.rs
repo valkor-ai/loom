@@ -3759,6 +3759,50 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         field == "outputContract.reviewSignals.requirementDetailEvidence"
             || field == "outputContract.reviewSignals.frontendWorkflowClosure"
     }));
+    let review_quality_group = review_inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "review_quality_profile")
+        .expect("review_quality_profile group");
+    let review_quality_fields = review_quality_group.expanded_fields();
+    assert!(review_quality_fields
+        .iter()
+        .any(|field| field == "reviewQualityProfile.referenceLoadPlan"));
+    assert!(review_quality_fields
+        .iter()
+        .any(|field| field == "reviewQualityProfile.reviewStageOrder"));
+    assert!(!review_quality_fields
+        .iter()
+        .any(|field| field == "reviewQualityProfile"));
+    let review_quality = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        group_id: "review_quality_profile".to_string(),
+    })
+    .expect("read review quality profile");
+    let review_references = review_quality.fields["reviewQualityProfile.referenceLoadPlan"]
+        .value
+        .as_array()
+        .expect("review reference load plan");
+    assert!(review_references
+        .iter()
+        .any(|item| item["path"] == json!("tech/review/core.md")));
+    assert!(review_references
+        .iter()
+        .any(|item| item["path"] == json!("tech/review/spec-compliance.md")));
+    assert!(review_references
+        .iter()
+        .any(|item| item["path"] == json!("tech/review/defect-patterns.md")));
+    assert!(review_references
+        .iter()
+        .any(|item| item["path"] == json!("tech/review/test-evidence.md")));
+    assert!(review_references
+        .iter()
+        .any(|item| item["path"] == json!("tech/review/finding-quality.md")));
+    let review_quality_text =
+        serde_json::to_string(&review_quality.fields).expect("serialize review profile");
+    assert!(!review_quality_text.contains("SQL Injection"));
+    assert!(!review_quality_text.contains("Full Review Report Template"));
     let review_matrices = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: review_request_ref.to_string(),
@@ -3813,6 +3857,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
             "review_packets",
             "change_context",
             "review_matrices",
+            "review_quality_profile",
             "review_rules",
             "review_write_contract"
         ]
