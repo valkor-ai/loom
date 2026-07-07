@@ -1100,8 +1100,8 @@ fn technical_baseline_request_treats_later_phase_without_repo_markers_as_existin
 }
 
 #[test]
-fn greenfield_technical_baseline_needing_confirmation_uses_user_gate() {
-    let fixture = Fixture::new("technical-baseline-greenfield-user-gate");
+fn new_project_technical_baseline_needing_confirmation_uses_user_gate() {
+    let fixture = Fixture::new("technical-baseline-new-project-user-gate");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
@@ -1114,7 +1114,7 @@ fn greenfield_technical_baseline_needing_confirmation_uses_user_gate() {
         .as_str()
         .expect("baseline requestRef")
         .to_string();
-    let mut candidate = greenfield_technical_baseline_candidate_json();
+    let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["status"] = json!("needs_user_confirmation");
     candidate["approval"] = json!({
         "type": "none",
@@ -1130,12 +1130,15 @@ fn greenfield_technical_baseline_needing_confirmation_uses_user_gate() {
     );
 
     assert_eq!(result["state"], "user_gate", "{result:#}");
-    assert_eq!(result["gate"]["gateId"], "greenfield_baseline_confirmation");
+    assert_eq!(
+        result["gate"]["gateId"],
+        "new_project_baseline_confirmation"
+    );
 }
 
 #[test]
-fn greenfield_technical_baseline_autofills_confirmed_at() {
-    let fixture = Fixture::new("technical-baseline-greenfield-confirmed-at");
+fn new_project_technical_baseline_autofills_confirmed_at() {
+    let fixture = Fixture::new("technical-baseline-new-project-confirmed-at");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
@@ -1148,7 +1151,7 @@ fn greenfield_technical_baseline_autofills_confirmed_at() {
         .as_str()
         .expect("baseline requestRef")
         .to_string();
-    let mut candidate = greenfield_technical_baseline_candidate_json();
+    let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["approval"]
         .as_object_mut()
         .expect("approval object")
@@ -1174,8 +1177,8 @@ fn greenfield_technical_baseline_autofills_confirmed_at() {
 }
 
 #[test]
-fn greenfield_technical_baseline_requires_complete_track_model() {
-    let fixture = Fixture::new("technical-baseline-greenfield-tracks");
+fn technical_baseline_accepts_legacy_greenfield_project_kind_alias() {
+    let fixture = Fixture::new("technical-baseline-greenfield-alias");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
 
@@ -1188,7 +1191,46 @@ fn greenfield_technical_baseline_requires_complete_track_model() {
         .as_str()
         .expect("baseline requestRef")
         .to_string();
-    let mut candidate = greenfield_technical_baseline_candidate_json();
+    let mut candidate = new_project_technical_baseline_candidate_json();
+    candidate["projectKind"] = json!("greenfield");
+    candidate["source"] = json!("agent_recommended_for_greenfield");
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &baseline_request_ref);
+    let baseline_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "technicalBaseline");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(baseline_ref)).unwrap())
+            .expect("parse technical baseline");
+    assert_eq!(persisted["projectKind"], json!("new_project"));
+    assert_eq!(
+        persisted["source"],
+        json!("agent_recommended_for_new_project")
+    );
+}
+
+#[test]
+fn new_project_technical_baseline_requires_complete_track_model() {
+    let fixture = Fixture::new("technical-baseline-new-project-tracks");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = new_project_technical_baseline_candidate_json();
     candidate["stack"] = json!({
         "frontend": "vite-react",
         "backend": "spring-boot",
@@ -1208,7 +1250,7 @@ fn greenfield_technical_baseline_requires_complete_track_model() {
         .expect("issues")
         .iter()
         .any(
-            |issue| issue["code"] == "GREENFIELD_BASELINE_TRACKS_INCOMPLETE"
+            |issue| issue["code"] == "NEW_PROJECT_BASELINE_TRACKS_INCOMPLETE"
                 && issue["fieldPath"] == "stack.tracks"
         ));
 }
@@ -2190,6 +2232,66 @@ fn architecture_coverage_submit_repairs_invalid_type_and_missing_reason() {
             "missing issue for {field_path}: {issues:#?}"
         );
     }
+}
+
+#[test]
+fn architecture_coverage_submit_normalizes_deferred_detail_reason() {
+    let fixture = Fixture::new("architecture-coverage-deferred-reason-normalization");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        candidate_with_planning_details_json(),
+    );
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "coverage");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["detailCoverage"]
+        .as_array_mut()
+        .expect("detail coverage")
+        .push(json!({
+            "detailId": "detail.deferred.deferred_1.1",
+            "coverageStatus": "deferred",
+            "artifactRefs": {
+                "modules": [],
+                "entities": [],
+                "fields": [],
+                "constraints": [],
+                "interfaces": [],
+                "userFlows": [],
+                "stateMachines": [],
+                "frontendDataViews": [],
+                "frontendActions": [],
+                "frontendOperationPaths": [],
+                "acceptanceMatrix": []
+            }
+        }));
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &architecture_request_ref);
+    let aac_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "architectureArtifact");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(aac_ref)).unwrap())
+            .expect("parse persisted AAC");
+    let deferred_row = persisted["detailCoverage"]
+        .as_array()
+        .expect("detail coverage")
+        .iter()
+        .find(|row| {
+            row["detailId"] == json!("detail.deferred.deferred_1.1")
+                && row["reason"].as_str().is_some_and(|reason| {
+                    reason.contains("Deferred by the confirmed phase boundary")
+                })
+        })
+        .expect("deferred detail row");
+    assert_eq!(deferred_row["coverageStatus"], json!("deferred"));
+    assert!(deferred_row["reason"]
+        .as_str()
+        .is_some_and(|reason| reason.contains("Deferred by the confirmed phase boundary")));
 }
 
 #[test]
@@ -3319,6 +3421,104 @@ fn task_result_submit_normalizes_invalid_no_change_reason_type() {
 }
 
 #[test]
+fn task_result_rejects_placeholder_jvm_production_package() {
+    let fixture = Fixture::new("task-result-placeholder-jvm-package");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_with_persistence_quality(&fixture, taskplan_request_ref);
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef");
+    let core = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+        group_id: "task_execution_core".to_string(),
+    })
+    .expect("read execution core")
+    .fields;
+    assert!(
+        core["sourceContext.codeQualityRequirements"].value[0]["packageNamingPolicy"]
+            ["forbiddenPackagePrefixes"]
+            .as_array()
+            .expect("forbidden package prefixes")
+            .contains(&json!("com.example"))
+    );
+
+    let java_file = "server/src/main/java/com/example/replenishment/api/HealthController.java";
+    let java_path = fixture.root.join(java_file);
+    std::fs::create_dir_all(java_path.parent().expect("java parent"))
+        .expect("create java source parent");
+    std::fs::write(
+        &java_path,
+        "package com.example.replenishment.api;\n\npublic class HealthController {}\n",
+    )
+    .expect("write placeholder java package");
+
+    write_task_result_candidate(&fixture, execution_request_ref);
+    mutate_task_result_candidate(&fixture, execution_request_ref, |result| {
+        result["changedFiles"] = json!([java_file]);
+        if let Some(items) = result
+            .get_mut("codeQualityEvidence")
+            .and_then(Value::as_array_mut)
+        {
+            for item in items {
+                item["changedFiles"] = json!([java_file]);
+                item["summary"] = json!(
+                    "The Java file was checked against the selected code quality references."
+                );
+            }
+        }
+    });
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read task result repair issues")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "TASK_RESULT_CODE_QUALITY_INVALID"
+                && issue["fieldPath"] == "changedFiles"
+                && issue["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("com.example.replenishment.api"))
+        }));
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -4035,6 +4235,38 @@ fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
         frontend.get("apiContractRequirementRefs").is_none(),
         "frontend API binding task must not receive API contract owner refs: {frontend:#}"
     );
+    let code_requirements = taskplan["codeQualityRequirements"]
+        .as_array()
+        .expect("code quality requirements");
+    let backend_data_code_requirement = code_requirements
+        .iter()
+        .find(|requirement| {
+            requirement["appliesToTaskIds"]
+                .as_array()
+                .is_some_and(|items| items.contains(&json!("task-backend-data-001")))
+        })
+        .expect("backend data code quality requirement");
+    assert_eq!(
+        backend_data_code_requirement["packageNamingPolicy"]["fallbackPackageTemplate"],
+        json!("app.<project_slug>")
+    );
+    assert_eq!(
+        backend_data_code_requirement["packageNamingPolicy"]["absoluteFallbackPackage"],
+        json!("app.generated")
+    );
+    assert!(
+        backend_data_code_requirement["packageNamingPolicy"]["forbiddenPackagePrefixes"]
+            .as_array()
+            .expect("forbidden package prefixes")
+            .contains(&json!("com.example"))
+    );
+    assert!(backend_data_code_requirement["implementationObligations"]
+        .as_array()
+        .expect("implementation obligations")
+        .iter()
+        .any(|obligation| obligation
+            .as_str()
+            .is_some_and(|text| text.contains("app.<project_slug>"))));
 
     let execution_request_ref = accepted["next"]["requestRef"]
         .as_str()
@@ -6422,6 +6654,65 @@ fn taskplan_submit_normalizes_missing_verification_detail_refs() {
 }
 
 #[test]
+fn taskplan_submit_normalizes_missing_verification_detail_refs_with_multiple_matching_intents() {
+    let fixture = Fixture::new("taskplan-normalizes-verification-detail-multiple-intents");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    let detail_ref = group_value["tasks"][0]["requirementDetailRefs"][0]
+        .as_str()
+        .expect("detail ref")
+        .to_string();
+    let mut second_intent = group_value["tasks"][0]["verificationIntents"][0].clone();
+    second_intent["verificationId"] = json!("verify-account-002");
+    second_intent["requirementDetailRefs"] = json!([]);
+    group_value["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"] = json!([]);
+    group_value["tasks"][0]["verificationIntents"]
+        .as_array_mut()
+        .expect("verification intents")
+        .push(second_intent);
+    write_json_atomic(&group_path, &group_value)
+        .expect("write group with ambiguous verification detail gap");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    assert!(
+        persisted["tasks"][0]["verificationIntents"][0]["requirementDetailRefs"]
+            .as_array()
+            .expect("verification detail refs")
+            .iter()
+            .any(|item| item == &json!(detail_ref))
+    );
+}
+
+#[test]
 fn taskplan_submit_requires_frontend_task_when_frontend_required() {
     let fixture = Fixture::new("taskplan-frontend-task-required");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -6460,8 +6751,8 @@ fn taskplan_submit_requires_frontend_task_when_frontend_required() {
 }
 
 #[test]
-fn taskplan_submit_requires_frontend_ui_quality_contract_on_ui_tasks() {
-    let fixture = Fixture::new("taskplan-frontend-ui-quality-required");
+fn taskplan_submit_normalizes_frontend_ui_quality_contract_on_ui_tasks() {
+    let fixture = Fixture::new("taskplan-frontend-ui-quality-normalized");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
     let taskplan_request_ref = taskplan_result["next"]["requestRef"]
@@ -6488,11 +6779,62 @@ fn taskplan_submit_requires_frontend_ui_quality_contract_on_ui_tasks() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "FRONTEND_UI_QUALITY_CONTRACT_REQUIRED"
-            && issue["fieldPath"] == "tasks[].frontendExperienceRequirement.uiQualityContract"
-    }));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    let expected =
+        frontend_requirement_template_from_taskplan_request(&fixture, &taskplan_request_ref);
+    assert_eq!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]["uiQualityContract"],
+        expected["uiQualityContract"]
+    );
+}
+
+#[test]
+fn taskplan_submit_normalizes_interface_write_refs_when_not_opened() {
+    let fixture = Fixture::new("taskplan-interface-refs-not-opened");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_without_interfaces_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let group_file = first_taskplan_group_file(&fixture, &taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"] =
+        json!(["api.not-opened"]);
+    write_json_atomic(&group_path, &group_value).expect("write group with unavailable interface");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    assert!(
+        persisted["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"]
+            .as_array()
+            .map(|items| items.is_empty())
+            .unwrap_or(true)
+    );
 }
 
 #[test]
@@ -9861,6 +10203,24 @@ fn architecture_section_candidate_with_workflow_closure_json(
     candidate
 }
 
+fn architecture_section_candidate_without_interfaces_json(
+    fixture: &Fixture,
+    request_ref: &str,
+) -> Value {
+    let mut candidate = architecture_section_candidate_json(fixture, request_ref);
+    match candidate["section"].as_str().unwrap_or_default() {
+        "domain_contract" => {
+            candidate["content"]["interfaces"] = json!([]);
+        }
+        "coverage" => {
+            candidate["content"]["architectureQuality"]["risks"][0]["ownerArtifactRefs"]
+                ["interfaces"] = json!([]);
+        }
+        _ => {}
+    }
+    candidate
+}
+
 fn architecture_section_candidate_with_workflow_closure_no_runtime_json(
     fixture: &Fixture,
     request_ref: &str,
@@ -10065,7 +10425,7 @@ fn technical_baseline_candidate_json(project_kind: &str, approval_type: &str) ->
         "source": if project_kind == "existing_project" {
             "detected_from_repo"
         } else {
-            "agent_recommended_for_greenfield"
+            "agent_recommended_for_new_project"
         },
         "projectKind": project_kind,
         "scope": "project",
@@ -10092,11 +10452,11 @@ fn technical_baseline_candidate_json(project_kind: &str, approval_type: &str) ->
     })
 }
 
-fn greenfield_technical_baseline_candidate_json() -> Value {
+fn new_project_technical_baseline_candidate_json() -> Value {
     json!({
         "status": "confirmed",
-        "source": "agent_recommended_for_greenfield",
-        "projectKind": "greenfield",
+        "source": "agent_recommended_for_new_project",
+        "projectKind": "new_project",
         "scope": "project",
         "stack": {
             "tracks": {
@@ -10141,7 +10501,7 @@ fn greenfield_technical_baseline_candidate_json() -> Value {
         "constraints": [],
         "evidence": [{
             "path": Value::Null,
-            "reason": "Greenfield stack was selected from the confirmed phase scope."
+            "reason": "New-project stack was selected from the confirmed phase scope."
         }],
         "approval": {
             "type": "user_confirmed",
@@ -10151,7 +10511,7 @@ fn greenfield_technical_baseline_candidate_json() -> Value {
         "confidence": "high",
         "requiresUserConfirmation": false,
         "reasoningSummary": [
-            "The selected stack supports the confirmed greenfield phase without adding extra surfaces."
+            "The selected stack supports the confirmed new-project phase without adding extra surfaces."
         ],
         "alternatives": []
     })

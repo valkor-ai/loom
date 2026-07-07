@@ -20,6 +20,8 @@ This file is not a Java style guide; it tells the agent how to make Java impleme
 - Preserve transaction ownership. A service method that changes business state should own the transaction boundary or call an existing transactional use case; do not spread writes across controller code.
 - Prefer constructor injection and final dependencies. Do not add field injection or static service lookups.
 - When adding IDs or status strings, use domain-specific types/enums where the project already uses them; avoid free-form strings for state machines or business categories.
+- Use a professional production package root. Prefer the existing `src/main` package root, then Gradle `group` or Maven `groupId`, then a confirmed organization/product namespace. If none exists, derive `app.<project_slug>` from the repository or confirmed project name; only use `app.generated` when no stable slug can be derived.
+- Do not create production source packages under placeholder roots such as `com.example`, `org.example`, `net.example`, `io.example`, `com.company`, `org.company`, `com.demo`, `org.demo`, `com.sample`, or `org.sample`.
 
 ## Verification Focus
 
@@ -28,7 +30,9 @@ This file is not a Java style guide; it tells the agent how to make Java impleme
 - If controller-visible behavior changes, add a controller/API test or runtime probe that proves status code, response body, and error shape.
 - If configuration is added, verify the default local value and one override path when feasible.
 - If the change uses Java 21 language features, the compile step must prove the configured source/target supports them.
+- For new Java source roots, verify package declarations match the chosen base package and directory layout.
 
 ## Evidence Focus
 
 - In the evidence summary, name the Java boundary that was kept clean, such as `controller -> service -> repository`, DTO/entity separation, validation ownership, or exception mapping.
+- When new Java files are created, state the chosen base package source: existing package root, build group metadata, confirmed namespace, or fallback `app.<project_slug>`.

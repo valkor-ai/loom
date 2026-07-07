@@ -19,7 +19,7 @@ API errors are part of product behavior. They should let the caller or UI explai
 
 ## Response Shape
 
-Prefer the repository's existing error envelope. For greenfield HTTP APIs, use a compact problem-details-compatible shape:
+Prefer the repository's existing error envelope. For new-project HTTP APIs, use a compact problem-details-compatible shape:
 
 ```json
 {

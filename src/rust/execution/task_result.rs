@@ -4,8 +4,9 @@ use std::{
 };
 
 use contracts::{
-    CodeQualityEvidence, CodeQualityRequirement, TaskDefinition, TaskKind, TaskPlanRunNextAction,
-    TaskPlanRunStatus, TaskResult, TaskResultStatus, TaskRunStatus, VerificationEvidence,
+    forbidden_jvm_package_prefixes, CodeQualityEvidence, CodeQualityRequirement, TaskDefinition,
+    TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult, TaskResultStatus,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -260,6 +261,7 @@ where
     };
     let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
     let issues = validate_result(
+        root,
         &normalized_result,
         &result,
         &task,
@@ -434,6 +436,7 @@ where
 }
 
 fn validate_result(
+    project_root: &Path,
     raw_result: &Value,
     result: &TaskResult,
     task: &TaskDefinition,
@@ -523,6 +526,13 @@ fn validate_result(
     validate_architecture_quality_evidence(result, task, &mut issues);
     validate_api_contract_evidence(result, task, &mut issues);
     validate_code_quality_evidence(result, task, code_quality_requirements, &mut issues);
+    validate_jvm_package_names(
+        project_root,
+        result,
+        task,
+        code_quality_requirements,
+        &mut issues,
+    );
     validate_blocked_reasons(result, blocked_output, &mut issues);
     if result
         .execution_continuity
@@ -555,6 +565,98 @@ fn validate_result(
         ));
     }
     issues
+}
+
+fn validate_jvm_package_names(
+    project_root: &Path,
+    result: &TaskResult,
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if !matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) || !task_has_jvm_package_policy(task, code_quality_requirements)
+    {
+        return;
+    }
+    for relative in &result.changed_files {
+        if !is_jvm_production_source_path(relative) {
+            continue;
+        }
+        let Ok(path) = from_project_relative(project_root, relative) else {
+            continue;
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(package_name) = extract_jvm_package_name(&content) else {
+            continue;
+        };
+        let Some(forbidden_prefix) = forbidden_package_prefix(&package_name) else {
+            continue;
+        };
+        issues.push(issue(
+            "TASK_RESULT_CODE_QUALITY_INVALID",
+            "changedFiles",
+            &format!(
+                "Production JVM source file {relative} declares placeholder package `{package_name}` using forbidden prefix `{forbidden_prefix}`. Use an existing package root, build group metadata, confirmed organization/project namespace, or fallback app.<project_slug>/app.generated."
+            ),
+        ));
+    }
+}
+
+fn task_has_jvm_package_policy(
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+) -> bool {
+    let requirement_refs = task
+        .code_quality_requirement_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    code_quality_requirements.iter().any(|requirement| {
+        requirement_refs.contains(requirement.requirement_id.as_str())
+            && requirement.package_naming_policy.is_some()
+    })
+}
+
+fn is_jvm_production_source_path(relative: &str) -> bool {
+    let normalized = relative.replace('\\', "/");
+    (normalized.ends_with(".java") || normalized.ends_with(".kt"))
+        && (normalized.contains("/src/main/") || normalized.starts_with("src/main/"))
+}
+
+fn extract_jvm_package_name(content: &str) -> Option<String> {
+    for line in content.lines().take(120) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.is_empty() {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("package ") else {
+            continue;
+        };
+        let package = rest
+            .trim()
+            .trim_end_matches(';')
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(';')
+            .to_string();
+        if !package.is_empty() {
+            return Some(package);
+        }
+    }
+    None
+}
+
+fn forbidden_package_prefix(package_name: &str) -> Option<&'static str> {
+    let package = package_name.to_ascii_lowercase();
+    forbidden_jvm_package_prefixes()
+        .into_iter()
+        .find(|prefix| package == *prefix || package.starts_with(&format!("{prefix}.")))
 }
 
 fn task_result_required_field_applies_to_status(field: &str, status: &TaskResultStatus) -> bool {

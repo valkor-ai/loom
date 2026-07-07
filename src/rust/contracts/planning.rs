@@ -7,7 +7,8 @@ use crate::{AcceptanceCandidate, FrontendExperience, ScopeItem, UserFacingLangua
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectKind {
-    Greenfield,
+    #[serde(rename = "new_project", alias = "greenfield")]
+    NewProject,
     ExistingProject,
     Unknown,
 }
@@ -30,7 +31,11 @@ pub enum TechnicalBaselineSource {
     UserConfirmed,
     DetectedFromRepo,
     AgentInferredFromRepoSignals,
-    AgentRecommendedForGreenfield,
+    #[serde(
+        rename = "agent_recommended_for_new_project",
+        alias = "agent_recommended_for_greenfield"
+    )]
+    AgentRecommendedForNewProject,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -346,8 +346,8 @@ fn schema_projection() -> Value {
             "frontendExperience.operationPaths[].requiredStates[]": "enumRefs.frontendInteractionState"
         },
         "objectShapeRules": {
-            "frontendExperience.actions[].resultObservation[]": "Use only frontendResultObservationMode values; empty is not a result observation.",
-            "frontendExperience.operationPaths[].requiredStates[]": "Use frontendInteractionState values; empty is valid only here for empty-list/page states."
+            "frontendExperience.actions[].resultObservation[]": "Use only frontendResultObservationMode values: list_refresh, detail_refresh, inline_status_update, response_message, not_applicable. Do not use frontendInteractionState values here: loading, success, error, empty, business_blocking. empty is not a result observation; it is a page/list state.",
+            "frontendExperience.operationPaths[].requiredStates[]": "Use only frontendInteractionState values: loading, success, error, empty, business_blocking. Do not use frontendResultObservationMode values here: list_refresh, detail_refresh, inline_status_update, response_message, not_applicable. empty is valid only here for empty-list/page states."
         },
         "clarificationFields": [
             "userConfirmation.confirmed",

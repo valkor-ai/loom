@@ -5,14 +5,14 @@ use std::{
 
 use contracts::{
     build_code_quality_seed, code_quality_enum_refs, code_reference_load_plan,
-    code_reference_selection_for_task, ui_quality_enum_refs, AcceptancePriority,
-    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
-    CodeQualityRequirement, CoverageStatus, EngineeringQualityRequirement, ImplementationAction,
-    TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
-    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
-    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus, VerificationEvidence,
+    code_reference_selection_for_task, package_naming_policy_for_reference_groups,
+    ui_quality_enum_refs, AcceptancePriority, ApiContractRequirement, ArchitectureArtifactContract,
+    ArchitectureQualityRequirement, CodeQualityRequirement, CoverageStatus,
+    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskGroupRunState,
+    TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction,
+    TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary, TaskPlanScopeSnapshot,
+    TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -746,7 +746,7 @@ where
                 return Ok(repairable(input, authorized, group_file, vec![issue], mode));
             }
         };
-        normalize_taskplan_write_boundaries(&mut candidate.tasks);
+        normalize_taskplan_write_boundaries(&mut candidate.tasks, &allowed_refs);
         issues.extend(validate_group_candidate(
             &candidate,
             group,
@@ -790,7 +790,7 @@ where
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
-    normalize_taskplan_write_boundaries(&mut tasks);
+    normalize_taskplan_write_boundaries(&mut tasks, &allowed_refs);
     let now = state::store::now_string();
     let task_plan = TaskPlan {
         schema_version: "1.0".to_string(),
@@ -1406,9 +1406,46 @@ fn validate_taskplan_refs(
     issues
 }
 
-fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition]) {
+fn normalize_taskplan_write_boundaries(tasks: &mut [TaskDefinition], allowed_refs: &Value) {
+    let module_refs = allowed_set(allowed_refs, "moduleRefs");
+    let entity_refs = allowed_set(allowed_refs, "entityRefs");
+    let interface_refs = allowed_set(allowed_refs, "interfaceRefs");
+    let user_flow_refs = allowed_set(allowed_refs, "userFlowRefs");
+    let state_machine_refs = allowed_set(allowed_refs, "stateMachineRefs");
+    let decision_refs = allowed_set(allowed_refs, "decisionRefs");
+    let nfr_refs = allowed_set(allowed_refs, "nfrRefs");
+    let risk_refs = allowed_set(allowed_refs, "riskRefs");
     for task in tasks {
         task.write_boundary.forbidden_paths = vec![".loom".to_string()];
+        clear_refs_when_unavailable(&mut task.write_boundary.artifact_refs.modules, &module_refs);
+        clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.entities,
+            &entity_refs,
+        );
+        clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.interfaces,
+            &interface_refs,
+        );
+        clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.user_flows,
+            &user_flow_refs,
+        );
+        clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.state_machines,
+            &state_machine_refs,
+        );
+        clear_refs_when_unavailable(
+            &mut task.write_boundary.artifact_refs.decisions,
+            &decision_refs,
+        );
+        clear_refs_when_unavailable(&mut task.write_boundary.artifact_refs.nfrs, &nfr_refs);
+        clear_refs_when_unavailable(&mut task.write_boundary.artifact_refs.risks, &risk_refs);
+    }
+}
+
+fn clear_refs_when_unavailable(refs: &mut Vec<String>, allowed: &BTreeSet<String>) {
+    if allowed.is_empty() {
+        refs.clear();
     }
 }
 
@@ -1418,9 +1455,52 @@ fn normalize_taskplan_candidate_relationships(
     pgc: &contracts::PlanningGenerationContract,
     aac: &ArchitectureArtifactContract,
 ) {
+    normalize_frontend_experience_requirements(tasks, aac);
     normalize_verification_detail_parent_refs(tasks);
     normalize_task_verification_detail_refs(tasks, pgc, aac);
     normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
+}
+
+fn normalize_frontend_experience_requirements(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    if !frontend_experience_required(aac) {
+        return;
+    }
+    let template = frontend_experience_requirement_template(aac);
+    if template.is_null() {
+        return;
+    }
+    let expected_ui_quality = frontend_ui_quality_contract(aac).cloned();
+    for task in tasks {
+        if !task_is_frontend_task(task) {
+            continue;
+        }
+        let Some(requirement) = task.frontend_experience_requirement.as_mut() else {
+            task.frontend_experience_requirement = Some(template.clone());
+            continue;
+        };
+        if !requirement.is_object() {
+            *requirement = template.clone();
+            continue;
+        }
+        requirement["frontendExperienceRef"] =
+            json!("sourceRefs.architectureArtifactContractRef#/frontendExperience");
+        requirement["mustSatisfy"] = json!(true);
+        if let Some(ui_quality_contract) = expected_ui_quality.as_ref() {
+            requirement["uiQualityContractRef"] = json!(
+                "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
+            );
+            requirement["uiQualityContract"] = ui_quality_contract.clone();
+        }
+        if requirement.get("uiTaskScope").is_none() {
+            requirement["uiTaskScope"] = template
+                .get("uiTaskScope")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+        }
+    }
 }
 
 fn normalize_verification_detail_parent_refs(tasks: &mut [TaskDefinition]) {
@@ -1459,7 +1539,9 @@ fn normalize_task_verification_detail_refs(
             }) {
                 continue;
             }
-            if let Some(intent_index) = verification_intent_for_detail(task, acceptance_refs) {
+            if let Some(intent_index) = verification_intent_for_detail(task, acceptance_refs)
+                .or_else(|| (!task.verification_intents.is_empty()).then_some(0))
+            {
                 push_unique(
                     &mut task.verification_intents[intent_index].requirement_detail_refs,
                     detail_ref,
@@ -1521,11 +1603,7 @@ fn verification_intent_for_detail(
                 .then_some(index)
         })
         .collect::<Vec<_>>();
-    if matches.len() == 1 {
-        matches.first().copied()
-    } else {
-        None
-    }
+    matches.first().copied()
 }
 
 fn normalize_runtime_delivery_closure_group(
@@ -2827,6 +2905,7 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "codeStackSignalSource": "codeQualitySeed.codeStackSignals",
         "referenceGroupSource": "codeQualitySeed.techReferenceProfile.groups.code",
         "referenceLoadPlanSource": "Generated by loom.taskPlanAcceptFile from selected reference groups; agents must read only files listed in each requirement referenceLoadPlan.",
+        "packageNamingPolicySource": "codeQualitySeed.packageNamingPolicy",
         "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
         "taskRefRule": "Tasks reference generated requirements by codeQualityRequirementRefs; do not inline language or framework reference prose inside tasks."
@@ -3034,11 +3113,16 @@ fn normalize_code_quality_requirements(
             requirement_id,
             kind: "language_implementation_quality".to_string(),
             applies_to_task_ids: vec![task.task_id.clone()],
-            stack_signals: selection.stack_signals,
+            stack_signals: selection.stack_signals.clone(),
             reference_load_plan: code_reference_load_plan(&selection.reference_groups),
-            reference_groups: selection.reference_groups,
-            focus_tags: selection.focus_tags,
-            implementation_obligations: code_quality_implementation_obligations(),
+            package_naming_policy: package_naming_policy_for_reference_groups(
+                &selection.reference_groups,
+            ),
+            reference_groups: selection.reference_groups.clone(),
+            focus_tags: selection.focus_tags.clone(),
+            implementation_obligations: code_quality_implementation_obligations_for_selection(
+                &selection,
+            ),
             verification_obligations: code_quality_verification_obligations(),
         });
     }
@@ -3056,6 +3140,17 @@ fn code_quality_implementation_obligations() -> Vec<String> {
         "Follow existing repository structure and style before introducing new language or framework patterns.".to_string(),
         "Keep API, UI, architecture, and persistence obligations in their own dedicated quality contracts; use code quality only for language and framework implementation discipline.".to_string(),
     ]
+}
+
+fn code_quality_implementation_obligations_for_selection(
+    selection: &contracts::CodeReferenceSelection,
+) -> Vec<String> {
+    let mut obligations = code_quality_implementation_obligations();
+    if package_naming_policy_for_reference_groups(&selection.reference_groups).is_some() {
+        obligations.push("For JVM production source, choose a professional base package from existing package roots, build group metadata, or confirmed organization/project identity; if none exists, use app.<project_slug> and only fall back to app.generated when no stable project slug can be derived.".to_string());
+        obligations.push("Do not create or keep placeholder package roots such as com.example, org.example, com.company, com.demo, org.demo, com.sample, or org.sample in production source.".to_string());
+    }
+    obligations
 }
 
 fn code_quality_verification_obligations() -> Vec<String> {

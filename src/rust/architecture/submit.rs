@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     validate_ui_quality_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
@@ -183,7 +186,7 @@ where
     let project_root = Path::new(&input.project_root);
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let raw = state::store::read_json_value(&candidate_file)?;
-    let candidate: ArchitectureSectionCandidateAgentWritable =
+    let mut candidate: ArchitectureSectionCandidateAgentWritable =
         match serde_json::from_value(raw.clone()) {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -265,6 +268,14 @@ where
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let mut candidate_normalized = false;
+    if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
+        candidate_normalized = normalize_coverage_deferred_reasons(
+            project_root,
+            &source_refs,
+            &mut candidate.content,
+        )?;
+    }
 
     let mut issues = validate_candidate_identity(
         &candidate,
@@ -302,6 +313,9 @@ where
         &authorized.request_id,
         candidate.section,
     );
+    if candidate_normalized {
+        state::store::write_json_atomic(&candidate_file, &candidate)?;
+    }
     state::store::write_json_atomic(&snapshot_file, &candidate)?;
 
     let next_section = next_section(candidate.section);
@@ -1172,6 +1186,71 @@ fn validate_coverage_section(
     issues
 }
 
+fn normalize_coverage_deferred_reasons(
+    project_root: &Path,
+    source_refs: &Value,
+    content: &mut Value,
+) -> Result<bool, state::store::StateError> {
+    let Some(planning_ref) = source_refs
+        .get("planningContractRef")
+        .and_then(Value::as_str)
+    else {
+        return Ok(false);
+    };
+    let planning: contracts::PlanningGenerationContract =
+        read_project_json(project_root, planning_ref)?;
+    let reason_by_detail = planning
+        .requirement_details
+        .items
+        .iter()
+        .filter(|detail| {
+            !detail.required_for_current_phase
+                || detail.kind == "deferred_or_excluded_boundary"
+                || detail.lifecycle_stage == "deferred"
+        })
+        .map(|detail| {
+            (
+                detail.detail_id.clone(),
+                format!(
+                    "Deferred by the confirmed phase boundary: {}",
+                    detail.summary
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let Some(rows) = content
+        .get_mut("detailCoverage")
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(false);
+    };
+    let mut normalized = false;
+    for row in rows {
+        if row.get("coverageStatus").and_then(Value::as_str) != Some("deferred") {
+            continue;
+        }
+        let has_reason = row
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if has_reason {
+            continue;
+        }
+        let Some(detail_id) = row.get("detailId").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(reason) = reason_by_detail.get(detail_id) else {
+            continue;
+        };
+        if let Some(object) = row.as_object_mut() {
+            object.insert("reason".to_string(), Value::String(reason.clone()));
+            normalized = true;
+        }
+    }
+    Ok(normalized)
+}
+
 fn validate_architecture_quality(
     value: Option<&Value>,
     allowed_refs: &Value,
@@ -1942,6 +2021,14 @@ fn parse_handoff(value: Option<Value>) -> Result<ArchitectureHandoff, state::sto
         });
     };
     serde_json::from_value(value).map_err(state::store::StateError::Json)
+}
+
+fn read_project_json<T: serde::de::DeserializeOwned>(
+    project_root: &Path,
+    relative: &str,
+) -> Result<T, state::store::StateError> {
+    let path = from_project_relative(project_root, relative)?;
+    state::store::read_json(&path)
 }
 
 fn needs_user_decision(coverage_content: &Value) -> bool {

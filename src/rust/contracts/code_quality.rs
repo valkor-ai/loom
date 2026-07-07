@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    ImplementationAction, ReferenceLoadPlanItem, TaskDefinition, TaskKind,
+    CodePackageNamingPolicy, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition, TaskKind,
     TechnicalBaselineContract,
 };
 
@@ -46,6 +46,7 @@ pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
     }
     let reference_groups = baseline_reference_groups(&signals);
     let reference_load_plan = code_reference_load_plan(&reference_groups);
+    let package_naming_policy = package_naming_policy_for_reference_groups(&reference_groups);
     json!({
         "required": !reference_groups.is_empty(),
         "qualityLevel": "production_code_implementation",
@@ -61,11 +62,13 @@ pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
             },
             "referenceLoadPlan": reference_load_plan
         },
+        "packageNamingPolicy": package_naming_policy,
         "generationRules": [
             "Use TechnicalBaseline.stack only as the source fact for stack signals; do not reselect or reconfirm the technology stack.",
             "Use codeStackSignals as derived signals, then select code references by current task scope.",
             "Read only files listed in techReferenceProfile.referenceLoadPlan; selected code groups are semantic evidence labels, not path maps.",
             "Do not attach SQL references to every backend task merely because a database exists; attach SQL only for schema, migration, query, reporting, dialect, or optimization work.",
+            "For JVM production source, derive package names from existing repository package roots, build group metadata, or confirmed organization/project identity; never create com.example/org.example/com.company/demo/sample package roots.",
             "If a stack signal is low confidence or unmapped, preserve existing repository style and verification instead of guessing a nearby language profile."
         ]
     })
@@ -1766,6 +1769,64 @@ fn push_unique(output: &mut Vec<String>, value: &str) {
     }
 }
 
+pub fn package_naming_policy_for_reference_groups(
+    reference_groups: &BTreeMap<String, Vec<String>>,
+) -> Option<CodePackageNamingPolicy> {
+    let applies_to = ["java", "springboot", "kotlin"]
+        .into_iter()
+        .filter(|group| reference_groups.contains_key(*group))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if applies_to.is_empty() {
+        return None;
+    }
+    Some(jvm_package_naming_policy(applies_to))
+}
+
+pub fn jvm_package_naming_policy(applies_to: Vec<String>) -> CodePackageNamingPolicy {
+    CodePackageNamingPolicy {
+        applies_to,
+        priority_order: vec![
+            "existing production package root in src/main".to_string(),
+            "build metadata group such as Gradle group or Maven groupId".to_string(),
+            "confirmed organization or product namespace from project context".to_string(),
+            "fallback app.<project_slug> derived from repository or confirmed project name"
+                .to_string(),
+            "absolute fallback app.generated only when no stable project slug exists"
+                .to_string(),
+        ],
+        forbidden_package_prefixes: forbidden_jvm_package_prefixes()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        fallback_package_template: "app.<project_slug>".to_string(),
+        absolute_fallback_package: "app.generated".to_string(),
+        notes: vec![
+            "project_slug must use lowercase letters and digits; split invalid separators into package segments and drop empty segments.".to_string(),
+            "Fallback packages are local bootstrap namespaces, not public organization identities, and should be replaced when a real organization namespace is known.".to_string(),
+        ],
+    }
+}
+
+pub fn forbidden_jvm_package_prefixes() -> Vec<&'static str> {
+    vec![
+        "com.example",
+        "org.example",
+        "net.example",
+        "io.example",
+        "example",
+        "com.company",
+        "org.company",
+        "company",
+        "com.demo",
+        "org.demo",
+        "demo",
+        "com.sample",
+        "org.sample",
+        "sample",
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1782,8 +1843,8 @@ mod tests {
             delivery_id: "delivery-1".to_string(),
             phase_id: "phase-1".to_string(),
             status: TechnicalBaselineStatus::Confirmed,
-            source: TechnicalBaselineSource::AgentRecommendedForGreenfield,
-            project_kind: ProjectKind::Greenfield,
+            source: TechnicalBaselineSource::AgentRecommendedForNewProject,
+            project_kind: ProjectKind::NewProject,
             scope: TechnicalBaselineScope::Project,
             stack,
             constraints: vec![],
@@ -1874,6 +1935,18 @@ mod tests {
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/code/java/security.md"));
+        let policy = package_naming_policy_for_reference_groups(&selection.reference_groups)
+            .expect("JVM package naming policy");
+        assert_eq!(policy.fallback_package_template, "app.<project_slug>");
+        assert_eq!(policy.absolute_fallback_package, "app.generated");
+        assert!(policy
+            .forbidden_package_prefixes
+            .contains(&"com.example".to_string()));
+        let seed = build_code_quality_seed(&baseline);
+        assert_eq!(
+            seed["packageNamingPolicy"]["fallbackPackageTemplate"],
+            json!("app.<project_slug>")
+        );
     }
 
     #[test]
@@ -2357,6 +2430,10 @@ mod tests {
             assert!(
                 selection.reference_groups.contains_key(language),
                 "{raw} should map to {language}"
+            );
+            assert!(
+                package_naming_policy_for_reference_groups(&selection.reference_groups).is_none(),
+                "{raw} should not receive JVM package naming policy"
             );
         }
     }

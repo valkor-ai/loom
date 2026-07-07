@@ -287,7 +287,7 @@ mod tests {
             phase_id: "phase_1".to_string(),
             status: crate::TechnicalBaselineStatus::Confirmed,
             source: TechnicalBaselineSource::UserConfirmed,
-            project_kind: ProjectKind::Greenfield,
+            project_kind: ProjectKind::NewProject,
             scope: TechnicalBaselineScope::Project,
             stack,
             constraints: vec![],

@@ -1065,6 +1065,13 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             );
         }
     }
+    let java_core = fs::read_to_string(code_root.join("java/core.md")).unwrap();
+    assert!(java_core.contains("app.<project_slug>"));
+    assert!(java_core.contains("app.generated"));
+    assert!(java_core.contains("com.example"));
+    let java_spring = fs::read_to_string(code_root.join("java/spring.md")).unwrap();
+    assert!(java_spring.contains("component scanning"));
+    assert!(java_spring.contains("app.<project_slug>"));
 
     let mut backend_files = Vec::new();
     collect_markdown_files(&backend_root, &mut backend_files);
@@ -1113,6 +1120,9 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             );
         }
     }
+    let spring_web = fs::read_to_string(backend_root.join("springboot/web.md")).unwrap();
+    assert!(spring_web.contains("real Spring Boot base package"));
+    assert!(spring_web.contains("com.example"));
 
     let mut frontend_files = Vec::new();
     collect_markdown_files(&frontend_root, &mut frontend_files);
@@ -1210,6 +1220,9 @@ fn loom_review_references_are_operational_without_protocol_duplication() {
             );
         }
     }
+    let defect_patterns = fs::read_to_string(review_root.join("defect-patterns.md")).unwrap();
+    assert!(defect_patterns.contains("placeholder namespaces"));
+    assert!(defect_patterns.contains("com.example"));
 }
 
 #[test]

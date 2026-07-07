@@ -669,6 +669,7 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
         "implementationRules": [
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
+            "When a code quality requirement contains packageNamingPolicy, production source package declarations must follow that policy; placeholder package roots are not acceptable deliverable code.",
             "When a selected language or framework reference is not applicable to the changed file, record the reason in codeQualityEvidence.knownGaps or summary instead of inventing work."
         ],
         "verificationRules": [

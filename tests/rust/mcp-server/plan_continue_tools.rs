@@ -579,10 +579,24 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
     );
     assert!(
         write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
+            ["frontendExperience.actions[].resultObservation[]"]
+            .as_str()
+            .expect("result observation shape rule")
+            .contains("Do not use frontendInteractionState values here")
+    );
+    assert!(
+        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
             ["frontendExperience.operationPaths[].requiredStates[]"]
             .as_str()
             .expect("required states shape rule")
             .contains("empty is valid only here")
+    );
+    assert!(
+        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
+            ["frontendExperience.operationPaths[].requiredStates[]"]
+            .as_str()
+            .expect("required states shape rule")
+            .contains("Do not use frontendResultObservationMode values here")
     );
     assert!(write_contract["fields"]["enumRefs"]["conceptRiskFactor"]
         .as_array()

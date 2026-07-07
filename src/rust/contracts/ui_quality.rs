@@ -1576,7 +1576,7 @@ mod tests {
             phase_id: "phase-test".to_string(),
             status: TechnicalBaselineStatus::Confirmed,
             source: TechnicalBaselineSource::UserConfirmed,
-            project_kind: ProjectKind::Greenfield,
+            project_kind: ProjectKind::NewProject,
             scope: TechnicalBaselineScope::Project,
             stack: serde_json::json!("React + Tailwind"),
             constraints: vec![],

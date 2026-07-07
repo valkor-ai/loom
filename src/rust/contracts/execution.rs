@@ -229,12 +229,25 @@ pub struct CodeQualityRequirement {
     pub reference_groups: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_load_plan: Vec<ReferenceLoadPlanItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_naming_policy: Option<CodePackageNamingPolicy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub focus_tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub implementation_obligations: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_obligations: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodePackageNamingPolicy {
+    pub applies_to: Vec<String>,
+    pub priority_order: Vec<String>,
+    pub forbidden_package_prefixes: Vec<String>,
+    pub fallback_package_template: String,
+    pub absolute_fallback_package: String,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

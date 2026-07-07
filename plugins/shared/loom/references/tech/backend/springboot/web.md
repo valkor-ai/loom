@@ -18,6 +18,7 @@ This file applies Spring MVC/Spring Boot web-layer rules to task-owned HTTP beha
 - Use `Pageable`, bounded filters, or explicit limits for list endpoints that can grow. Keep sorting deterministic.
 - For WebClient or downstream HTTP calls, centralize base URL/configuration, timeouts, error mapping, and retries according to existing project style. Do not call blocking clients from reactive paths.
 - Configure CORS only for the runtime/frontend boundary the task owns, and externalize origins when the project already uses configuration.
+- Keep web controllers, DTOs, advice, and application services under the project's real Spring Boot base package. Do not place production web code under tutorial roots such as `com.example` or `org.example`.
 
 ## Verification Focus
 
@@ -25,7 +26,9 @@ This file applies Spring MVC/Spring Boot web-layer rules to task-owned HTTP beha
 - Prove at least one success response and one validation/business error response for new or changed endpoints.
 - For list endpoints, verify filtering, sorting, pagination, empty result, and stable response DTO shape when touched.
 - For external HTTP clients, test success, non-2xx/error mapping, timeout behavior when configured, and no hardcoded environment values.
+- For new controller packages, verify the application context or web-layer test discovers the controller and advice through the normal package tree.
 
 ## Evidence Focus
 
 - In the evidence summary, name the Spring web decision: controller boundary, DTO mapping, validation split, exception advice, pagination, CORS, WebClient behavior, or web-layer proof.
+- When adding a new web package, mention the real base package used and why it matches the project namespace.

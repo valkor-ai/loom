@@ -47,5 +47,6 @@ Use this reference when judging implementation quality after current-phase spec 
 - New abstractions have at least two real consumers or isolate a clear complexity boundary.
 - Domain rules live in the domain/service layer instead of being duplicated across UI, API, and persistence.
 - Names reflect business concepts from the accepted contract and existing codebase.
+- Production source should not retain tutorial or placeholder namespaces such as `com.example`, `org.example`, `com.company`, `com.demo`, or `com.sample`; these indicate generated demo code rather than a professional project namespace.
 - Functions and components have one clear responsibility and can be tested at the right level.
 - Comments explain non-obvious decisions, not what the code already says.

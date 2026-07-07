@@ -20,6 +20,8 @@ This file focuses on Spring Boot wiring and service delivery, not broad architec
 - Keep CORS local to actual frontend/runtime needs. Do not hardcode one dev origin if the project already externalizes origins.
 - Preserve application startup behavior. New beans should not require unavailable environment variables, external services, or databases unless the task also provides safe local defaults or clear configuration.
 - Use constructor injection and avoid circular dependencies. If a new service creates a cycle, revisit boundary placement rather than adding lazy injection.
+- Keep the Spring Boot application class at or above the task-owned component packages so component scanning, configuration properties, repositories, and controller advice are discovered without broad scan hacks.
+- When starting a new Spring Boot module, choose the base package from existing production packages, build group metadata, or a confirmed namespace. Use `app.<project_slug>` as the neutral fallback and avoid tutorial placeholders such as `com.example` or `org.example`.
 
 ## Verification Focus
 
@@ -27,7 +29,9 @@ This file focuses on Spring Boot wiring and service delivery, not broad architec
 - For new controllers or exception advice, verify at least one success response and one validation/business error response.
 - For new configuration properties, test binding or run a startup smoke with default local values.
 - For runtime/actuator changes, probe the exact endpoint or startup path that consumes the new configuration.
+- For new modules or package moves, include a context startup or focused Spring test that proves component scanning still finds controllers, services, repositories, and advice in the chosen package tree.
 
 ## Evidence Focus
 
 - In the evidence summary, state which Spring boundary was changed: controller mapping, service wiring, configuration binding, exception handling, startup/runtime behavior, or dependency setup.
+- If package layout was created or changed, state how it preserves Spring component scanning without placeholder package roots.
