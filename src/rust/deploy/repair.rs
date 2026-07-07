@@ -1442,6 +1442,21 @@ struct DiagnosticRule {
 
 const DEPLOYMENT_DIAGNOSTIC_RULES: &[DiagnosticRule] = &[
     DiagnosticRule {
+        code: "docker_unavailable",
+        severity: "error",
+        needles: &[
+            "failed to connect to the docker api",
+            "cannot connect to the docker daemon",
+            "is the docker daemon running",
+            "docker daemon is not running",
+            "dial unix",
+            "docker.sock",
+            "error during connect",
+        ],
+        message: "Docker is not reachable from the current execution environment.",
+        suggested_action: "Start Docker Desktop or the Docker daemon, verify `docker version` works from the same session, then retry deployUp.",
+    },
+    DiagnosticRule {
         code: "registry_network",
         severity: "error",
         needles: &[

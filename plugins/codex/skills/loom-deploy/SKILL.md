@@ -18,7 +18,7 @@ Deployment is a Loom MCP workflow. Route deploy requests to the registered `loom
 - `@loom deploy down` -> `loom.deployDown`.
 - `@loom deploy repair` -> `loom.deployRepair`.
 
-Follow the returned action result. During `active_operation`, only call the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it. During deployment asset repair, edit only the returned generated deployment assets. During deploy execution repair, edit only the returned application/runtime files and submit through the returned repair submit tool.
+Follow the returned action result. During `active_operation`, only call the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it. During deployment asset repair, edit only the returned generated deployment assets, then call the returned `retryTool`; do not retry asset repair through `loom.deployRun`. During deploy execution repair, edit only the returned application/runtime files and submit through the returned repair submit tool.
 
 Do not invent deployment files, stack choices, preview URLs, ports, or repair scopes outside the current MCP result.
 

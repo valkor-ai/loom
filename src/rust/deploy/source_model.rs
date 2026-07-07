@@ -36,6 +36,11 @@ pub fn source_model_from_runtime_contract(
             ],
             &["frontend", "web", "client", "ui"],
         );
+        let frontend_root = if frontend_root == "." {
+            frontend_root_from_probe(fallback_probe).unwrap_or(frontend_root)
+        } else {
+            frontend_root
+        };
         let backend_root = service_root_from_refs(
             &[
                 runtime.api.as_ref().and_then(|item| item.entry.as_deref()),
@@ -48,6 +53,11 @@ pub fn source_model_from_runtime_contract(
             ],
             &["backend", "api", "service", "server"],
         );
+        let backend_root = if backend_root == "." {
+            backend_root_from_probe(fallback_probe).unwrap_or(backend_root)
+        } else {
+            backend_root
+        };
         let backend_kind = runtime_kind_from_signals(&[
             runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
             runtime.start_command.as_deref(),
@@ -77,6 +87,14 @@ pub fn source_model_from_runtime_contract(
             root: frontend_root.clone(),
             working_directory: (frontend_root != ".").then_some(frontend_root.clone()),
             workspace_package_json_paths: fallback_probe.workspace_package_json_paths.clone(),
+            manifest_refs: node_manifest_refs(&frontend_root),
+            lockfile_refs: node_lockfile_refs(fallback_probe, &frontend_root),
+            artifact_refs: vec![runtime
+                .frontend
+                .as_ref()
+                .and_then(|item| item.output_dir.clone())
+                .or_else(|| runtime.frontend_output_dir.clone())
+                .unwrap_or_else(|| default_frontend_output_dir(&frontend_root))],
             runtime_kind: RuntimeKind::Node,
             package_manager: package_manager_from_command(frontend_build.as_deref())
                 .or(Some(PackageManager::Npm)),
@@ -111,6 +129,13 @@ pub fn source_model_from_runtime_contract(
             root: backend_root.clone(),
             working_directory: (backend_root != ".").then_some(backend_root.clone()),
             workspace_package_json_paths: vec![],
+            manifest_refs: backend_manifest_refs(
+                &backend_root,
+                backend_kind,
+                backend_build.as_deref(),
+            ),
+            lockfile_refs: vec![],
+            artifact_refs: backend_artifact_refs(&backend_root, backend_kind),
             runtime_kind: backend_kind,
             package_manager: package_manager_from_command(backend_build.as_deref())
                 .or_else(|| package_manager_from_command(backend_start.as_deref()))
@@ -173,6 +198,9 @@ pub fn source_model_from_runtime_contract(
             .unwrap_or_else(|| ".".to_string()),
         working_directory: fallback_probe.working_directory.clone(),
         workspace_package_json_paths: fallback_probe.workspace_package_json_paths.clone(),
+        manifest_refs: probe_manifest_refs(fallback_probe),
+        lockfile_refs: probe_lockfile_refs(fallback_probe),
+        artifact_refs: probe_artifact_refs(fallback_probe),
         runtime_kind: if contract_kind == RuntimeKind::Unknown {
             fallback_probe.kind
         } else {
@@ -244,6 +272,9 @@ fn source_model_from_probe(
             .unwrap_or_else(|| ".".to_string()),
         working_directory: probe.working_directory.clone(),
         workspace_package_json_paths: probe.workspace_package_json_paths.clone(),
+        manifest_refs: probe_manifest_refs(probe),
+        lockfile_refs: probe_lockfile_refs(probe),
+        artifact_refs: probe_artifact_refs(probe),
         runtime_kind: probe.kind,
         package_manager: probe.package_manager,
         has_lockfile: probe.has_lockfile,
@@ -279,6 +310,151 @@ fn dependencies_from_runtime_or_probe(
         probe.services.clone()
     } else {
         runtime.dependency_services.clone()
+    }
+}
+
+fn frontend_root_from_probe(probe: &DeploymentCodeProbe) -> Option<String> {
+    probe
+        .workspace_package_json_paths
+        .iter()
+        .filter_map(|path| path.rsplit_once('/').map(|(root, _)| root.to_string()))
+        .find(|root| !root.is_empty())
+        .or_else(|| {
+            probe.output_directory.as_ref().and_then(|output| {
+                output
+                    .split_once('/')
+                    .map(|(root, _)| root.to_string())
+                    .filter(|root| !root.is_empty())
+            })
+        })
+}
+
+fn backend_root_from_probe(probe: &DeploymentCodeProbe) -> Option<String> {
+    probe
+        .build_command
+        .as_deref()
+        .and_then(|command| {
+            service_root_from_cd_segments(command, &["backend", "api", "service", "server"])
+        })
+        .or_else(|| probe.working_directory.clone().filter(|root| root != "."))
+}
+
+fn node_manifest_refs(root: &str) -> Vec<String> {
+    vec![join_root(root, "package.json")]
+}
+
+fn node_lockfile_refs(probe: &DeploymentCodeProbe, root: &str) -> Vec<String> {
+    if !node_lockfile_for_root(probe, root) {
+        return vec![];
+    }
+    let package_manager = if probe.kind == RuntimeKind::Node {
+        probe.package_manager
+    } else {
+        None
+    };
+    vec![join_root(
+        root,
+        match package_manager.unwrap_or(PackageManager::Npm) {
+            PackageManager::Pnpm => "pnpm-lock.yaml",
+            PackageManager::Yarn => "yarn.lock",
+            PackageManager::Bun => "bun.lockb",
+            _ => "package-lock.json",
+        },
+    )]
+}
+
+fn backend_manifest_refs(
+    root: &str,
+    kind: RuntimeKind,
+    build_command: Option<&str>,
+) -> Vec<String> {
+    match kind {
+        RuntimeKind::Java => {
+            if package_manager_from_command(build_command) == Some(PackageManager::Gradle) {
+                vec![join_root(root, "build.gradle")]
+            } else {
+                vec![join_root(root, "pom.xml")]
+            }
+        }
+        RuntimeKind::Dotnet => vec![join_root(root, "*.csproj")],
+        RuntimeKind::Python => vec![
+            join_root(root, "pyproject.toml"),
+            join_root(root, "requirements.txt"),
+        ],
+        RuntimeKind::Go => vec![join_root(root, "go.mod")],
+        RuntimeKind::Node => node_manifest_refs(root),
+        _ => vec![],
+    }
+}
+
+fn backend_artifact_refs(root: &str, kind: RuntimeKind) -> Vec<String> {
+    match kind {
+        RuntimeKind::Java => vec![
+            join_root(root, "target/*.jar"),
+            join_root(root, "build/libs/*.jar"),
+        ],
+        RuntimeKind::Dotnet => vec![join_root(root, "bin/Release/*/publish/*.dll")],
+        RuntimeKind::Go => vec![join_root(root, "bin/*")],
+        RuntimeKind::Node | RuntimeKind::Python | RuntimeKind::Php | RuntimeKind::Ruby => vec![],
+        RuntimeKind::Static | RuntimeKind::Unknown => vec![],
+    }
+}
+
+fn probe_manifest_refs(probe: &DeploymentCodeProbe) -> Vec<String> {
+    let root = probe.working_directory.as_deref().unwrap_or(".");
+    match probe.kind {
+        RuntimeKind::Node => node_manifest_refs(root),
+        RuntimeKind::Java => {
+            backend_manifest_refs(root, RuntimeKind::Java, probe.build_command.as_deref())
+        }
+        RuntimeKind::Python => {
+            backend_manifest_refs(root, RuntimeKind::Python, probe.build_command.as_deref())
+        }
+        RuntimeKind::Go => {
+            backend_manifest_refs(root, RuntimeKind::Go, probe.build_command.as_deref())
+        }
+        RuntimeKind::Dotnet => {
+            backend_manifest_refs(root, RuntimeKind::Dotnet, probe.build_command.as_deref())
+        }
+        RuntimeKind::Php => vec![join_root(root, "composer.json")],
+        RuntimeKind::Ruby => vec![join_root(root, "Gemfile")],
+        RuntimeKind::Static | RuntimeKind::Unknown => vec![],
+    }
+}
+
+fn probe_lockfile_refs(probe: &DeploymentCodeProbe) -> Vec<String> {
+    let root = probe.working_directory.as_deref().unwrap_or(".");
+    match probe.kind {
+        RuntimeKind::Node => node_lockfile_refs(probe, root),
+        RuntimeKind::Python if probe.package_manager == Some(PackageManager::Poetry) => {
+            vec![join_root(root, "poetry.lock")]
+        }
+        RuntimeKind::Php if probe.package_manager == Some(PackageManager::Composer) => {
+            vec![join_root(root, "composer.lock")]
+        }
+        RuntimeKind::Ruby if probe.package_manager == Some(PackageManager::Bundler) => {
+            vec![join_root(root, "Gemfile.lock")]
+        }
+        _ => vec![],
+    }
+}
+
+fn probe_artifact_refs(probe: &DeploymentCodeProbe) -> Vec<String> {
+    let root = probe.working_directory.as_deref().unwrap_or(".");
+    let mut refs = backend_artifact_refs(root, probe.kind);
+    if let Some(output) = &probe.output_directory {
+        refs.push(output.clone());
+    }
+    refs.sort();
+    refs.dedup();
+    refs
+}
+
+fn join_root(root: &str, path: &str) -> String {
+    if root == "." || root.is_empty() {
+        path.to_string()
+    } else {
+        format!("{}/{}", root.trim_matches('/'), path)
     }
 }
 
@@ -527,6 +703,9 @@ fn service_root_from_refs(values: &[Option<&str>], preferred_labels: &[&str]) ->
         if let Some(root) = preferred_labeled_root(value, preferred_labels) {
             return root;
         }
+        if let Some(root) = service_root_from_cd_segments(value, preferred_labels) {
+            return root;
+        }
         if let Some(root) = prefix_root(value) {
             return root;
         }
@@ -545,6 +724,18 @@ fn service_root_from_refs(values: &[Option<&str>], preferred_labels: &[&str]) ->
         }
     }
     ".".to_string()
+}
+
+fn service_root_from_cd_segments(command: &str, preferred_labels: &[&str]) -> Option<String> {
+    command_cd_segments(command)
+        .into_iter()
+        .map(|segment| segment.root)
+        .find(|root| {
+            let aliases = root_aliases(root);
+            preferred_labels
+                .iter()
+                .any(|label| aliases.iter().any(|alias| alias == label))
+        })
 }
 
 fn preferred_labeled_root(value: &str, preferred_labels: &[&str]) -> Option<String> {
@@ -570,6 +761,9 @@ fn command_for_root(command: Option<String>, root: &str) -> Option<String> {
     if let Some(segment) = labeled_command_for_root(&command, root) {
         return Some(segment);
     }
+    if let Some(segment) = cd_command_for_root(&command, root) {
+        return Some(segment);
+    }
     if root == "." {
         return Some(command);
     }
@@ -578,6 +772,89 @@ fn command_for_root(command: Option<String>, root: &str) -> Option<String> {
             .replace(&format!("{root}/"), "")
             .replace(&format!("--prefix {root}"), ""),
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CdCommandSegment {
+    root: String,
+    command: String,
+}
+
+fn cd_command_for_root(command: &str, root: &str) -> Option<String> {
+    let aliases = root_aliases(root);
+    let commands = command_cd_segments(command)
+        .into_iter()
+        .filter(|segment| {
+            let segment_aliases = root_aliases(&segment.root);
+            aliases
+                .iter()
+                .any(|alias| segment_aliases.iter().any(|candidate| candidate == alias))
+        })
+        .map(|segment| segment.command)
+        .filter(|segment| !segment.trim().is_empty())
+        .collect::<Vec<_>>();
+    (!commands.is_empty()).then(|| commands.join(" && "))
+}
+
+fn command_cd_segments(command: &str) -> Vec<CdCommandSegment> {
+    let mut current_root = ".".to_string();
+    let mut output = Vec::new();
+    for raw in split_shell_sequence(command) {
+        let segment = raw.trim();
+        if segment.is_empty() {
+            continue;
+        }
+        if let Some(target) = segment.strip_prefix("cd ").and_then(first_shell_word) {
+            current_root = normalize_cd_target(&current_root, &target);
+            continue;
+        }
+        output.push(CdCommandSegment {
+            root: current_root.clone(),
+            command: segment.to_string(),
+        });
+    }
+    output
+}
+
+fn split_shell_sequence(command: &str) -> Vec<&str> {
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .collect()
+}
+
+fn first_shell_word(value: &str) -> Option<String> {
+    value
+        .split_whitespace()
+        .next()
+        .map(|word| word.trim_matches('"').trim_matches('\'').to_string())
+        .filter(|word| !word.is_empty())
+}
+
+fn normalize_cd_target(current_root: &str, target: &str) -> String {
+    let mut parts = if target.starts_with('/') || current_root == "." {
+        Vec::new()
+    } else {
+        current_root
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>()
+    };
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                let _ = parts.pop();
+            }
+            item => parts.push(item),
+        }
+    }
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 fn labeled_command_for_root(command: &str, root: &str) -> Option<String> {

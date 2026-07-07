@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::{
     active_operation::{acquire_operation, active_operation_result, update_operation_phase},
+    paths::deployment_paths,
     prepare::deploy_prepare_inner,
     up::deploy_up_inner,
     DeployToolInput,
@@ -25,22 +26,24 @@ pub fn deploy_run(input: DeployToolInput) -> LoomMcpActionResult {
             })
         }
     };
-    let _ = update_operation_phase(project_root, "preparing", "running");
-    let prepare = deploy_prepare_inner(project_root, input.clone());
-    match prepare {
-        Ok(LoomMcpActionResult::Done(_)) => {}
-        Ok(result) => {
-            drop(guard);
-            return result;
-        }
-        Err(error) => {
-            drop(guard);
-            return LoomMcpActionResult::Blocked(delivery_core::LoomMcpBlockedResult {
-                project_root: project_root.to_string_lossy().into_owned(),
-                blockers: vec![error.to_string()],
-                recommended_tool: Some("loom.deployInspect".to_string()),
-                details: Some(json!({ "failureKind": "deploy_prepare_failed" })),
-            });
+    if !deployment_paths(project_root).spec_file.exists() {
+        let _ = update_operation_phase(project_root, "preparing", "running");
+        let prepare = deploy_prepare_inner(project_root, input.clone());
+        match prepare {
+            Ok(LoomMcpActionResult::Done(_)) => {}
+            Ok(result) => {
+                drop(guard);
+                return result;
+            }
+            Err(error) => {
+                drop(guard);
+                return LoomMcpActionResult::Blocked(delivery_core::LoomMcpBlockedResult {
+                    project_root: project_root.to_string_lossy().into_owned(),
+                    blockers: vec![error.to_string()],
+                    recommended_tool: Some("loom.deployInspect".to_string()),
+                    details: Some(json!({ "failureKind": "deploy_prepare_failed" })),
+                });
+            }
         }
     }
     let _ = update_operation_phase(project_root, "building", "running");

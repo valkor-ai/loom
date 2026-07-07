@@ -134,15 +134,22 @@ fn generate_static_frontend_dockerfile(
         .into_iter()
         .collect::<Vec<_>>();
     let frontend_build_env = frontend_proxy_build_env(service, spec);
+    let workdir = workspace_workdir(service);
+    let manifest_sources = node_manifest_copy_sources(service);
+    let source_copy = if service.root == "." {
+        "COPY . .".to_string()
+    } else {
+        format!("COPY {}/ ./", service.root)
+    };
     let mut lines = vec![
-        "FROM node:22-alpine AS builder".to_string(),
-        "WORKDIR /workspace".to_string(),
-        "COPY . .".to_string(),
-        service_root_workdir(service),
+        "FROM node:22-slim AS builder".to_string(),
+        format!("WORKDIR {workdir}"),
+        format!("COPY {} ./", manifest_sources.join(" ")),
         format!(
             "RUN {}",
             install_command(package_manager, service.has_lockfile)
         ),
+        source_copy,
     ];
     lines.extend(frontend_build_env);
     lines.extend([
@@ -197,30 +204,37 @@ fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
     let start_command = service.start_command.clone().unwrap_or_else(|| {
         "echo 'No Node start command declared in RuntimeDeliveryContract.' && exit 64".to_string()
     });
-    [
+    let workdir = if service.root == "." {
+        "/app".to_string()
+    } else {
+        format!("/app/{}", service.root)
+    };
+    let source_copy = if service.root == "." {
+        "COPY . .".to_string()
+    } else {
+        format!("COPY {}/ ./", service.root)
+    };
+    let mut lines = vec![
         "FROM node:22-alpine AS runner".to_string(),
-        "WORKDIR /app".to_string(),
+        format!("WORKDIR {workdir}"),
         "ENV NODE_ENV=production".to_string(),
         format!("ENV PORT={}", service.port),
-        "COPY . .".to_string(),
-        service_root_workdir(service),
+        format!("COPY {} ./", node_manifest_copy_sources(service).join(" ")),
         format!(
             "RUN {}",
             install_command(package_manager, service.has_lockfile)
         ),
-        service
-            .build_command
-            .as_ref()
-            .map(|command| format!("RUN {command}"))
-            .unwrap_or_default(),
+        source_copy,
+    ];
+    if let Some(command) = &service.build_command {
+        lines.push(format!("RUN {command}"));
+    }
+    lines.extend([
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
         "".to_string(),
-    ]
-    .into_iter()
-    .filter(|line| !line.is_empty())
-    .collect::<Vec<_>>()
-    .join("\n")
+    ]);
+    lines.join("\n")
 }
 
 fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
@@ -257,6 +271,20 @@ fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
 }
 
 fn java_builder_context(service: &DeploymentSourceService) -> Vec<String> {
+    if service.package_manager == Some(PackageManager::Maven) {
+        if service.root == "." {
+            return vec![
+                "WORKDIR /workspace".to_string(),
+                "COPY pom.xml ./".to_string(),
+                "COPY src ./src".to_string(),
+            ];
+        }
+        return vec![
+            format!("WORKDIR /workspace/{}", service.root),
+            format!("COPY {}/pom.xml ./", service.root),
+            format!("COPY {}/src ./src", service.root),
+        ];
+    }
     if service.root == "." {
         return vec!["WORKDIR /workspace".to_string(), "COPY . .".to_string()];
     }
@@ -813,6 +841,36 @@ fn service_root_workdir(service: &DeploymentSourceService) -> String {
     } else {
         format!("WORKDIR /workspace/{}", service.root)
     }
+}
+
+fn workspace_workdir(service: &DeploymentSourceService) -> String {
+    if service.root == "." {
+        "/workspace".to_string()
+    } else {
+        format!("/workspace/{}", service.root)
+    }
+}
+
+fn node_manifest_copy_sources(service: &DeploymentSourceService) -> Vec<String> {
+    let mut sources = service.manifest_refs.clone();
+    sources.extend(service.lockfile_refs.clone());
+    if sources.is_empty() {
+        sources.push(if service.root == "." {
+            "package.json".to_string()
+        } else {
+            format!("{}/package.json", service.root)
+        });
+        if service.has_lockfile {
+            sources.push(if service.root == "." {
+                "package-lock.json".to_string()
+            } else {
+                format!("{}/package-lock.json", service.root)
+            });
+        }
+    }
+    sources.sort();
+    sources.dedup();
+    sources
 }
 
 fn relative_from_context(path: &str) -> String {
