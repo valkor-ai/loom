@@ -31,9 +31,10 @@ use crate::{
     task_plan::update_run_summary,
     templates::{
         api_contract_evidence_applies, architecture_quality_evidence_applies,
-        code_quality_evidence_applies, frontend_quality_self_check_applies,
-        frontend_self_check_applies, runtime_delivery_evidence_applies,
-        task_result_template_with_code_quality, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        code_quality_evidence_applies, code_quality_execution_context,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, task_result_template_with_code_quality,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -152,7 +153,7 @@ where
         "task.architectureQualityRequirementRefs",
         "task.apiContractRequirementRefs",
         "task.codeQualityRequirementRefs",
-        "sourceContext.codeQualityRequirements",
+        "sourceContext.codeQualityExecutionContext",
         "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
@@ -227,7 +228,7 @@ where
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let code_quality_requirements =
-        code_quality_requirements_field(&fields, "sourceContext.codeQualityRequirements")?;
+        code_quality_requirements_field(&fields, "sourceContext.codeQualityExecutionContext")?;
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
@@ -1521,8 +1522,8 @@ fn validate_code_quality_evidence(
         if !requirements_by_id.contains_key(requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
-                "sourceContext.codeQualityRequirements",
-                "TaskResult validation requires sourceContext.codeQualityRequirements for every task.codeQualityRequirementRefs item.",
+                "sourceContext.codeQualityExecutionContext",
+                "TaskResult validation requires sourceContext.codeQualityExecutionContext for every task.codeQualityRequirementRefs item.",
             ));
         }
     }
@@ -1702,7 +1703,7 @@ fn validate_code_quality_reference_files(
         issues.push(issue(
             "TASK_RESULT_CODE_QUALITY_INVALID",
             "codeQualityEvidence[].referenceFilesChecked",
-            "codeQualityEvidence.referenceFilesChecked must list the files from sourceContext.codeQualityRequirements[].referenceLoadPlan that were read for this task.",
+            "codeQualityEvidence.referenceFilesChecked must list the files from sourceContext.codeQualityExecutionContext[].referenceLoadPlan that were read for this task.",
         ));
         return;
     }
@@ -1716,7 +1717,7 @@ fn validate_code_quality_reference_files(
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].referenceFilesChecked",
-                "codeQualityEvidence.referenceFilesChecked must include every path selected by sourceContext.codeQualityRequirements[].referenceLoadPlan.",
+                "codeQualityEvidence.referenceFilesChecked must include every path selected by sourceContext.codeQualityExecutionContext[].referenceLoadPlan.",
             ));
         }
     }
@@ -1725,7 +1726,7 @@ fn validate_code_quality_reference_files(
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].referenceFilesChecked",
-                "codeQualityEvidence.referenceFilesChecked must not include files outside sourceContext.codeQualityRequirements[].referenceLoadPlan.",
+                "codeQualityEvidence.referenceFilesChecked must not include files outside sourceContext.codeQualityExecutionContext[].referenceLoadPlan.",
             ));
         }
     }
@@ -2535,7 +2536,7 @@ fn materialize_task_result_repair(
     }
     if code_quality_evidence_applies(&context.task) {
         context_fields.push("task.codeQualityRequirementRefs");
-        context_fields.push("sourceContext.codeQualityRequirements");
+        context_fields.push("sourceContext.codeQualityExecutionContext");
     }
     if frontend_self_check_applies(&context.task) {
         context_fields
@@ -2656,7 +2657,7 @@ fn materialize_task_result_repair(
     });
     if !context.code_quality_requirements.is_empty() {
         root_value["sourceContext"] = json!({
-            "codeQualityRequirements": context.code_quality_requirements.clone()
+            "codeQualityExecutionContext": code_quality_execution_context(&context.code_quality_requirements)
         });
     }
     let stored = state::write_native_request(
@@ -2920,7 +2921,8 @@ fn task_result_api_contract_conflict(context: &RepairContextInput, mut base: Val
 
 fn task_result_code_quality_conflict(context: &RepairContextInput, mut base: Value) -> Value {
     base["expectedCodeQualityRequirementRefs"] = json!(context.task.code_quality_requirement_refs);
-    base["expectedCodeQualityRequirements"] = json!(context.code_quality_requirements);
+    base["expectedCodeQualityExecutionContext"] =
+        code_quality_execution_context(&context.code_quality_requirements);
     base["expectedReferenceLoadPlan"] = json!(context
         .code_quality_requirements
         .iter()
@@ -2997,7 +2999,7 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
     {
         rules.push("codeQualityEvidence must cover every task.codeQualityRequirementRefs item when the task is completed or completed_with_notes.");
         rules.push("codeQualityEvidence.referenceGroupsChecked must exactly match the selected language/framework groups for the assigned code quality requirement.");
-        rules.push("codeQualityEvidence.referenceFilesChecked must exactly list files from sourceContext.codeQualityRequirements[].referenceLoadPlan that were read for the task.");
+        rules.push("codeQualityEvidence.referenceFilesChecked must exactly list files from sourceContext.codeQualityExecutionContext[].referenceLoadPlan that were read for the task.");
         rules.push(
             "codeQualityEvidence.verificationIds must use exact task.verificationIntents ids.",
         );

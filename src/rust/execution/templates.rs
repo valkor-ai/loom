@@ -163,6 +163,27 @@ pub(crate) fn code_quality_requirements_for_task(
         .collect()
 }
 
+pub(crate) fn code_quality_execution_context(
+    code_quality_requirements: &[CodeQualityRequirement],
+) -> Value {
+    Value::Array(
+        code_quality_requirements
+            .iter()
+            .map(|requirement| {
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "kind": requirement.kind,
+                    "appliesToTaskIds": requirement.applies_to_task_ids,
+                    "referenceGroups": requirement.reference_groups,
+                    "referenceLoadPlan": requirement.reference_load_plan,
+                    "packageNamingPolicy": requirement.package_naming_policy,
+                    "focusTags": requirement.focus_tags
+                })
+            })
+            .collect(),
+    )
+}
+
 pub(crate) fn task_result_template_with_code_quality(
     task_plan_id: &str,
     task: &TaskDefinition,

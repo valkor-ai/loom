@@ -2701,40 +2701,65 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .find(|group| group.group_id == "task_execution_core")
         .expect("core group");
     let core_fields = core_group.expanded_fields();
-    assert!(core_fields.contains(
+    assert!(core_fields.contains(&"task.writeBoundary.artifactRefs".to_string()));
+    assert!(!core_fields
+        .contains(&"sourceContext.architectureArtifactProjection.interfaces".to_string()));
+    let frontend_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_frontend_context")
+        .expect("frontend context group");
+    let frontend_fields = frontend_group.expanded_fields();
+    assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs".to_string()
     ));
-    assert!(core_fields
+    assert!(frontend_fields
         .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
-    assert!(core_fields.contains(
+    assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string()
     ));
-    assert!(core_fields.contains(
+    assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string()
     ));
-    assert!(core_fields.contains(
+    assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
     ));
-    assert!(core_fields.contains(
+    assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
             .to_string()
     ));
-    assert!(core_fields.contains(
+    assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
             .to_string()
     ));
-    assert!(!core_fields.contains(
+    assert!(!frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
     ));
-    assert!(!core_fields.contains(
+    assert!(!frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string()
     ));
+    assert!(frontend_fields
+        .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
     assert!(
-        core_fields.contains(&"executionRules.frontendImplementationOrganizationRules".to_string())
+        frontend_fields.contains(&"executionRules.interactiveVerificationProbePolicy".to_string())
     );
-    assert!(core_fields.contains(&"executionRules.interactiveVerificationProbePolicy".to_string()));
-    assert!(core_fields.contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
-    assert!(!core_fields
+    let runtime_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_runtime_context")
+        .expect("runtime context group");
+    assert!(runtime_group
+        .expanded_fields()
+        .contains(&"executionRules.controlledRuntimeProbeRules".to_string()));
+    let architecture_group = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_architecture_context")
+        .expect("architecture context group");
+    assert!(architecture_group
+        .expanded_fields()
+        .contains(&"sourceContext.architectureArtifactProjection.interfaces".to_string()));
+    assert!(!frontend_fields
         .contains(&"sourceContext.architectureArtifactProjection.frontendExperience".to_string()));
 
     let fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -3445,15 +3470,16 @@ fn task_result_rejects_placeholder_jvm_production_package() {
     let execution_request_ref = accepted["next"]["requestRef"]
         .as_str()
         .expect("execution requestRef");
-    let core = state::read_field_group(ReadFieldGroupInput {
+    let quality = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.to_string(),
-        group_id: "task_execution_core".to_string(),
+        group_id: "task_execution_quality_context".to_string(),
     })
-    .expect("read execution core")
+    .expect("read execution quality context")
     .fields;
+    assert!(!quality.contains_key("sourceContext.codeQualityRequirements"));
     assert!(
-        core["sourceContext.codeQualityRequirements"].value[0]["packageNamingPolicy"]
+        quality["sourceContext.codeQualityExecutionContext"].value[0]["packageNamingPolicy"]
             ["forbiddenPackagePrefixes"]
             .as_array()
             .expect("forbidden package prefixes")
@@ -4009,6 +4035,11 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         group_id: "review_matrices".to_string(),
     })
     .expect("read review matrices");
+    let review_matrices_text =
+        serde_json::to_string(&review_matrices.fields).expect("serialize review matrices");
+    assert!(!review_matrices_text.contains("referenceLoadPlan"));
+    assert!(!review_matrices_text.contains("referenceFilesChecked"));
+    assert!(!review_matrices_text.contains("referenceGroupsChecked"));
     let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
         .value
         .as_array()
@@ -4039,6 +4070,9 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(!review_packets_text.contains("very large execution note"));
     assert!(!review_packets_text.contains("very large verification summary"));
     assert!(!review_packets_text.contains("very large detail evidence summary"));
+    assert!(!review_packets_text.contains("referenceFilesChecked"));
+    assert!(!review_packets_text.contains("referenceGroupsChecked"));
+    assert!(!review_packets_text.contains("evidenceRefs"));
     assert!(
         serde_json::to_vec_pretty(&review_packets.fields["reviewPacket.taskResultSummaries"].value)
             .expect("serialize task result summaries")
@@ -4282,17 +4316,24 @@ fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
         .find(|group| group.group_id == "task_execution_core")
         .expect("task execution core")
         .expanded_fields();
-    assert!(core_fields.contains(&"task.engineeringQualityRequirementRefs".to_string()));
-    assert!(core_fields.contains(&"sourceContext.engineeringQualityRequirements".to_string()));
-    assert!(core_fields.contains(&"executionRules.engineeringQualityExecutionRules".to_string()));
+    assert!(!core_fields.contains(&"task.engineeringQualityRequirementRefs".to_string()));
     assert!(!core_fields.contains(&"engineeringQualityRequirements".to_string()));
+    let quality_fields = inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_quality_context")
+        .expect("task execution quality context")
+        .expanded_fields();
+    assert!(quality_fields.contains(&"task.engineeringQualityRequirementRefs".to_string()));
+    assert!(quality_fields.contains(&"sourceContext.engineeringQualityRequirements".to_string()));
+    assert!(quality_fields.contains(&"executionRules.engineeringQualityExecutionRules".to_string()));
 
     let core = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: execution_request_ref.to_string(),
-        group_id: "task_execution_core".to_string(),
+        group_id: "task_execution_quality_context".to_string(),
     })
-    .expect("read task execution core")
+    .expect("read task execution quality context")
     .fields;
     assert_eq!(
         core["task.engineeringQualityRequirementRefs"].value,

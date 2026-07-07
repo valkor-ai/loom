@@ -38,11 +38,12 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
-        code_quality_requirements_for_task, frontend_quality_self_check_applies,
-        frontend_self_check_applies, runtime_delivery_evidence_applies,
-        runtime_delivery_requirement_template, task_result_required_top_level_fields,
-        task_result_template_with_code_quality, taskplan_group_result_template,
-        taskplan_outline_result_template, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        code_quality_execution_context, code_quality_requirements_for_task,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
+        task_result_required_top_level_fields, task_result_template_with_code_quality,
+        taskplan_group_result_template, taskplan_outline_result_template,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -715,7 +716,7 @@ fn build_repair_execution_request(
     if !task.code_quality_requirement_refs.is_empty() {
         repair_core_fields.extend([
             "task.codeQualityRequirementRefs",
-            "sourceContext.codeQualityRequirements",
+            "sourceContext.codeQualityExecutionContext",
             "executionRules.codeQualityExecutionRules",
         ]);
     }
@@ -857,7 +858,7 @@ fn build_repair_execution_request(
     });
     if !code_quality_requirements.is_empty() {
         root_value["sourceContext"] = json!({
-            "codeQualityRequirements": code_quality_requirements
+            "codeQualityExecutionContext": code_quality_execution_context(&code_quality_requirements)
         });
     }
     root_value

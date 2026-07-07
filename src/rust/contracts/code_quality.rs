@@ -103,7 +103,7 @@ pub fn code_quality_enum_refs() -> Value {
                 "sql": ["schema", "queries", "dialects", "optimization", "windows"]
             }
         },
-        "focusTag": ["api", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
+        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -570,6 +570,10 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     }
     if task_owns_api_contract(task) {
         push_unique(&mut tags, "api");
+    }
+    if task_uses_api_client_binding(task) {
+        push_unique(&mut tags, "api_client");
+        push_unique(&mut tags, "data_fetching");
     }
     if task_owns_persistence(task) {
         push_unique(&mut tags, "persistence");
@@ -1176,14 +1180,14 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
         }
         Some("typescript") => {
             items.extend(["core", "types", "config", "patterns", "testing"].map(str::to_string));
-            if has_focus("api") {
+            if has_focus("api") || has_focus("api_client") {
                 items.insert("guards".to_string());
             }
         }
         Some("javascript") => {
             items.insert("core".to_string());
             items.insert("modules".to_string());
-            if has_focus("async") || has_focus("api") {
+            if has_focus("async") || has_focus("api") || has_focus("api_client") {
                 items.insert("async".to_string());
             }
             if signal.roles.iter().any(|role| role == "frontend") {
@@ -1612,6 +1616,9 @@ fn task_is_backend_task(task: &TaskDefinition) -> bool {
 }
 
 fn task_owns_api_contract(task: &TaskDefinition) -> bool {
+    if task_is_frontend_task(task) {
+        return false;
+    }
     matches!(task.task_kind, TaskKind::InterfaceIncrement)
         || task.implementation_actions.iter().any(|action| {
             matches!(
@@ -1621,6 +1628,15 @@ fn task_owns_api_contract(task: &TaskDefinition) -> bool {
                     | ImplementationAction::WireReferenceInApiOrUi
             )
         })
+}
+
+fn task_uses_api_client_binding(task: &TaskDefinition) -> bool {
+    task_is_frontend_task(task)
+        && (!task.write_boundary.artifact_refs.interfaces.is_empty()
+            || task
+                .implementation_actions
+                .iter()
+                .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi)))
 }
 
 fn task_owns_persistence(task: &TaskDefinition) -> bool {
@@ -1973,9 +1989,13 @@ mod tests {
                 == Some("tech/frontend/react/core.md")));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::WireReferenceInApiOrUi,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.write_boundary.artifact_refs.interfaces = vec!["api.purchase.create".to_string()];
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("typescript"));
         assert!(selection.reference_groups.contains_key("react"));
@@ -1986,6 +2006,7 @@ mod tests {
         assert!(!selection.reference_groups["react"].contains(&"migration".to_string()));
         assert!(!selection.reference_groups["react"].contains(&"server-components".to_string()));
         assert!(!selection.reference_groups.contains_key("java"));
+        assert!(!selection.reference_groups.contains_key("springboot"));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
@@ -1999,6 +2020,9 @@ mod tests {
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/code/java/spring.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path.starts_with("tech/backend/springboot/")));
     }
 
     #[test]

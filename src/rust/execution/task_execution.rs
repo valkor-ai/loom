@@ -27,10 +27,10 @@ use crate::{
     },
     task_plan::{execute_task_next_from_request, update_run_summary},
     templates::{
-        code_quality_requirements_for_task, frontend_quality_self_check_applies,
-        frontend_self_check_applies, runtime_delivery_evidence_applies,
-        task_result_required_top_level_fields, task_result_template_with_code_quality,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        code_quality_execution_context, code_quality_requirements_for_task,
+        frontend_quality_self_check_applies, frontend_self_check_applies,
+        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
+        task_result_template_with_code_quality, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -263,7 +263,11 @@ fn build_execution_request(
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
     let dependency_results = dependency_results(run, task);
-    let read_groups = task_execution_read_groups(&request_task, !dependency_results.is_empty());
+    let read_groups = task_execution_read_groups(
+        &request_task,
+        !dependency_results.is_empty(),
+        &architecture_projection,
+    );
     let user_facing_language = pgc.planning_inputs.user_facing_language.clone();
     let execution_rules =
         task_execution_rules(result_file, &request_task, user_facing_language.clone());
@@ -296,7 +300,8 @@ fn build_execution_request(
         source_context["apiContractRequirements"] = json!(api_contract_requirements);
     }
     if !code_quality_requirements.is_empty() {
-        source_context["codeQualityRequirements"] = json!(code_quality_requirements);
+        source_context["codeQualityExecutionContext"] =
+            code_quality_execution_context(&code_quality_requirements);
     }
     Ok(json!({
         "schemaVersion": "1.0",
@@ -596,8 +601,8 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
         rules.push("apiContractEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
-        rules.push("For referenced codeQualityRequirements, include codeQualityEvidence with the exact requirementId values assigned to this task.".to_string());
-        rules.push("codeQualityEvidence.referenceFilesChecked must list exactly the files read from sourceContext.codeQualityRequirements[].referenceLoadPlan; verificationIds must reference task.verificationIntents and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
+        rules.push("For referenced codeQualityExecutionContext entries, include codeQualityEvidence with the exact requirementId values assigned to this task.".to_string());
+        rules.push("codeQualityEvidence.referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan; verificationIds must reference task.verificationIntents and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
     }
     json!(rules)
 }
@@ -663,9 +668,9 @@ fn api_contract_execution_rules(task: &TaskDefinition) -> Value {
 fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
     json!({
         "appliesToRequirementRefs": task.code_quality_requirement_refs,
-        "requirementSource": "sourceContext.codeQualityRequirements",
+        "requirementSource": "sourceContext.codeQualityExecutionContext",
         "scopeRule": "Apply only listed code quality requirements whose appliesToTaskIds include this task; do not create new language or framework requirements inside TaskResult.",
-        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityRequirements[].referenceLoadPlan. Do not derive paths from referenceGroups, scan the tech/code or tech/backend trees, or load external language/framework skills.",
+        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityExecutionContext[].referenceLoadPlan. Do not derive paths from referenceGroups, scan the tech/code or tech/backend trees, or load external language/framework skills.",
         "implementationRules": [
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
@@ -680,11 +685,15 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
     })
 }
 
-fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: bool) -> Value {
+fn task_execution_read_groups(
+    task: &TaskDefinition,
+    has_dependency_results: bool,
+    architecture_projection: &Value,
+) -> Value {
     let has_frontend_execution = task_has_frontend_execution(task);
     let has_frontend_requirement = task.frontend_experience_requirement.is_some();
     let needs_runtime_probe_rules = task_needs_controlled_runtime_probe_rules(task);
-    let mut core_fields = vec![
+    let core_fields = vec![
         "source.taskPlanId",
         "source.taskId",
         "source.groupId",
@@ -705,22 +714,44 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         "task.writeBoundary.artifactRefs",
         "task.verificationIntents",
         "sourceContext.technicalBaseline.projectKind",
-        "sourceContext.technicalBaseline.stack",
-        "sourceContext.architectureArtifactProjection.modules",
-        "sourceContext.architectureArtifactProjection.entities",
-        "sourceContext.architectureArtifactProjection.interfaces",
-        "sourceContext.architectureArtifactProjection.userFlows",
-        "sourceContext.architectureArtifactProjection.stateMachines",
-        "sourceContext.acceptanceSnapshot",
-        "sourceContext.requirementDetailSnapshot",
         "sourceContext.userFacingLanguage",
         "executionRules.sourceEditPreparationContract",
-        "executionRules.verificationCommandSchedulingRules",
-        "executionRules.userFacingLanguage",
         "executionRules.boundaryRules",
     ];
+    let mut scope_fields = vec![
+        "sourceContext.acceptanceSnapshot",
+        "sourceContext.requirementDetailSnapshot",
+        "executionRules.verificationCommandSchedulingRules",
+        "executionRules.userFacingLanguage",
+    ];
+    if has_dependency_results {
+        scope_fields.push("sourceContext.dependencyResults");
+    }
+
+    let mut architecture_fields = Vec::new();
+    if projection_array_has_items(architecture_projection, "modules") {
+        architecture_fields.push("sourceContext.architectureArtifactProjection.modules");
+    }
+    if projection_array_has_items(architecture_projection, "entities") {
+        architecture_fields.push("sourceContext.architectureArtifactProjection.entities");
+    }
+    if projection_array_has_items(architecture_projection, "interfaces") {
+        architecture_fields.push("sourceContext.architectureArtifactProjection.interfaces");
+    }
+    if projection_array_has_items(architecture_projection, "userFlows") {
+        architecture_fields.push("sourceContext.architectureArtifactProjection.userFlows");
+    }
+    if projection_array_has_items(architecture_projection, "stateMachines") {
+        architecture_fields.push("sourceContext.architectureArtifactProjection.stateMachines");
+    }
+    if projection_architecture_quality_has_items(architecture_projection) {
+        architecture_fields
+            .push("sourceContext.architectureArtifactProjection.architectureQuality");
+    }
+
+    let mut frontend_fields = Vec::new();
     if has_frontend_requirement {
-        core_fields.extend([
+        frontend_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.schemaVersion",
             "task.frontendExperienceRequirement.executionGuidance.purpose",
             "task.frontendExperienceRequirement.executionGuidance.userFacingLanguage",
@@ -739,67 +770,67 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         ]);
     }
     if frontend_quality_self_check_applies(task) {
-        core_fields.extend([
+        frontend_fields.extend([
             "task.frontendExperienceRequirement.executionGuidance.uiQuality",
             "task.frontendExperienceRequirement.uiQualityContractRef",
         ]);
-        core_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
+        frontend_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if has_frontend_execution {
         if !runtime_delivery_evidence_applies(task) {
-            core_fields.push("executionRules.frontendImplementationOrganizationRules");
+            frontend_fields.push("executionRules.frontendImplementationOrganizationRules");
         }
-        core_fields.push("executionRules.interactiveVerificationProbePolicy");
+        frontend_fields.push("executionRules.interactiveVerificationProbePolicy");
     }
+
+    let mut runtime_fields = Vec::new();
     if needs_runtime_probe_rules {
-        core_fields.push("executionRules.controlledRuntimeProbeRules");
+        runtime_fields.push("executionRules.controlledRuntimeProbeRules");
     }
     if runtime_delivery_evidence_applies(task) {
-        core_fields.extend(runtime_delivery_requirement_read_fields(task));
-        core_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
-        core_fields.push("executionRules.runtimeDeliveryExecutionRules");
+        runtime_fields.extend(runtime_delivery_requirement_read_fields(task));
+        runtime_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
+        runtime_fields.push("executionRules.runtimeDeliveryExecutionRules");
     }
+
+    let mut quality_fields = Vec::new();
     if !task.engineering_quality_requirement_refs.is_empty() {
-        core_fields.extend([
+        quality_fields.extend([
             "task.engineeringQualityRequirementRefs",
             "sourceContext.engineeringQualityRequirements",
             "executionRules.engineeringQualityExecutionRules",
         ]);
     }
     if !task.architecture_quality_requirement_refs.is_empty() {
-        core_fields.extend([
+        quality_fields.extend([
             "task.architectureQualityRequirementRefs",
             "sourceContext.architectureQualityRequirements",
-            "sourceContext.architectureArtifactProjection.architectureQuality",
             "executionRules.architectureQualityExecutionRules",
         ]);
     }
     if !task.api_contract_requirement_refs.is_empty() {
-        core_fields.extend([
+        quality_fields.extend([
             "task.apiContractRequirementRefs",
             "sourceContext.apiContractRequirements",
-            "sourceContext.architectureArtifactProjection.interfaces",
             "executionRules.apiContractExecutionRules",
         ]);
     }
     if !task.code_quality_requirement_refs.is_empty() {
-        core_fields.extend([
+        quality_fields.extend([
             "task.codeQualityRequirementRefs",
-            "sourceContext.codeQualityRequirements",
+            "sourceContext.codeQualityExecutionContext",
             "executionRules.codeQualityExecutionRules",
         ]);
     }
-    if has_dependency_results {
-        core_fields.push("sourceContext.dependencyResults");
-    }
+    let mut concept_fields = Vec::new();
     if !task.concept_refs.is_empty() {
-        core_fields.push("task.conceptRefs");
+        concept_fields.push("task.conceptRefs");
     }
     if !task.concept_responsibilities.is_empty() {
-        core_fields.push("task.conceptResponsibilities");
+        concept_fields.push("task.conceptResponsibilities");
     }
     if !task.concept_verification_intents.is_empty() {
-        core_fields.push("task.conceptVerificationIntents");
+        concept_fields.push("task.conceptVerificationIntents");
     }
 
     let mut result_fields = vec![
@@ -849,14 +880,68 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
         result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
     }
 
-    Value::Array(vec![
+    let mut groups = vec![
         json!({
             "groupId": "task_execution_core",
             "required": true,
-            "purpose": "Read task identity, task-scoped architecture context, and execution rules before editing.",
+            "purpose": "Read task identity, edit boundary, and source edit rules before editing.",
             "whenToRead": "Read before any source edit.",
             "selectors": read_selectors_value_from_paths(core_fields)
         }),
+        json!({
+            "groupId": "task_execution_scope_context",
+            "required": true,
+            "purpose": "Read task-scoped acceptance, requirement detail, dependency, and language context.",
+            "whenToRead": "Read before deciding implementation scope.",
+            "selectors": read_selectors_value_from_paths(scope_fields)
+        }),
+    ];
+    if !architecture_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "task_execution_architecture_context",
+            "required": true,
+            "purpose": "Read only task-owned architecture artifacts needed for this task.",
+            "whenToRead": "Read before editing architecture-owned code.",
+            "selectors": read_selectors_value_from_paths(architecture_fields)
+        }));
+    }
+    if !frontend_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "task_execution_frontend_context",
+            "required": true,
+            "purpose": "Read task-owned frontend guidance and UI quality contract.",
+            "whenToRead": "Read before editing frontend surfaces.",
+            "selectors": read_selectors_value_from_paths(frontend_fields)
+        }));
+    }
+    if !runtime_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "task_execution_runtime_context",
+            "required": true,
+            "purpose": "Read runtime delivery and controlled probe rules only when this task needs runtime evidence.",
+            "whenToRead": "Read before runtime-impacting edits or probes.",
+            "selectors": read_selectors_value_from_paths(runtime_fields)
+        }));
+    }
+    if !quality_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "task_execution_quality_context",
+            "required": true,
+            "purpose": "Read only quality contracts assigned to this task.",
+            "whenToRead": "Read before applying engineering, architecture, API, or code quality obligations.",
+            "selectors": read_selectors_value_from_paths(quality_fields)
+        }));
+    }
+    if !concept_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "task_execution_concept_context",
+            "required": true,
+            "purpose": "Read concept responsibilities assigned to this task.",
+            "whenToRead": "Read before implementing concept-sensitive behavior.",
+            "selectors": read_selectors_value_from_paths(concept_fields)
+        }));
+    }
+    groups.push(
         json!({
             "groupId": "task_execution_result_contract",
             "required": true,
@@ -864,7 +949,27 @@ fn task_execution_read_groups(task: &TaskDefinition, has_dependency_results: boo
             "whenToRead": "Read before writing TaskResult.",
             "selectors": read_selectors_value_from_paths(result_fields)
         }),
-    ])
+    );
+    Value::Array(groups)
+}
+
+fn projection_array_has_items(projection: &Value, key: &str) -> bool {
+    projection
+        .get(key)
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+}
+
+fn projection_architecture_quality_has_items(projection: &Value) -> bool {
+    let Some(quality) = projection.get("architectureQuality") else {
+        return false;
+    };
+    ["decisions", "nfrs", "risks"].iter().any(|key| {
+        quality
+            .get(*key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty())
+    })
 }
 
 fn task_scoped_engineering_quality_requirements(

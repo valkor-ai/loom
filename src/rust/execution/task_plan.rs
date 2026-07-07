@@ -3136,7 +3136,7 @@ fn normalize_code_quality_requirements(
 
 fn code_quality_implementation_obligations() -> Vec<String> {
     vec![
-        "Load only the files listed in sourceContext.codeQualityRequirements[].referenceLoadPlan for this task; do not scan the whole tech/code or tech/backend trees or infer group-to-file mappings.".to_string(),
+        "Load only the files listed in sourceContext.codeQualityExecutionContext[].referenceLoadPlan for this task; do not scan the whole tech/code or tech/backend trees or infer group-to-file mappings.".to_string(),
         "Follow existing repository structure and style before introducing new language or framework patterns.".to_string(),
         "Keep API, UI, architecture, and persistence obligations in their own dedicated quality contracts; use code quality only for language and framework implementation discipline.".to_string(),
     ]
@@ -3162,6 +3162,9 @@ fn code_quality_verification_obligations() -> Vec<String> {
 }
 
 fn task_owns_api_contract(task: &TaskDefinition) -> bool {
+    if task_is_frontend_task(task) {
+        return false;
+    }
     if task.write_boundary.artifact_refs.interfaces.is_empty() {
         return false;
     }

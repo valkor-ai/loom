@@ -2986,7 +2986,14 @@ fn compact_review_matrix_summary(
             json!({
                 "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
                 "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
-                "referenceGroups": item.get("referenceGroups").cloned().unwrap_or_else(|| json!({})),
+                "referenceGroupCount": reference_group_entry_count(
+                    item.get("referenceGroups").unwrap_or(&Value::Null)
+                ),
+                "referenceFileCount": item
+                    .get("referenceLoadPlan")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
                 "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
@@ -3113,10 +3120,16 @@ fn build_review_signals(
             "taskRefs": [task_id],
             "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
             "qualitySatisfied": quality_satisfied,
-            "stackSignals": item.get("stackSignals").cloned().unwrap_or_else(|| json!({})),
-            "alignmentTargets": item.get("alignmentTargets").cloned().unwrap_or_else(|| json!([])),
-            "riskFieldKinds": item.get("riskFieldKinds").cloned().unwrap_or_else(|| json!([])),
-            "verificationObligations": item.get("verificationObligations").cloned().unwrap_or_else(|| json!([])),
+            "alignmentTargetCount": item
+                .get("alignmentTargets")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            "riskFieldKindCount": item
+                .get("riskFieldKinds")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
             "passedVerificationCount": item
                 .get("passedVerificationSummaries")
                 .and_then(Value::as_array)
@@ -3231,10 +3244,22 @@ fn build_review_signals(
             "qualityKind": item.get("kind").cloned().unwrap_or(Value::Null),
             "taskRefs": [task_id],
             "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
-            "referenceGroups": item.get("referenceGroups").cloned().unwrap_or_else(|| json!({})),
-            "referenceLoadPlan": item.get("referenceLoadPlan").cloned().unwrap_or_else(|| json!([])),
-            "referenceGroupsChecked": item.get("referenceGroupsChecked").cloned().unwrap_or_else(|| json!({})),
-            "referenceFilesChecked": item.get("referenceFilesChecked").cloned().unwrap_or_else(|| json!([])),
+            "referenceGroupCount": reference_group_entry_count(
+                item.get("referenceGroups").unwrap_or(&Value::Null)
+            ),
+            "referenceFileCount": item
+                .get("referenceLoadPlan")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            "referenceGroupCheckedCount": reference_group_entry_count(
+                item.get("referenceGroupsChecked").unwrap_or(&Value::Null)
+            ),
+            "referenceFileCheckedCount": item
+                .get("referenceFilesChecked")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
             "codeQualitySatisfied": quality_satisfied,
             "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
             "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
@@ -3400,6 +3425,16 @@ fn reference_groups(value: &Value, key: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+fn reference_group_entry_count(value: &Value) -> usize {
+    value
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.values())
+        .filter_map(Value::as_array)
+        .map(Vec::len)
+        .sum()
+}
+
 fn object_array_string_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {
     value
         .get(array_key)
@@ -3553,7 +3588,7 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
                 "status": result.status,
-                "changedFiles": result.changed_files,
+                "changedFileCount": result.changed_files.len(),
                 "verificationResults": result.verification_results.iter().map(|verification| {
                     json!({
                         "verificationId": verification.verification_id,
@@ -3565,39 +3600,45 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                     json!({
                         "detailId": evidence.detail_id,
                         "status": evidence.status,
-                        "verificationIds": evidence.verification_ids,
-                        "evidenceRefs": evidence.evidence_refs
+                        "verificationIdCount": evidence.verification_ids.len(),
+                        "evidenceRefCount": evidence.evidence_refs.len()
                     })
                 }).collect::<Vec<_>>(),
                 "conceptEvidence": result.concept_evidence.iter().map(|evidence| {
                     json!({
                         "conceptRef": evidence.concept_ref,
                         "evidenceType": evidence.evidence_type,
-                        "refs": evidence.refs
+                        "refCount": evidence.refs.len()
                     })
                 }).collect::<Vec<_>>(),
                 "architectureQualityEvidence": result.architecture_quality_evidence.iter().map(|evidence| {
                     json!({
                         "requirementId": evidence.requirement_id,
                         "status": evidence.status,
-                        "verificationIds": evidence.verification_ids
+                        "verificationIdCount": evidence.verification_ids.len()
                     })
                 }).collect::<Vec<_>>(),
                 "apiContractEvidence": result.api_contract_evidence.iter().map(|evidence| {
                     json!({
                         "requirementId": evidence.requirement_id,
                         "status": evidence.status,
-                        "interfaceRefs": evidence.interface_refs,
-                        "verificationIds": evidence.verification_ids
+                        "interfaceRefCount": evidence.interface_refs.len(),
+                        "verificationIdCount": evidence.verification_ids.len(),
+                        "knownGapCount": evidence.known_gaps.len()
                     })
                 }).collect::<Vec<_>>(),
                 "codeQualityEvidence": result.code_quality_evidence.iter().map(|evidence| {
                     json!({
                         "requirementId": evidence.requirement_id,
                         "status": evidence.status,
-                        "referenceGroupsChecked": evidence.reference_groups_checked,
-                        "referenceFilesChecked": evidence.reference_files_checked,
-                        "verificationIds": evidence.verification_ids
+                        "referenceGroupCount": evidence
+                            .reference_groups_checked
+                            .values()
+                            .map(Vec::len)
+                            .sum::<usize>(),
+                        "referenceFileCount": evidence.reference_files_checked.len(),
+                        "verificationIdCount": evidence.verification_ids.len(),
+                        "knownGapCount": evidence.known_gaps.len()
                     })
                 }).collect::<Vec<_>>(),
                 "frontendExperienceSelfCheckPresent": result.frontend_experience_self_check.is_some(),
@@ -3640,13 +3681,13 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
         "status": self_check.get("status").and_then(Value::as_str),
         "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
         "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupsCheckedCount": reference_groups(&self_check, "referenceGroupsChecked").len(),
+        "referenceGroupCheckCount": reference_groups(&self_check, "referenceGroupsChecked").len(),
         "statesCoveredCount": self_check
             .get("statesCovered")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "businessUiRulesCheckedCount": self_check
+        "businessUiRuleCheckCount": self_check
             .get("businessUiRulesChecked")
             .and_then(Value::as_array)
             .map(Vec::len)
