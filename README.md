@@ -361,7 +361,13 @@ Loom is informed by adjacent work in coding-agent skills, agentic engineering wo
 
 ## Star History
 
-[![Star History Chart](./assets/star-history-2026.png)](https://www.star-history.com/?repos=valkor-ai%2Floom&type=date&legend=top-left)
+<a href="https://www.star-history.com/?repos=valkor-ai%2Floom&type=date&legend=top-left">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&theme=dark&legend=top-left&sealed_token=ITFmYmSJKgFXBLyRXm7qY3vsrnmzfFHgrR_5OOlRxgV6s2K_LV830pKK_rnMumgB8aECRZFwLZbfPy0fRqfliQz1DwShMs_7Gw5N3dZ75Kog79874801wBiMbEZ9TrhspECsQzAO6Wja93DPEbM-G4WJggxWb_VmSZWEzBrMC1twHlm0CVWGY9Bw5xA4" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=ITFmYmSJKgFXBLyRXm7qY3vsrnmzfFHgrR_5OOlRxgV6s2K_LV830pKK_rnMumgB8aECRZFwLZbfPy0fRqfliQz1DwShMs_7Gw5N3dZ75Kog79874801wBiMbEZ9TrhspECsQzAO6Wja93DPEbM-G4WJggxWb_VmSZWEzBrMC1twHlm0CVWGY9Bw5xA4" />
+    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=valkor-ai/loom&type=date&legend=top-left&sealed_token=ITFmYmSJKgFXBLyRXm7qY3vsrnmzfFHgrR_5OOlRxgV6s2K_LV830pKK_rnMumgB8aECRZFwLZbfPy0fRqfliQz1DwShMs_7Gw5N3dZ75Kog79874801wBiMbEZ9TrhspECsQzAO6Wja93DPEbM-G4WJggxWb_VmSZWEzBrMC1twHlm0CVWGY9Bw5xA4" />
+  </picture>
+</a>
 
 ## License
 
