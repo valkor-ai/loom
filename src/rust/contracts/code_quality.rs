@@ -50,7 +50,10 @@ pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
         "required": !reference_groups.is_empty(),
         "qualityLevel": "production_code_implementation",
         "codeStackSignals": signals,
-        "unmappedSignals": signals.iter().filter(|signal| signal.language.is_none()).collect::<Vec<_>>(),
+        "unmappedSignals": signals
+            .iter()
+            .filter(|signal| signal_is_unmapped(signal))
+            .collect::<Vec<_>>(),
         "techReferenceProfile": {
             "loadMode": "mcp_reference_load_plan",
             "groups": {
@@ -78,6 +81,12 @@ pub fn code_quality_enum_refs() -> Value {
                 "fastapi": ["schemas", "data", "routing", "security", "testing", "migration"],
                 "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime"],
                 "nestjs": ["controllers", "dtos", "services", "security", "testing", "migration"],
+                "react": ["core", "hooks", "state", "performance", "testing", "server-components", "react19", "migration"],
+                "nextjs": ["core", "app-router", "data", "actions", "server-components", "runtime", "testing"],
+                "vue": ["core", "components", "state", "typescript", "nuxt", "build", "mobile", "testing"],
+                "angular": ["core", "components", "routing", "rxjs", "ngrx", "testing"],
+                "reactnative": ["core", "structure", "navigation", "platform", "lists", "storage", "testing"],
+                "flutter": ["core", "structure", "widgets", "navigation", "riverpod", "bloc", "performance", "testing"],
                 "typescript": ["core", "types", "guards", "config", "patterns", "testing"],
                 "javascript": ["core", "async", "modules", "node", "browser", "testing"],
                 "python": ["core", "typing", "async", "packaging", "testing"],
@@ -91,7 +100,7 @@ pub fn code_quality_enum_refs() -> Value {
                 "sql": ["schema", "queries", "dialects", "optimization", "windows"]
             }
         },
-        "focusTag": ["api", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory"],
+        "focusTag": ["api", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -110,24 +119,35 @@ pub fn code_reference_selection_for_task(
     let mut unmapped_signals = Vec::new();
 
     for signal in signals {
-        let Some(language) = &signal.language else {
-            unmapped_signals.push(signal);
-            continue;
-        };
         if !signal_applies_to_task(&signal, &focus_tags) {
+            if signal.language.is_none() {
+                unmapped_signals.push(signal);
+            }
             continue;
         }
-        let items = reference_items_for_signal(&signal, &focus_tags);
+        let items = if signal.language.is_some() {
+            reference_items_for_signal(&signal, &focus_tags)
+        } else {
+            BTreeSet::new()
+        };
         let backend_items = backend_reference_items_for_signal(&signal, &focus_tags);
-        if !items.is_empty() || !backend_items.is_empty() {
+        let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags);
+        if !items.is_empty() || !backend_items.is_empty() || !frontend_items.is_empty() {
             selected_signals.push(signal.clone());
-            reference_groups
-                .entry(language.clone())
-                .or_default()
-                .extend(items);
+            if let Some(language) = &signal.language {
+                reference_groups
+                    .entry(language.clone())
+                    .or_default()
+                    .extend(items);
+            }
             for (framework, items) in backend_items {
                 reference_groups.entry(framework).or_default().extend(items);
             }
+            for (framework, items) in frontend_items {
+                reference_groups.entry(framework).or_default().extend(items);
+            }
+        } else if signal.language.is_none() {
+            unmapped_signals.push(signal);
         }
     }
 
@@ -213,14 +233,16 @@ fn baseline_reference_groups(signals: &[CodeStackSignal]) -> BTreeMap<String, Ve
         "testing".to_string(),
     ];
     for signal in signals {
-        let Some(language) = &signal.language else {
-            continue;
-        };
-        groups
-            .entry(language.clone())
-            .or_default()
-            .extend(reference_items_for_signal(signal, &focus_tags));
+        if let Some(language) = &signal.language {
+            groups
+                .entry(language.clone())
+                .or_default()
+                .extend(reference_items_for_signal(signal, &focus_tags));
+        }
         for (framework, items) in backend_reference_items_for_signal(signal, &focus_tags) {
+            groups.entry(framework).or_default().extend(items);
+        }
+        for (framework, items) in frontend_reference_items_for_signal(signal, &focus_tags) {
             groups.entry(framework).or_default().extend(items);
         }
     }
@@ -278,12 +300,10 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
 
     if contains_any(&haystack, &["typescript", "type script", " ts ", "tsx"]) {
         language = Some("typescript".to_string());
-        push_if_contains(&haystack, &mut frameworks, "react", &["react", "next"]);
-        push_if_contains(&haystack, &mut frameworks, "vue", &["vue", "nuxt"]);
-        push_if_contains(&haystack, &mut frameworks, "svelte", &["svelte"]);
+        push_frontend_frameworks_from_haystack(&haystack, &mut frameworks);
         push_if_contains(&haystack, &mut frameworks, "node", &["node"]);
         push_if_contains(&haystack, &mut frameworks, "nestjs", &["nestjs", "nest js"]);
-        if contains_any(&haystack, &["react", "next", "vue", "nuxt", "svelte"]) {
+        if selection_mentions_frontend_framework(&haystack) {
             push_unique(&mut roles, "frontend");
         }
         if contains_any(
@@ -300,10 +320,8 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_if_contains(&haystack, &mut frameworks, "node", &["node"]);
         push_if_contains(&haystack, &mut frameworks, "express", &["express"]);
         push_if_contains(&haystack, &mut frameworks, "nestjs", &["nestjs", "nest js"]);
-        push_if_contains(&haystack, &mut frameworks, "react", &["react", "next"]);
-        push_if_contains(&haystack, &mut frameworks, "vue", &["vue", "nuxt"]);
-        push_if_contains(&haystack, &mut frameworks, "svelte", &["svelte"]);
-        if contains_any(&haystack, &["react", "next", "vue", "nuxt", "svelte"]) {
+        push_frontend_frameworks_from_haystack(&haystack, &mut frameworks);
+        if selection_mentions_frontend_framework(&haystack) {
             push_unique(&mut roles, "frontend");
         }
         if contains_any(
@@ -418,6 +436,9 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_if_contains(&haystack, &mut frameworks, "axum", &["axum"]);
         push_if_contains(&haystack, &mut frameworks, "actix", &["actix"]);
         push_backend_unless_persistence_track(&mut roles);
+    } else if selection_mentions_flutter_framework(&haystack) {
+        push_frontend_frameworks_from_haystack(&haystack, &mut frameworks);
+        push_unique(&mut roles, "frontend");
     } else if contains_any(&haystack, &["kotlin", "ktor", "android", "compose", "kmp"]) {
         language = Some("kotlin".to_string());
         push_if_contains(&haystack, &mut frameworks, "ktor", &["ktor"]);
@@ -435,10 +456,8 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
     } else if contains_any(&haystack, &["c++", "cpp", "cmake", "clang", "gcc"]) {
         language = Some("cpp".to_string());
         push_if_contains(&haystack, &mut frameworks, "cmake", &["cmake"]);
-    } else if contains_any(&haystack, &["react", "next", "vue", "nuxt", "svelte"]) {
-        push_if_contains(&haystack, &mut frameworks, "react", &["react", "next"]);
-        push_if_contains(&haystack, &mut frameworks, "vue", &["vue", "nuxt"]);
-        push_if_contains(&haystack, &mut frameworks, "svelte", &["svelte"]);
+    } else if selection_mentions_frontend_framework(&haystack) {
+        push_frontend_frameworks_from_haystack(&haystack, &mut frameworks);
         push_unique(&mut roles, "frontend");
     } else if contains_any(
         &haystack,
@@ -490,9 +509,14 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_unique(&mut roles, "persistence");
     }
 
-    let confidence = if language.is_some() { "high" } else { "low" }.to_string();
+    let mapped = language.is_some() || !frameworks.is_empty() || !dialects.is_empty();
+    let confidence = if mapped { "high" } else { "low" }.to_string();
     let reason = if language.is_some() {
-        "Mapped from confirmed TechnicalBaseline stack selection.".to_string()
+        "Mapped language from confirmed TechnicalBaseline stack selection.".to_string()
+    } else if !frameworks.is_empty() {
+        "Mapped framework from confirmed TechnicalBaseline stack selection.".to_string()
+    } else if !dialects.is_empty() {
+        "Mapped storage dialect from confirmed TechnicalBaseline stack selection.".to_string()
     } else {
         "No known Loom code reference profile matched this stack selection.".to_string()
     };
@@ -507,6 +531,10 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         confidence,
         reason,
     }
+}
+
+fn signal_is_unmapped(signal: &CodeStackSignal) -> bool {
+    signal.language.is_none() && signal.frameworks.is_empty() && signal.dialects.is_empty()
 }
 
 fn role_from_track(track: &str) -> Vec<String> {
@@ -554,6 +582,327 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
         "{} {} {:?}",
         task.title, task.objective, task.implementation_actions
     ));
+    if contains_any(
+        &text,
+        &[
+            "state",
+            "store",
+            "context",
+            "reducer",
+            "zustand",
+            "redux",
+            "tanstack",
+            "query client",
+            "selected record",
+            "form draft",
+            "状态",
+            "表单草稿",
+            "选中记录",
+        ],
+    ) {
+        push_unique(&mut tags, "state");
+    }
+    if contains_any(
+        &text,
+        &[
+            "hook",
+            "hooks",
+            "useeffect",
+            "usememo",
+            "usecallback",
+            "useref",
+            "custom hook",
+            "debounce",
+            "localstorage",
+            "effect cleanup",
+            "钩子",
+            "副作用",
+            "防抖",
+        ],
+    ) {
+        push_unique(&mut tags, "hooks");
+    }
+    if contains_any(
+        &text,
+        &[
+            "server component",
+            "server components",
+            "react server component",
+            "rsc",
+            "suspense",
+            "streaming",
+            "use client",
+            "hydration",
+            "服务端组件",
+            "服务端渲染",
+            "水合",
+        ],
+    ) {
+        push_unique(&mut tags, "server_components");
+    }
+    if contains_any(
+        &text,
+        &[
+            "react 19",
+            "useactionstate",
+            "useformstatus",
+            "useoptimistic",
+            "use()",
+            "ref as prop",
+            "action state",
+            "optimistic",
+            "乐观更新",
+        ],
+    ) {
+        push_unique(&mut tags, "react19");
+    }
+    if contains_any(
+        &text,
+        &[
+            "app router",
+            "layout.tsx",
+            "page.tsx",
+            "loading.tsx",
+            "error.tsx",
+            "not-found.tsx",
+            "route group",
+            "route handler",
+            "generate metadata",
+            "metadata api",
+            "dynamic route",
+            "parallel route",
+            "intercepting route",
+        ],
+    ) {
+        push_unique(&mut tags, "app_router");
+    }
+    if contains_any(
+        &text,
+        &[
+            "server action",
+            "server actions",
+            "use server",
+            "form action",
+            "revalidatepath",
+            "revalidatetag",
+            "useformstatus",
+            "useactionstate",
+        ],
+    ) {
+        push_unique(&mut tags, "server_actions");
+    }
+    if contains_any(
+        &text,
+        &[
+            "data fetching",
+            "fetch",
+            "cache",
+            "revalidate",
+            "isr",
+            "swr",
+            "usefetch",
+            "useasyncdata",
+            "uselazyfetch",
+            "数据获取",
+            "缓存",
+        ],
+    ) {
+        push_unique(&mut tags, "data_fetching");
+    }
+    if contains_any(
+        &text,
+        &[
+            "nuxt",
+            "nitro",
+            "definepagemeta",
+            "runtimeconfig",
+            "clientonly",
+            "usehead",
+            "useseometa",
+            "hydration",
+        ],
+    ) {
+        push_unique(&mut tags, "nuxt");
+    }
+    if contains_any(
+        &text,
+        &[
+            "vite",
+            "vite config",
+            "build tooling",
+            "bundle",
+            "chunk",
+            "sourcemap",
+            "dev server",
+            "proxy",
+            "tree shaking",
+            "构建",
+            "打包",
+        ],
+    ) {
+        push_unique(&mut tags, "build_tooling");
+    }
+    if contains_any(
+        &text,
+        &[
+            "mobile",
+            "native",
+            "quasar",
+            "capacitor",
+            "pwa",
+            "service worker",
+            "offline",
+            "push notification",
+            "geolocation",
+            "camera",
+            "移动端",
+            "离线",
+        ],
+    ) {
+        push_unique(&mut tags, "mobile");
+    }
+    if contains_any(
+        &text,
+        &[
+            "route",
+            "router",
+            "routing",
+            "navigation",
+            "navigate",
+            "deep link",
+            "deeplink",
+            "guard",
+            "resolver",
+            "tab",
+            "stack",
+            "drawer",
+            "query param",
+            "route param",
+            "路由",
+            "导航",
+            "守卫",
+            "深链",
+        ],
+    ) {
+        push_unique(&mut tags, "routing");
+    }
+    if contains_any(
+        &text,
+        &[
+            "rxjs",
+            "observable",
+            "subscription",
+            "subject",
+            "behaviorsubject",
+            "httpclient",
+            "http client",
+            "api call",
+            "switchmap",
+            "mergemap",
+            "concatmap",
+            "exhaustmap",
+            "takeuntildestroyed",
+            "marble",
+            "流式",
+            "订阅",
+            "可观察",
+        ],
+    ) {
+        push_unique(&mut tags, "rxjs");
+    }
+    if contains_any(
+        &text,
+        &[
+            "ngrx",
+            "store",
+            "action group",
+            "entity adapter",
+            "selector",
+            "effect",
+            "effects",
+            "reducer",
+            "store devtools",
+            "facade",
+        ],
+    ) {
+        push_unique(&mut tags, "ngrx");
+    }
+    if contains_any(
+        &text,
+        &[
+            "riverpod",
+            "consumerwidget",
+            "consumer widget",
+            "widgetref",
+            "provider scope",
+            "providerscope",
+            "state notifier",
+            "statenotifier",
+            "async notifier",
+            "asyncnotifier",
+        ],
+    ) {
+        push_unique(&mut tags, "riverpod");
+    }
+    if contains_any(
+        &text,
+        &[
+            " bloc ",
+            "cubit",
+            "blocbuilder",
+            "bloc builder",
+            "bloclistener",
+            "bloc listener",
+            "blocconsumer",
+            "bloc consumer",
+            "blocprovider",
+            "bloc provider",
+            "event driven",
+        ],
+    ) {
+        push_unique(&mut tags, "bloc");
+    }
+    if contains_any(
+        &text,
+        &[
+            "list",
+            "feed",
+            "flatlist",
+            "sectionlist",
+            "flashlist",
+            "virtualized",
+            "infinite scroll",
+            "pull to refresh",
+            "refreshcontrol",
+            "onendreached",
+            "list performance",
+            "列表性能",
+            "列表",
+            "动态列表",
+            "下拉刷新",
+            "无限滚动",
+        ],
+    ) {
+        push_unique(&mut tags, "list_performance");
+    }
+    if contains_any(
+        &text,
+        &[
+            "asyncstorage",
+            "mmkv",
+            "securestore",
+            "secure store",
+            "storage",
+            "persist",
+            "persistent",
+            "local cache",
+            "localstorage",
+            "缓存持久化",
+            "本地存储",
+        ],
+    ) {
+        push_unique(&mut tags, "storage");
+    }
     if contains_any(
         &text,
         &[
@@ -798,7 +1147,7 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     || has_focus("configuration")
             }
         }
-        None => false,
+        None => roles.contains("frontend") && has_focus("frontend"),
     }
 }
 
@@ -1050,6 +1399,128 @@ fn backend_reference_items_for_signal(
     groups
 }
 
+fn frontend_reference_items_for_signal(
+    signal: &CodeStackSignal,
+    focus_tags: &[String],
+) -> BTreeMap<String, BTreeSet<String>> {
+    let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
+    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
+    if !has_focus("frontend") {
+        return groups;
+    }
+    if signal.frameworks.iter().any(|item| item == "nextjs") {
+        let items = groups.entry("nextjs".to_string()).or_default();
+        items.insert("core".to_string());
+        items.insert("app-router".to_string());
+        items.insert("testing".to_string());
+        if has_focus("data_fetching") || has_focus("performance") || has_focus("persistence") {
+            items.insert("data".to_string());
+        }
+        if has_focus("server_actions") {
+            items.insert("actions".to_string());
+        }
+        if has_focus("server_components") {
+            items.insert("server-components".to_string());
+        }
+        if has_focus("runtime") || has_focus("configuration") || has_focus("performance") {
+            items.insert("runtime".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "react") {
+        let items = groups.entry("react".to_string()).or_default();
+        items.insert("core".to_string());
+        items.insert("hooks".to_string());
+        items.insert("state".to_string());
+        items.insert("testing".to_string());
+        if has_focus("performance") {
+            items.insert("performance".to_string());
+        }
+        if has_focus("server_components") {
+            items.insert("server-components".to_string());
+        }
+        if has_focus("react19") {
+            items.insert("react19".to_string());
+        }
+        if has_focus("migration") {
+            items.insert("migration".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "vue") {
+        let items = groups.entry("vue".to_string()).or_default();
+        items.insert("core".to_string());
+        items.insert("components".to_string());
+        items.insert("state".to_string());
+        items.insert("testing".to_string());
+        if signal.language.as_deref() == Some("typescript") {
+            items.insert("typescript".to_string());
+        }
+        if has_focus("nuxt") || signal.frameworks.iter().any(|item| item == "nuxt") {
+            items.insert("nuxt".to_string());
+        }
+        if has_focus("build_tooling")
+            || has_focus("runtime")
+            || has_focus("configuration")
+            || has_focus("performance")
+        {
+            items.insert("build".to_string());
+        }
+        if has_focus("mobile") {
+            items.insert("mobile".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "angular") {
+        let items = groups.entry("angular".to_string()).or_default();
+        items.insert("core".to_string());
+        items.insert("components".to_string());
+        items.insert("testing".to_string());
+        if has_focus("routing") {
+            items.insert("routing".to_string());
+        }
+        if has_focus("rxjs") || has_focus("async") || has_focus("data_fetching") {
+            items.insert("rxjs".to_string());
+        }
+        if has_focus("ngrx") {
+            items.insert("ngrx".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "reactnative") {
+        let items = groups.entry("reactnative".to_string()).or_default();
+        items.insert("core".to_string());
+        items.insert("structure".to_string());
+        items.insert("platform".to_string());
+        items.insert("testing".to_string());
+        if has_focus("routing") || signal.frameworks.iter().any(|item| item == "expo") {
+            items.insert("navigation".to_string());
+        }
+        if has_focus("list_performance") || has_focus("performance") {
+            items.insert("lists".to_string());
+        }
+        if has_focus("storage") {
+            items.insert("storage".to_string());
+        }
+    }
+    if signal.frameworks.iter().any(|item| item == "flutter") {
+        let items = groups.entry("flutter".to_string()).or_default();
+        items.insert("core".to_string());
+        items.insert("structure".to_string());
+        items.insert("widgets".to_string());
+        items.insert("testing".to_string());
+        if has_focus("routing") || signal.frameworks.iter().any(|item| item == "gorouter") {
+            items.insert("navigation".to_string());
+        }
+        if has_focus("riverpod") || signal.frameworks.iter().any(|item| item == "riverpod") {
+            items.insert("riverpod".to_string());
+        }
+        if has_focus("bloc") || signal.frameworks.iter().any(|item| item == "bloc") {
+            items.insert("bloc".to_string());
+        }
+        if has_focus("performance") || has_focus("list_performance") {
+            items.insert("performance".to_string());
+        }
+    }
+    groups
+}
+
 fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanItem {
     if let Some((ref_prefix, path_group, label)) = match group_key {
         "springboot" => Some(("bk.spring", "springboot", "Spring Boot")),
@@ -1063,6 +1534,23 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
             ref_id: format!("{ref_prefix}.{group}"),
             path: format!("tech/backend/{path_group}/{group}.md"),
             reason: format!("Selected {label} {group} framework quality reference for this task."),
+        };
+    }
+    if let Some((ref_prefix, path_group, label)) = match group_key {
+        "react" => Some(("fe.react", "react", "React")),
+        "nextjs" => Some(("fe.next", "nextjs", "Next.js")),
+        "vue" => Some(("fe.vue", "vue", "Vue")),
+        "angular" => Some(("fe.angular", "angular", "Angular")),
+        "reactnative" => Some(("fe.rn", "react-native", "React Native")),
+        "flutter" => Some(("fe.flutter", "flutter", "Flutter")),
+        _ => None,
+    } {
+        return ReferenceLoadPlanItem {
+            ref_id: format!("{ref_prefix}.{group}"),
+            path: format!("tech/frontend/{path_group}/{group}.md"),
+            reason: format!(
+                "Selected {label} {group} frontend framework quality reference for this task."
+            ),
         };
     }
     ReferenceLoadPlanItem {
@@ -1207,6 +1695,71 @@ fn push_backend_unless_persistence_track(roles: &mut Vec<String>) {
     }
 }
 
+fn selection_mentions_frontend_framework(haystack: &str) -> bool {
+    contains_any(
+        haystack,
+        &[
+            "react",
+            "next",
+            "nextjs",
+            "next js",
+            "app router",
+            "vue",
+            "nuxt",
+            "svelte",
+            "angular",
+            "ngrx",
+            "react native",
+            "reactnative",
+            "expo",
+            "expo router",
+            "flutter",
+            "riverpod",
+            "go router",
+            "gorouter",
+        ],
+    )
+}
+
+fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<String>) {
+    let react_native = contains_any(
+        haystack,
+        &["react native", "reactnative", "expo", "expo router"],
+    );
+    if react_native {
+        push_unique(frameworks, "reactnative");
+        push_if_contains(haystack, frameworks, "expo", &["expo", "expo router"]);
+    }
+    if selection_mentions_flutter_framework(haystack) {
+        push_unique(frameworks, "flutter");
+        push_if_contains(haystack, frameworks, "riverpod", &["riverpod"]);
+        push_if_contains(haystack, frameworks, "bloc", &[" bloc ", "cubit"]);
+        push_if_contains(haystack, frameworks, "gorouter", &["go router", "gorouter"]);
+    }
+    push_if_contains(
+        haystack,
+        frameworks,
+        "nextjs",
+        &["next", "nextjs", "next js", "app router"],
+    );
+    if !react_native {
+        push_if_contains(
+            haystack,
+            frameworks,
+            "react",
+            &["react", "next", "nextjs", "next js"],
+        );
+    }
+    push_if_contains(haystack, frameworks, "vue", &["vue", "nuxt"]);
+    push_if_contains(haystack, frameworks, "nuxt", &["nuxt"]);
+    push_if_contains(haystack, frameworks, "angular", &["angular", "ngrx"]);
+    push_if_contains(haystack, frameworks, "svelte", &["svelte"]);
+}
+
+fn selection_mentions_flutter_framework(haystack: &str) -> bool {
+    contains_any(haystack, &["flutter", "riverpod", "go router", "gorouter"])
+}
+
 fn push_unique(output: &mut Vec<String>, value: &str) {
     if !output.iter().any(|item| item == value) {
         output.push(value.to_string());
@@ -1331,6 +1884,20 @@ mod tests {
                 "backend": {"selection": "Java + Spring Boot"}
             }
         }));
+        let seed = build_code_quality_seed(&baseline);
+        assert_eq!(
+            seed.pointer("/unmappedSignals")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert!(seed
+            .pointer("/techReferenceProfile/referenceLoadPlan")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|item| item.get("path").and_then(Value::as_str)
+                == Some("tech/frontend/react/core.md")));
         let mut task = task(
             TaskKind::UiFlowIncrement,
             vec![ImplementationAction::CreateOrUpdateUiFlow],
@@ -1338,7 +1905,440 @@ mod tests {
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("typescript"));
+        assert!(selection.reference_groups.contains_key("react"));
+        assert!(selection.reference_groups["react"].contains(&"core".to_string()));
+        assert!(selection.reference_groups["react"].contains(&"hooks".to_string()));
+        assert!(selection.reference_groups["react"].contains(&"state".to_string()));
+        assert!(selection.reference_groups["react"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"migration".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"server-components".to_string()));
         assert!(!selection.reference_groups.contains_key("java"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.hooks" && item.path == "tech/frontend/react/hooks.md"
+        }));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/typescript/core.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/java/spring.md"));
+    }
+
+    #[test]
+    fn maps_framework_only_react_baseline_to_frontend_refs() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("react"));
+        assert!(!selection.reference_groups.contains_key("typescript"));
+        assert!(selection.unmapped_signals.is_empty());
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.state" && item.path == "tech/frontend/react/state.md"
+        }));
+    }
+
+    #[test]
+    fn react_specialized_refs_are_task_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Migrate a class component to hooks and add React 19 useActionState optimistic form state with server components while optimizing table performance.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let react_refs = &selection.reference_groups["react"];
+        assert!(react_refs.contains(&"migration".to_string()));
+        assert!(react_refs.contains(&"react19".to_string()));
+        assert!(react_refs.contains(&"server-components".to_string()));
+        assert!(react_refs.contains(&"performance".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.migration" && item.path == "tech/frontend/react/migration.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.react19" && item.path == "tech/frontend/react/react19.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.server-components"
+                && item.path == "tech/frontend/react/server-components.md"
+        }));
+    }
+
+    #[test]
+    fn maps_nextjs_typescript_to_nextjs_react_and_typescript_refs() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "Next.js + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective =
+            "Create an App Router dashboard page with loading.tsx and error.tsx boundaries."
+                .to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("nextjs"));
+        assert!(selection.reference_groups["nextjs"].contains(&"core".to_string()));
+        assert!(selection.reference_groups["nextjs"].contains(&"app-router".to_string()));
+        assert!(selection.reference_groups["nextjs"].contains(&"testing".to_string()));
+        assert!(selection.reference_groups.contains_key("react"));
+        assert!(selection.reference_groups.contains_key("typescript"));
+        assert!(!selection.reference_groups.contains_key("vue"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.next.app-router" && item.path == "tech/frontend/nextjs/app-router.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
+        }));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/typescript/core.md"));
+    }
+
+    #[test]
+    fn nextjs_specialized_refs_are_task_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "Next.js + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Add Server Actions with revalidatePath, no-store data fetching, Suspense server components, runtime config, and next build validation.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let next_refs = &selection.reference_groups["nextjs"];
+        assert!(next_refs.contains(&"actions".to_string()));
+        assert!(next_refs.contains(&"data".to_string()));
+        assert!(next_refs.contains(&"server-components".to_string()));
+        assert!(next_refs.contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.next.actions" && item.path == "tech/frontend/nextjs/actions.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.next.data" && item.path == "tech/frontend/nextjs/data.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.next.runtime" && item.path == "tech/frontend/nextjs/runtime.md"
+        }));
+    }
+
+    #[test]
+    fn maps_vue_typescript_to_vue_and_typescript_refs() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "Vue 3 + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Build a Vue 3 Composition API purchase request list with typed props, Pinia store state, and component tests.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("vue"));
+        assert!(selection.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(selection.reference_groups["vue"].contains(&"components".to_string()));
+        assert!(selection.reference_groups["vue"].contains(&"state".to_string()));
+        assert!(selection.reference_groups["vue"].contains(&"typescript".to_string()));
+        assert!(selection.reference_groups["vue"].contains(&"testing".to_string()));
+        assert!(selection.reference_groups.contains_key("typescript"));
+        assert!(!selection.reference_groups.contains_key("react"));
+        assert!(!selection.reference_groups.contains_key("nextjs"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.vue.components" && item.path == "tech/frontend/vue/components.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.vue.typescript" && item.path == "tech/frontend/vue/typescript.md"
+        }));
+    }
+
+    #[test]
+    fn maps_framework_only_vue_without_assuming_typescript() {
+        let baseline = baseline(json!({"tracks": {"web": {"selection": "Vue"}}}));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("vue"));
+        assert!(!selection.reference_groups["vue"].contains(&"typescript".to_string()));
+        assert!(!selection.reference_groups.contains_key("typescript"));
+        assert!(selection.unmapped_signals.is_empty());
+    }
+
+    #[test]
+    fn nuxt_specialized_refs_are_task_scoped_to_vue() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "Nuxt 3 + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Implement a Nuxt page with useFetch, runtimeConfig, ClientOnly hydration guard, Vite build optimization, and mobile PWA offline state.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let vue_refs = &selection.reference_groups["vue"];
+        assert!(vue_refs.contains(&"nuxt".to_string()));
+        assert!(vue_refs.contains(&"build".to_string()));
+        assert!(vue_refs.contains(&"mobile".to_string()));
+        assert!(vue_refs.contains(&"typescript".to_string()));
+        assert!(!selection.reference_groups.contains_key("nextjs"));
+        assert!(!selection.reference_groups.contains_key("react"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.ref_id == "fe.vue.nuxt" && item.path == "tech/frontend/vue/nuxt.md"));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.vue.build" && item.path == "tech/frontend/vue/build.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.vue.mobile" && item.path == "tech/frontend/vue/mobile.md"
+        }));
+    }
+
+    #[test]
+    fn maps_angular_typescript_to_task_scoped_angular_refs() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "Angular 17 + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Build standalone purchase approval components with signals, route guard and resolver, RxJS switchMap search, NgRx entity adapter state, and component tests.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("angular"));
+        assert!(selection.reference_groups.contains_key("typescript"));
+        let angular_refs = &selection.reference_groups["angular"];
+        assert!(angular_refs.contains(&"core".to_string()));
+        assert!(angular_refs.contains(&"components".to_string()));
+        assert!(angular_refs.contains(&"routing".to_string()));
+        assert!(angular_refs.contains(&"rxjs".to_string()));
+        assert!(angular_refs.contains(&"ngrx".to_string()));
+        assert!(angular_refs.contains(&"testing".to_string()));
+        assert!(!selection.reference_groups.contains_key("react"));
+        assert!(!selection.reference_groups.contains_key("nextjs"));
+        assert!(!selection.reference_groups.contains_key("vue"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.angular.routing" && item.path == "tech/frontend/angular/routing.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.angular.ngrx" && item.path == "tech/frontend/angular/ngrx.md"
+        }));
+    }
+
+    #[test]
+    fn framework_only_angular_does_not_assume_typescript() {
+        let baseline = baseline(json!({"tracks": {"web": {"selection": "Angular"}}}));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("angular"));
+        assert!(!selection.reference_groups.contains_key("typescript"));
+        assert!(selection.unmapped_signals.is_empty());
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.angular.components"
+                && item.path == "tech/frontend/angular/components.md"
+        }));
+    }
+
+    #[test]
+    fn maps_react_native_typescript_without_web_react_refs() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "app": {"selection": "React Native + Expo + TypeScript"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Create a mobile purchase request screen with Expo Router navigation, iOS and Android SafeArea keyboard handling, FlatList pull to refresh, and MMKV storage.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("reactnative"));
+        assert!(selection.reference_groups.contains_key("typescript"));
+        let rn_refs = &selection.reference_groups["reactnative"];
+        assert!(rn_refs.contains(&"core".to_string()));
+        assert!(rn_refs.contains(&"structure".to_string()));
+        assert!(rn_refs.contains(&"navigation".to_string()));
+        assert!(rn_refs.contains(&"platform".to_string()));
+        assert!(rn_refs.contains(&"lists".to_string()));
+        assert!(rn_refs.contains(&"storage".to_string()));
+        assert!(rn_refs.contains(&"testing".to_string()));
+        assert!(!selection.reference_groups.contains_key("react"));
+        assert!(!selection.reference_groups.contains_key("nextjs"));
+        assert!(!selection.reference_groups.contains_key("vue"));
+        assert!(!selection.reference_groups.contains_key("angular"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.rn.navigation"
+                && item.path == "tech/frontend/react-native/navigation.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.rn.platform" && item.path == "tech/frontend/react-native/platform.md"
+        }));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/typescript/core.md"));
+    }
+
+    #[test]
+    fn framework_only_react_native_does_not_assume_typescript_or_web_react() {
+        let baseline =
+            baseline(json!({"tracks": {"app": {"selection": "Expo Router + React Native"}}}));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("reactnative"));
+        assert!(!selection.reference_groups.contains_key("typescript"));
+        assert!(!selection.reference_groups.contains_key("react"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.rn.navigation"
+                && item.path == "tech/frontend/react-native/navigation.md"
+        }));
+    }
+
+    #[test]
+    fn maps_flutter_stack_to_task_scoped_flutter_refs() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "app": {"selection": "Flutter 3 + Riverpod + GoRouter"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Create a purchase approval Flutter screen with GoRouter route params, ConsumerWidget Riverpod AsyncValue state, ListView.builder rows, and jank profiling.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("flutter"));
+        let flutter_refs = &selection.reference_groups["flutter"];
+        assert!(flutter_refs.contains(&"core".to_string()));
+        assert!(flutter_refs.contains(&"structure".to_string()));
+        assert!(flutter_refs.contains(&"widgets".to_string()));
+        assert!(flutter_refs.contains(&"navigation".to_string()));
+        assert!(flutter_refs.contains(&"riverpod".to_string()));
+        assert!(flutter_refs.contains(&"performance".to_string()));
+        assert!(flutter_refs.contains(&"testing".to_string()));
+        assert!(!flutter_refs.contains(&"bloc".to_string()));
+        assert!(!selection.reference_groups.contains_key("typescript"));
+        assert!(!selection.reference_groups.contains_key("react"));
+        assert!(!selection.reference_groups.contains_key("reactnative"));
+        assert!(!selection.reference_groups.contains_key("kotlin"));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.flutter.navigation"
+                && item.path == "tech/frontend/flutter/navigation.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.flutter.riverpod" && item.path == "tech/frontend/flutter/riverpod.md"
+        }));
+    }
+
+    #[test]
+    fn flutter_bloc_reference_is_explicitly_scoped() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "app": {"selection": "Flutter 3 + Bloc"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective = "Implement a Flutter wizard using Cubit, BlocBuilder, BlocListener, immutable states, and widget tests.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let flutter_refs = &selection.reference_groups["flutter"];
+        assert!(flutter_refs.contains(&"bloc".to_string()));
+        assert!(flutter_refs.contains(&"widgets".to_string()));
+        assert!(flutter_refs.contains(&"testing".to_string()));
+        assert!(!flutter_refs.contains(&"riverpod".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.ref_id == "fe.flutter.bloc"
+                && item.path == "tech/frontend/flutter/bloc.md"));
+    }
+
+    #[test]
+    fn framework_only_flutter_does_not_assume_dart_language_refs() {
+        let baseline = baseline(json!({"tracks": {"app": {"selection": "Flutter"}}}));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        task.objective =
+            "Build a Flutter form that shows a business-blocking validation message.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups.contains_key("flutter"));
+        assert!(!selection.reference_groups.contains_key("typescript"));
+        assert!(!selection.reference_groups.contains_key("javascript"));
+        assert!(!selection.reference_groups.contains_key("kotlin"));
+        assert!(!selection.reference_groups["flutter"].contains(&"bloc".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "fe.flutter.widgets" && item.path == "tech/frontend/flutter/widgets.md"
+        }));
+    }
+
+    #[test]
+    fn dart_alone_stays_unmapped_without_blocking() {
+        let baseline = baseline(json!({"tracks": {"app": {"selection": "Dart"}}}));
+        let seed = build_code_quality_seed(&baseline);
+        assert_eq!(seed["required"], false);
+        assert_eq!(seed["unmappedSignals"][0]["confidence"], "low");
+        assert!(seed
+            .pointer("/techReferenceProfile/referenceLoadPlan")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty));
     }
 
     #[test]
@@ -1752,11 +2752,26 @@ mod tests {
     }
 
     #[test]
-    fn framework_only_react_signal_stays_unmapped() {
+    fn framework_only_react_signal_maps_frontend_references() {
         let baseline = baseline(json!({"tracks": {"web": {"selection": "React"}}}));
         let seed = build_code_quality_seed(&baseline);
-        assert_eq!(seed["required"], false);
-        assert_eq!(seed["unmappedSignals"][0]["rawSelection"], "React");
+        assert_eq!(seed["required"], true);
+        assert!(seed
+            .pointer("/unmappedSignals")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty));
+        let load_plan = seed
+            .pointer("/techReferenceProfile/referenceLoadPlan")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(load_plan.iter().any(|item| {
+            item.get("refId").and_then(Value::as_str) == Some("fe.react.core")
+                && item.get("path").and_then(Value::as_str) == Some("tech/frontend/react/core.md")
+        }));
+        assert!(!load_plan.iter().any(|item| item
+            .get("path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| path.starts_with("tech/code/typescript/"))));
     }
 
     #[test]

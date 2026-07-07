@@ -115,6 +115,53 @@ const BACKEND_REFERENCE_FILES: &[&str] = &[
     "springboot/web",
 ];
 
+const FRONTEND_REFERENCE_FILES: &[&str] = &[
+    "angular/components",
+    "angular/core",
+    "angular/ngrx",
+    "angular/routing",
+    "angular/rxjs",
+    "angular/testing",
+    "flutter/bloc",
+    "flutter/core",
+    "flutter/navigation",
+    "flutter/performance",
+    "flutter/riverpod",
+    "flutter/structure",
+    "flutter/testing",
+    "flutter/widgets",
+    "nextjs/actions",
+    "nextjs/app-router",
+    "nextjs/core",
+    "nextjs/data",
+    "nextjs/runtime",
+    "nextjs/server-components",
+    "nextjs/testing",
+    "react/core",
+    "react/hooks",
+    "react/migration",
+    "react/performance",
+    "react/react19",
+    "react/server-components",
+    "react/state",
+    "react/testing",
+    "react-native/core",
+    "react-native/lists",
+    "react-native/navigation",
+    "react-native/platform",
+    "react-native/storage",
+    "react-native/structure",
+    "react-native/testing",
+    "vue/build",
+    "vue/components",
+    "vue/core",
+    "vue/mobile",
+    "vue/nuxt",
+    "vue/state",
+    "vue/testing",
+    "vue/typescript",
+];
+
 #[test]
 fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
     let fixture = Fixture::new("install_cleans_legacy");
@@ -279,6 +326,11 @@ fn install_projects_shared_references_to_agent_read_paths() {
                 .join(format!("skills/loom/references/tech/backend/{file}.md"))
                 .exists());
         }
+        for file in FRONTEND_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/frontend/{file}.md"))
+                .exists());
+        }
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -331,6 +383,12 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(env
             .opencode_home
             .join(format!("references/loom/tech/backend/{file}.md"))
+            .exists());
+    }
+    for file in FRONTEND_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/frontend/{file}.md"))
             .exists());
     }
     assert!(!env.opencode_home.join("references/loom/delivery").exists());
@@ -922,6 +980,7 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let repo = repo_root();
     let code_root = repo.join("plugins/shared/loom/references/tech/code");
     let backend_root = repo.join("plugins/shared/loom/references/tech/backend");
+    let frontend_root = repo.join("plugins/shared/loom/references/tech/frontend");
     let common = fs::read_to_string(code_root.join("common.md")).unwrap();
     for required in [
         "Position In Loom",
@@ -955,11 +1014,10 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             path.display()
         );
         for required in [
-            "referenceLoadPlan",
             "When To Use",
             "Implementation Focus",
             "Verification Focus",
-            "Evidence Notes",
+            "Evidence Focus",
         ] {
             assert!(
                 content.contains(required),
@@ -968,6 +1026,10 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             );
         }
         for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
             "skill_reference_by_group",
             "Load this file only when `techReferenceProfile.groups",
             "Load only the listed group/items",
@@ -1000,15 +1062,82 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             path.display()
         );
         for required in [
-            "referenceLoadPlan",
             "When To Use",
             "Implementation Focus",
             "Verification Focus",
-            "Evidence Notes",
+            "Evidence Focus",
         ] {
             assert!(
                 content.contains(required),
                 "{} missing backend framework reference section or boundary {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Load this file only when `techReferenceProfile.groups",
+            "Load only the listed group/items",
+            "Source Coverage",
+            "Repository Adaptation",
+            "Delivery Patterns",
+            "## Evidence\n",
+            "## Anti-Patterns",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained protocol or duplicated shared reference fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+
+    let mut frontend_files = Vec::new();
+    collect_markdown_files(&frontend_root, &mut frontend_files);
+    assert!(
+        frontend_files.len() >= FRONTEND_REFERENCE_FILES.len(),
+        "expected frontend framework reference coverage for selected framework profiles"
+    );
+    for path in frontend_files {
+        let content = fs::read_to_string(&path).unwrap();
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 25,
+            "{} is too thin to act as a frontend framework reference: {line_count} lines",
+            path.display()
+        );
+        for required in [
+            "When To Use",
+            "Implementation Focus",
+            "Verification Focus",
+            "Evidence Focus",
+        ] {
+            assert!(
+                content.contains(required),
+                "{} missing frontend framework reference section {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Load this file only when `techReferenceProfile.groups",
+            "Load only the listed group/items",
+            "Source Coverage",
+            "Repository Adaptation",
+            "Delivery Patterns",
+            "## Evidence\n",
+            "## Anti-Patterns",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained protocol or duplicated shared reference fragment {forbidden}",
                 path.display()
             );
         }
@@ -1424,6 +1553,14 @@ impl Fixture {
                     "plugins/shared/loom/references/tech/backend/{path}.md"
                 )),
                 &format!("# {path} Backend Reference\n"),
+            );
+        }
+        for path in FRONTEND_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/frontend/{path}.md"
+                )),
+                &format!("# {path} Frontend Reference\n"),
             );
         }
         for name in [
