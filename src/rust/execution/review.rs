@@ -2818,6 +2818,8 @@ fn build_frontend_quality_review_matrix(
                 missing_strings(&expected_reference_files, &checked_reference_files);
             let missing_ui_states = missing_strings(&expected_states, &covered_states);
             let missing_business_ui_rule_ids = missing_strings(&expected_rules, &checked_rules);
+            let expected_gates = frontend_quality_gates_for_review(task, ui_quality_contract);
+            let gate_review = frontend_quality_gate_review(&expected_gates, &self_check);
             let forbidden_violation_count = self_check
                 .pointer("/forbiddenContentCheck/violations")
                 .and_then(Value::as_array)
@@ -2883,6 +2885,10 @@ fn build_frontend_quality_review_matrix(
                 == Some("satisfied")
                 && scenario_matches
                 && quality_level_matches
+                && gate_review
+                    .get("satisfied")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
                 && missing_reference_groups.is_empty()
                 && missing_reference_files.is_empty()
                 && missing_ui_states.is_empty()
@@ -2916,12 +2922,197 @@ fn build_frontend_quality_review_matrix(
                     "parallelTokenSystemCreated": parallel_token_system_created,
                     "satisfied": token_asset_satisfied
                 },
+                "qualityGateCoverage": gate_review,
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
                 "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" }
             }))
         })
         .collect()
+}
+
+fn frontend_quality_gates_for_review(
+    task: &TaskDefinition,
+    ui_quality_contract: &Value,
+) -> Vec<Value> {
+    task.frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| {
+            ui_quality_contract
+                .get("qualityGates")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+
+fn frontend_quality_gate_review(expected_gates: &[Value], self_check: &Value) -> Value {
+    let expected = expected_gates
+        .iter()
+        .filter_map(|gate| {
+            let gate_id = gate.get("gateId").and_then(Value::as_str)?;
+            Some((
+                gate_id.to_string(),
+                gate.get("severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("must")
+                    .to_string(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let expected_by_id = expected_gates
+        .iter()
+        .filter_map(|gate| {
+            gate.get("gateId")
+                .and_then(Value::as_str)
+                .map(|gate_id| (gate_id.to_string(), gate))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let expected_ids = expected.keys().cloned().collect::<BTreeSet<_>>();
+    let gate_results = self_check
+        .get("gateResults")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut seen = BTreeSet::new();
+    let mut checked_gate_ids = Vec::new();
+    let mut duplicate_gate_ids = Vec::new();
+    let mut invented_gate_ids = Vec::new();
+    let mut invalid_status_gate_ids = Vec::new();
+    let mut partial_gate_ids = Vec::new();
+    let mut missing_status_gate_ids = Vec::new();
+    let mut blocked_environment_gate_ids = Vec::new();
+    let mut invalid_environment_block_gate_ids = Vec::new();
+    let mut render_gate_missing_viewport_ids = Vec::new();
+    let mut source_check_missing_gate_ids = Vec::new();
+    let mut viewport_check_missing_gate_ids = Vec::new();
+    let mut self_report_only_gate_ids = Vec::new();
+    let mut status_counts = BTreeMap::<String, usize>::new();
+    let mut status_by_gate = BTreeMap::<String, String>::new();
+
+    for result in &gate_results {
+        let Some(gate_id) = result.get("gateId").and_then(Value::as_str) else {
+            invalid_status_gate_ids.push("missing_gate_id".to_string());
+            continue;
+        };
+        checked_gate_ids.push(gate_id.to_string());
+        if !seen.insert(gate_id.to_string()) {
+            duplicate_gate_ids.push(gate_id.to_string());
+        }
+        if !expected_ids.contains(gate_id) {
+            invented_gate_ids.push(gate_id.to_string());
+        }
+        let required_evidence = expected_by_id
+            .get(gate_id)
+            .map(|gate| string_array_field(gate, "requiredEvidence"))
+            .unwrap_or_default();
+        let status = result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("missing");
+        *status_counts.entry(status.to_string()).or_insert(0) += 1;
+        status_by_gate.insert(gate_id.to_string(), status.to_string());
+        match status {
+            "partial" => partial_gate_ids.push(gate_id.to_string()),
+            "missing" => missing_status_gate_ids.push(gate_id.to_string()),
+            "blocked_by_environment" => {
+                blocked_environment_gate_ids.push(gate_id.to_string());
+                if !is_environment_blockable_gate(gate_id, &required_evidence) {
+                    invalid_environment_block_gate_ids.push(gate_id.to_string());
+                }
+            }
+            "satisfied" => {
+                if evidence_requires_source_check(&required_evidence)
+                    && string_array_field(result, "sourceChecks").is_empty()
+                {
+                    source_check_missing_gate_ids.push(gate_id.to_string());
+                }
+                if evidence_requires_viewport_check(&required_evidence)
+                    && string_array_field(result, "viewportsChecked").is_empty()
+                {
+                    viewport_check_missing_gate_ids.push(gate_id.to_string());
+                }
+                if is_render_or_viewport_gate(gate_id)
+                    && !has_desktop_and_mobile_viewports(&string_array_field(
+                        result,
+                        "viewportsChecked",
+                    ))
+                {
+                    render_gate_missing_viewport_ids.push(gate_id.to_string());
+                }
+                if string_array_field(result, "files").is_empty()
+                    && string_array_field(result, "sourceChecks").is_empty()
+                    && string_array_field(result, "viewportsChecked").is_empty()
+                    && string_array_field(result, "attemptedChecks").is_empty()
+                    && string_array_field(result, "fallbackEvidence").is_empty()
+                {
+                    self_report_only_gate_ids.push(gate_id.to_string());
+                }
+            }
+            "not_applicable" => {}
+            _ => invalid_status_gate_ids.push(gate_id.to_string()),
+        }
+    }
+
+    let missing_gate_ids = expected_ids
+        .iter()
+        .filter(|gate_id| !seen.contains(*gate_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let must_gate_unsatisfied_ids = expected
+        .iter()
+        .filter_map(|(gate_id, severity)| {
+            if severity != "must" {
+                return None;
+            }
+            let status = status_by_gate.get(gate_id).map(String::as_str);
+            if status == Some("satisfied") {
+                None
+            } else {
+                Some(gate_id.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    let satisfied = expected_ids.is_empty()
+        || (missing_gate_ids.is_empty()
+            && invented_gate_ids.is_empty()
+            && duplicate_gate_ids.is_empty()
+            && invalid_status_gate_ids.is_empty()
+            && partial_gate_ids.is_empty()
+            && missing_status_gate_ids.is_empty()
+            && blocked_environment_gate_ids.is_empty()
+            && invalid_environment_block_gate_ids.is_empty()
+            && render_gate_missing_viewport_ids.is_empty()
+            && source_check_missing_gate_ids.is_empty()
+            && viewport_check_missing_gate_ids.is_empty()
+            && self_report_only_gate_ids.is_empty()
+            && must_gate_unsatisfied_ids.is_empty());
+
+    json!({
+        "expectedGateIds": expected_ids.into_iter().collect::<Vec<_>>(),
+        "checkedGateIds": checked_gate_ids,
+        "expectedGateCount": expected.len(),
+        "checkedGateCount": gate_results.len(),
+        "statusCounts": status_counts,
+        "missingGateIds": missing_gate_ids,
+        "inventedGateIds": invented_gate_ids,
+        "duplicateGateIds": duplicate_gate_ids,
+        "invalidStatusGateIds": invalid_status_gate_ids,
+        "partialGateIds": partial_gate_ids,
+        "missingStatusGateIds": missing_status_gate_ids,
+        "mustGateUnsatisfiedIds": must_gate_unsatisfied_ids,
+        "blockedEnvironmentGateIds": blocked_environment_gate_ids,
+        "invalidEnvironmentBlockGateIds": invalid_environment_block_gate_ids,
+        "renderGateMissingViewportIds": render_gate_missing_viewport_ids,
+        "sourceCheckMissingGateIds": source_check_missing_gate_ids,
+        "viewportCheckMissingGateIds": viewport_check_missing_gate_ids,
+        "selfReportOnlyGateIds": self_report_only_gate_ids,
+        "satisfied": satisfied
+    })
 }
 
 fn compact_review_matrix_summary(
@@ -3008,7 +3199,17 @@ fn compact_review_matrix_summary(
                 "qualityLevel": item.get("qualityLevel").cloned().unwrap_or(Value::Null),
                 "actualQualityLevel": item.get("actualQualityLevel").cloned().unwrap_or(Value::Null),
                 "missingReferenceCount": item
-                    .get("missingReferenceIds")
+                    .get("missingReferenceGroups")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "missingQualityGateCount": item
+                    .pointer("/qualityGateCoverage/missingGateIds")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "mustQualityGateUnsatisfiedCount": item
+                    .pointer("/qualityGateCoverage/mustGateUnsatisfiedIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
@@ -3085,7 +3286,8 @@ fn build_review_signals(
             "taskResultId": quality.get("taskResultId").cloned().unwrap_or(Value::Null),
             "uiQualitySatisfied": quality_satisfied,
             "actualStatus": quality.get("actualStatus").cloned().unwrap_or(Value::Null),
-            "missingReferenceIds": quality.get("missingReferenceIds").cloned().unwrap_or_else(|| json!([])),
+            "missingReferenceGroups": quality.get("missingReferenceGroups").cloned().unwrap_or_else(|| json!([])),
+            "qualityGateCoverage": quality.get("qualityGateCoverage").cloned().unwrap_or_else(|| json!({})),
             "missingUiStates": quality.get("missingUiStates").cloned().unwrap_or_else(|| json!([])),
             "missingBusinessUiRuleIds": quality.get("missingBusinessUiRuleIds").cloned().unwrap_or_else(|| json!([])),
             "forbiddenViolationCount": quality.get("forbiddenViolationCount").cloned().unwrap_or_else(|| json!(0)),
@@ -3478,6 +3680,42 @@ fn missing_strings(expected: &[String], actual: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn is_render_or_viewport_gate(gate_id: &str) -> bool {
+    gate_id.contains("render") || gate_id.contains("viewport")
+}
+
+fn is_environment_blockable_gate(gate_id: &str, required_evidence: &[String]) -> bool {
+    is_render_or_viewport_gate(gate_id)
+        || gate_id.contains("mobile")
+        || evidence_requires_viewport_check(required_evidence)
+        || required_evidence
+            .iter()
+            .any(|item| item == "render_or_environment_reason")
+}
+
+fn evidence_requires_source_check(required: &[String]) -> bool {
+    required
+        .iter()
+        .any(|item| item == "source_check" || item == "responsive_source_check")
+}
+
+fn evidence_requires_viewport_check(required: &[String]) -> bool {
+    required.iter().any(|item| item == "viewport_check")
+}
+
+fn has_desktop_and_mobile_viewports(viewports: &[String]) -> bool {
+    let normalized = viewports
+        .iter()
+        .map(|viewport| viewport.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    normalized
+        .iter()
+        .any(|viewport| viewport.contains("desktop") || viewport.contains("1024"))
+        && normalized.iter().any(|viewport| {
+            viewport.contains("mobile") || viewport.contains("375") || viewport.contains("390")
+        })
+}
+
 fn missing_reference_groups(
     expected: &[(String, String)],
     actual: &[(String, String)],
@@ -3697,6 +3935,21 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
+        "qualityGateResultCount": self_check
+            .get("gateResults")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "qualityGateStatusCounts": frontend_quality_gate_status_counts(&self_check),
+        "environmentBlockedGateCount": self_check
+            .get("gateResults")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|gate| {
+                gate.get("status").and_then(Value::as_str) == Some("blocked_by_environment")
+            })
+            .count(),
         "designTokenEvidence": self_check
             .get("designTokenEvidence")
             .map(|evidence| json!({
@@ -3734,6 +3987,23 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             .map(Vec::len)
             .unwrap_or(0)
     })
+}
+
+fn frontend_quality_gate_status_counts(self_check: &Value) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for gate in self_check
+        .get("gateResults")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let status = gate
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("missing");
+        *counts.entry(status.to_string()).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn allowed_refs(

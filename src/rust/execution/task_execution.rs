@@ -582,6 +582,7 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
     }
     if frontend_quality_self_check_applies(task) {
         rules.push("For frontendQualitySelfCheck, replace template placeholders with concrete UI files, states, business actions, token asset files, token consumer files, and evidence from this task; do not leave replace_with_* values in submitted results.".to_string());
+        rules.push("For frontendQualitySelfCheck.gateResults, report every task.frontendExperienceRequirement.uiTaskQualityGates item with concrete files and evidence; when local preview is available, render/viewport gates must record desktop and mobile checks; use blocked_by_environment only for render/viewport gates blocked by local environment and include blockedReason, attemptedChecks, and fallbackEvidence.".to_string());
     }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
@@ -767,6 +768,7 @@ fn task_execution_read_groups(
             "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
             "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
             "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "task.frontendExperienceRequirement.uiTaskQualityGates",
         ]);
     }
     if frontend_quality_self_check_applies(task) {
@@ -1281,6 +1283,7 @@ fn frontend_quality_execution_guidance(task: &TaskDefinition) -> Value {
             "designTokenAssetPlan",
             "requiredUiStates",
             "businessUiRules",
+            "qualityGates",
             "forbiddenUserVisibleContent"
         ],
         "rule": "Implement the task-owned UI according to uiQualityContract and selected UIX reference groups; report concrete evidence in frontendQualitySelfCheck."
@@ -1664,9 +1667,37 @@ fn ui_production_brief(
         "interactionExpectation": actions.iter().filter_map(value_display_name).chain(operation_paths.iter().filter_map(value_display_name)).collect::<Vec<_>>(),
         "dataExpectation": data_views.iter().filter_map(value_display_name).collect::<Vec<_>>(),
         "forbiddenUserVisibleContent": contract.get("forbiddenUserVisibleContent").cloned().unwrap_or_else(|| json!([])),
+        "gateImplementationPlan": ui_gate_implementation_plan(task),
         "qualityLevel": contract.get("qualityLevel").cloned().unwrap_or(Value::Null),
         "surfacePolicy": contract.get("surfacePolicy").cloned().unwrap_or(Value::Null)
     })
+}
+
+fn ui_gate_implementation_plan(task: &TaskDefinition) -> Value {
+    let gates = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Value::Array(
+        gates
+            .into_iter()
+            .filter_map(|gate| {
+                let gate_id = gate.get("gateId").and_then(Value::as_str)?;
+                Some(json!({
+                    "gateId": gate_id,
+                    "severity": gate.get("severity").cloned().unwrap_or(Value::Null),
+                    "surfaceIds": gate.get("surfaceIds").cloned().unwrap_or_else(|| json!([])),
+                    "implementationTarget": "Implement this gate only in files and UI surfaces owned by the current task.",
+                    "expectation": gate.get("expectation").cloned().unwrap_or(Value::Null),
+                    "requiredEvidence": gate.get("requiredEvidence").cloned().unwrap_or_else(|| json!([])),
+                    "resultField": "frontendQualitySelfCheck.gateResults"
+                }))
+            })
+            .collect(),
+    )
 }
 
 fn style_asset_plan(task: &TaskDefinition) -> Value {

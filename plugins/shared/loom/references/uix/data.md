@@ -110,3 +110,9 @@ A completed data UI should cite:
 - Query/list/detail/action states that were implemented.
 - Empty, loading, error, and business-blocking placement.
 - Overflow/responsive behavior for dense values and long labels.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `data.surface.scan_action_path` | The user can scan object identity, status, key fields, and available action in one path, with loading/empty/error/business-blocking states near the affected region. | Data is hidden behind generic cards, status/action are separated from the record, or state feedback appears only as a global toast/message. |

@@ -65,6 +65,16 @@ pub const UI_DESIGN_TOKEN_MERGE_POLICIES: [&str; 1] = ["preserve_existing_projec
 
 pub const UI_DESIGN_TOKEN_DUPLICATION_POLICIES: [&str; 1] = ["do_not_create_parallel_token_system"];
 
+pub const UI_QUALITY_GATE_SEVERITIES: [&str; 2] = ["must", "should"];
+
+pub const UI_QUALITY_GATE_STATUSES: [&str; 5] = [
+    "satisfied",
+    "partial",
+    "missing",
+    "blocked_by_environment",
+    "not_applicable",
+];
+
 pub const UI_FORBIDDEN_USER_VISIBLE_CONTENT: [&str; 5] = [
     "runtime_commands",
     "technical_stack_explanation",
@@ -142,6 +152,8 @@ pub fn ui_quality_enum_refs() -> Value {
         "designTokenTemplateId": UI_DESIGN_TOKEN_TEMPLATE_IDS,
         "designTokenMergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES,
         "designTokenDuplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES,
+        "qualityGateSeverity": UI_QUALITY_GATE_SEVERITIES,
+        "qualityGateStatus": UI_QUALITY_GATE_STATUSES,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiState": UI_REQUIRED_STATES,
         "knownReferenceGroups": known_ui_reference_groups()
@@ -194,6 +206,14 @@ pub fn ui_quality_contract_shape() -> Value {
         "businessUiRules": [{
             "ruleId": "string",
             "expectation": "string"
+        }],
+        "qualityGates": [{
+            "gateId": "known UI gate id",
+            "sourceRefId": "uix reference id such as uix.scenarios.admin-dashboard",
+            "severity": UI_QUALITY_GATE_SEVERITIES.join(" | "),
+            "appliesToSurfaceRoles": ["app_shell | page | record_list | record_detail | form | action_panel | navigation"],
+            "expectation": "short executable UI quality expectation",
+            "evidenceRequired": ["changed_files", "state_coverage", "source_check", "render_or_environment_reason"]
         }]
     })
 }
@@ -276,6 +296,8 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
         .get("designTokenAssetPlan")
         .cloned()
         .unwrap_or_else(default_design_token_asset_plan);
+    let quality_gates =
+        ui_quality_gates_for_contract(scenario, &reference_groups, &design_token_asset_plan);
 
     json!({
         "scenario": {
@@ -322,7 +344,8 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
                 "ruleId": "current_business_surface_complete",
                 "expectation": "The task-owned user-visible surface completes the current-phase business workflow with its required data, actions, and feedback."
             }
-        ]
+        ],
+        "qualityGates": quality_gates
     })
 }
 
@@ -437,7 +460,211 @@ pub fn validate_ui_quality_contract(frontend_experience: &Value) -> Vec<RepairIs
     validate_design_token_asset_plan(contract, &mut issues);
     validate_required_ui_states(contract, &mut issues);
     validate_business_rules(contract, &mut issues);
+    validate_quality_gates(contract, &mut issues);
     issues
+}
+
+pub fn ui_quality_gates_for_contract(
+    scenario: &str,
+    reference_groups: &Value,
+    design_token_plan: &Value,
+) -> Value {
+    let mut gates = Vec::new();
+    push_gate(
+        &mut gates,
+        "anti.product_boundary.no_internal_process",
+        "uix.core.anti-patterns",
+        "must",
+        &["app_shell", "page", "navigation", "record_list", "record_detail", "form"],
+        "User-visible UI must not expose Loom/MCP terms, delivery progress, runtime commands, verification instructions, stack explanations, request ids, or future-phase planning language.",
+        &["changed_files", "source_check", "forbidden_content_check"],
+    );
+    push_gate(
+        &mut gates,
+        "verify.rendered_viewports",
+        "uix.core.verification",
+        "must",
+        &["app_shell", "page", "record_list", "record_detail", "form"],
+        "When a local preview is available, record desktop and mobile rendered inspection; when unavailable, record blocked_by_environment with the concrete blocker and fallback source checks.",
+        &["render_or_environment_reason", "viewport_check", "fallback_source_check"],
+    );
+    match scenario {
+        "admin_dashboard" | "fintech_workstation" => {
+            push_admin_gates(&mut gates);
+        }
+        "data_console" | "developer_tool" => {
+            push_data_gates(&mut gates);
+        }
+        "mobile_responsive" | "consumer_app" | "fintech_consumer_app" => {
+            push_mobile_gates(&mut gates);
+        }
+        _ => {}
+    }
+    if reference_group_contains(reference_groups, "scenarios", "admin-dashboard") {
+        push_admin_gates(&mut gates);
+    }
+    if reference_group_contains(reference_groups, "focus", "data")
+        || reference_group_contains(reference_groups, "scenarios", "data-console")
+    {
+        push_data_gates(&mut gates);
+    }
+    if reference_group_contains(reference_groups, "focus", "mobile")
+        || reference_group_contains(reference_groups, "scenarios", "mobile-responsive")
+        || reference_group_contains(reference_groups, "scenarios", "mobile-native")
+    {
+        push_mobile_gates(&mut gates);
+    }
+    if reference_group_contains(reference_groups, "focus", "frameworks") {
+        push_gate(
+            &mut gates,
+            "framework.component_structure",
+            "uix.focus.frameworks",
+            "must",
+            &["app_shell", "page", "record_list", "record_detail", "form", "action_panel"],
+            "Real screens must separate shell, page orchestration, feature components, shared primitives, data/API helpers, and state-specific components when the workflow spans multiple regions.",
+            &["changed_files", "component_split_evidence"],
+        );
+    }
+    if reference_group_contains(reference_groups, "stacks", "react") {
+        push_gate(
+            &mut gates,
+            "react.split.workflow_regions",
+            "uix.stacks.react",
+            "must",
+            &["app_shell", "page", "record_list", "record_detail", "form", "action_panel"],
+            "React workbench UI must keep page orchestration separate from reusable feature components, data/API modules, formatters, and state-specific UI.",
+            &["changed_files", "component_split_evidence", "state_ownership_evidence"],
+        );
+    }
+    if design_token_plan
+        .get("strategy")
+        .and_then(Value::as_str)
+        .is_some_and(|strategy| strategy != "not_applicable")
+    {
+        push_token_gates(&mut gates, design_token_plan);
+    }
+    dedupe_gates(gates)
+}
+
+fn push_admin_gates(gates: &mut Vec<Value>) {
+    push_gate(
+        gates,
+        "admin.shell.work_surface",
+        "uix.scenarios.admin-dashboard",
+        "must",
+        &["app_shell", "page"],
+        "The first viewport must be the working business console with navigation, current page context, a real work region, and primary business action access.",
+        &["changed_files", "surface_evidence", "source_check"],
+    );
+    push_gate(
+        gates,
+        "admin.topbar.context_actions",
+        "uix.scenarios.admin-dashboard",
+        "should",
+        &["app_shell", "navigation", "page"],
+        "Topbar/header content must provide operational context and relevant actions such as search, filters, user/workspace context, or primary action; it must not be filler description.",
+        &["changed_files", "surface_evidence"],
+    );
+    push_gate(
+        gates,
+        "admin.list.filter_table_detail",
+        "uix.scenarios.admin-dashboard",
+        "must",
+        &["record_list", "record_detail", "page"],
+        "Record-management screens must preserve list context across filter, pagination, row selection, detail viewing, and mutations.",
+        &["changed_files", "state_coverage", "workflow_evidence"],
+    );
+}
+
+fn push_data_gates(gates: &mut Vec<Value>) {
+    push_gate(
+        gates,
+        "data.surface.scan_action_path",
+        "uix.focus.data",
+        "must",
+        &["record_list", "record_detail", "page"],
+        "Data surfaces must show object identity, status, key fields, and available action in the same scan path, with loading, empty, error, and business-blocking states placed near the affected region.",
+        &["changed_files", "state_coverage", "surface_evidence"],
+    );
+    push_gate(
+        gates,
+        "admin.state.scoped_feedback",
+        "uix.core.interaction",
+        "must",
+        &["record_list", "record_detail", "form", "action_panel"],
+        "Loading, success, validation, error, and business-blocking feedback must appear near the table, form, detail, row, or action they affect instead of only in a generic global message.",
+        &["changed_files", "state_coverage", "business_feedback_evidence"],
+    );
+}
+
+fn push_mobile_gates(gates: &mut Vec<Value>) {
+    push_gate(
+        gates,
+        "admin.mobile.record_fallback",
+        "uix.focus.mobile",
+        "must",
+        &["record_list", "record_detail", "page"],
+        "Responsive record-management UI must keep the workflow usable on narrow screens through cards, drawer/detail route, or an explicit source-checked fallback; do not rely only on shrinking a dense table.",
+        &["changed_files", "viewport_check", "responsive_source_check"],
+    );
+}
+
+fn push_token_gates(gates: &mut Vec<Value>, design_token_plan: &Value) {
+    let template_ref = match design_token_plan.get("templateId").and_then(Value::as_str) {
+        Some("tokens-tailwind") => "uix.templates.tokens-tailwind",
+        _ => "uix.templates.tokens-css",
+    };
+    push_gate(
+        gates,
+        "token.semantic_roles.coverage",
+        template_ref,
+        "must",
+        &["app_shell", "page", "record_list", "record_detail", "form", "action_panel"],
+        "Token assets must cover semantic surface, text, border, primary, status, focus, control, shell, table/list, and detail/action roles needed by the implemented UI.",
+        &["token_asset_files", "token_consumer_files", "source_check"],
+    );
+    push_gate(
+        gates,
+        "token.single_source_consumed",
+        "uix.core.system",
+        "must",
+        &["app_shell", "page", "record_list", "record_detail", "form", "action_panel"],
+        "The UI must consume one token/theme source through the project style entry or component system and must not create a parallel token system.",
+        &["token_asset_files", "token_consumer_files", "source_check"],
+    );
+}
+
+fn push_gate(
+    gates: &mut Vec<Value>,
+    gate_id: &str,
+    source_ref_id: &str,
+    severity: &str,
+    surface_roles: &[&str],
+    expectation: &str,
+    evidence_required: &[&str],
+) {
+    gates.push(json!({
+        "gateId": gate_id,
+        "sourceRefId": source_ref_id,
+        "severity": severity,
+        "appliesToSurfaceRoles": surface_roles,
+        "expectation": expectation,
+        "evidenceRequired": evidence_required
+    }));
+}
+
+fn dedupe_gates(gates: Vec<Value>) -> Value {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+    for gate in gates {
+        let Some(gate_id) = gate.get("gateId").and_then(Value::as_str) else {
+            continue;
+        };
+        if seen.insert(gate_id.to_string()) {
+            deduped.push(gate);
+        }
+    }
+    Value::Array(deduped)
 }
 
 pub fn known_ui_reference_groups() -> Value {
@@ -935,6 +1162,13 @@ fn ui_haystack(
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
+}
+
+fn reference_group_contains(reference_groups: &Value, group: &str, item: &str) -> bool {
+    reference_groups
+        .get(group)
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.iter().any(|value| value.as_str() == Some(item)))
 }
 
 fn validate_reference_groups(contract: &Value, issues: &mut Vec<RepairIssue>) {
@@ -1441,6 +1675,122 @@ fn validate_business_rules(contract: &Value, issues: &mut Vec<RepairIssue>) {
                     "businessUiRules entries must include ruleId and expectation.",
                 ));
             }
+        }
+    }
+}
+
+fn validate_quality_gates(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let scenario = contract
+        .pointer("/scenario/kind")
+        .and_then(Value::as_str)
+        .unwrap_or("custom_product_ui");
+    let reference_groups = contract
+        .pointer("/referenceProfile/groups")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let design_token_plan = contract
+        .get("designTokenAssetPlan")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let expected = ui_quality_gates_for_contract(scenario, &reference_groups, &design_token_plan);
+    let expected_gate_ids = expected
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let Some(gates) = contract.get("qualityGates").and_then(Value::as_array) else {
+        issues.push(issue(
+            "UI_QUALITY_GATES_REQUIRED",
+            "content.frontendExperience.uiQualityContract.qualityGates",
+            "uiQualityContract must include generated qualityGates so selected UIX references become executable and reviewable.",
+        ));
+        return;
+    };
+    if gates.is_empty() {
+        issues.push(issue(
+            "UI_QUALITY_GATES_REQUIRED",
+            "content.frontendExperience.uiQualityContract.qualityGates",
+            "uiQualityContract.qualityGates must not be empty.",
+        ));
+        return;
+    }
+    let mut actual_gate_ids = BTreeSet::new();
+    for (index, gate) in gates.iter().enumerate() {
+        let Some(gate_id) = gate.get("gateId").and_then(Value::as_str) else {
+            issues.push(issue(
+                "UI_QUALITY_GATE_INVALID",
+                &format!(
+                    "content.frontendExperience.uiQualityContract.qualityGates[{index}].gateId"
+                ),
+                "qualityGates entries must include gateId.",
+            ));
+            continue;
+        };
+        actual_gate_ids.insert(gate_id);
+        if !expected_gate_ids.contains(gate_id) {
+            issues.push(issue(
+                "UI_QUALITY_GATE_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].gateId"),
+                "qualityGates.gateId must be one of the gates generated from selected scenario, references, stack, and token plan.",
+            ));
+        }
+        if !gate
+            .get("sourceRefId")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.starts_with("uix."))
+        {
+            issues.push(issue(
+                "UI_QUALITY_GATE_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].sourceRefId"),
+                "qualityGates.sourceRefId must reference the UIX source rule such as uix.scenarios.admin-dashboard.",
+            ));
+        }
+        let severity = gate.get("severity").and_then(Value::as_str);
+        if !severity.is_some_and(|value| UI_QUALITY_GATE_SEVERITIES.contains(&value)) {
+            issues.push(issue(
+                "UI_QUALITY_GATE_INVALID",
+                &format!(
+                    "content.frontendExperience.uiQualityContract.qualityGates[{index}].severity"
+                ),
+                "qualityGates.severity must be a known UI quality gate severity.",
+            ));
+        }
+        for field in ["appliesToSurfaceRoles", "evidenceRequired"] {
+            if !gate
+                .get(field)
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_string))
+            {
+                issues.push(issue(
+                    "UI_QUALITY_GATE_INVALID",
+                    &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].{field}"),
+                    "qualityGates array fields must be non-empty string arrays.",
+                ));
+            }
+        }
+        if gate
+            .get("expectation")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            issues.push(issue(
+                "UI_QUALITY_GATE_INVALID",
+                &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].expectation"),
+                "qualityGates.expectation must describe the executable UI quality rule.",
+            ));
+        }
+    }
+    for expected_gate_id in expected_gate_ids {
+        if !actual_gate_ids.contains(expected_gate_id) {
+            issues.push(issue(
+                "UI_QUALITY_GATE_REQUIRED",
+                "content.frontendExperience.uiQualityContract.qualityGates",
+                "uiQualityContract.qualityGates must include every gate generated from selected scenario, references, stack, and token plan.",
+            ));
+            break;
         }
     }
 }

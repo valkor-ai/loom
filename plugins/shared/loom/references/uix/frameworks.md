@@ -1,10 +1,10 @@
 # UIX Focus: Frameworks
 
-Load this only when the current MCP request lists `uix/frameworks.md` in `referenceLoadPlan`. For MCP-driven work, stack-specific UIX files must also come from `referenceLoadPlan`; do not infer them from stack names or group labels.
+Use this when framework structure, shared components, routing, data fetching, state ownership, styling, or frontend build conventions affect a user-visible surface.
 
 ## Rule
 
-Frameworks implement the UI contract; they do not redefine the product surface. Keep scenario, quality level, states, and forbidden user-visible content aligned with the MCP artifact.
+Frameworks implement the product surface; they do not redefine it. Keep scenario fit, density, visible states, and product-boundary rules aligned with the selected UI target.
 
 ## Component Architecture
 
@@ -35,7 +35,7 @@ Before applying a token template:
 
 ```text
 1. Locate existing theme/tokens/global styles.
-2. Decide reuse_existing, extend_existing, or create_* from designTokenAssetPlan.
+2. Decide reuse existing, extend existing, or create a new token asset from the current UI styling plan.
 3. Register the token asset once.
 4. Move repeated raw values into semantic roles.
 5. Keep component classes/props consistent with the selected stack.
@@ -43,20 +43,16 @@ Before applying a token template:
 
 Do not create both `tokens.css` and a separate Tailwind theme for the same project unless the repo already uses both and they are linked intentionally.
 
-## Framework-Specific References
-
-- React/Next/Vite React: `references/uix/stacks/react.md`.
-- Vue/Nuxt: `references/uix/stacks/vue.md`.
-- Plain HTML/Tailwind/static/server template: `references/uix/stacks/plain-html.md`.
-- Native mobile/React Native/Flutter/Swift/Kotlin: `references/uix/stacks/native-mobile.md`.
-- Three.js/WebGL/canvas: `references/uix/stacks/threejs.md`.
-- Svelte/SvelteKit: `references/uix/stacks/svelte.md`.
-- UniApp/mini-app: `references/uix/stacks/uniapp.md`.
-
 ## Verification
 
 - Run focused build/type/lint tests available in the repo.
 - Render the changed screen when possible.
-- Include only implementation evidence in TaskResult; do not put framework setup notes in product UI.
-- Check that framework-specific client/server boundaries, hydration, routing, and state ownership do not break the UI contract.
-- In `frontendQualitySelfCheck`, name the files that consume the declared token asset, not only the file that defines tokens.
+- Keep framework setup notes out of product UI.
+- Check that framework-specific client/server boundaries, hydration, routing, and state ownership do not break the current UI requirements.
+- Name the files that consume the declared token asset, not only the file that defines tokens.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `framework.component_structure` | Multi-region screens are split into shell/page, feature components, shared primitives, data/API helpers, and state-specific components following repo conventions. | Real workflow remains one giant component, duplicated primitives/styles spread across pages, or framework setup notes leak into product UI. |

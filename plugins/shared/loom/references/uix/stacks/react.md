@@ -43,7 +43,7 @@ For a workbench page, split at least:
 - Use controlled form state or a form library already present in the repo.
 - Use stable keys, memoization only where useful, and avoid state that can drift between displayed record and submitted record.
 - Use existing icon libraries; prefer accessible icon buttons with labels/tooltips.
-- If `designTokenAssetPlan.templateId` is selected, adapt the template into the repo's existing global CSS/Tailwind/theme location. Do not paste template declarations into every component.
+- If a token template is selected for the task, adapt it into the repo's existing global CSS, Tailwind, or theme location. Do not paste template declarations into every component.
 - Keep route/page components as orchestration and move repeated UI into feature/shared components when the page owns more than one workflow region.
 
 ## State Pattern
@@ -70,4 +70,10 @@ Do not collapse business blocking into generic `error`. Keep it as a domain stat
 - Run the repo's focused build/lint/test commands when available.
 - Render the page and inspect at relevant viewport sizes.
 - Check that state transitions do not remount the whole surface unnecessarily.
-- Confirm `frontendQualitySelfCheck.designTokenEvidence.tokenConsumerFiles` includes React components or styles that actually consume the token asset.
+- Confirm evidence names React components or styles that actually consume the token asset.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `react.split.workflow_regions` | React page orchestration is separated from reusable feature components, data/API modules, formatters, state views, and token-consuming styles. | Page component owns all fetching, form, table, modal/drawer, state rendering, and styling once the workflow has multiple regions. |

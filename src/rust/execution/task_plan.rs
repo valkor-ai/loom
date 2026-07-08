@@ -1493,12 +1493,18 @@ fn normalize_frontend_experience_requirements(
                 "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
             );
             requirement["uiQualityContract"] = ui_quality_contract.clone();
+            requirement["uiTaskQualityGates"] =
+                ui_task_quality_gates_for_requirement(requirement, ui_quality_contract);
         }
         if requirement.get("uiTaskScope").is_none() {
             requirement["uiTaskScope"] = template
                 .get("uiTaskScope")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+        }
+        if let Some(ui_quality_contract) = expected_ui_quality.as_ref() {
+            requirement["uiTaskQualityGates"] =
+                ui_task_quality_gates_for_requirement(requirement, ui_quality_contract);
         }
     }
 }
@@ -1910,6 +1916,7 @@ fn validate_frontend_quality_requirements(
                     Some(&task.task_id),
                 ));
             }
+            validate_ui_task_quality_gates(task, requirement, expected, &mut issues);
         }
     }
     issues
@@ -2526,8 +2533,161 @@ fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) 
             "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
         );
         requirement["uiQualityContract"] = ui_quality_contract.clone();
+        requirement["uiTaskQualityGates"] =
+            ui_task_quality_gates_for_requirement(&requirement, ui_quality_contract);
     }
     requirement
+}
+
+fn ui_task_quality_gates_for_requirement(
+    requirement: &Value,
+    ui_quality_contract: &Value,
+) -> Value {
+    let surface_roles = requirement
+        .pointer("/uiTaskScope/surfacesInScope")
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            surfaces
+                .iter()
+                .filter_map(|surface| {
+                    surface
+                        .get("surfaceRole")
+                        .or_else(|| surface.get("role"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let surface_ids_by_role = requirement
+        .pointer("/uiTaskScope/surfacesInScope")
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            let mut by_role = BTreeMap::<String, Vec<String>>::new();
+            for surface in surfaces {
+                let Some(surface_id) = surface.get("surfaceId").and_then(Value::as_str) else {
+                    continue;
+                };
+                let role = surface
+                    .get("surfaceRole")
+                    .or_else(|| surface.get("role"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("page");
+                by_role
+                    .entry(role.to_string())
+                    .or_default()
+                    .push(surface_id.to_string());
+            }
+            by_role
+        })
+        .unwrap_or_default();
+    let gates = ui_quality_contract
+        .get("qualityGates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Value::Array(
+        gates
+            .into_iter()
+            .filter_map(|gate| {
+                let gate_roles = gate
+                    .get("appliesToSurfaceRoles")
+                    .and_then(Value::as_array)
+                    .map(|roles| {
+                        roles
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                if !surface_roles.is_empty()
+                    && !gate_roles.is_empty()
+                    && surface_roles.is_disjoint(&gate_roles)
+                {
+                    return None;
+                }
+                let surface_ids = if surface_ids_by_role.is_empty() || gate_roles.is_empty() {
+                    Vec::new()
+                } else {
+                    gate_roles
+                        .iter()
+                        .filter_map(|role| surface_ids_by_role.get(role))
+                        .flatten()
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                };
+                Some(json!({
+                    "gateId": gate.get("gateId").cloned().unwrap_or(Value::Null),
+                    "sourceRefId": gate.get("sourceRefId").cloned().unwrap_or(Value::Null),
+                    "severity": gate.get("severity").cloned().unwrap_or(Value::Null),
+                    "surfaceIds": surface_ids,
+                    "requiredEvidence": gate.get("evidenceRequired").cloned().unwrap_or_else(|| json!([])),
+                    "expectation": gate.get("expectation").cloned().unwrap_or(Value::Null)
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn validate_ui_task_quality_gates(
+    task: &TaskDefinition,
+    requirement: &Value,
+    ui_quality_contract: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let expected_ids = ui_quality_contract
+        .get("qualityGates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    if expected_ids.is_empty() {
+        return;
+    }
+    let Some(gates) = requirement
+        .get("uiTaskQualityGates")
+        .and_then(Value::as_array)
+    else {
+        issues.push(issue(
+            "FRONTEND_UI_TASK_QUALITY_GATES_REQUIRED",
+            "tasks[].frontendExperienceRequirement.uiTaskQualityGates",
+            "Frontend tasks must carry task-scoped UI quality gates derived from the AAC uiQualityContract.",
+            Some(&task.task_id),
+        ));
+        return;
+    };
+    if gates.is_empty() {
+        issues.push(issue(
+            "FRONTEND_UI_TASK_QUALITY_GATES_REQUIRED",
+            "tasks[].frontendExperienceRequirement.uiTaskQualityGates",
+            "Frontend tasks must not receive an empty UI quality gate list.",
+            Some(&task.task_id),
+        ));
+        return;
+    }
+    for gate in gates {
+        let Some(gate_id) = gate.get("gateId").and_then(Value::as_str) else {
+            issues.push(issue(
+                "FRONTEND_UI_TASK_QUALITY_GATE_INVALID",
+                "tasks[].frontendExperienceRequirement.uiTaskQualityGates[].gateId",
+                "Task UI quality gate entries must include gateId.",
+                Some(&task.task_id),
+            ));
+            continue;
+        };
+        if !expected_ids.contains(gate_id) {
+            issues.push(issue(
+                "FRONTEND_UI_TASK_QUALITY_GATE_INVALID",
+                "tasks[].frontendExperienceRequirement.uiTaskQualityGates[].gateId",
+                "Task UI quality gates must be derived from AAC uiQualityContract.qualityGates.",
+                Some(&task.task_id),
+            ));
+        }
+    }
 }
 
 fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value {

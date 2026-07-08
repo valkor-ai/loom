@@ -3545,6 +3545,54 @@ fn task_result_rejects_placeholder_jvm_production_package() {
 }
 
 #[test]
+fn task_result_rejects_satisfied_render_gate_without_mobile_viewport() {
+    let fixture = Fixture::new("task-result-render-gate-viewports");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        let gates = result["frontendQualitySelfCheck"]["gateResults"]
+            .as_array_mut()
+            .expect("gate results");
+        let render_gate = gates
+            .iter_mut()
+            .find(|gate| gate["gateId"] == json!("verify.rendered_viewports"))
+            .expect("render gate");
+        render_gate["status"] = json!("satisfied");
+        render_gate["viewportsChecked"] = json!(["desktop 1280x800"]);
+    });
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read task result repair issues")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"
+                && issue["fieldPath"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(".viewportsChecked"))
+        }));
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -6195,6 +6243,11 @@ fn review_flags_frontend_quality_self_check_gaps() {
         .expect("frontend quality matrix summary");
     assert_eq!(quality_matrix[0]["qualitySatisfied"], json!(false));
     assert_eq!(quality_matrix[0]["knownGapCount"], json!(1));
+    assert_eq!(quality_matrix[0]["missingQualityGateCount"], json!(0));
+    assert_eq!(
+        quality_matrix[0]["mustQualityGateUnsatisfiedCount"],
+        json!(0)
+    );
     assert_eq!(
         quality_matrix[0]["recommendedNextAction"],
         json!("execution_repair")
@@ -8857,6 +8910,46 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
 
 fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
     complete_architecture_quality_evidence_for_test(result);
+    if let Some(self_check) = result
+        .get_mut("frontendQualitySelfCheck")
+        .and_then(Value::as_object_mut)
+    {
+        self_check.insert("status".to_string(), json!("satisfied"));
+        self_check.insert("knownGaps".to_string(), json!([]));
+        if let Some(forbidden) = self_check
+            .get_mut("forbiddenContentCheck")
+            .and_then(Value::as_object_mut)
+        {
+            forbidden.insert("violations".to_string(), json!([]));
+        }
+        if let Some(gates) = self_check
+            .get_mut("gateResults")
+            .and_then(Value::as_array_mut)
+        {
+            for gate in gates {
+                let gate_id = gate
+                    .get("gateId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                gate["status"] = json!("satisfied");
+                gate["files"] = json!(["src/App.tsx"]);
+                gate["sourceChecks"] = json!(["src/App.tsx"]);
+                gate["attemptedChecks"] = json!([]);
+                gate["fallbackEvidence"] = json!([]);
+                gate["blockedReason"] = Value::Null;
+                if gate_id.contains("render")
+                    || gate_id.contains("viewport")
+                    || gate_id.contains("mobile")
+                {
+                    gate["viewportsChecked"] = json!(["desktop 1280x800", "mobile 390x844"]);
+                }
+                gate["evidence"] = json!(format!(
+                    "Test candidate satisfies UI quality gate {gate_id} through src/App.tsx."
+                ));
+            }
+        }
+    }
     let Some(evidence) = result
         .pointer_mut("/frontendQualitySelfCheck/designTokenEvidence")
         .and_then(Value::as_object_mut)

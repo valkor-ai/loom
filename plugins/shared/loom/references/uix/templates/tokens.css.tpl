@@ -1,6 +1,12 @@
-/* Loom UIX design tokens.
+/* UIX design tokens.
    Merge into the project's existing token/theme file when one exists.
    Do not create a parallel token system beside an existing design system. */
+
+/* UIX gate: token.semantic_roles.coverage
+   Pass when adapted tokens cover semantic surface, text, border, primary,
+   status, focus, control, shell, table/list, and detail/action roles used by
+   the implemented UI. Fail when tokens are decorative, unused, or copied into
+   page-local styles instead of a project-level asset. */
 
 :root {
   /* Spacing: 4px grid */

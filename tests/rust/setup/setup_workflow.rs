@@ -1281,6 +1281,60 @@ fn loom_tech_references_do_not_duplicate_mcp_contract_terms() {
     }
 }
 
+#[test]
+fn loom_uix_references_do_not_duplicate_mcp_contract_terms() {
+    let repo = repo_root();
+    let uix_root = repo.join("plugins/shared/loom/references/uix");
+    let mut files = Vec::new();
+    collect_markdown_files(&uix_root, &mut files);
+    let forbidden = [
+        "TaskResult",
+        "ReviewResult",
+        "TaskPlan",
+        "frontendQualitySelfCheck",
+        "frontendExperienceRequirement",
+        "uiQualityContract",
+        "uiTaskQualityGates",
+        "gateResults",
+        "referenceGroupsChecked",
+        "referenceFilesChecked",
+        "designTokenEvidence",
+        "designTokenAssetPlan",
+        "requestRef",
+        "requestReadPlan",
+        "readFieldGroup",
+        "readRequestFields",
+        "referenceLoadPlan",
+        "outputContract",
+        "resultTemplate",
+        "resultRules",
+        "enumRefs",
+        "schemaShape",
+        "writeTargets",
+        "MCP",
+        "Loom",
+        "MCP request",
+        ".loom",
+        "loom.",
+    ];
+
+    for path in files {
+        let relative = path
+            .strip_prefix(&uix_root)
+            .expect("relative uix path")
+            .to_string_lossy()
+            .to_string();
+        let content = fs::read_to_string(&path).unwrap();
+        for term in forbidden {
+            assert!(
+                !content.contains(term),
+                "{} must not duplicate MCP contract term {term}",
+                relative
+            );
+        }
+    }
+}
+
 fn collect_markdown_files(dir: &Path, output: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();

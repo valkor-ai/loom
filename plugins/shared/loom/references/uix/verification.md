@@ -7,7 +7,7 @@ Load this file before frontend review, visual inspection, accessibility checks, 
 - Inspect the rendered application when a local preview is available. Prefer Browser or Playwright screenshots over source-only claims.
 - Exercise the required workflow from entry to completion. Component-level inspection is not enough when the task is a business flow.
 - Verify the first viewport: it must show the actual product surface for the selected scenario.
-- Check at least desktop and mobile-responsive widths for web surfaces when the product contract includes responsive behavior.
+- Check at least desktop and mobile-responsive widths for web surfaces when the current product requirements include responsive behavior.
 - For 3D/canvas/media surfaces, verify the scene or media is nonblank, correctly framed, and still interactive after initial render.
 - Source-only review can catch missing files and obvious copy leaks, but it cannot prove production UI quality. If render verification is skipped, record the blocker and keep the risk visible.
 
@@ -45,9 +45,8 @@ Check every state that is in scope for the screen:
 
 ## Evidence Requirements
 
-TaskResult or ReviewResult evidence should include:
+UI quality evidence should include:
 
-- `referenceGroupsChecked`: all UIX group/items that were loaded for the task.
 - Changed screens/components and the user workflow checked.
 - States covered and states not applicable.
 - Viewports or devices checked.
@@ -64,3 +63,9 @@ screen/component -> state checked -> viewport/device -> evidence command or scre
 For UI quality, "build passed" is supporting evidence only. It does not replace rendered layout, state, and interaction checks.
 
 If a rendered check cannot run because of missing dependencies, network, auth, credentials, or environment limits, record that as verification blocked. Do not mark it as a product defect unless the UI itself caused the failure.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `verify.rendered_viewports` | Desktop and mobile rendered checks are recorded when preview is available, with changed files and evidence. | Render check is skipped without blocker, only build/source evidence is supplied, desktop or mobile viewport is missing, or environment-blocked evidence lacks blocker, attempted checks, and fallback evidence. |

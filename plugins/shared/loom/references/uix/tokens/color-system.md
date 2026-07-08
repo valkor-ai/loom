@@ -85,4 +85,4 @@ The exact values may change, but components should consume roles rather than har
 - No category-reflex palette.
 - Every visible state uses a semantic role.
 - Text, borders, icons, charts, and focus rings remain legible on the selected surfaces.
-- `frontendQualitySelfCheck.designTokenEvidence` names the token asset and at least one consumer file that uses these roles.
+- Evidence names the token asset and at least one consumer file that uses these roles.

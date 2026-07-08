@@ -4,7 +4,7 @@ Load this file when generating, refining, or reviewing user-visible UI. These ar
 
 ## Product Boundary Failures
 
-- Runtime commands, local ports, dependency commands, stack explanations, verification instructions, delivery progress, Loom block names, MCP tool names, request ids, schema terms, and internal enum values must not appear in normal product UI.
+- Runtime commands, local ports, dependency commands, stack explanations, verification instructions, delivery progress, internal workflow names, tool names, generated artifact ids, validator terms, and internal status values must not appear in normal product UI.
 - Operational products must not open with a marketing hero, feature-summary wall, footer-heavy page, or "how this was built" explanation.
 - Brand intro blocks, footer-like explainer sections, and "system capability" cards are product-boundary failures when the user asked for a workbench, admin console, data surface, or internal product.
 - Developer/runtime products may show technical terms only when the user task is actually about those terms.
@@ -61,4 +61,10 @@ Load this file when generating, refining, or reviewing user-visible UI. These ar
 
 ## Review Rule
 
-If product-boundary leakage or demo-only filler appears in a production surface, `frontendQualitySelfCheck.status` cannot be `satisfied`. The result must either fix the UI or declare the remaining issue as a known gap with a concrete reason.
+If product-boundary leakage or demo-only filler appears in a production surface, the UI quality result cannot be treated as satisfied. Fix the UI or record the remaining issue as a known gap with a concrete reason.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `anti.product_boundary.no_internal_process` | Changed UI source and rendered copy keep internal workflow, runtime, build, and progress language out of product surfaces. | Product UI contains delivery notes, stack explanations, runtime commands, generated artifact ids, future-stage copy, or feature-description filler instead of business UI. |

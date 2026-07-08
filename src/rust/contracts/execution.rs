@@ -705,6 +705,28 @@ pub struct FrontendDesignTokenEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityGateResult {
+    pub gate_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surface_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub viewports_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempted_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_evidence: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendQualitySelfCheck {
     pub status: String,
@@ -723,6 +745,8 @@ pub struct FrontendQualitySelfCheck {
     pub surfaces_covered: Vec<FrontendQualitySurfaceEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate_results: Vec<FrontendQualityGateResult>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub known_gaps: Vec<String>,
     pub summary: String,

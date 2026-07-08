@@ -2,7 +2,7 @@ use contracts::{CodeQualityRequirement, TaskDefinition, TaskPlan};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 22] = [
+pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 23] = [
     "task.frontendExperienceRequirement.uiQualityContract.scenario",
     "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
     "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
@@ -25,6 +25,7 @@ pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 22] = [
     "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
     "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
     "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+    "task.frontendExperienceRequirement.uiQualityContract.qualityGates",
 ];
 
 pub(crate) fn taskplan_outline_result_template(
@@ -703,8 +704,9 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let gate_results = frontend_quality_gate_result_template(task, ui_quality_contract);
     json!({
-        "status": "satisfied",
+        "status": "partial",
         "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
         "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str).unwrap_or("production_internal_product"),
         "referenceGroupsChecked": reference_groups,
@@ -725,7 +727,50 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             "parallelTokenSystemCreated": false,
             "mergeSummary": ""
         },
+        "gateResults": gate_results,
         "knownGaps": [],
         "summary": ""
     })
+}
+
+fn frontend_quality_gate_result_template(
+    task: &TaskDefinition,
+    ui_quality_contract: &Value,
+) -> Value {
+    let gates = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| {
+            ui_quality_contract
+                .get("qualityGates")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default();
+    Value::Array(
+        gates
+            .into_iter()
+            .filter_map(|gate| {
+                let gate_id = gate.get("gateId").and_then(Value::as_str)?;
+                Some(json!({
+                    "gateId": gate_id,
+                    "status": "missing",
+                    "files": ["replace_with_changed_ui_file_or_source_checked_file"],
+                    "surfaceIds": gate
+                        .get("surfaceIds")
+                        .cloned()
+                        .unwrap_or_else(|| json!([])),
+                    "viewportsChecked": [],
+                    "sourceChecks": [],
+                    "attemptedChecks": [],
+                    "fallbackEvidence": [],
+                    "blockedReason": Value::Null,
+                    "evidence": "Replace with concrete evidence. Use status=blocked_by_environment only for render checks blocked by missing local preview/browser/dependencies, and include blockedReason plus fallbackEvidence."
+                }))
+            })
+            .collect(),
+    )
 }

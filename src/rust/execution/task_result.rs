@@ -157,6 +157,7 @@ where
         "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        "task.frontendExperienceRequirement.uiTaskQualityGates",
     ] {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
@@ -2001,6 +2002,7 @@ fn validate_frontend_quality_self_check(
         }
     }
     validate_design_token_evidence(&self_check, ui_quality_contract, issues);
+    validate_frontend_quality_gate_results(&self_check, task, ui_quality_contract, issues);
     if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
         let violations = self_check
             .pointer("/forbiddenContentCheck/violations")
@@ -2020,6 +2022,304 @@ fn validate_frontend_quality_self_check(
             ));
         }
     }
+}
+
+fn validate_frontend_quality_gate_results(
+    self_check: &Value,
+    task: &TaskDefinition,
+    ui_quality_contract: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    const VALID_GATE_STATUSES: &[&str] = &[
+        "satisfied",
+        "partial",
+        "missing",
+        "blocked_by_environment",
+        "not_applicable",
+    ];
+
+    let expected_gates = frontend_quality_gates_for_task(task, ui_quality_contract);
+    if expected_gates.is_empty() {
+        return;
+    }
+
+    let expected_by_id = expected_gates
+        .iter()
+        .filter_map(|gate| {
+            gate.get("gateId")
+                .and_then(Value::as_str)
+                .map(|gate_id| (gate_id.to_string(), gate))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let expected_ids = expected_by_id.keys().cloned().collect::<BTreeSet<_>>();
+    let Some(gate_results) = self_check.get("gateResults").and_then(Value::as_array) else {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.gateResults",
+            "frontendQualitySelfCheck.gateResults must report every assigned UI quality gate.",
+        ));
+        return;
+    };
+    if gate_results.is_empty() {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.gateResults",
+            "frontendQualitySelfCheck.gateResults must not be empty for frontend quality tasks.",
+        ));
+        return;
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut result_status_by_gate = BTreeMap::<String, String>::new();
+    let overall_satisfied = self_check.get("status").and_then(Value::as_str) == Some("satisfied");
+
+    for (index, gate_result) in gate_results.iter().enumerate() {
+        let Some(gate_id) = gate_result.get("gateId").and_then(Value::as_str) else {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}].gateId"),
+                "Each frontendQualitySelfCheck.gateResults entry must include gateId.",
+            ));
+            continue;
+        };
+        if !seen.insert(gate_id.to_string()) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}].gateId"),
+                "frontendQualitySelfCheck.gateResults must not contain duplicate gateId entries.",
+            ));
+        }
+        if !expected_ids.contains(gate_id) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}].gateId"),
+                "frontendQualitySelfCheck.gateResults cannot invent gate ids; use only task.frontendExperienceRequirement.uiTaskQualityGates.",
+            ));
+        }
+        let expected_gate = expected_by_id.get(gate_id).copied();
+
+        let status = gate_result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !VALID_GATE_STATUSES.contains(&status) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
+                "frontendQualitySelfCheck.gateResults.status must be one of satisfied, partial, missing, blocked_by_environment, or not_applicable.",
+            ));
+            continue;
+        }
+        result_status_by_gate.insert(gate_id.to_string(), status.to_string());
+
+        let evidence_present = gate_result
+            .get("evidence")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|evidence| !evidence.is_empty());
+        if !evidence_present {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}].evidence"),
+                "Each UI quality gate result must include concrete evidence, not an empty self-report.",
+            ));
+        }
+        if matches!(status, "satisfied" | "blocked_by_environment")
+            && gate_result_contains_placeholder(gate_result)
+        {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}]"),
+                "Satisfied or environment-blocked UI quality gate results must replace template placeholders with concrete files, checks, blocker reasons, or evidence.",
+            ));
+        }
+
+        if status == "satisfied" {
+            if string_array_at(gate_result, "files").is_empty() {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}].files"),
+                    "Satisfied UI quality gates must cite concrete files that implement or prove the gate.",
+                ));
+            }
+            let required_evidence = expected_gate
+                .map(|gate| string_array_at(gate, "requiredEvidence"))
+                .unwrap_or_default();
+            if evidence_requires_source_check(&required_evidence)
+                && string_array_at(gate_result, "sourceChecks").is_empty()
+            {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}].sourceChecks"),
+                    "Satisfied UI quality gates that require source_check must cite sourceChecks.",
+                ));
+            }
+            if evidence_requires_viewport_check(&required_evidence)
+                && string_array_at(gate_result, "viewportsChecked").is_empty()
+            {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}].viewportsChecked"),
+                    "Satisfied UI quality gates that require viewport_check must cite viewportsChecked.",
+                ));
+            }
+            if is_render_or_viewport_gate(gate_id)
+                && !has_desktop_and_mobile_viewports(&string_array_at(
+                    gate_result,
+                    "viewportsChecked",
+                ))
+            {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}].viewportsChecked"),
+                    "Satisfied render/viewport gate must record both desktop and mobile rendered checks.",
+                ));
+            }
+        }
+
+        if status == "blocked_by_environment" {
+            if !is_environment_blockable_gate(gate_id, expected_gate) {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
+                    "blocked_by_environment is only allowed for render or viewport verification gates.",
+                ));
+            }
+            let blocked_reason_present = gate_result
+                .get("blockedReason")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|reason| !reason.is_empty());
+            if !blocked_reason_present
+                || string_array_at(gate_result, "attemptedChecks").is_empty()
+                || string_array_at(gate_result, "fallbackEvidence").is_empty()
+            {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}]"),
+                    "Environment-blocked render gates must include blockedReason, attemptedChecks, and fallbackEvidence.",
+                ));
+            }
+            if overall_satisfied {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
+                    "frontendQualitySelfCheck.status cannot be satisfied while any assigned gate is blocked_by_environment.",
+                ));
+            }
+        }
+
+        if overall_satisfied && matches!(status, "partial" | "missing") {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
+                "frontendQualitySelfCheck.status cannot be satisfied while assigned gates are partial or missing.",
+            ));
+        }
+    }
+
+    for (gate_id, gate) in expected_by_id {
+        let Some(status) = result_status_by_gate.get(&gate_id).map(String::as_str) else {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.gateResults",
+                "frontendQualitySelfCheck.gateResults must include every assigned uiTaskQualityGates gateId.",
+            ));
+            continue;
+        };
+        let severity = gate
+            .get("severity")
+            .and_then(Value::as_str)
+            .unwrap_or("must");
+        if overall_satisfied && severity == "must" && status != "satisfied" {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.status",
+                "Satisfied frontendQualitySelfCheck requires every must UI quality gate to be satisfied.",
+            ));
+        }
+    }
+}
+
+fn frontend_quality_gates_for_task(
+    task: &TaskDefinition,
+    ui_quality_contract: &Value,
+) -> Vec<Value> {
+    task.frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
+        .and_then(Value::as_array)
+        .cloned()
+        .or_else(|| {
+            ui_quality_contract
+                .get("qualityGates")
+                .and_then(Value::as_array)
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+
+fn is_render_or_viewport_gate(gate_id: &str) -> bool {
+    gate_id.contains("render") || gate_id.contains("viewport")
+}
+
+fn is_environment_blockable_gate(gate_id: &str, expected_gate: Option<&Value>) -> bool {
+    if is_render_or_viewport_gate(gate_id) || gate_id.contains("mobile") {
+        return true;
+    }
+    let required = expected_gate
+        .map(|gate| string_array_at(gate, "requiredEvidence"))
+        .unwrap_or_default();
+    evidence_requires_viewport_check(&required)
+        || required
+            .iter()
+            .any(|item| item == "render_or_environment_reason")
+}
+
+fn evidence_requires_source_check(required: &[String]) -> bool {
+    required
+        .iter()
+        .any(|item| item == "source_check" || item == "responsive_source_check")
+}
+
+fn evidence_requires_viewport_check(required: &[String]) -> bool {
+    required.iter().any(|item| item == "viewport_check")
+}
+
+fn gate_result_contains_placeholder(gate_result: &Value) -> bool {
+    [
+        "evidence",
+        "blockedReason",
+        "files",
+        "surfaceIds",
+        "viewportsChecked",
+        "sourceChecks",
+        "attemptedChecks",
+        "fallbackEvidence",
+    ]
+    .iter()
+    .any(|field| value_field_contains_placeholder(gate_result.get(field).unwrap_or(&Value::Null)))
+}
+
+fn value_field_contains_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.trim().starts_with("replace_with_"),
+        Value::Array(items) => items.iter().any(value_field_contains_placeholder),
+        _ => false,
+    }
+}
+
+fn has_desktop_and_mobile_viewports(viewports: &[String]) -> bool {
+    let normalized = viewports
+        .iter()
+        .map(|viewport| viewport.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    normalized
+        .iter()
+        .any(|viewport| viewport.contains("desktop") || viewport.contains("1024"))
+        && normalized.iter().any(|viewport| {
+            viewport.contains("mobile") || viewport.contains("375") || viewport.contains("390")
+        })
 }
 
 fn validate_design_token_evidence(
@@ -2820,6 +3120,10 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
             .cloned()
             .unwrap_or_else(|| json!([])),
         "designTokenEvidence": self_check.get("designTokenEvidence").cloned().unwrap_or(Value::Null),
+        "gateResults": self_check
+            .get("gateResults")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
         "knownGapsCount": self_check
             .get("knownGaps")
             .and_then(Value::as_array)
@@ -2842,14 +3146,24 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
             .get("designTokenAssetPlan")
             .cloned()
             .unwrap_or(Value::Null),
+        "uiTaskQualityGates": context
+            .task
+            .frontend_experience_requirement
+            .as_ref()
+            .and_then(|requirement| requirement.get("uiTaskQualityGates"))
+            .cloned()
+            .or_else(|| ui_quality_contract.get("qualityGates").cloned())
+            .unwrap_or_else(|| json!([])),
         "forbiddenUserVisibleContent": ui_quality_contract
             .get("forbiddenUserVisibleContent")
             .cloned()
             .unwrap_or_else(|| json!([]))
     });
     base["validRepairChoices"] = json!([
-        "If the implemented UI satisfies the contract, repair frontendQualitySelfCheck to match task.frontendExperienceRequirement.uiQualityContract and cite evidence.",
-        "If the UI still has quality gaps, keep status below satisfied and record the specific gaps without claiming completion."
+        "Report every assigned uiTaskQualityGates gateId in frontendQualitySelfCheck.gateResults; do not invent or omit gate ids.",
+        "For satisfied gates, cite concrete files and evidence; render/viewport gates also need desktop and mobile viewports when local preview is available.",
+        "Use blocked_by_environment only for render/viewport gates when browser, preview, auth, or local dependencies prevent rendering; include blockedReason, attemptedChecks, and fallbackEvidence.",
+        "If any must gate is missing, partial, or environment-blocked, keep frontendQualitySelfCheck.status below satisfied and record the specific gap."
     ]);
     base
 }
@@ -3522,8 +3836,19 @@ fn frontend_experience_requirement_from_fields(
             },
             "requiredUiStates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates"),
             "businessUiRules": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.businessUiRules"),
+            "qualityGates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.qualityGates"),
             "forbiddenUserVisibleContent": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent")
         });
+    }
+    let ui_task_quality_gates = array_field(
+        fields,
+        "task.frontendExperienceRequirement.uiTaskQualityGates",
+    );
+    if ui_task_quality_gates
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        requirement["uiTaskQualityGates"] = ui_task_quality_gates;
     }
     requirement
 }

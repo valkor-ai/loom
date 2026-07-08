@@ -86,3 +86,9 @@ Keep technical errors, validation errors, and business-rule blocks visually dist
 - Detail drawers should close back to the same list state.
 - Multi-step flows need progress, back/cancel behavior, and a visible summary before irreversible actions.
 - If a task spans frontend and backend, the UI must display backend validation and domain errors in product language.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `admin.state.scoped_feedback` | Loading, success, validation, error, and business-blocking feedback appear beside the affected table, form, detail, row, or action. | Feedback is only a toast/global banner, domain blocks look like technical errors, or failed submit loses context/input. |
