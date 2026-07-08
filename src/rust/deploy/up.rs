@@ -25,7 +25,7 @@ use crate::{
     prepare::{deploy_prepare_inner, read_spec},
     repair::write_repair_action,
     runtime_state::write_success_state,
-    validate::{deploy_validate_inner, DeploymentValidationResult},
+    validate::{deploy_validate_inner, validate_generated_assets, DeploymentValidationResult},
     DeployToolInput,
 };
 
@@ -85,6 +85,40 @@ pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpAc
     };
     if let Err(result) = docker_available(project_root, &spec) {
         return result;
+    }
+    match validate_generated_assets(project_root, &spec) {
+        Ok(asset_issues) if asset_issues.is_empty() => {}
+        Ok(asset_issues) => {
+            if should_fallback_to_generated(&spec) {
+                return fallback_to_generated(
+                    project_root,
+                    input,
+                    "existing deployment assets failed consistency validation",
+                );
+            }
+            return write_repair_action(
+                project_root,
+                &spec,
+                DeploymentFailureKind::DeployAssetInvalid,
+                vec!["loom.deployValidate".to_string()],
+                1,
+                "",
+                &asset_issues.join("\n"),
+            )
+            .unwrap_or_else(|error| failed(project_root, error.to_string()));
+        }
+        Err(error) => {
+            return write_repair_action(
+                project_root,
+                &spec,
+                DeploymentFailureKind::DeployAssetInvalid,
+                vec!["loom.deployValidate".to_string()],
+                1,
+                "",
+                &error.to_string(),
+            )
+            .unwrap_or_else(|error| failed(project_root, error.to_string()));
+        }
     }
     let _ = update_operation_phase(project_root, "checking_compose", "running");
     let compose_file = match from_project_relative(project_root, &spec.files.compose_path) {
@@ -583,7 +617,9 @@ fn classify_compose_up_failure(
     stderr: &str,
 ) -> DeploymentFailureKind {
     let text = format!("{stdout}\n{stderr}").to_ascii_lowercase();
-    if looks_like_registry_network_failure(&text) {
+    if looks_like_docker_unavailable_failure(&text) {
+        DeploymentFailureKind::DockerUnavailable
+    } else if looks_like_registry_network_failure(&text) {
         DeploymentFailureKind::RegistryNetwork
     } else if is_runtime_build_command_failure(spec, &text) {
         DeploymentFailureKind::BuildCommandFailed
@@ -595,6 +631,20 @@ fn classify_compose_up_failure(
     } else {
         DeploymentFailureKind::ContainerStart
     }
+}
+
+fn looks_like_docker_unavailable_failure(text: &str) -> bool {
+    [
+        "failed to connect to the docker api",
+        "cannot connect to the docker daemon",
+        "is the docker daemon running",
+        "docker daemon is not running",
+        "dial unix",
+        "docker.sock",
+        "error during connect",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 fn looks_like_registry_network_failure(text: &str) -> bool {

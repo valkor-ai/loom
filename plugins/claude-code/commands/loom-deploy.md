@@ -18,4 +18,4 @@ Call the matching Loom MCP deploy tool for the current project directory:
 - `down` -> `loom.deployDown`
 - `repair` -> `loom.deployRepair`
 
-Follow the returned MCP action result and do not create deployment assets or repair scopes outside that result.
+Follow the returned MCP action result and do not create deployment assets or repair scopes outside that result. During asset repair, edit only returned generated deployment assets and then call the returned `retryTool`; do not use `loom.deployRun` as a repair retry.

@@ -1,0 +1,46 @@
+# Loom API Contract Core
+
+API work in Loom is not a standalone specification exercise. It is a task-verifiable contract that connects interface design, task planning, implementation, evidence, review, and later deploy/runtime probes.
+
+## Operating Model
+
+1. Use the confirmed delivery contract and current task scope as the authority for API ownership, ids, and boundaries.
+2. Model only current-phase APIs that are required by confirmed scope, frontend bindings, business workflows, runtime probes, or integration boundaries.
+3. Express API decisions through the current architecture/API contract artifacts; use references to make concrete decisions rather than copying reference prose.
+4. Keep API quality evidence concrete: changed files, endpoint paths, status/error behavior, request/response DTOs, tests, runtime probes, or contract files.
+
+## Required API Contract Assets
+
+| Asset | Purpose | Used By |
+|---|---|---|
+| Interface record | Names API ownership, method, path, resource, operation kind, schemas, status codes, and refs. | Task planning and implementation. |
+| Request model | Describes accepted body/query/path fields and validation. | Implementation and tests. |
+| Response model | Describes success body shape and readback fields. | Frontend binding, runtime probes, and review. |
+| Error model | Describes business, validation, auth, conflict, and not-found responses. | UI feedback and implementation evidence. |
+| Pagination/filtering policy | Defines bounded collection behavior when collection endpoints are unbounded. | API task verification and performance NFRs. |
+| Auth policy | States actor/permission requirements when current scope includes protected operations. | Security-sensitive implementation and review. |
+| Evolution policy | Captures compatibility constraints only when existing/public clients or explicit versioning requirements exist. | Architecture risk and API repair ownership. |
+| Operational policy | Captures idempotency, cache validators, rate limiting, retry behavior, and request tracing only when selected or already used by the repository. | Implementation evidence and production behavior review. |
+
+## Contract Discipline
+
+- Identify HTTP endpoints with compact, stable ids.
+- Use resource-oriented paths for REST APIs. Do not use command names as paths unless the domain operation is genuinely command-like and cannot be represented as a resource state transition.
+- For every write API, specify request validation, success status, business-blocking errors, and state/readback proof.
+- For every collection API, declare pagination/filtering only when the collection can grow beyond a bounded current-phase dataset.
+- Do not require OpenAPI files unless selected by the contract file reference or explicitly required by user/repo context.
+- Do not invent `/v1` or deprecation policy by default.
+- Do not invent idempotency keys, ETags, rate limits, retry headers, or request-id infrastructure by default; apply operations semantics only when explicitly selected for the current API work or already owned by the repository.
+
+## Minimum Quality Bar
+
+A usable API contract lets a later agent answer:
+
+- Which endpoint or service method should this task implement?
+- Which request fields are accepted and validated?
+- Which response fields prove the business result?
+- Which business errors must be actionable for the UI/client?
+- Which status codes are expected for success, validation, conflict, missing resource, auth, and unexpected failure?
+- Which verification evidence proves this endpoint is not a mock or silent failure?
+
+If those answers are missing, repair upstream design or task planning instead of leaving implementation to guess.

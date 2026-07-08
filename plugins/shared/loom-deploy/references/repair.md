@@ -22,7 +22,7 @@ Use this reference when the current Loom MCP deploy action asks for deployment r
 
 - If logs mention `@next/swc-linux-*`, `@tailwindcss/oxide-linux-*`, `tailwindcss-oxide.linux-*.node`, `lightningcss.linux-*.node`, `sharp`, `esbuild`, `rollup-*`, or similar native optional packages, treat OS/libc/CPU as part of the repair.
 - Prefer glibc images such as `node:22-slim` or the project-detected `node:<major>-slim` for Next.js/Tailwind apps unless the project is known to work on Alpine.
-- If a package lockfile was generated on macOS and only includes `darwin-*` optional packages, either add the needed Linux optional dependency to the project lockfile with user approval, or patch the generated Dockerfile install step to install the matching Linux package inside the image.
+- If a package lockfile was generated on macOS and only includes `darwin-*` optional packages, prefer adding the needed Linux optional dependency to the project lockfile with user approval. When the repair scope is limited to generated assets, patch the generated Dockerfile install step so the Linux package is installed inside the image.
 - Do not solve native module failures by bind-mounting host `node_modules` into a Linux container unless the user explicitly wants a dev-only deployment. Host `node_modules` is usually platform-specific.
 
 ## Java Build Failures
@@ -75,8 +75,10 @@ Ask the user only when the next action requires real credentials, destructive bo
 
 ## Retry Rules
 
-- For plain deploy requests, use the MCP deploy run action; it prepares, builds, starts, validates, reports status, and returns the next repair action when the full flow cannot complete.
-- After each repair edit, run `loom deploy up --project-root /abs/project`.
+- For a fresh deploy request, use the MCP deploy run action; it prepares missing specs, builds, starts, validates, reports status, and returns the next repair action when the full flow cannot complete.
+- After each repair edit, call the returned `retryTool`. For asset repair this is `loom.deployUp`.
+- `loom.deployUp` retries with the current `.loom/deployment/specs/local.json` and generated assets. It must not regenerate Dockerfile, Compose, nginx, or dockerignore files.
+- Do not call `loom.deployRun` as a repair retry. `deployRun` is a high-level entry point, while repair retry is an execution step against the current spec.
 - If it succeeds, run `loom deploy status --project-root /abs/project`.
 - If it fails, run `loom deploy repair --project-root /abs/project` again and use the new request.
 - Default `maxAttempts` is 10.

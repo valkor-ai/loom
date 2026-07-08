@@ -4,11 +4,11 @@ use std::{
 };
 
 use contracts::{
-    build_ui_quality_seed, ui_quality_contract_template, ui_quality_enum_refs,
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
-    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
-    COVERAGE_ARTIFACT_TYPES,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
+    ui_quality_contract_template, ui_quality_enum_refs, ArchitectureSectionCandidateAgentWritable,
+    ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
+    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
+    TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
@@ -38,9 +38,10 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
+        code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
-        task_result_required_top_level_fields, task_result_template,
+        task_result_required_top_level_fields, task_result_template_with_code_quality,
         taskplan_group_result_template, taskplan_outline_result_template,
         FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
@@ -594,7 +595,12 @@ fn build_repair_execution_request(
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
         .unwrap_or_else(|_| json!({ "type": "object" }));
-    let result_template = task_result_template(&task_plan.task_plan_id, task);
+    let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
+    let result_template = task_result_template_with_code_quality(
+        &task_plan.task_plan_id,
+        task,
+        &code_quality_requirements,
+    );
     let mut execution_rules = task_execution_rules(result_file, task, None);
     if let Some(object) = execution_rules.as_object_mut() {
         object.insert(
@@ -707,6 +713,13 @@ fn build_repair_execution_request(
             "executionRules.runtimeDeliveryExecutionRules",
         ]);
     }
+    if !task.code_quality_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.codeQualityRequirementRefs",
+            "sourceContext.codeQualityExecutionContext",
+            "executionRules.codeQualityExecutionRules",
+        ]);
+    }
     if execution_rules
         .get("frontendImplementationOrganizationRules")
         .is_some()
@@ -763,6 +776,9 @@ fn build_repair_execution_request(
     if !task.concept_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
+    if !task.code_quality_requirement_refs.is_empty() {
+        repair_result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
+    }
     let mut repair_context = json!({
         "sourceTaskId": task.task_id,
         "repairOrigin": repair_origin,
@@ -776,7 +792,7 @@ fn build_repair_execution_request(
     if !finding_refs.is_empty() {
         repair_context["findingRefs"] = json!(finding_refs);
     }
-    json!({
+    let mut root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "delivery_execution_repair",
         "requestId": request_id,
@@ -839,7 +855,13 @@ fn build_repair_execution_request(
                 }
             ]
         }
-    })
+    });
+    if !code_quality_requirements.is_empty() {
+        root_value["sourceContext"] = json!({
+            "codeQualityExecutionContext": code_quality_execution_context(&code_quality_requirements)
+        });
+    }
+    root_value
 }
 
 pub fn materialize_taskplan_repair(
@@ -952,6 +974,7 @@ fn materialize_taskplan_repair_action(
         "userFlowRefs": value_field(&core_fields, "allowedRefs.userFlowRefs"),
         "stateMachineRefs": value_field(&core_fields, "allowedRefs.stateMachineRefs"),
         "decisionRefs": value_field(&core_fields, "allowedRefs.decisionRefs"),
+        "nfrRefs": value_field(&core_fields, "allowedRefs.nfrRefs"),
         "riskRefs": value_field(&core_fields, "allowedRefs.riskRefs")
     });
     let context_projection = json!({
@@ -985,6 +1008,15 @@ fn materialize_taskplan_repair_action(
     if !engineering_quality_rules.is_null() {
         generation_rules["engineeringQualityRules"] = engineering_quality_rules;
     }
+    let architecture_quality_rules =
+        value_field(&rule_fields, "generationRules.architectureQualityRules");
+    if !architecture_quality_rules.is_null() {
+        generation_rules["architectureQualityRules"] = architecture_quality_rules;
+    }
+    let api_contract_rules = value_field(&rule_fields, "generationRules.apiContractRules");
+    if !api_contract_rules.is_null() {
+        generation_rules["apiContractRules"] = api_contract_rules;
+    }
     let enum_refs = json!({
         "taskKind": value_field(&contract_fields, "enumRefs.taskKind"),
         "implementationAction": value_field(&contract_fields, "enumRefs.implementationAction"),
@@ -1017,6 +1049,14 @@ fn materialize_taskplan_repair_action(
     let engineering_quality_template = value_field(
         &contract_fields,
         "outputContract.engineeringQualityRequirementTemplate",
+    );
+    let architecture_quality_template = value_field(
+        &contract_fields,
+        "outputContract.architectureQualityRequirementTemplate",
+    );
+    let api_contract_template = value_field(
+        &contract_fields,
+        "outputContract.apiContractRequirementTemplate",
     );
     let schema_shape = serde_json::to_value(schema_for!(TaskPlanOutlineCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1077,6 +1117,7 @@ fn materialize_taskplan_repair_action(
         "allowedRefs.userFlowRefs",
         "allowedRefs.stateMachineRefs",
         "allowedRefs.decisionRefs",
+        "allowedRefs.nfrRefs",
         "allowedRefs.riskRefs",
     ]);
 
@@ -1106,6 +1147,13 @@ fn materialize_taskplan_repair_action(
     if !engineering_quality_template.is_null() {
         taskplan_repair_write_contract_fields
             .push("outputContract.engineeringQualityRequirementTemplate");
+    }
+    if !architecture_quality_template.is_null() {
+        taskplan_repair_write_contract_fields
+            .push("outputContract.architectureQualityRequirementTemplate");
+    }
+    if !api_contract_template.is_null() {
+        taskplan_repair_write_contract_fields.push("outputContract.apiContractRequirementTemplate");
     }
 
     let mut request_root = json!({
@@ -1174,7 +1222,9 @@ fn materialize_taskplan_repair_action(
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",
                         "generationRules.runtimeDeliveryRules",
-                        "generationRules.engineeringQualityRules"
+                        "generationRules.engineeringQualityRules",
+                        "generationRules.architectureQualityRules",
+                        "generationRules.apiContractRules"
                     ])
                 },
                 {
@@ -1225,6 +1275,26 @@ fn materialize_taskplan_repair_action(
             .insert(
                 "engineeringQualityRequirementTemplate".to_string(),
                 engineering_quality_template,
+            );
+    }
+    if !architecture_quality_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "architectureQualityRequirementTemplate".to_string(),
+                architecture_quality_template,
+            );
+    }
+    if !api_contract_template.is_null() {
+        request_root
+            .pointer_mut("/outputContract")
+            .and_then(Value::as_object_mut)
+            .expect("taskplan repair outputContract")
+            .insert(
+                "apiContractRequirementTemplate".to_string(),
+                api_contract_template,
             );
     }
     let stored = state::write_native_request(
@@ -1456,6 +1526,11 @@ fn materialize_architecture_repair_action(
             technical_baseline.as_ref(),
         )
     });
+    let api_quality_seed = planning_contract
+        .as_ref()
+        .zip(technical_baseline.as_ref())
+        .map(|(planning, baseline)| build_api_quality_seed(planning, baseline))
+        .unwrap_or(Value::Null);
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
         .and_then(Value::as_str)
@@ -1473,6 +1548,7 @@ fn materialize_architecture_repair_action(
         &frontend_experience_source,
         &context_projection,
         &ui_quality_seed,
+        &api_quality_seed,
     )?;
     let candidate_files = section_outputs
         .iter()
@@ -1498,7 +1574,7 @@ fn materialize_architecture_repair_action(
         repair_context["sourceRef"] = json!(source_ref);
     }
     let include_repair_source_ref = has_non_null_key(&repair_context, "sourceRef");
-    let request_root = json!({
+    let mut request_root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_artifact_repair",
         "requestId": request_id,
@@ -1577,10 +1653,15 @@ fn materialize_architecture_repair_action(
                 ArchitectureSectionGroup::Foundation,
                 &source_refs,
                 &frontend_experience_source,
+                &api_quality_seed,
                 include_repair_source_ref
             )
         }
     });
+    if !api_quality_seed.is_null() {
+        request_root["apiQualitySeed"] = api_quality_seed;
+        request_root["enumRefs"]["apiQuality"] = api_quality_enum_refs();
+    }
     let stored = state::write_native_request(
         project_root,
         state::NativeRequestInput {
@@ -1751,7 +1832,8 @@ fn ui_quality_seed_from_fields(
         "layoutBaselineCandidates": value_field(fields, "uiQualitySeed.layoutBaselineCandidates"),
         "densityCandidates": value_field(fields, "uiQualitySeed.densityCandidates"),
         "semanticTokenPolicy": value_field(fields, "uiQualitySeed.semanticTokenPolicy"),
-        "requiredReferenceIds": value_field(fields, "uiQualitySeed.requiredReferenceIds"),
+        "requiredReferenceGroups": value_field(fields, "uiQualitySeed.requiredReferenceGroups"),
+        "referenceLoadPlan": value_field(fields, "uiQualitySeed.referenceLoadPlan"),
         "stackReferenceCandidates": value_field(fields, "uiQualitySeed.stackReferenceCandidates"),
         "designTokenAssetPlan": value_field(fields, "uiQualitySeed.designTokenAssetPlan"),
         "forbiddenUserVisibleContent": value_field(fields, "uiQualitySeed.forbiddenUserVisibleContent"),
@@ -1786,6 +1868,7 @@ fn architecture_repair_read_groups(
     section: ArchitectureSectionGroup,
     source_refs: &Value,
     frontend_experience_source: &Value,
+    api_quality_seed: &Value,
     include_source_ref: bool,
 ) -> Value {
     let mut core_fields = vec![
@@ -1834,6 +1917,18 @@ fn architecture_repair_read_groups(
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
     ]);
+    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+        core_fields.extend([
+            "apiQualitySeed.required",
+            "apiQualitySeed.qualityLevel",
+            "apiQualitySeed.selectionReason",
+            "apiQualitySeed.techReferenceProfile.loadMode",
+            "apiQualitySeed.techReferenceProfile.groups.api",
+            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
+            "apiQualitySeed.interfaceContract",
+            "apiQualitySeed.generationRules",
+        ]);
+    }
     if include_source_ref {
         core_fields.insert(9, "repairContext.sourceRef");
     }
@@ -1849,6 +1944,25 @@ fn architecture_repair_read_groups(
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
         ]);
+    }
+    let mut contract_fields = vec![
+        "sectionState.currentSection",
+        "currentSectionContract.section",
+        "currentSectionContract.candidateFile",
+        "currentSectionContract.schemaRef",
+        "currentSectionContract.resultTemplate",
+        "currentSectionContract.enumRefs",
+        "currentSectionContract.generationRules",
+        "outputContract.writeTargets",
+        "outputContract.submitTool",
+        "outputContract.schemaProjection",
+        "enumRefs.section",
+        "enumRefs.status",
+        "enumRefs.coverageStatus",
+        "enumRefs.acceptancePriority",
+    ];
+    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+        contract_fields.push("enumRefs.apiQuality");
     }
     let mut groups = vec![
         json!({
@@ -1867,22 +1981,7 @@ fn architecture_repair_read_groups(
             "required": true,
             "purpose": "Read the current section contract, schema projection, and write target before writing the replacement section candidate.",
             "whenToRead": "Read immediately before writing the current replacement Architecture section candidate.",
-            "selectors": read_selectors_value_from_paths([
-                "sectionState.currentSection",
-                "currentSectionContract.section",
-                "currentSectionContract.candidateFile",
-                "currentSectionContract.schemaRef",
-                "currentSectionContract.resultTemplate",
-                "currentSectionContract.enumRefs",
-                "currentSectionContract.generationRules",
-                "outputContract.writeTargets",
-                "outputContract.submitTool",
-                "outputContract.schemaProjection",
-                "enumRefs.section",
-                "enumRefs.status",
-                "enumRefs.coverageStatus",
-                "enumRefs.acceptancePriority"
-            ])
+            "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
@@ -1915,7 +2014,8 @@ fn architecture_repair_read_groups(
             "uiQualitySeed.layoutBaselineCandidates",
             "uiQualitySeed.densityCandidates",
             "uiQualitySeed.semanticTokenPolicy",
-            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.requiredReferenceGroups",
+            "uiQualitySeed.referenceLoadPlan",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -1972,6 +2072,7 @@ fn build_architecture_repair_section_outputs(
     frontend_experience_source: &Value,
     context_projection: &Value,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
         .unwrap_or_else(|_| json!({ "type": "object" }));
@@ -1983,7 +2084,7 @@ fn build_architecture_repair_section_outputs(
                 .join("agent-writable")
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
-            Ok(json!({
+            let mut output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
                 "schemaRef": format!("rust-contract://ArchitectureSectionCandidateAgentWritable/{}", section_name(*section)),
@@ -1995,7 +2096,8 @@ fn build_architecture_repair_section_outputs(
                     *section,
                     frontend_experience_source,
                     context_projection,
-                    ui_quality_seed
+                    ui_quality_seed,
+                    api_quality_seed
                 ),
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
@@ -2009,7 +2111,11 @@ fn build_architecture_repair_section_outputs(
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
                     "Do not write the final AAC JSON; Rust assembles it after coverage submit."
                 ]
-            }))
+            });
+            if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+                output["enumRefs"]["apiQuality"] = api_quality_enum_refs();
+            }
+            Ok(output)
         })
         .collect::<Result<Vec<_>, state::store::StateError>>()?)
 }
@@ -2022,6 +2128,7 @@ fn architecture_repair_section_result_template(
     frontend_experience_source: &Value,
     context_projection: &Value,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -2034,11 +2141,94 @@ fn architecture_repair_section_result_template(
             section,
             frontend_experience_source,
             context_projection,
-            ui_quality_seed
+            ui_quality_seed,
+            api_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
     })
+}
+
+fn architecture_repair_domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return json!([]);
+    }
+    json!([{
+        "interfaceId": "api_current_001",
+        "name": "Current phase API or service interface",
+        "type": "http_api",
+        "resource": "",
+        "operationKind": "create",
+        "method": "POST",
+        "path": "/api/current-resources",
+        "requestSchema": [{
+            "field": "replace_with_request_field",
+            "required": true,
+            "kind": "string",
+            "validation": "business validation rule"
+        }],
+        "responseSchema": [{
+            "field": "id",
+            "required": true,
+            "kind": "identifier",
+            "meaning": "Created or affected resource id"
+        }],
+        "statusCodes": {
+            "success": [201],
+            "validation": [400, 422],
+            "businessConflict": [409],
+            "notFound": [404],
+            "auth": [],
+            "rateLimit": [],
+            "serviceUnavailable": [],
+            "serverError": [500]
+        },
+        "errorSchema": [{
+            "field": "message",
+            "required": true,
+            "kind": "user_actionable_message"
+        }],
+        "paginationPolicy": {
+            "strategy": "not_applicable",
+            "requestFields": [],
+            "responseFields": []
+        },
+        "authPolicy": {
+            "required": "not_applicable",
+            "actorRefs": [],
+            "permissionRefs": []
+        },
+        "contractFileRefs": [],
+        "idempotencyPolicy": {
+            "required": false,
+            "keyHeader": "",
+            "duplicateBehavior": ""
+        },
+        "cachePolicy": {
+            "strategy": "not_applicable",
+            "validators": []
+        },
+        "conditionalRequestPolicy": {
+            "required": false,
+            "staleUpdateStatus": null
+        },
+        "rateLimitPolicy": {
+            "applies": false,
+            "status": null,
+            "headers": []
+        },
+        "retryPolicy": {
+            "retryableStatuses": [],
+            "retryAfterHeader": false
+        },
+        "requestIdPolicy": {
+            "header": "",
+            "includedInErrorBody": false
+        },
+        "scopeRefs": [],
+        "acceptanceRefs": [],
+        "requirementDetailRefs": []
+    }])
 }
 
 fn architecture_repair_section_content_template(
@@ -2046,6 +2236,7 @@ fn architecture_repair_section_content_template(
     frontend_experience_source: &Value,
     context_projection: &Value,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -2090,14 +2281,7 @@ fn architecture_repair_section_content_template(
                 "relationships": [],
                 "constraints": []
             },
-            "interfaces": [{
-                "interfaceId": "interface_1",
-                "name": "",
-                "kind": "",
-                "operations": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
+            "interfaces": architecture_repair_domain_contract_interfaces_template(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": [{
@@ -2160,11 +2344,8 @@ fn architecture_repair_section_content_template(
                             "local loading, empty, error, success, and business-blocking feedback"
                         ],
                         "forbiddenComposition": [
-                            "marketing or hero introduction",
-                            "runtime command instructions",
-                            "technical stack explanation",
-                            "delivery progress notes",
-                            "tutorial-style explanatory copy unrelated to the business task"
+                            "surface composition unrelated to the task-owned business workflow",
+                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
                         ],
                         "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
                         "dataViewRefs": ["view_1"],
@@ -2276,15 +2457,67 @@ fn coverage_content_template(context_projection: &Value) -> Value {
     json!({
         "acceptanceMatrix": acceptance_matrix,
         "detailCoverage": detail_coverage,
-        "risksAndDecisions": {
-            "decisions": [],
-            "risks": []
-        },
+        "architectureQuality": architecture_quality_repair_template(),
         "handoff": {
             "readyForTaskPlan": true,
             "blockingReasons": [],
             "nextNode": "task_plan"
         }
+    })
+}
+
+fn architecture_quality_repair_template() -> Value {
+    json!({
+        "decisions": [{
+            "decisionId": "adr-current-001",
+            "category": "architecture_style",
+            "title": "Current phase architecture decision",
+            "status": "accepted",
+            "context": "State the current-phase forces from the repair request and accepted planning contract.",
+            "decision": "State the selected architecture approach for this phase.",
+            "alternativesConsidered": [{
+                "name": "alternative architecture approach",
+                "tradeoff": "Concrete trade-off compared with the selected approach.",
+                "rejectedBecause": "Why this alternative is not the best fit for the current phase."
+            }],
+            "consequences": {
+                "positive": ["Implementation or verification benefit."],
+                "negative": ["Implementation or operation cost to watch."],
+                "neutral": ["Known side effect that does not block delivery."]
+            },
+            "sourceRefs": {
+                "scopeRefs": ["allowedRefs.scopeRefs item"],
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
+            },
+            "verificationHints": ["How later tasks or review can prove this decision was respected."]
+        }],
+        "nfrs": [{
+            "nfrId": "nfr-current-001",
+            "category": "maintainability",
+            "target": "Concrete quality target for this phase.",
+            "rationale": "Why this target matters for the current phase.",
+            "architectureRefs": {
+                "decisions": ["adr-current-001"],
+                "risks": ["risk-current-001"]
+            },
+            "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
+        }],
+        "risks": [{
+            "riskId": "risk-current-001",
+            "category": "data_integrity",
+            "severity": "medium",
+            "likelihood": "medium",
+            "impact": "Concrete implementation or operation impact if this risk occurs.",
+            "mitigation": "Concrete design or task-plan mitigation.",
+            "ownerArtifactRefs": {
+                "modules": ["module_1"],
+                "interfaces": ["interface_1"],
+                "decisions": ["adr-current-001"],
+                "nfrs": ["nfr-current-001"]
+            },
+            "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
+        }]
     })
 }
 
@@ -2334,7 +2567,7 @@ fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<
             vec![
                 "acceptanceMatrix",
                 "detailCoverage",
-                "risksAndDecisions",
+                "architectureQuality",
                 "handoff",
             ]
         }

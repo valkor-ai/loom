@@ -4,8 +4,9 @@ use std::{
 };
 
 use contracts::{
-    TaskDefinition, TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult,
-    TaskResultStatus, TaskRunStatus, VerificationEvidence,
+    forbidden_jvm_package_prefixes, CodeQualityEvidence, CodeQualityRequirement, TaskDefinition,
+    TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult, TaskResultStatus,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -29,8 +30,10 @@ use crate::{
     },
     task_plan::update_run_summary,
     templates::{
+        api_contract_evidence_applies, architecture_quality_evidence_applies,
+        code_quality_evidence_applies, code_quality_execution_context,
         frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_template,
+        runtime_delivery_evidence_applies, task_result_template_with_code_quality,
         FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
@@ -147,6 +150,11 @@ where
     ];
     for optional_field in [
         "task.conceptRefs",
+        "task.architectureQualityRequirementRefs",
+        "task.apiContractRequirementRefs",
+        "task.codeQualityRequirementRefs",
+        "sourceContext.codeQualityExecutionContext",
+        "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
     ] {
@@ -185,6 +193,12 @@ where
     let run_id = string_field(&fields, "source.taskPlanRunId")?;
     let result_file = string_field(&fields, "outputContract.resultFile")?;
     let frontend_experience_requirement = frontend_experience_requirement_from_fields(&fields);
+    let artifact_refs = value_field(&fields, "task.writeBoundary.artifactRefs");
+    let artifact_refs = if artifact_refs.is_object() {
+        artifact_refs
+    } else {
+        json!({})
+    };
     let task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
@@ -198,18 +212,23 @@ where
         "requirementDetailRefs": array_field(&fields, "task.requirementDetailRefs"),
         "writeBoundary": {
             "forbiddenPaths": [],
-            "artifactRefs": {}
+            "artifactRefs": artifact_refs
         },
         "verificationIntents": array_field(&fields, "task.verificationIntents"),
         "conceptRefs": array_field(&fields, "task.conceptRefs"),
         "conceptResponsibilities": [],
         "conceptVerificationIntents": [],
         "frontendExperienceRequirement": frontend_experience_requirement,
-        "runtimeDeliveryRequirement": runtime_delivery_requirement_from_fields(&fields)
+        "runtimeDeliveryRequirement": runtime_delivery_requirement_from_fields(&fields),
+        "architectureQualityRequirementRefs": array_field(&fields, "task.architectureQualityRequirementRefs"),
+        "apiContractRequirementRefs": array_field(&fields, "task.apiContractRequirementRefs"),
+        "codeQualityRequirementRefs": array_field(&fields, "task.codeQualityRequirementRefs")
     }))
     .map_err(state::store::StateError::Json)?;
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
+    let code_quality_requirements =
+        code_quality_requirements_field(&fields, "sourceContext.codeQualityExecutionContext")?;
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
@@ -243,9 +262,11 @@ where
     };
     let previous_changed_files = previous_persisted_changed_files(root, &locator, &run_id, &result);
     let issues = validate_result(
+        root,
         &normalized_result,
         &result,
         &task,
+        &code_quality_requirements,
         &required_top_level_fields,
         &blocked_output,
         &task_plan_id,
@@ -270,6 +291,7 @@ where
                 blocked_output,
                 submitted_result: normalized_result.clone(),
                 previous_changed_files,
+                code_quality_requirements,
             }),
         );
     }
@@ -415,9 +437,11 @@ where
 }
 
 fn validate_result(
+    project_root: &Path,
     raw_result: &Value,
     result: &TaskResult,
     task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
     required_top_level_fields: &[String],
     blocked_output: &Value,
     task_plan_id: &str,
@@ -500,6 +524,16 @@ fn validate_result(
     validate_runtime_delivery_evidence(result, task, &mut issues);
     validate_frontend_experience_self_check(result, task, &mut issues);
     validate_frontend_quality_self_check(result, task, &mut issues);
+    validate_architecture_quality_evidence(result, task, &mut issues);
+    validate_api_contract_evidence(result, task, &mut issues);
+    validate_code_quality_evidence(result, task, code_quality_requirements, &mut issues);
+    validate_jvm_package_names(
+        project_root,
+        result,
+        task,
+        code_quality_requirements,
+        &mut issues,
+    );
     validate_blocked_reasons(result, blocked_output, &mut issues);
     if result
         .execution_continuity
@@ -534,6 +568,98 @@ fn validate_result(
     issues
 }
 
+fn validate_jvm_package_names(
+    project_root: &Path,
+    result: &TaskResult,
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if !matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) || !task_has_jvm_package_policy(task, code_quality_requirements)
+    {
+        return;
+    }
+    for relative in &result.changed_files {
+        if !is_jvm_production_source_path(relative) {
+            continue;
+        }
+        let Ok(path) = from_project_relative(project_root, relative) else {
+            continue;
+        };
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(package_name) = extract_jvm_package_name(&content) else {
+            continue;
+        };
+        let Some(forbidden_prefix) = forbidden_package_prefix(&package_name) else {
+            continue;
+        };
+        issues.push(issue(
+            "TASK_RESULT_CODE_QUALITY_INVALID",
+            "changedFiles",
+            &format!(
+                "Production JVM source file {relative} declares placeholder package `{package_name}` using forbidden prefix `{forbidden_prefix}`. Use an existing package root, build group metadata, confirmed organization/project namespace, or fallback app.<project_slug>/app.generated."
+            ),
+        ));
+    }
+}
+
+fn task_has_jvm_package_policy(
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+) -> bool {
+    let requirement_refs = task
+        .code_quality_requirement_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    code_quality_requirements.iter().any(|requirement| {
+        requirement_refs.contains(requirement.requirement_id.as_str())
+            && requirement.package_naming_policy.is_some()
+    })
+}
+
+fn is_jvm_production_source_path(relative: &str) -> bool {
+    let normalized = relative.replace('\\', "/");
+    (normalized.ends_with(".java") || normalized.ends_with(".kt"))
+        && (normalized.contains("/src/main/") || normalized.starts_with("src/main/"))
+}
+
+fn extract_jvm_package_name(content: &str) -> Option<String> {
+    for line in content.lines().take(120) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.is_empty() {
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("package ") else {
+            continue;
+        };
+        let package = rest
+            .trim()
+            .trim_end_matches(';')
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(';')
+            .to_string();
+        if !package.is_empty() {
+            return Some(package);
+        }
+    }
+    None
+}
+
+fn forbidden_package_prefix(package_name: &str) -> Option<&'static str> {
+    let package = package_name.to_ascii_lowercase();
+    forbidden_jvm_package_prefixes()
+        .into_iter()
+        .find(|prefix| package == *prefix || package.starts_with(&format!("{prefix}.")))
+}
+
 fn task_result_required_field_applies_to_status(field: &str, status: &TaskResultStatus) -> bool {
     if !matches!(status, TaskResultStatus::Failed | TaskResultStatus::Blocked) {
         return true;
@@ -544,6 +670,9 @@ fn task_result_required_field_applies_to_status(field: &str, status: &TaskResult
             | "frontendQualitySelfCheck"
             | "runtimeDeliveryEvidence"
             | "conceptEvidence"
+            | "architectureQualityEvidence"
+            | "apiContractEvidence"
+            | "codeQualityEvidence"
             | "requirementDetailEvidence"
     )
 }
@@ -1148,6 +1277,461 @@ fn validate_concept_evidence(
     }
 }
 
+fn validate_architecture_quality_evidence(
+    result: &TaskResult,
+    task: &TaskDefinition,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if matches!(
+        result.status,
+        TaskResultStatus::Failed | TaskResultStatus::Blocked
+    ) {
+        return;
+    }
+    if !architecture_quality_evidence_applies(task) {
+        if !result.architecture_quality_evidence.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence",
+                "TaskResult must not include architectureQualityEvidence when the task has no architectureQualityRequirementRefs.",
+            ));
+        }
+        return;
+    }
+    let requirement_refs = task
+        .architecture_quality_requirement_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let verification_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for evidence in &result.architecture_quality_evidence {
+        if !requirement_refs.contains(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].requirementId",
+                "architectureQualityEvidence.requirementId must reference task.architectureQualityRequirementRefs.",
+            ));
+        }
+        if evidence.verification_ids.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].verificationIds",
+                "architectureQualityEvidence must link to verification results.",
+            ));
+        }
+        for verification_id in &evidence.verification_ids {
+            if !verification_ids.contains(verification_id.as_str()) {
+                issues.push(issue(
+                    "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                    "architectureQualityEvidence[].verificationIds",
+                    "architectureQualityEvidence verificationIds must reference task verification intents.",
+                ));
+            }
+        }
+        if evidence.summary.trim().is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].summary",
+                "architectureQualityEvidence summary must explain how the task respected the referenced architecture quality requirement.",
+            ));
+        }
+    }
+    if !matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) {
+        return;
+    }
+    for requirement_id in &task.architecture_quality_requirement_refs {
+        let Some(evidence) = result
+            .architecture_quality_evidence
+            .iter()
+            .find(|evidence| &evidence.requirement_id == requirement_id)
+        else {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence",
+                "Completed TaskResult must include architectureQualityEvidence for every assigned architecture quality requirement.",
+            ));
+            continue;
+        };
+        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].status",
+                "Completed TaskResult architectureQualityEvidence must be satisfied.",
+            ));
+        }
+    }
+}
+
+fn validate_api_contract_evidence(
+    result: &TaskResult,
+    task: &TaskDefinition,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if matches!(
+        result.status,
+        TaskResultStatus::Failed | TaskResultStatus::Blocked
+    ) {
+        return;
+    }
+    if !api_contract_evidence_applies(task) {
+        if !result.api_contract_evidence.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence",
+                "TaskResult must not include apiContractEvidence when the task has no apiContractRequirementRefs.",
+            ));
+        }
+        return;
+    }
+    let requirement_refs = task
+        .api_contract_requirement_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let task_interface_refs = task
+        .write_boundary
+        .artifact_refs
+        .interfaces
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let verification_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for evidence in &result.api_contract_evidence {
+        if !requirement_refs.contains(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].requirementId",
+                "apiContractEvidence.requirementId must reference task.apiContractRequirementRefs.",
+            ));
+        }
+        if evidence.verification_ids.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].verificationIds",
+                "apiContractEvidence must link to verification results.",
+            ));
+        }
+        for verification_id in &evidence.verification_ids {
+            if !verification_ids.contains(verification_id.as_str()) {
+                issues.push(issue(
+                    "TASK_RESULT_API_CONTRACT_INVALID",
+                    "apiContractEvidence[].verificationIds",
+                    "apiContractEvidence verificationIds must reference task verification intents.",
+                ));
+            }
+        }
+        for interface_ref in &evidence.interface_refs {
+            if !task_interface_refs.is_empty()
+                && !task_interface_refs.contains(interface_ref.as_str())
+            {
+                issues.push(issue(
+                    "TASK_RESULT_API_CONTRACT_INVALID",
+                    "apiContractEvidence[].interfaceRefs",
+                    "apiContractEvidence interfaceRefs must reference task writeBoundary interface refs.",
+                ));
+            }
+        }
+        if evidence.summary.trim().is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].summary",
+                "apiContractEvidence summary must explain how the task implemented or preserved the referenced API contract.",
+            ));
+        }
+    }
+    if !matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) {
+        return;
+    }
+    for requirement_id in &task.api_contract_requirement_refs {
+        let Some(evidence) = result
+            .api_contract_evidence
+            .iter()
+            .find(|evidence| &evidence.requirement_id == requirement_id)
+        else {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence",
+                "Completed TaskResult must include apiContractEvidence for every assigned API contract requirement.",
+            ));
+            continue;
+        };
+        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].status",
+                "Completed TaskResult apiContractEvidence must be satisfied.",
+            ));
+        }
+        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].knownGaps",
+                "Completed TaskResult apiContractEvidence cannot contain known gaps.",
+            ));
+        }
+    }
+}
+
+fn validate_code_quality_evidence(
+    result: &TaskResult,
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if matches!(
+        result.status,
+        TaskResultStatus::Failed | TaskResultStatus::Blocked
+    ) {
+        return;
+    }
+    if !code_quality_evidence_applies(task) {
+        if !result.code_quality_evidence.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence",
+                "TaskResult must not include codeQualityEvidence when the task has no codeQualityRequirementRefs.",
+            ));
+        }
+        return;
+    }
+    let requirement_refs = task
+        .code_quality_requirement_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let requirements_by_id = code_quality_requirements
+        .iter()
+        .filter(|requirement| requirement_refs.contains(requirement.requirement_id.as_str()))
+        .map(|requirement| (requirement.requirement_id.as_str(), requirement))
+        .collect::<BTreeMap<_, _>>();
+    for requirement_id in &task.code_quality_requirement_refs {
+        if !requirements_by_id.contains_key(requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "sourceContext.codeQualityExecutionContext",
+                "TaskResult validation requires sourceContext.codeQualityExecutionContext for every task.codeQualityRequirementRefs item.",
+            ));
+        }
+    }
+    let verification_ids = task
+        .verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for evidence in &result.code_quality_evidence {
+        if !requirement_refs.contains(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].requirementId",
+                "codeQualityEvidence.requirementId must reference task.codeQualityRequirementRefs.",
+            ));
+        }
+        if evidence.reference_groups_checked.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].referenceGroupsChecked",
+                "codeQualityEvidence must record the selected language/framework reference groups checked for this task.",
+            ));
+        }
+        if let Some(requirement) = requirements_by_id.get(evidence.requirement_id.as_str()) {
+            validate_code_quality_reference_groups(evidence, requirement, issues);
+            validate_code_quality_reference_files(evidence, requirement, issues);
+        }
+        if evidence.verification_ids.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].verificationIds",
+                "codeQualityEvidence must link to verification results.",
+            ));
+        }
+        for verification_id in &evidence.verification_ids {
+            if !verification_ids.contains(verification_id.as_str()) {
+                issues.push(issue(
+                    "TASK_RESULT_CODE_QUALITY_INVALID",
+                    "codeQualityEvidence[].verificationIds",
+                    "codeQualityEvidence verificationIds must reference task verification intents.",
+                ));
+            }
+        }
+        if evidence.summary.trim().is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].summary",
+                "codeQualityEvidence summary must explain how changed files followed selected code references and repository style.",
+            ));
+        }
+    }
+    if !matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) {
+        return;
+    }
+    for requirement_id in &task.code_quality_requirement_refs {
+        let Some(evidence) = result
+            .code_quality_evidence
+            .iter()
+            .find(|evidence| &evidence.requirement_id == requirement_id)
+        else {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence",
+                "Completed TaskResult must include codeQualityEvidence for every assigned code quality requirement.",
+            ));
+            continue;
+        };
+        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].status",
+                "Completed TaskResult codeQualityEvidence must be satisfied.",
+            ));
+        }
+        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].knownGaps",
+                "Completed TaskResult codeQualityEvidence cannot contain known gaps.",
+            ));
+        }
+    }
+}
+
+fn validate_code_quality_reference_groups(
+    evidence: &CodeQualityEvidence,
+    requirement: &CodeQualityRequirement,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if requirement.reference_groups.is_empty() {
+        return;
+    }
+    let expected = requirement
+        .reference_groups
+        .iter()
+        .map(|(language, groups)| {
+            (
+                language.as_str(),
+                groups.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let checked = evidence
+        .reference_groups_checked
+        .iter()
+        .map(|(language, groups)| {
+            (
+                language.as_str(),
+                groups.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (language, expected_groups) in &expected {
+        let Some(checked_groups) = checked.get(language) else {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].referenceGroupsChecked",
+                "codeQualityEvidence.referenceGroupsChecked must include every selected language/framework group key from the assigned code quality requirement.",
+            ));
+            continue;
+        };
+        for group in expected_groups {
+            if !checked_groups.contains(group) {
+                issues.push(issue(
+                    "TASK_RESULT_CODE_QUALITY_INVALID",
+                    "codeQualityEvidence[].referenceGroupsChecked",
+                    "codeQualityEvidence.referenceGroupsChecked must include every selected group from the assigned code quality requirement.",
+                ));
+            }
+        }
+    }
+    for (language, checked_groups) in &checked {
+        let Some(expected_groups) = expected.get(language) else {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].referenceGroupsChecked",
+                "codeQualityEvidence.referenceGroupsChecked must not add language/framework group keys that were not selected by the assigned code quality requirement.",
+            ));
+            continue;
+        };
+        for group in checked_groups {
+            if !expected_groups.contains(group) {
+                issues.push(issue(
+                    "TASK_RESULT_CODE_QUALITY_INVALID",
+                    "codeQualityEvidence[].referenceGroupsChecked",
+                    "codeQualityEvidence.referenceGroupsChecked must not add groups that were not selected by the assigned code quality requirement.",
+                ));
+            }
+        }
+    }
+}
+
+fn validate_code_quality_reference_files(
+    evidence: &CodeQualityEvidence,
+    requirement: &CodeQualityRequirement,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let expected_paths = requirement
+        .reference_load_plan
+        .iter()
+        .map(|item| item.path.as_str())
+        .collect::<BTreeSet<_>>();
+    if expected_paths.is_empty() {
+        if !evidence.reference_files_checked.is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].referenceFilesChecked",
+                "codeQualityEvidence.referenceFilesChecked must be empty when the assigned code quality requirement has no referenceLoadPlan.",
+            ));
+        }
+        return;
+    }
+    if evidence.reference_files_checked.is_empty() {
+        issues.push(issue(
+            "TASK_RESULT_CODE_QUALITY_INVALID",
+            "codeQualityEvidence[].referenceFilesChecked",
+            "codeQualityEvidence.referenceFilesChecked must list the files from sourceContext.codeQualityExecutionContext[].referenceLoadPlan that were read for this task.",
+        ));
+        return;
+    }
+    let checked_paths = evidence
+        .reference_files_checked
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for expected_path in &expected_paths {
+        if !checked_paths.contains(expected_path) {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].referenceFilesChecked",
+                "codeQualityEvidence.referenceFilesChecked must include every path selected by sourceContext.codeQualityExecutionContext[].referenceLoadPlan.",
+            ));
+        }
+    }
+    for checked_path in &checked_paths {
+        if !expected_paths.contains(checked_path) {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].referenceFilesChecked",
+                "codeQualityEvidence.referenceFilesChecked must not include files outside sourceContext.codeQualityExecutionContext[].referenceLoadPlan.",
+            ));
+        }
+    }
+}
+
 fn validate_runtime_delivery_evidence(
     result: &TaskResult,
     task: &TaskDefinition,
@@ -1290,6 +1874,13 @@ fn validate_frontend_quality_self_check(
         return;
     };
     let self_check = serde_json::to_value(self_check_model).unwrap_or(Value::Null);
+    if self_check.get("referenceIdsChecked").is_some() {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.referenceIdsChecked",
+            "referenceIdsChecked is not allowed; use referenceGroupsChecked instead.",
+        ));
+    }
     if self_check.get("scenarioKind").and_then(Value::as_str)
         != ui_quality_contract
             .pointer("/scenario/kind")
@@ -1312,21 +1903,48 @@ fn validate_frontend_quality_self_check(
             "frontendQualitySelfCheck.qualityLevel must match uiQualityContract.qualityLevel.",
         ));
     }
-    let checked_refs = string_array_at(&self_check, "referenceIdsChecked");
-    for reference_id in string_array_at(
+    let checked_groups = reference_groups_at(&self_check, "referenceGroupsChecked");
+    for (group, item) in reference_groups_at(
         ui_quality_contract
             .get("referenceProfile")
             .unwrap_or(&Value::Null),
-        "referenceIds",
+        "groups",
     ) {
-        if !checked_refs.contains(&reference_id) {
+        if !checked_groups.contains(&(group, item)) {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.referenceIdsChecked",
-                "frontendQualitySelfCheck must cover every uiQualityContract reference id.",
+                "frontendQualitySelfCheck.referenceGroupsChecked",
+                "frontendQualitySelfCheck must cover every uiQualityContract reference group item.",
             ));
             break;
         }
+    }
+    let expected_reference_files = ui_quality_contract
+        .pointer("/referenceProfile/referenceLoadPlan")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("path").and_then(Value::as_str))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let checked_reference_files = self_check
+        .get("referenceFilesChecked")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    if !expected_reference_files.is_empty() && checked_reference_files != expected_reference_files {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.referenceFilesChecked",
+            "frontendQualitySelfCheck.referenceFilesChecked must exactly list uiQualityContract.referenceProfile.referenceLoadPlan paths.",
+        ));
     }
     let covered_states = self_check
         .get("statesCovered")
@@ -1600,6 +2218,24 @@ fn string_array_at(value: &Value, field: &str) -> Vec<String> {
         .collect()
 }
 
+fn reference_groups_at(value: &Value, field: &str) -> std::collections::BTreeSet<(String, String)> {
+    value
+        .get(field)
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .flat_map(|(group, items)| {
+            items
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str())
+                .map(|item| (group.clone(), item.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn object_array_string_field(
     value: &Value,
     array_field: &str,
@@ -1809,6 +2445,7 @@ struct RepairContextInput {
     blocked_output: Value,
     submitted_result: Value,
     previous_changed_files: Vec<String>,
+    code_quality_requirements: Vec<CodeQualityRequirement>,
 }
 
 fn repair_task_result_or_error(
@@ -1891,6 +2528,16 @@ fn materialize_task_result_repair(
     if !context.task.concept_refs.is_empty() {
         context_fields.push("task.conceptRefs");
     }
+    if architecture_quality_evidence_applies(&context.task) {
+        context_fields.push("task.architectureQualityRequirementRefs");
+    }
+    if api_contract_evidence_applies(&context.task) {
+        context_fields.push("task.apiContractRequirementRefs");
+    }
+    if code_quality_evidence_applies(&context.task) {
+        context_fields.push("task.codeQualityRequirementRefs");
+        context_fields.push("sourceContext.codeQualityExecutionContext");
+    }
     if frontend_self_check_applies(&context.task) {
         context_fields
             .push("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
@@ -1936,7 +2583,17 @@ fn materialize_task_result_repair(
     if !context.task.concept_refs.is_empty() {
         write_contract_fields.push("outputContract.schemaShape.properties.conceptEvidence");
     }
-    let root_value = json!({
+    if architecture_quality_evidence_applies(&context.task) {
+        write_contract_fields
+            .push("outputContract.schemaShape.properties.architectureQualityEvidence");
+    }
+    if api_contract_evidence_applies(&context.task) {
+        write_contract_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
+    }
+    if code_quality_evidence_applies(&context.task) {
+        write_contract_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
+    }
+    let mut root_value = json!({
         "schemaVersion": "1.0",
         "requestType": "task_result_repair",
         "requestId": request_id,
@@ -1998,6 +2655,11 @@ fn materialize_task_result_repair(
             ]
         }
     });
+    if !context.code_quality_requirements.is_empty() {
+        root_value["sourceContext"] = json!({
+            "codeQualityExecutionContext": code_quality_execution_context(&context.code_quality_requirements)
+        });
+    }
     let stored = state::write_native_request(
         &input.project_root,
         state::NativeRequestInput {
@@ -2080,6 +2742,15 @@ fn task_result_issue_conflicts(
             if issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID" {
                 return task_result_runtime_conflict(context, base);
             }
+            if issue.code == "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID" {
+                return task_result_architecture_quality_conflict(context, base);
+            }
+            if issue.code == "TASK_RESULT_API_CONTRACT_INVALID" {
+                return task_result_api_contract_conflict(context, base);
+            }
+            if issue.code == "TASK_RESULT_CODE_QUALITY_INVALID" {
+                return task_result_code_quality_conflict(context, base);
+            }
             base
         })
         .collect()
@@ -2140,7 +2811,14 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         "status": self_check.get("status").and_then(Value::as_str),
         "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
         "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceIdsChecked": string_array_at(&self_check, "referenceIdsChecked"),
+        "referenceGroupsChecked": self_check
+            .get("referenceGroupsChecked")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        "referenceFilesChecked": self_check
+            .get("referenceFilesChecked")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
         "designTokenEvidence": self_check.get("designTokenEvidence").cloned().unwrap_or(Value::Null),
         "knownGapsCount": self_check
             .get("knownGaps")
@@ -2150,12 +2828,14 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
     base["expected"] = json!({
         "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
         "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
-        "referenceIds": string_array_at(
-            ui_quality_contract
-                .get("referenceProfile")
-                .unwrap_or(&Value::Null),
-            "referenceIds"
-        ),
+        "referenceGroups": ui_quality_contract
+            .pointer("/referenceProfile/groups")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+        "referenceLoadPlan": ui_quality_contract
+            .pointer("/referenceProfile/referenceLoadPlan")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
         "requiredUiStates": ui_quality_contract.get("requiredUiStates").cloned().unwrap_or_else(|| json!([])),
         "businessUiRules": ui_quality_contract.get("businessUiRules").cloned().unwrap_or_else(|| json!([])),
         "designTokenAssetPlan": ui_quality_contract
@@ -2203,6 +2883,71 @@ fn task_result_runtime_conflict(context: &RepairContextInput, mut base: Value) -
     base
 }
 
+fn task_result_architecture_quality_conflict(
+    context: &RepairContextInput,
+    mut base: Value,
+) -> Value {
+    base["expectedArchitectureQualityRequirementRefs"] =
+        json!(context.task.architecture_quality_requirement_refs);
+    base["current"] = json!({
+        "architectureQualityEvidence": context
+            .submitted_result
+            .get("architectureQualityEvidence")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    base["validRepairChoices"] = json!([
+        "If the implementation satisfies the referenced architecture quality requirements, add architectureQualityEvidence entries for every task.architectureQualityRequirementRefs item and cite task verificationIds.",
+        "If evidence is missing or the implementation has a real architecture quality gap, keep status below completed or record the gap instead of claiming satisfied evidence."
+    ]);
+    base
+}
+
+fn task_result_api_contract_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    base["expectedApiContractRequirementRefs"] = json!(context.task.api_contract_requirement_refs);
+    base["current"] = json!({
+        "apiContractEvidence": context
+            .submitted_result
+            .get("apiContractEvidence")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    base["validRepairChoices"] = json!([
+        "If the implementation satisfies the referenced API contract requirements, add apiContractEvidence entries for every task.apiContractRequirementRefs item and cite task verificationIds.",
+        "If API behavior or evidence is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
+    ]);
+    base
+}
+
+fn task_result_code_quality_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    base["expectedCodeQualityRequirementRefs"] = json!(context.task.code_quality_requirement_refs);
+    base["expectedCodeQualityExecutionContext"] =
+        code_quality_execution_context(&context.code_quality_requirements);
+    base["expectedReferenceLoadPlan"] = json!(context
+        .code_quality_requirements
+        .iter()
+        .map(|requirement| {
+            json!({
+                "requirementId": requirement.requirement_id,
+                "referenceGroups": requirement.reference_groups,
+                "referenceLoadPlan": requirement.reference_load_plan
+            })
+        })
+        .collect::<Vec<_>>());
+    base["current"] = json!({
+        "codeQualityEvidence": context
+            .submitted_result
+            .get("codeQualityEvidence")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    base["validRepairChoices"] = json!([
+        "If the implementation satisfies the referenced code quality requirements, add codeQualityEvidence entries for every task.codeQualityRequirementRefs item and cite task verificationIds.",
+        "If selected language or framework reference evidence or verification is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
+    ]);
+    base
+}
+
 fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Vec<&'static str> {
     let mut rules = vec![
         "Repair the same TaskResult JSON file only.",
@@ -2229,7 +2974,35 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
         .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
     {
         rules.push("frontendQualitySelfCheck must match the task uiQualityContract scenario, quality level, references, required states, and business UI rules.");
+        rules.push("frontendQualitySelfCheck.referenceFilesChecked must exactly list uiQualityContract.referenceProfile.referenceLoadPlan paths.");
         rules.push("frontendQualitySelfCheck.status=satisfied is valid only when forbidden content violations and knownGaps are empty.");
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID")
+    {
+        rules.push("architectureQualityEvidence must cover every task.architectureQualityRequirementRefs item when the task is completed or completed_with_notes.");
+        rules.push("architectureQualityEvidence.verificationIds must use exact task.verificationIntents ids.");
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_API_CONTRACT_INVALID")
+    {
+        rules.push("apiContractEvidence must cover every task.apiContractRequirementRefs item when the task is completed or completed_with_notes.");
+        rules.push(
+            "apiContractEvidence.verificationIds must use exact task.verificationIntents ids.",
+        );
+    }
+    if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_CODE_QUALITY_INVALID")
+    {
+        rules.push("codeQualityEvidence must cover every task.codeQualityRequirementRefs item when the task is completed or completed_with_notes.");
+        rules.push("codeQualityEvidence.referenceGroupsChecked must exactly match the selected language/framework groups for the assigned code quality requirement.");
+        rules.push("codeQualityEvidence.referenceFilesChecked must exactly list files from sourceContext.codeQualityExecutionContext[].referenceLoadPlan that were read for the task.");
+        rules.push(
+            "codeQualityEvidence.verificationIds must use exact task.verificationIntents ids.",
+        );
     }
     rules
 }
@@ -2238,7 +3011,11 @@ fn task_result_repair_template(
     context: &RepairContextInput,
     issues: &[delivery_core::RepairIssue],
 ) -> Value {
-    let mut template = task_result_template(&context.task_plan_id, &context.task);
+    let mut template = task_result_template_with_code_quality(
+        &context.task_plan_id,
+        &context.task,
+        &context.code_quality_requirements,
+    );
     merge_submitted_task_result_fields(&mut template, &context.submitted_result, issues);
     if changed_files_issue(issues)
         && context
@@ -2611,6 +3388,19 @@ fn string_vec_field(
         })
 }
 
+fn code_quality_requirements_field(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> Result<Vec<CodeQualityRequirement>, state::store::StateError> {
+    let Some(value) = fields.get(name).map(|field| field.value.clone()) else {
+        return Ok(vec![]);
+    };
+    if value.is_null() {
+        return Ok(vec![]);
+    }
+    serde_json::from_value(value).map_err(state::store::StateError::Json)
+}
+
 fn value_field(
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
     name: &str,
@@ -2712,8 +3502,9 @@ fn frontend_experience_requirement_from_fields(
             "density": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.density"),
             "semanticTokenPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy"),
             "referenceProfile": {
-                "referenceIds": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds"),
-                "loadMode": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode")
+                "loadMode": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode"),
+                "groups": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"),
+                "referenceLoadPlan": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan")
             },
             "designTokenAssetPlan": {
                 "strategy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy"),

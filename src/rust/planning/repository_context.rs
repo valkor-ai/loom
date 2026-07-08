@@ -224,7 +224,7 @@ fn build_request_root(
         "scanPurpose": scan_purpose,
         "generationRules": generation_rules,
         "enumRefs": {
-            "projectKind": ["greenfield", "existing_project", "unknown"],
+            "projectKind": ["new_project", "existing_project", "unknown"],
             "repositoryMode": ["empty_project", "existing_project", "unknown"],
             "phaseDevelopmentMode": ["initial_delivery", "incremental_delivery", "unknown"],
             "repositoryShape": ["single_package", "monorepo", "multi_application", "unknown"],
@@ -453,7 +453,7 @@ fn phase_repository_lens(
         };
     }
     match baseline_project_kind {
-        ProjectKind::Greenfield => RepositoryLens {
+        ProjectKind::NewProject => RepositoryLens {
             repository_mode: RepositoryMode::EmptyProject,
             phase_development_mode: PhaseDevelopmentMode::InitialDelivery,
             completed_phase_summaries,

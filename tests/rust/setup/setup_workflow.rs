@@ -10,6 +10,166 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml_edit::DocumentMut;
 
+const CODE_REFERENCE_FILES: &[&str] = &[
+    "cpp/build",
+    "cpp/concurrency",
+    "cpp/core",
+    "cpp/modern",
+    "cpp/performance",
+    "cpp/templates",
+    "cpp/testing",
+    "csharp/aspnet",
+    "csharp/blazor",
+    "csharp/core",
+    "csharp/performance",
+    "csharp/persistence",
+    "csharp/testing",
+    "go/concurrency",
+    "go/core",
+    "go/generics",
+    "go/interfaces",
+    "go/structure",
+    "go/testing",
+    "java/core",
+    "java/persistence",
+    "java/reactive",
+    "java/security",
+    "java/spring",
+    "java/testing",
+    "javascript/async",
+    "javascript/browser",
+    "javascript/core",
+    "javascript/modules",
+    "javascript/node",
+    "javascript/testing",
+    "kotlin/compose",
+    "kotlin/core",
+    "kotlin/coroutines",
+    "kotlin/ktor",
+    "kotlin/multiplatform",
+    "kotlin/testing",
+    "php/async",
+    "php/core",
+    "php/laravel",
+    "php/symfony",
+    "php/testing",
+    "python/async",
+    "python/core",
+    "python/packaging",
+    "python/testing",
+    "python/typing",
+    "rust/async",
+    "rust/core",
+    "rust/errors",
+    "rust/ownership",
+    "rust/testing",
+    "rust/traits",
+    "sql/dialects",
+    "sql/optimization",
+    "sql/queries",
+    "sql/schema",
+    "sql/windows",
+    "swift/concurrency",
+    "swift/core",
+    "swift/memory",
+    "swift/protocols",
+    "swift/swiftui",
+    "swift/testing",
+    "typescript/config",
+    "typescript/core",
+    "typescript/guards",
+    "typescript/patterns",
+    "typescript/testing",
+    "typescript/types",
+];
+
+const BACKEND_REFERENCE_FILES: &[&str] = &[
+    "aspnetcore/architecture",
+    "aspnetcore/data",
+    "aspnetcore/minimal",
+    "aspnetcore/runtime",
+    "aspnetcore/security",
+    "aspnetcore/testing",
+    "django/models",
+    "django/security",
+    "django/serializers",
+    "django/testing",
+    "django/views",
+    "fastapi/data",
+    "fastapi/migration",
+    "fastapi/routing",
+    "fastapi/schemas",
+    "fastapi/security",
+    "fastapi/testing",
+    "nestjs/controllers",
+    "nestjs/dtos",
+    "nestjs/migration",
+    "nestjs/security",
+    "nestjs/services",
+    "nestjs/testing",
+    "springboot/cloud",
+    "springboot/data",
+    "springboot/runtime",
+    "springboot/security",
+    "springboot/testing",
+    "springboot/web",
+];
+
+const FRONTEND_REFERENCE_FILES: &[&str] = &[
+    "angular/components",
+    "angular/core",
+    "angular/ngrx",
+    "angular/routing",
+    "angular/rxjs",
+    "angular/testing",
+    "flutter/bloc",
+    "flutter/core",
+    "flutter/navigation",
+    "flutter/performance",
+    "flutter/riverpod",
+    "flutter/structure",
+    "flutter/testing",
+    "flutter/widgets",
+    "nextjs/actions",
+    "nextjs/app-router",
+    "nextjs/core",
+    "nextjs/data",
+    "nextjs/runtime",
+    "nextjs/server-components",
+    "nextjs/testing",
+    "react/core",
+    "react/hooks",
+    "react/migration",
+    "react/performance",
+    "react/react19",
+    "react/server-components",
+    "react/state",
+    "react/testing",
+    "react-native/core",
+    "react-native/lists",
+    "react-native/navigation",
+    "react-native/platform",
+    "react-native/storage",
+    "react-native/structure",
+    "react-native/testing",
+    "vue/build",
+    "vue/components",
+    "vue/core",
+    "vue/mobile",
+    "vue/nuxt",
+    "vue/state",
+    "vue/testing",
+    "vue/typescript",
+];
+
+const REVIEW_REFERENCE_FILES: &[&str] = &[
+    "core",
+    "defect-patterns",
+    "finding-quality",
+    "spec-compliance",
+    "test-evidence",
+];
+
 #[test]
 fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
     let fixture = Fixture::new("install_cleans_legacy");
@@ -146,6 +306,44 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root
             .join("skills/loom/references/uix/stacks/uniapp.md")
             .exists());
+        assert!(root
+            .join("skills/loom/references/tech/arch/core.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/tech/arch/nfr.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/tech/arch/adr.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/tech/api/core.md")
+            .exists());
+        assert!(root
+            .join("skills/loom/references/tech/api/contract.md")
+            .exists());
+        for file in REVIEW_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/review/{file}.md"))
+                .exists());
+        }
+        assert!(root
+            .join("skills/loom/references/tech/code/common.md")
+            .exists());
+        for file in CODE_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/code/{file}.md"))
+                .exists());
+        }
+        for file in BACKEND_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/backend/{file}.md"))
+                .exists());
+        }
+        for file in FRONTEND_REFERENCE_FILES {
+            assert!(root
+                .join(format!("skills/loom/references/tech/frontend/{file}.md"))
+                .exists());
+        }
         assert!(!root.join("skills/loom/references/delivery").exists());
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
@@ -164,6 +362,54 @@ fn install_projects_shared_references_to_agent_read_paths() {
         .opencode_home
         .join("references/loom/uix/templates/tokens.tailwind.tpl")
         .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/arch/core.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/arch/nfr.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/arch/adr.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/api/core.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/api/contract.md")
+        .exists());
+    for file in REVIEW_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/review/{file}.md"))
+            .exists());
+    }
+    assert!(env
+        .opencode_home
+        .join("references/loom/tech/code/common.md")
+        .exists());
+    for file in CODE_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/code/{file}.md"))
+            .exists());
+    }
+    for file in BACKEND_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/backend/{file}.md"))
+            .exists());
+    }
+    for file in FRONTEND_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/frontend/{file}.md"))
+            .exists());
+    }
     assert!(!env.opencode_home.join("references/loom/delivery").exists());
     assert!(env
         .opencode_home
@@ -606,28 +852,36 @@ fn opencode_commands_expose_mcp_result_discipline() {
     );
 
     for required in [
-        "MCP-selected references:",
+        "Reference profiles:",
         "Reference discipline:",
-        "uiQualityContract.referenceProfile.referenceIds",
-        "../references/loom/uix/core.md",
-        "`uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification`",
-        "../references/loom/uix/anti-patterns.md",
-        "uix.scenarios.admin-dashboard",
-        "uix.tokens.color-system",
-        "uix.stacks.react",
-        "../references/loom/uix/templates/tokens.css.tpl",
-        "../references/loom/uix/templates/tokens.tailwind.tpl",
-        "uiQualityContract.designTokenAssetPlan.templateId",
+        "referenceLoadPlan",
+        "Resolve `path` relative to `../references/loom/`",
+        "Load exactly the listed paths",
+        "Do not derive paths from group names",
+        "scan reference directories",
+        "external language/API/architecture/UI skills",
         "do not paste reference prose or template bodies",
-        "creates, changes, or reviews user-visible frontend work",
-        "Focus references are contract-selected ids, not fallback reading",
-        "companion scenario ids",
         "Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result",
         "Do not load separate delivery reference files",
     ] {
         assert!(
             loom.contains(required),
             "opencode loom.md missing optional reference guidance {required}"
+        );
+    }
+    for forbidden in [
+        "MCP-selected references:",
+        "uiQualityContract.referenceProfile.groups",
+        "../references/loom/uix/core.md",
+        "`groups.core`",
+        "../references/loom/uix/anti-patterns.md",
+        "../references/loom/uix/templates/tokens.css.tpl",
+        "Focus references are contract-selected group/items",
+        "skill_reference_by_group",
+    ] {
+        assert!(
+            !loom.contains(forbidden),
+            "opencode loom.md must not retain hard-coded reference map fragment {forbidden}"
         );
     }
 
@@ -673,25 +927,35 @@ fn agent_templates_expose_reference_loading_protocol() {
         for required in [
             "## Reference Loading",
             "Protocol:",
-            "MCP-selected references:",
             "Reference discipline:",
             "After reading the current request group",
-            "uiQualityContract.referenceProfile.referenceIds",
-            "uiQualityContract.designTokenAssetPlan.templateId",
-            "Do not scan the whole",
+            "referenceLoadPlan",
+            "Reference profiles:",
+            "Do not derive paths from group names",
+            "scan reference directories",
             "If a referenced file is not selected by the MCP contract",
-            "frontendQualitySelfCheck",
             "do not paste reference prose or template bodies",
-            "Focus references are contract-selected ids, not fallback reading",
-            "`uix.system`",
-            "`uix.scenarios.admin-dashboard`",
-            "`uix.tokens.color-system`",
-            "`uix.stacks.react`",
-            "`uix.templates.tokens-css`",
         ] {
             assert!(
                 content.contains(required),
                 "{file} missing reference loading protocol fragment {required}"
+            );
+        }
+        for forbidden in [
+            "MCP-selected references:",
+            "uiQualityContract.referenceProfile.groups",
+            "uiQualityContract.designTokenAssetPlan.templateId",
+            "../references/loom/uix/core.md",
+            "`groups.core`",
+            "`groups.scenarios`",
+            "`groups.tokens`",
+            "`groups.stacks`",
+            "`groups.templates`",
+            "skill_reference_by_group",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{file} must not retain hard-coded reference map fragment {forbidden}"
             );
         }
     }
@@ -727,6 +991,304 @@ fn agent_templates_expose_reference_loading_protocol() {
             !content.contains("references/external-references.md`: comparing external"),
             "{file} must not expose external-references as a normal deploy reference"
         );
+    }
+}
+
+#[test]
+fn loom_code_references_are_operational_and_load_plan_driven() {
+    let repo = repo_root();
+    let code_root = repo.join("plugins/shared/loom/references/tech/code");
+    let backend_root = repo.join("plugins/shared/loom/references/tech/backend");
+    let frontend_root = repo.join("plugins/shared/loom/references/tech/frontend");
+    let common = fs::read_to_string(code_root.join("common.md")).unwrap();
+    for required in [
+        "Position In Loom",
+        "Repository Adaptation",
+        "Delivery Rules",
+        "Verification Rules",
+        "Evidence Rules",
+        "Common Anti-Patterns",
+    ] {
+        assert!(
+            common.contains(required),
+            "common code reference missing shared section {required}"
+        );
+    }
+    let mut files = Vec::new();
+    collect_markdown_files(&code_root, &mut files);
+    assert!(
+        files.len() >= 71,
+        "expected language reference coverage for all supported code profiles"
+    );
+
+    for path in files {
+        if path.file_name().is_some_and(|name| name == "common.md") {
+            continue;
+        }
+        let content = fs::read_to_string(&path).unwrap();
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 25,
+            "{} is too thin to act as a topic code reference: {line_count} lines",
+            path.display()
+        );
+        for required in [
+            "When To Use",
+            "Implementation Focus",
+            "Verification Focus",
+            "Evidence Focus",
+        ] {
+            assert!(
+                content.contains(required),
+                "{} missing code reference section or boundary {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Load this file only when `techReferenceProfile.groups",
+            "Load only the listed group/items",
+            "Source Coverage",
+            "Repository Adaptation",
+            "Delivery Patterns",
+            "## Evidence\n",
+            "## Anti-Patterns",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained old group-to-path reference loading fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+    let java_core = fs::read_to_string(code_root.join("java/core.md")).unwrap();
+    assert!(java_core.contains("app.<project_slug>"));
+    assert!(java_core.contains("app.generated"));
+    assert!(java_core.contains("com.example"));
+    let java_spring = fs::read_to_string(code_root.join("java/spring.md")).unwrap();
+    assert!(java_spring.contains("component scanning"));
+    assert!(java_spring.contains("app.<project_slug>"));
+
+    let mut backend_files = Vec::new();
+    collect_markdown_files(&backend_root, &mut backend_files);
+    assert!(
+        backend_files.len() >= BACKEND_REFERENCE_FILES.len(),
+        "expected backend framework reference coverage for selected framework profiles"
+    );
+    for path in backend_files {
+        let content = fs::read_to_string(&path).unwrap();
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 25,
+            "{} is too thin to act as a backend framework reference: {line_count} lines",
+            path.display()
+        );
+        for required in [
+            "When To Use",
+            "Implementation Focus",
+            "Verification Focus",
+            "Evidence Focus",
+        ] {
+            assert!(
+                content.contains(required),
+                "{} missing backend framework reference section or boundary {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Load this file only when `techReferenceProfile.groups",
+            "Load only the listed group/items",
+            "Source Coverage",
+            "Repository Adaptation",
+            "Delivery Patterns",
+            "## Evidence\n",
+            "## Anti-Patterns",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained protocol or duplicated shared reference fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+    let spring_web = fs::read_to_string(backend_root.join("springboot/web.md")).unwrap();
+    assert!(spring_web.contains("real Spring Boot base package"));
+    assert!(spring_web.contains("com.example"));
+
+    let mut frontend_files = Vec::new();
+    collect_markdown_files(&frontend_root, &mut frontend_files);
+    assert!(
+        frontend_files.len() >= FRONTEND_REFERENCE_FILES.len(),
+        "expected frontend framework reference coverage for selected framework profiles"
+    );
+    for path in frontend_files {
+        let content = fs::read_to_string(&path).unwrap();
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 25,
+            "{} is too thin to act as a frontend framework reference: {line_count} lines",
+            path.display()
+        );
+        for required in [
+            "When To Use",
+            "Implementation Focus",
+            "Verification Focus",
+            "Evidence Focus",
+        ] {
+            assert!(
+                content.contains(required),
+                "{} missing frontend framework reference section {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Load this file only when `techReferenceProfile.groups",
+            "Load only the listed group/items",
+            "Source Coverage",
+            "Repository Adaptation",
+            "Delivery Patterns",
+            "## Evidence\n",
+            "## Anti-Patterns",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained protocol or duplicated shared reference fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn loom_review_references_are_operational_without_protocol_duplication() {
+    let repo = repo_root();
+    let review_root = repo.join("plugins/shared/loom/references/tech/review");
+    let expected = [
+        ("core.md", "Review Posture"),
+        ("spec-compliance.md", "Missing Requirement Checks"),
+        ("defect-patterns.md", "Functional Correctness"),
+        ("test-evidence.md", "Strong Evidence"),
+        ("finding-quality.md", "Finding Content"),
+    ];
+
+    for (file, required_section) in expected {
+        let path = review_root.join(file);
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read review reference {}: {error}", path.display()));
+        let line_count = content.lines().count();
+        assert!(
+            line_count >= 30,
+            "{} is too thin to guide review decisions: {line_count} lines",
+            path.display()
+        );
+        for required in ["Use this reference", required_section] {
+            assert!(
+                content.contains(required),
+                "{} missing review reference section {required}",
+                path.display()
+            );
+        }
+        for forbidden in [
+            "referenceLoadPlan",
+            "readFieldGroup",
+            "requestReadPlan",
+            "techReferenceProfile",
+            "skill_reference_by_group",
+            "Full Review Report Template",
+            "Code Review: [PR Title]",
+            "Receiving Feedback",
+            "Load this file only",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{} retained protocol, markdown report template, or human-feedback fragment {forbidden}",
+                path.display()
+            );
+        }
+    }
+    let defect_patterns = fs::read_to_string(review_root.join("defect-patterns.md")).unwrap();
+    assert!(defect_patterns.contains("placeholder namespaces"));
+    assert!(defect_patterns.contains("com.example"));
+}
+
+#[test]
+fn loom_tech_references_do_not_duplicate_mcp_contract_terms() {
+    let repo = repo_root();
+    let tech_root = repo.join("plugins/shared/loom/references/tech");
+    let mut files = Vec::new();
+    collect_markdown_files(&tech_root, &mut files);
+    let forbidden = [
+        "TaskResult",
+        "ReviewResult",
+        "TaskPlan",
+        "AAC",
+        "PGC",
+        "apiContractEvidence",
+        "apiContractRequirements",
+        "architectureQualityEvidence",
+        "architectureQualityRequirementRefs",
+        "architectureQuality.",
+        "interfaces[]",
+        "interfaceId",
+        "type: \"http_api\"",
+        "recommendedNextAction",
+        "nextAction",
+        "execution_repair",
+        "taskplan_repair",
+        "architecture_artifact_repair",
+        "manual_review",
+        "continue_to_next_phase",
+        "needs_user_decision",
+        "approved_with_notes",
+        "changes_requested",
+        "requestReadPlan",
+        "readFieldGroup",
+        "referenceLoadPlan",
+        "techReferenceProfile",
+        "outputContract",
+        "resultTemplate",
+        "enumRefs",
+        "schemaShape",
+        "writeTargets",
+        "MCP request",
+        ".loom",
+        "loom.",
+    ];
+
+    for path in files {
+        let content = fs::read_to_string(&path).unwrap();
+        for term in forbidden {
+            assert!(
+                !content.contains(term),
+                "{} must not duplicate MCP contract term {term}",
+                path.display()
+            );
+        }
+    }
+}
+
+fn collect_markdown_files(dir: &Path, output: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_markdown_files(&path, output);
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            output.push(path);
+        }
     }
 }
 
@@ -1079,6 +1641,71 @@ impl Fixture {
                     .package_root
                     .join(format!("plugins/shared/loom/references/uix/{path}")),
                 &format!("/* {path} */\n"),
+            );
+        }
+        for path in [
+            "adr", "core", "data", "failure", "nfr", "patterns", "system",
+        ] {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/arch/{path}.md"
+                )),
+                &format!("# {path} Architecture Reference\n"),
+            );
+        }
+        for path in [
+            "contract",
+            "core",
+            "errors",
+            "evolution",
+            "operations",
+            "pagination",
+            "resource",
+            "security",
+        ] {
+            write_file(
+                &self
+                    .package_root
+                    .join(format!("plugins/shared/loom/references/tech/api/{path}.md")),
+                &format!("# {path} API Reference\n"),
+            );
+        }
+        for path in REVIEW_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/review/{path}.md"
+                )),
+                &format!("# {path} Review Reference\n"),
+            );
+        }
+        write_file(
+            &self
+                .package_root
+                .join("plugins/shared/loom/references/tech/code/common.md"),
+            "# Common Code Reference\n",
+        );
+        for path in CODE_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/code/{path}.md"
+                )),
+                &format!("# {path} Code Reference\n"),
+            );
+        }
+        for path in BACKEND_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/backend/{path}.md"
+                )),
+                &format!("# {path} Backend Reference\n"),
+            );
+        }
+        for path in FRONTEND_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/frontend/{path}.md"
+                )),
+                &format!("# {path} Frontend Reference\n"),
             );
         }
         for name in [

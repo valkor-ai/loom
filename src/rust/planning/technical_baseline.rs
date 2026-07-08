@@ -208,7 +208,7 @@ fn build_request_root(
         "operation": if matches!(project_kind, ProjectKind::ExistingProject) {
             "infer_existing_project_baseline"
         } else {
-            "recommend_greenfield_baseline"
+            "recommend_new_project_baseline"
         },
         "brainstormLens": {
             "summary": brainstorm.summary,
@@ -269,9 +269,9 @@ fn build_request_root(
         "repoEvidence": repo_evidence,
         "selectionGuidance": selection_guidance,
         "enumRefs": {
-            "projectKind": ["greenfield", "existing_project", "unknown"],
+            "projectKind": ["new_project", "existing_project", "unknown"],
             "status": ["draft", "needs_user_confirmation", "auto_accepted", "confirmed", "blocked", "superseded"],
-            "source": ["user_specified", "user_confirmed", "detected_from_repo", "agent_inferred_from_repo_signals", "agent_recommended_for_greenfield"],
+            "source": ["user_specified", "user_confirmed", "detected_from_repo", "agent_inferred_from_repo_signals", "agent_recommended_for_new_project"],
             "scope": ["project", "roadmap", "phase_override"],
             "approvalType": ["user_confirmed", "policy_auto_accept", "manual_override", "none"],
             "confidence": ["low", "medium", "high", "unknown"]
@@ -329,8 +329,8 @@ fn build_request_root(
                 {
                     "groupId": "technical_baseline_selection_guidance",
                     "required": selection_guidance.is_some(),
-                    "purpose": "Read the greenfield confirmation discipline before asking the user to confirm the baseline.",
-                    "whenToRead": "Read only when the projectKind is greenfield or the baseline still needs explicit user confirmation.",
+                    "purpose": "Read the new-project confirmation discipline before asking the user to confirm the baseline.",
+                    "whenToRead": "Read only when the projectKind is new_project or the baseline still needs explicit user confirmation.",
                     "selectors": read_selectors_value_from_paths([
                         "selectionGuidance"
                     ])
@@ -673,13 +673,13 @@ fn technical_baseline_selection_guidance(
     project_kind: ProjectKind,
     has_previous_baseline: bool,
 ) -> Option<Value> {
-    if !matches!(project_kind, ProjectKind::Greenfield) && !has_previous_baseline {
+    if !matches!(project_kind, ProjectKind::NewProject) && !has_previous_baseline {
         return None;
     }
     Some(json!({
         "schemaVersion": "1.0",
-        "purpose": if matches!(project_kind, ProjectKind::Greenfield) {
-            "Guide the agent-user technical baseline confirmation for a greenfield empty project before PGC."
+        "purpose": if matches!(project_kind, ProjectKind::NewProject) {
+            "Guide the agent-user technical baseline confirmation for a new project in an empty or uninitialized workspace before PGC."
         } else {
             "Guide the agent-user technical baseline confirmation when a previous baseline exists and the final candidate may add, replace, or conflict with stable baseline elements."
         },
@@ -706,7 +706,7 @@ fn technical_baseline_selection_guidance(
             "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary."
         },
         "recommendationBasis": {
-            "authority": "Use the complete BrainstormContract as the product-scope authority for the first greenfield TechnicalBaseline recommendation.",
+            "authority": "Use the complete BrainstormContract as the product-scope authority for the first new-project TechnicalBaseline recommendation.",
             "mustRead": [
                 "brainstormLens.summary",
                 "brainstormLens.scopeIndex included/deferred/excluded labels and assumptions",
@@ -903,14 +903,14 @@ where
             "project_kind_confirmation".to_string(),
         ));
     }
-    if matches!(candidate.project_kind, ProjectKind::Greenfield)
+    if matches!(candidate.project_kind, ProjectKind::NewProject)
         && candidate.approval.r#type != TechnicalBaselineApprovalType::UserConfirmed
     {
         return Ok(technical_baseline_user_gate(
             input,
             authorized,
             "The technology baseline for a new project must be explicitly confirmed by the user before planning continues. Present the recommended stack, capture corrections, then rewrite the same candidate with approval.type=user_confirmed.".to_string(),
-            "greenfield_baseline_confirmation".to_string(),
+            "new_project_baseline_confirmation".to_string(),
         ));
     }
     if candidate.requires_user_confirmation.unwrap_or(false)
@@ -1089,13 +1089,13 @@ fn validate_candidate(
             "A confirmed TechnicalBaseline cannot keep approval.type=none.",
         ));
     }
-    if matches!(candidate.project_kind, ProjectKind::Greenfield) {
-        validate_greenfield_candidate(candidate, &mut issues);
+    if matches!(candidate.project_kind, ProjectKind::NewProject) {
+        validate_new_project_candidate(candidate, &mut issues);
     }
     issues
 }
 
-const GREENFIELD_CORE_TRACKS: [&str; 6] = [
+const NEW_PROJECT_CORE_TRACKS: [&str; 6] = [
     "web",
     "app",
     "backend",
@@ -1103,10 +1103,10 @@ const GREENFIELD_CORE_TRACKS: [&str; 6] = [
     "dataAccess",
     "externalServices",
 ];
-const GREENFIELD_TRACK_STATUSES: [&str; 4] =
+const NEW_PROJECT_TRACK_STATUSES: [&str; 4] =
     ["selected", "not_needed", "not_applicable", "user_custom"];
 
-fn validate_greenfield_candidate(
+fn validate_new_project_candidate(
     candidate: &TechnicalBaselineCandidateAgentWritable,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
@@ -1122,9 +1122,9 @@ fn validate_greenfield_candidate(
         .is_empty()
     {
         issues.push(issue(
-            "GREENFIELD_BASELINE_CONFIRMATION_REQUIRED",
+            "NEW_PROJECT_BASELINE_CONFIRMATION_REQUIRED",
             "approval.confirmedAt",
-            "Greenfield TechnicalBaseline with approval.type=user_confirmed must include the actual user confirmation timestamp.",
+            "New-project TechnicalBaseline with approval.type=user_confirmed must include the actual user confirmation timestamp.",
         ));
     }
     if !matches!(
@@ -1132,25 +1132,25 @@ fn validate_greenfield_candidate(
         TechnicalBaselineStatus::Confirmed | TechnicalBaselineStatus::NeedsUserConfirmation
     ) {
         issues.push(issue(
-            "GREENFIELD_BASELINE_CONFIRMATION_REQUIRED",
+            "NEW_PROJECT_BASELINE_CONFIRMATION_REQUIRED",
             "status",
-            "Greenfield TechnicalBaseline must be confirmed before planning, or use status=needs_user_confirmation when user confirmation is still pending.",
+            "New-project TechnicalBaseline must be confirmed before planning, or use status=needs_user_confirmation when user confirmation is still pending.",
         ));
     }
-    if !greenfield_stack_tracks_complete(&candidate.stack) {
+    if !new_project_stack_tracks_complete(&candidate.stack) {
         issues.push(issue(
-            "GREENFIELD_BASELINE_TRACKS_INCOMPLETE",
+            "NEW_PROJECT_BASELINE_TRACKS_INCOMPLETE",
             "stack.tracks",
-            "Greenfield TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
+            "New-project TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
         ));
     }
 }
 
-fn greenfield_stack_tracks_complete(stack: &Value) -> bool {
+fn new_project_stack_tracks_complete(stack: &Value) -> bool {
     let Some(tracks) = stack.get("tracks").and_then(Value::as_object) else {
         return false;
     };
-    GREENFIELD_CORE_TRACKS.iter().all(|track| {
+    NEW_PROJECT_CORE_TRACKS.iter().all(|track| {
         let Some(value) = tracks.get(*track).and_then(Value::as_object) else {
             return false;
         };
@@ -1164,7 +1164,7 @@ fn greenfield_stack_tracks_complete(stack: &Value) -> bool {
             .and_then(Value::as_str)
             .map(str::trim)
             .unwrap_or_default();
-        GREENFIELD_TRACK_STATUSES.contains(&status) && !selection.is_empty()
+        NEW_PROJECT_TRACK_STATUSES.contains(&status) && !selection.is_empty()
     })
 }
 
@@ -1172,7 +1172,7 @@ fn technical_baseline_decision_needs(
     project_kind: ProjectKind,
     baseline_exists: bool,
 ) -> Vec<String> {
-    if matches!(project_kind, ProjectKind::Greenfield) {
+    if matches!(project_kind, ProjectKind::NewProject) {
         return vec![
             "web client technology track when applicable".to_string(),
             "app client technology track when applicable".to_string(),
@@ -1441,7 +1441,7 @@ fn infer_project_kind_from_repo(project_root: &Path) -> ProjectKind {
     {
         ProjectKind::ExistingProject
     } else {
-        ProjectKind::Greenfield
+        ProjectKind::NewProject
     }
 }
 

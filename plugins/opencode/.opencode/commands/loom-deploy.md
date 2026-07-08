@@ -22,7 +22,7 @@ Follow the returned action result. Do not invent deployment assets, topology, re
 
 During `active_operation`, call only the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it.
 
-For `DeployRepairAssetsNext`, edit only the returned generated deployment asset files and retry through the returned deploy tool. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
+For `DeployRepairAssetsNext`, edit only the returned generated deployment asset files and retry through the returned `retryTool`; do not use `loom.deployRun` as a repair retry. For deploy execution repair, edit only the allowed application/runtime files and submit through the returned repair submit tool.
 
 When a deploy repair or deploy execution repair result contains `requestRef`, use `loom.inspectRequest` and `loom.readFieldGroup`. `requestReadPlan.groups` is the only read contract. Read only the field groups needed for the current repair action.
 

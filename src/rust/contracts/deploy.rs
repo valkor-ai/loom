@@ -187,6 +187,12 @@ pub struct DeploymentSourceService {
     pub working_directory: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_package_json_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manifest_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lockfile_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_refs: Vec<String>,
     pub runtime_kind: RuntimeKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_manager: Option<PackageManager>,

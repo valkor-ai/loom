@@ -1,15 +1,17 @@
-use contracts::TaskDefinition;
+use contracts::{CodeQualityRequirement, TaskDefinition, TaskPlan};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
-pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 21] = [
+pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 22] = [
     "task.frontendExperienceRequirement.uiQualityContract.scenario",
     "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
     "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
     "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
     "task.frontendExperienceRequirement.uiQualityContract.density",
     "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
-    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceIds",
     "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode",
+    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups",
+    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan",
     "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy",
     "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId",
     "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles",
@@ -91,6 +93,7 @@ pub(crate) fn taskplan_group_result_template(
                     "userFlows": [],
                     "stateMachines": [],
                     "decisions": [],
+                    "nfrs": [],
                     "risks": []
                 }
             },
@@ -111,7 +114,10 @@ pub(crate) fn taskplan_group_result_template(
                 "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
                 "evidenceType": "static_check",
                 "intent": "How verification will prove this task preserved or implemented that concept."
-            }]
+            }],
+            "architectureQualityRequirementRefs": [],
+            "apiContractRequirementRefs": [],
+            "codeQualityRequirementRefs": []
         }],
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -138,7 +144,51 @@ pub(crate) fn runtime_delivery_requirement_template(runtime_delivery: Option<&Va
     })
 }
 
-pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) -> Value {
+pub(crate) fn code_quality_requirements_for_task(
+    task_plan: &TaskPlan,
+    task: &TaskDefinition,
+) -> Vec<CodeQualityRequirement> {
+    if task.code_quality_requirement_refs.is_empty() {
+        return vec![];
+    }
+    let refs = task
+        .code_quality_requirement_refs
+        .iter()
+        .collect::<BTreeSet<_>>();
+    task_plan
+        .code_quality_requirements
+        .iter()
+        .filter(|requirement| refs.contains(&requirement.requirement_id))
+        .cloned()
+        .collect()
+}
+
+pub(crate) fn code_quality_execution_context(
+    code_quality_requirements: &[CodeQualityRequirement],
+) -> Value {
+    Value::Array(
+        code_quality_requirements
+            .iter()
+            .map(|requirement| {
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "kind": requirement.kind,
+                    "appliesToTaskIds": requirement.applies_to_task_ids,
+                    "referenceGroups": requirement.reference_groups,
+                    "referenceLoadPlan": requirement.reference_load_plan,
+                    "packageNamingPolicy": requirement.package_naming_policy,
+                    "focusTags": requirement.focus_tags
+                })
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn task_result_template_with_code_quality(
+    task_plan_id: &str,
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+) -> Value {
     let verification_results = task
         .verification_intents
         .iter()
@@ -231,6 +281,24 @@ pub(crate) fn task_result_template(task_plan_id: &str, task: &TaskDefinition) ->
             ),
         );
     }
+    if architecture_quality_evidence_applies(task) {
+        object.insert(
+            "architectureQualityEvidence".to_string(),
+            architecture_quality_evidence_template(task),
+        );
+    }
+    if api_contract_evidence_applies(task) {
+        object.insert(
+            "apiContractEvidence".to_string(),
+            api_contract_evidence_template(task),
+        );
+    }
+    if code_quality_evidence_applies(task) {
+        object.insert(
+            "codeQualityEvidence".to_string(),
+            code_quality_evidence_template(task, code_quality_requirements),
+        );
+    }
     template
 }
 
@@ -286,7 +354,28 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
     if !task.concept_refs.is_empty() {
         fields.push("conceptEvidence");
     }
+    if architecture_quality_evidence_applies(task) {
+        fields.push("architectureQualityEvidence");
+    }
+    if api_contract_evidence_applies(task) {
+        fields.push("apiContractEvidence");
+    }
+    if code_quality_evidence_applies(task) {
+        fields.push("codeQualityEvidence");
+    }
     fields
+}
+
+pub(crate) fn architecture_quality_evidence_applies(task: &TaskDefinition) -> bool {
+    !task.architecture_quality_requirement_refs.is_empty()
+}
+
+pub(crate) fn api_contract_evidence_applies(task: &TaskDefinition) -> bool {
+    !task.api_contract_requirement_refs.is_empty()
+}
+
+pub(crate) fn code_quality_evidence_applies(task: &TaskDefinition) -> bool {
+    !task.code_quality_requirement_refs.is_empty()
 }
 
 pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
@@ -338,6 +427,96 @@ fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
     })
 }
 
+fn architecture_quality_evidence_template(task: &TaskDefinition) -> Value {
+    Value::Array(
+        task.architecture_quality_requirement_refs
+            .iter()
+            .map(|requirement_id| {
+                json!({
+                    "requirementId": requirement_id,
+                    "status": "satisfied",
+                    "verificationIds": template_verification_ids_for_architecture_quality(task),
+                    "changedFiles": [],
+                    "summary": ""
+                })
+            })
+            .collect(),
+    )
+}
+
+fn api_contract_evidence_template(task: &TaskDefinition) -> Value {
+    Value::Array(
+        task.api_contract_requirement_refs
+            .iter()
+            .map(|requirement_id| {
+                json!({
+                    "requirementId": requirement_id,
+                    "status": "satisfied",
+                    "interfaceRefs": task.write_boundary.artifact_refs.interfaces.clone(),
+                    "verificationIds": template_verification_ids_for_architecture_quality(task),
+                    "changedFiles": [],
+                    "successPaths": [],
+                    "errorPaths": [],
+                    "paginationPaths": [],
+                    "contractFileRefs": [],
+                    "knownGaps": [],
+                    "summary": ""
+                })
+            })
+            .collect(),
+    )
+}
+
+fn code_quality_evidence_template(
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+) -> Value {
+    Value::Array(
+        task.code_quality_requirement_refs
+            .iter()
+            .map(|requirement_id| {
+                let reference_groups = code_quality_requirements
+                    .iter()
+                    .find(|requirement| &requirement.requirement_id == requirement_id)
+                    .map(|requirement| json!(requirement.reference_groups))
+                    .unwrap_or_else(|| json!({}));
+                let reference_files = code_quality_requirements
+                    .iter()
+                    .find(|requirement| &requirement.requirement_id == requirement_id)
+                    .map(|requirement| {
+                        requirement
+                            .reference_load_plan
+                            .iter()
+                            .map(|item| item.path.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                json!({
+                    "requirementId": requirement_id,
+                    "status": "satisfied",
+                    "referenceGroupsChecked": reference_groups,
+                    "referenceFilesChecked": reference_files,
+                    "verificationIds": template_verification_ids_for_architecture_quality(task),
+                    "changedFiles": [],
+                    "commandsRun": [],
+                    "knownGaps": [],
+                    "summary": "Explain how the changed files followed the selected code quality references and existing repository style."
+                })
+            })
+            .collect(),
+    )
+}
+
+fn template_verification_ids_for_architecture_quality(task: &TaskDefinition) -> Vec<String> {
+    if task.verification_intents.len() == 1 {
+        return vec![task.verification_intents[0].verification_id.clone()];
+    }
+    task.verification_intents
+        .iter()
+        .map(|intent| intent.verification_id.clone())
+        .collect()
+}
+
 fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
     if task.frontend_experience_requirement.is_none() {
         return Value::Null;
@@ -383,10 +562,19 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .frontend_experience_requirement
         .as_ref()
         .and_then(|requirement| requirement.get("executionGuidance"));
-    let reference_ids = ui_quality_contract
-        .pointer("/referenceProfile/referenceIds")
-        .and_then(Value::as_array)
+    let reference_groups = ui_quality_contract
+        .pointer("/referenceProfile/groups")
         .cloned()
+        .unwrap_or_else(|| json!({}));
+    let reference_files = ui_quality_contract
+        .pointer("/referenceProfile/referenceLoadPlan")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_string))
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let states_covered = ui_quality_contract
         .get("requiredUiStates")
@@ -519,7 +707,8 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         "status": "satisfied",
         "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
         "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str).unwrap_or("production_internal_product"),
-        "referenceIdsChecked": reference_ids,
+        "referenceGroupsChecked": reference_groups,
+        "referenceFilesChecked": reference_files,
         "statesCovered": states_covered,
         "businessUiRulesChecked": business_rules_checked,
         "forbiddenContentCheck": {

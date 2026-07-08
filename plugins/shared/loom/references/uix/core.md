@@ -6,27 +6,17 @@ This reference set is a Loom-owned rewrite. It absorbs proven UI craft categorie
 
 ## Routing Contract
 
-When the request includes `uiQualityContract.referenceProfile.referenceIds`, load only the listed references in addition to this core file.
+Load UIX references only from the current MCP request's `referenceLoadPlan` entries. Do not derive file paths from group names, scenario names, stack names, token names, or this reference file. Selected groups are evidence labels only; `referenceLoadPlan[].path` is the loading authority.
 
-| Reference id family | File location | Purpose |
-| --- | --- | --- |
-| `uix.anti-patterns` | `references/uix/anti-patterns.md` | Blocks demo-looking UI and product-boundary failures. |
-| `uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification` | Top-level files under `references/uix/` | Focus rules selected by the MCP contract for system foundations, workflow behavior, copy, data surfaces, responsive/mobile behavior, stack adoption, and rendered verification. |
-| `uix.tokens.*` | `references/uix/tokens/` | Defines semantic color, typography, spacing, grid, radius, elevation, and motion decisions. |
-| `uix.scenarios.*` | `references/uix/scenarios/` | Defines surface layout, density, navigation, component, and state expectations for a product scenario. |
-| `uix.stacks.*` | `references/uix/stacks/` | Defines framework-specific implementation patterns without changing the product contract. |
-| `uix.templates.tokens-css` | `references/uix/templates/tokens.css.tpl` | Token asset baseline for CSS variable systems. Load only when `uiQualityContract.designTokenAssetPlan.templateId` selects it. |
-| `uix.templates.tokens-tailwind` | `references/uix/templates/tokens.tailwind.tpl` | Token asset baseline for Tailwind theme extension. Load only when `uiQualityContract.designTokenAssetPlan.templateId` selects it. |
-
-Do not load unrelated UI skills. Do not copy reference text into task results. Cite reference ids in `frontendQualitySelfCheck.referenceIdsChecked`, then provide concrete evidence from the implemented UI.
+Do not load unrelated UI skills or scan the UIX reference tree. Do not copy reference text into task results. Cite loaded group/items in `frontendQualitySelfCheck.referenceGroupsChecked`, list exact loaded paths in `frontendQualitySelfCheck.referenceFilesChecked`, then provide concrete evidence from the implemented UI.
 
 ## Contract Chain
 
 Loom UIX must work as one chain, not as optional reading:
 
-1. Architecture writes `uiQualityContract` from the confirmed frontend target and repository evidence. It selects compact reference ids and a token asset plan; it does not copy reference prose.
+1. Architecture writes `uiQualityContract` from the confirmed frontend target and repository evidence. It selects compact reference groups and a token asset plan; it does not copy reference prose.
 2. TaskPlan copies the architecture `uiQualityContract` exactly into every task that owns visible UI surfaces, workflows, states, bindings, or frontend foundations.
-3. Execution reads only the selected ids, adapts the token template to the actual project stack/theme, and implements the business surface.
+3. Execution reads only the selected group/items, adapts the token template to the actual project stack/theme, and implements the business surface.
 4. TaskResult fills `frontendQualitySelfCheck` with changed UI files, states, actions, token asset files, token consumer files, viewports, and known gaps.
 5. Review checks the rendered product surface and the evidence; it must not accept a prose-only claim of UI quality.
 
@@ -66,7 +56,7 @@ Every production UI surface must establish these decisions before implementation
 
 ## Architecture
 
-- Convert the confirmed UI target into `uiQualityContract`: scenario, quality level, surface policy, layout baseline, density, semantic token policy, selected reference ids, forbidden user-visible content, required UI states, and business UI rules.
+- Convert the confirmed UI target into `uiQualityContract`: scenario, quality level, surface policy, layout baseline, density, semantic token policy, selected reference groups, forbidden user-visible content, required UI states, and business UI rules.
 - Keep the contract field-level and operational. Do not store large prose blobs or duplicate the full frontend model inside the UI contract.
 - The selected scenario reference must explain page structure. Token references must explain how the visual system is made. Stack references must explain how to implement it in the detected framework.
 - Frontend sections must reject product-boundary leakage: runtime commands, stack explanations, Loom/MCP terms, verification instructions, and delivery progress do not belong in the product UI.
@@ -102,4 +92,4 @@ Classify UI defects as product defects when they affect:
 - Responsive behavior at required viewports.
 - Product-boundary leakage or demo-only filler.
 
-Task and review evidence should name changed screens/components, checked states, checked viewports, reference ids used, token asset files changed/reused, screenshot or Playwright evidence when available, and known manual-review gaps.
+Task and review evidence should name changed screens/components, checked states, checked viewports, reference group/items used, token asset files changed/reused, screenshot or Playwright evidence when available, and known manual-review gaps.

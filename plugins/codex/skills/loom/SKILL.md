@@ -53,28 +53,24 @@ For `DeployRepairAssetsNext`, edit only the returned deployment asset files and 
 
 ## Reference Loading
 
-The current MCP request/result remains the authority. Load no reference by default; load references only when the current action matches the trigger.
+The current MCP request/result remains the authority. Load no reference by default; load references only when the current action selects a reference profile.
 
 Protocol:
-- Read `references/uix/core.md` only when the current action creates, changes, or reviews user-visible frontend work.
-- After reading the current request group, map `uiQualityContract.referenceProfile.referenceIds` to the exact focus, scenario, token, and stack reference files named below. Do not scan the whole `references/uix` tree.
-- When `uiQualityContract.designTokenAssetPlan.templateId` is present, load only the matching token template file. Treat it as a merge baseline for project files, not as text to copy into Loom artifacts.
+- After reading the current request group, choose references only from the profiles selected by that request.
+- Read reference files only from `referenceLoadPlan` arrays in the current MCP request/result.
+- Treat any selected group fields as semantic labels for scope and evidence, not as path mappings.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
-- In `frontendQualitySelfCheck`, report `referenceIdsChecked` and concrete evidence from changed files; do not paste reference prose or template bodies.
+- In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
 
-MCP-selected references:
-- `uix.core` -> `references/uix/core.md`.
-- `uix.anti-patterns` -> `references/uix/anti-patterns.md`.
-- `uix.system`, `uix.interaction`, `uix.content`, `uix.data`, `uix.mobile`, `uix.frameworks`, `uix.verification` -> the matching top-level file under `references/uix/`.
-- `uix.tokens.color-system`, `uix.tokens.typography`, `uix.tokens.spacing`, `uix.tokens.layout-grid`, `uix.tokens.motion`, `uix.tokens.radius-elevation` -> the matching file under `references/uix/tokens/`.
-- `uix.scenarios.admin-dashboard`, `uix.scenarios.data-console`, `uix.scenarios.fintech-workstation`, `uix.scenarios.fintech-consumer-app`, `uix.scenarios.consumer-app`, `uix.scenarios.mobile-responsive`, `uix.scenarios.mobile-native`, `uix.scenarios.marketing-site`, `uix.scenarios.corporate-site`, `uix.scenarios.docs-site`, `uix.scenarios.developer-tool`, `uix.scenarios.immersive-3d` -> the matching file under `references/uix/scenarios/`.
-- `uix.stacks.react`, `uix.stacks.vue`, `uix.stacks.plain-html`, `uix.stacks.native-mobile`, `uix.stacks.threejs`, `uix.stacks.svelte`, `uix.stacks.uniapp` -> the matching file under `references/uix/stacks/`.
-- `uix.templates.tokens-css` -> `references/uix/templates/tokens.css.tpl`; `uix.templates.tokens-tailwind` -> `references/uix/templates/tokens.tailwind.tpl`.
+Reference profiles:
+- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to the installed Loom references root for this agent.
+- Load exactly the listed paths for the current action. Do not derive paths from group names, scan reference directories, or load external language/API/architecture/UI skills.
+- Treat token template paths as merge baselines for project files, not as text to copy into Loom artifacts.
 
 Reference discipline:
-- Focus references are contract-selected ids, not fallback reading. Load a focus file only when its `uix.*` id appears in `referenceProfile.referenceIds`.
-- If the contract selects companion scenario ids such as `uix.scenarios.data-console` and `uix.scenarios.admin-dashboard`, read both and apply the more specific rule to each surface.
-- Do not load unselected UIX files to compensate for weak implementation planning; ask Loom to repair the contract only when selected references are insufficient for the task.
+- Do not load unselected references to compensate for weak implementation planning; ask Loom to repair the contract only when the selected `referenceLoadPlan` is insufficient for the task.
+- In TaskPlan, Execution, Review, and Repair requests without a selected load plan, use the provided quality refs, requirements, evidence, and review signals without reading raw references.
+- Do not paste tech reference text into Architecture, TaskPlan, TaskResult, ReviewResult, source files, or user-facing UI. Use references to produce concrete decisions, interface contracts, NFRs, risks, and evidence.
 
 Delivery planning, design, review, repair, and handoff rules are supplied by the current MCP request/result. Do not load separate delivery reference files.
 

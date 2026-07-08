@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use contracts::{
-    build_ui_quality_seed, ui_quality_contract_shape, ui_quality_contract_template,
-    ui_quality_enum_refs, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
+    ui_quality_contract_shape, ui_quality_contract_template, ui_quality_enum_refs,
+    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
     PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
@@ -126,6 +127,7 @@ fn materialize_request_inner(
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
     let frontend_experience_source = build_frontend_experience_source(phase);
+    let api_quality_seed = build_api_quality_seed(&planning_contract, &technical_baseline);
     let section_outputs = build_section_outputs(
         root,
         &request_id,
@@ -135,6 +137,7 @@ fn materialize_request_inner(
         &frontend_experience_source,
         &planning_contract,
         &technical_baseline,
+        &api_quality_seed,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
         state::store::StateError::StateCorrupted(
@@ -155,6 +158,7 @@ fn materialize_request_inner(
         &frontend_experience_source,
         &current_output,
         &section_outputs,
+        &api_quality_seed,
     )?;
     let request_file = to_project_relative(
         root,
@@ -209,6 +213,7 @@ fn build_request_root(
     frontend_experience_source: &Value,
     current_output: &SectionOutput,
     section_outputs: &[SectionOutput],
+    api_quality_seed: &Value,
 ) -> Result<Value, state::store::StateError> {
     let candidate_schema =
         serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
@@ -228,7 +233,8 @@ fn build_request_root(
             .as_ref(),
         Some(technical_baseline),
     );
-    Ok(json!({
+    let architecture_quality_seed = build_architecture_quality_seed();
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
         "requestId": request_id,
@@ -239,6 +245,7 @@ fn build_request_root(
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
         "uiQualitySeed": ui_quality_seed,
+        "architectureQualitySeed": architecture_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -252,6 +259,7 @@ fn build_request_root(
             "status": ["ready", "blocked"],
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
+            "architectureQuality": architecture_quality_enum_refs(),
             "uiQuality": ui_quality_enum_refs()
         },
         "rules": {
@@ -306,10 +314,16 @@ fn build_request_root(
                 false,
                 false,
                 &source_refs,
-                frontend_experience_source
+                frontend_experience_source,
+                api_quality_seed
             )
         }
-    }))
+    });
+    if !api_quality_seed.is_null() {
+        root["apiQualitySeed"] = api_quality_seed.clone();
+        root["enumRefs"]["apiQuality"] = api_quality_enum_refs();
+    }
+    Ok(root)
 }
 
 pub(crate) fn architecture_read_groups(
@@ -318,6 +332,7 @@ pub(crate) fn architecture_read_groups(
     include_repair_source_ref: bool,
     source_refs: &Value,
     frontend_experience_source: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     let mut core_fields = vec![
         "sourceRefs.planningContractRef",
@@ -369,7 +384,24 @@ pub(crate) fn architecture_read_groups(
         "contextProjection.technicalBaseline.scope",
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
+        "architectureQualitySeed.required",
+        "architectureQualitySeed.qualityLevel",
+        "architectureQualitySeed.techReferenceProfile.loadMode",
+        "architectureQualitySeed.techReferenceProfile.groups.arch",
+        "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
     ]);
+    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+        core_fields.extend([
+            "apiQualitySeed.required",
+            "apiQualitySeed.qualityLevel",
+            "apiQualitySeed.selectionReason",
+            "apiQualitySeed.techReferenceProfile.loadMode",
+            "apiQualitySeed.techReferenceProfile.groups.api",
+            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
+            "apiQualitySeed.interfaceContract",
+            "apiQualitySeed.generationRules",
+        ]);
+    }
     if matches!(
         section,
         ArchitectureSectionGroup::Foundation
@@ -388,6 +420,26 @@ pub(crate) fn architecture_read_groups(
             "allowedRefs.excludedScopeRefs",
             "allowedRefs.requirementDetailIds",
         ]);
+    }
+    let mut contract_fields = vec![
+        "sectionState.currentSection",
+        "currentSectionContract.section",
+        "currentSectionContract.candidateFile",
+        "currentSectionContract.schemaRef",
+        "currentSectionContract.resultTemplate",
+        "currentSectionContract.enumRefs",
+        "currentSectionContract.generationRules",
+        "outputContract.writeTargets",
+        "outputContract.submitTool",
+        "outputContract.schemaProjection",
+        "enumRefs.section",
+        "enumRefs.status",
+        "enumRefs.coverageStatus",
+        "enumRefs.acceptancePriority",
+        "enumRefs.architectureQuality",
+    ];
+    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
+        contract_fields.push("enumRefs.apiQuality");
     }
     let mut groups = vec![
         json!({
@@ -418,22 +470,7 @@ pub(crate) fn architecture_read_groups(
             } else {
                 "Read immediately before writing the current Architecture section candidate."
             },
-            "selectors": read_selectors_value_from_paths([
-                "sectionState.currentSection",
-                "currentSectionContract.section",
-                "currentSectionContract.candidateFile",
-                "currentSectionContract.schemaRef",
-                "currentSectionContract.resultTemplate",
-                "currentSectionContract.enumRefs",
-                "currentSectionContract.generationRules",
-                "outputContract.writeTargets",
-                "outputContract.submitTool",
-                "outputContract.schemaProjection",
-                "enumRefs.section",
-                "enumRefs.status",
-                "enumRefs.coverageStatus",
-                "enumRefs.acceptancePriority"
-            ])
+            "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
@@ -466,7 +503,8 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.layoutBaselineCandidates",
             "uiQualitySeed.densityCandidates",
             "uiQualitySeed.semanticTokenPolicy",
-            "uiQualitySeed.requiredReferenceIds",
+            "uiQualitySeed.requiredReferenceGroups",
+            "uiQualitySeed.referenceLoadPlan",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -551,6 +589,64 @@ fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -
         value["repositoryContextRef"] = json!(repository_context_ref);
     }
     value
+}
+
+fn build_architecture_quality_seed() -> Value {
+    let arch_groups = vec![
+        "core", "patterns", "system", "data", "nfr", "adr", "failure",
+    ];
+    json!({
+        "required": true,
+        "qualityLevel": "production_delivery_architecture",
+        "techReferenceProfile": {
+            "loadMode": "mcp_reference_load_plan",
+            "groups": {
+                "arch": arch_groups.clone()
+            },
+            "referenceLoadPlan": arch_groups.iter().map(|item| {
+                json!({
+                    "refId": format!("tech.arch.{item}"),
+                    "path": format!("tech/arch/{item}.md"),
+                    "reason": format!("Selected architecture {item} quality reference for this architecture section.")
+                })
+            }).collect::<Vec<_>>()
+        }
+    })
+}
+
+fn architecture_quality_enum_refs() -> Value {
+    json!({
+        "decisionStatus": ["accepted", "needs_user_decision"],
+        "decisionCategory": [
+            "architecture_style",
+            "module_boundary",
+            "data_boundary",
+            "integration_boundary",
+            "runtime_boundary",
+            "security_boundary",
+            "operability"
+        ],
+        "nfrCategory": [
+            "performance",
+            "scalability",
+            "availability",
+            "reliability",
+            "security",
+            "maintainability",
+            "observability",
+            "cost"
+        ],
+        "riskCategory": [
+            "data_integrity",
+            "integration",
+            "runtime",
+            "security",
+            "operability",
+            "maintainability"
+        ],
+        "riskSeverity": ["low", "medium", "high", "critical"],
+        "riskLikelihood": ["low", "medium", "high"]
+    })
 }
 
 fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
@@ -691,6 +787,7 @@ fn build_section_outputs(
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
     technical_baseline: &TechnicalBaselineContract,
+    api_quality_seed: &Value,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
     let ui_quality_seed = build_ui_quality_seed(
         planning_contract
@@ -710,7 +807,11 @@ fn build_section_outputs(
                     &architecture_candidate_file(project_root, request_id, section),
                 )?,
                 schema_ref: format!("architecture-section-{}-v1", section_name(section)),
-                schema_shape: section_schema_shape(section, has_previous_runtime_delivery),
+                schema_shape: section_schema_shape(
+                    section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
                 result_template: section_result_template(
                     request_id,
                     delivery_id,
@@ -720,9 +821,18 @@ fn build_section_outputs(
                     frontend_experience_source,
                     planning_contract,
                     &ui_quality_seed,
+                    api_quality_seed,
                 ),
-                enum_refs: section_enum_refs(section, has_previous_runtime_delivery),
-                generation_rules: section_generation_rules(section, has_previous_runtime_delivery),
+                enum_refs: section_enum_refs(
+                    section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
+                generation_rules: section_generation_rules(
+                    section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
             })
         })
         .collect()
@@ -755,7 +865,7 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
             vec![
                 "acceptanceMatrix",
                 "detailCoverage",
-                "risksAndDecisions",
+                "architectureQuality",
                 "handoff",
             ]
         }
@@ -765,6 +875,7 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
 fn section_schema_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -773,7 +884,7 @@ fn section_schema_shape(
         "phaseId": "string",
         "section": section,
         "status": "ready | blocked",
-        "content": section_content_shape(section, has_previous_runtime_delivery),
+        "content": section_content_shape(section, has_previous_runtime_delivery, api_quality_seed),
         "blockedReasons": [{
             "code": "string",
             "message": "string",
@@ -786,6 +897,7 @@ fn section_schema_shape(
 fn section_content_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -806,7 +918,7 @@ fn section_content_shape(
                 "relationships": ["object"],
                 "constraints": ["object"]
             },
-            "interfaces": ["object"]
+            "interfaces": domain_contract_interfaces_shape(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": ["object"],
@@ -881,7 +993,58 @@ fn section_content_shape(
                 },
                 "reason": "string"
             }],
-            "risksAndDecisions": "object",
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "string",
+                    "category": "architecture_style | module_boundary | data_boundary | integration_boundary | runtime_boundary | security_boundary | operability",
+                    "title": "string",
+                    "status": "accepted | needs_user_decision",
+                    "context": "string",
+                    "decision": "string",
+                    "alternativesConsidered": [{
+                        "name": "string",
+                        "tradeoff": "string",
+                        "rejectedBecause": "string"
+                    }],
+                    "consequences": {
+                        "positive": ["string"],
+                        "negative": ["string"],
+                        "neutral": ["string"]
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": ["string"],
+                        "acceptanceRefs": ["string"],
+                        "requirementDetailRefs": ["string"]
+                    },
+                    "verificationHints": ["string"]
+                }],
+                "nfrs": [{
+                    "nfrId": "string",
+                    "category": "performance | reliability | security | maintainability | observability | cost",
+                    "target": "string",
+                    "rationale": "string",
+                    "architectureRefs": {
+                        "decisions": ["string"],
+                        "risks": ["string"]
+                    },
+                    "verificationStrategy": "string"
+                }],
+                "risks": [{
+                    "riskId": "string",
+                    "category": "data_integrity | integration | runtime | security | operability | maintainability",
+                    "severity": "low | medium | high | critical",
+                    "likelihood": "low | medium | high",
+                    "impact": "string",
+                    "mitigation": "string",
+                    "ownerArtifactRefs": {
+                        "modules": ["string"],
+                        "interfaces": ["string"],
+                        "decisions": ["string"],
+                        "nfrs": ["string"]
+                    },
+                    "verificationHints": ["string"]
+                }]
+            },
             "handoff": {
                 "readyForTaskPlan": "boolean",
                 "blockingReasons": ["string"],
@@ -943,6 +1106,46 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
     })
 }
 
+fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return json!(["object"]);
+    }
+    json!([{
+        "interfaceId": "string",
+        "name": "string",
+        "type": "http_api | service_method | external_adapter | event | job | cli_command",
+        "resource": "string when type=http_api",
+        "operationKind": "create | read_list | read_detail | replace | update | delete | state_transition | domain_action | search | export",
+        "method": "GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS when type=http_api",
+        "path": "string when type=http_api",
+        "requestSchema": ["object"],
+        "responseSchema": ["object"],
+        "statusCodes": {
+            "success": ["number"],
+            "validation": ["number"],
+            "businessConflict": ["number"],
+            "notFound": ["number"],
+            "auth": ["number"],
+            "rateLimit": ["number"],
+            "serviceUnavailable": ["number"],
+            "serverError": ["number"]
+        },
+        "errorSchema": ["object"],
+        "paginationPolicy": "optional object for unbounded collection endpoints",
+        "authPolicy": "optional object for protected operations",
+        "contractFileRefs": ["string"],
+        "idempotencyPolicy": "optional object for retry-sensitive or duplicate-sensitive operations",
+        "cachePolicy": "optional object for cacheable reads",
+        "conditionalRequestPolicy": "optional object for optimistic concurrency or cache validators",
+        "rateLimitPolicy": "optional object for abuse-sensitive endpoints",
+        "retryPolicy": "optional object for retryable dependency/runtime failures",
+        "requestIdPolicy": "optional object for traceable critical APIs",
+        "scopeRefs": ["string"],
+        "acceptanceRefs": ["string"],
+        "requirementDetailRefs": ["string"]
+    }])
+}
+
 fn section_result_template(
     request_id: &str,
     delivery_id: &str,
@@ -952,6 +1155,7 @@ fn section_result_template(
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     json!({
         "schemaVersion": "1.0",
@@ -965,7 +1169,8 @@ fn section_result_template(
             has_previous_runtime_delivery,
             frontend_experience_source,
             planning_contract,
-            ui_quality_seed
+            ui_quality_seed,
+            api_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
@@ -978,6 +1183,7 @@ fn section_content_template(
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
     ui_quality_seed: &Value,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
@@ -1022,14 +1228,7 @@ fn section_content_template(
                 "relationships": [],
                 "constraints": []
             },
-            "interfaces": [{
-                "interfaceId": "interface_1",
-                "name": "",
-                "kind": "",
-                "operations": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
+            "interfaces": domain_contract_interfaces_template(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": [{
@@ -1092,11 +1291,8 @@ fn section_content_template(
                             "local loading, empty, error, success, and business-blocking feedback"
                         ],
                         "forbiddenComposition": [
-                            "marketing or hero introduction",
-                            "runtime command instructions",
-                            "technical stack explanation",
-                            "delivery progress notes",
-                            "tutorial-style explanatory copy unrelated to the business task"
+                            "surface composition unrelated to the task-owned business workflow",
+                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
                         ],
                         "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
                         "dataViewRefs": ["view_1"],
@@ -1151,15 +1347,67 @@ fn coverage_content_template(planning_contract: &PlanningGenerationContract) -> 
     json!({
         "acceptanceMatrix": acceptance_matrix,
         "detailCoverage": detail_coverage,
-        "risksAndDecisions": {
-            "decisions": [],
-            "risks": []
-        },
+        "architectureQuality": architecture_quality_template(),
         "handoff": {
             "readyForTaskPlan": true,
             "blockingReasons": [],
             "nextNode": "task_plan"
         }
+    })
+}
+
+fn architecture_quality_template() -> Value {
+    json!({
+        "decisions": [{
+            "decisionId": "adr-current-001",
+            "category": "architecture_style",
+            "title": "Current phase architecture decision",
+            "status": "accepted",
+            "context": "State the current-phase forces from requirementDetailTransfer and the confirmed technical baseline.",
+            "decision": "State the selected architecture approach for this phase.",
+            "alternativesConsidered": [{
+                "name": "alternative architecture approach",
+                "tradeoff": "Concrete trade-off compared with the selected approach.",
+                "rejectedBecause": "Why this alternative is not the best fit for the current phase."
+            }],
+            "consequences": {
+                "positive": ["Implementation or verification benefit."],
+                "negative": ["Implementation or operation cost to watch."],
+                "neutral": ["Known side effect that does not block delivery."]
+            },
+            "sourceRefs": {
+                "scopeRefs": ["allowedRefs.scopeRefs item"],
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
+            },
+            "verificationHints": ["How later tasks or review can prove this decision was respected."]
+        }],
+        "nfrs": [{
+            "nfrId": "nfr-current-001",
+            "category": "maintainability",
+            "target": "Concrete quality target for this phase.",
+            "rationale": "Why this target matters for the current phase.",
+            "architectureRefs": {
+                "decisions": ["adr-current-001"],
+                "risks": ["risk-current-001"]
+            },
+            "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
+        }],
+        "risks": [{
+            "riskId": "risk-current-001",
+            "category": "data_integrity",
+            "severity": "medium",
+            "likelihood": "medium",
+            "impact": "Concrete implementation or operation impact if this risk occurs.",
+            "mitigation": "Concrete design or task-plan mitigation.",
+            "ownerArtifactRefs": {
+                "modules": ["module_1"],
+                "interfaces": ["interface_1"],
+                "decisions": ["adr-current-001"],
+                "nfrs": ["nfr-current-001"]
+            },
+            "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
+        }]
     })
 }
 
@@ -1267,19 +1515,106 @@ fn runtime_delivery_authority(has_previous_runtime_delivery: bool) -> &'static s
     }
 }
 
+fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return json!([]);
+    }
+    json!([{
+        "interfaceId": "api_current_001",
+        "name": "Current phase API or service interface",
+        "type": "http_api",
+        "resource": "",
+        "operationKind": "create",
+        "method": "POST",
+        "path": "/api/current-resources",
+        "requestSchema": [{
+            "field": "replace_with_request_field",
+            "required": true,
+            "kind": "string",
+            "validation": "business validation rule"
+        }],
+        "responseSchema": [{
+            "field": "id",
+            "required": true,
+            "kind": "identifier",
+            "meaning": "Created or affected resource id"
+        }],
+        "statusCodes": {
+            "success": [201],
+            "validation": [400, 422],
+            "businessConflict": [409],
+            "notFound": [404],
+            "auth": [],
+            "rateLimit": [],
+            "serviceUnavailable": [],
+            "serverError": [500]
+        },
+        "errorSchema": [{
+            "field": "message",
+            "required": true,
+            "kind": "user_actionable_message"
+        }],
+        "paginationPolicy": {
+            "strategy": "not_applicable",
+            "requestFields": [],
+            "responseFields": []
+        },
+        "authPolicy": {
+            "required": "not_applicable",
+            "actorRefs": [],
+            "permissionRefs": []
+        },
+        "contractFileRefs": [],
+        "idempotencyPolicy": {
+            "required": false,
+            "keyHeader": "",
+            "duplicateBehavior": ""
+        },
+        "cachePolicy": {
+            "strategy": "not_applicable",
+            "validators": []
+        },
+        "conditionalRequestPolicy": {
+            "required": false,
+            "staleUpdateStatus": null
+        },
+        "rateLimitPolicy": {
+            "applies": false,
+            "status": null,
+            "headers": []
+        },
+        "retryPolicy": {
+            "retryableStatuses": [],
+            "retryAfterHeader": false
+        },
+        "requestIdPolicy": {
+            "header": "",
+            "includedInErrorBody": false
+        },
+        "scopeRefs": [],
+        "acceptanceRefs": [],
+        "requirementDetailRefs": []
+    }])
+}
+
 fn section_enum_refs(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Coverage => json!({
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
-            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES
+            "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
+            "architectureQuality": architecture_quality_enum_refs()
         }),
         ArchitectureSectionGroup::RuntimeDelivery => json!({
             "runtimeDeliveryStatus": runtime_delivery_status_values(has_previous_runtime_delivery)
         }),
+        ArchitectureSectionGroup::DomainContract if !api_quality_seed.is_null() => {
+            json!({ "apiQuality": api_quality_enum_refs() })
+        }
         ArchitectureSectionGroup::FrontendExperience => json!({
             "uiQuality": ui_quality_enum_refs()
         }),
@@ -1290,27 +1625,43 @@ fn section_enum_refs(
 fn section_generation_rules(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
+    api_quality_seed: &Value,
 ) -> Vec<String> {
     match section {
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only.".to_string(),
+            "Read only files listed in architectureQualitySeed.techReferenceProfile.referenceLoadPlan; selected architecture groups are evidence labels only and do not copy reference prose into the candidate.".to_string(),
+            "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
-            "Add a seam only when it supports current-phase behavior, verification, or meaningful isolation; avoid pass-through wrappers.".to_string(),
+            "Add an abstraction only when it supports current-phase behavior, verification, or meaningful isolation; avoid pass-through wrappers.".to_string(),
             "Use allowedRefs.scopeRefs and allowedRefs.acceptanceRefs exactly; do not invent ids."
                 .to_string(),
         ],
-        ArchitectureSectionGroup::DomainContract => vec![
-            "Represent current-phase business objects, key fields, relationships, constraints, and interfaces."
-                .to_string(),
-            "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
-                .to_string(),
-            "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
-                .to_string(),
-        ],
+        ArchitectureSectionGroup::DomainContract => {
+            let mut rules = vec![
+                "Represent current-phase business objects, key fields, relationships, constraints, and interfaces."
+                    .to_string(),
+                "Use contextProjection.requirementDetailTransfer as the current phase detail authority."
+                    .to_string(),
+                "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
+                "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
+                "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
+                    .to_string(),
+            ];
+            if !api_quality_seed.is_null() {
+                rules.extend([
+                    "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
+                    "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
+                    "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
+                ]);
+            }
+            rules
+        }
         ArchitectureSectionGroup::Behavior => vec![
             "Represent current-phase user flows, state machines, blockers, and success outcomes."
                 .to_string(),
+            "Include failure paths, recovery behavior, consistency expectations, and business-blocking outcomes for stateful flows.".to_string(),
             "Do not reference future or deferred scope as if it were current-phase behavior."
                 .to_string(),
         ],
@@ -1319,10 +1670,10 @@ fn section_generation_rules(
             "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
-            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; use compact reference ids, not copied reference text.".to_string(),
+            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; copy uiQualitySeed.referenceLoadPlan into referenceProfile.referenceLoadPlan and do not copy reference text.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
             "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
-            "Business UI surfaces must directly serve the selected scenario and task workflow; do not add marketing hero blocks, runtime commands, stack explanations, Loom progress notes, verification instructions, or tutorial-style explanatory copy to user-visible UI.".to_string(),
+            "Business UI surfaces must directly serve the selected scenario and task workflow; enforce uiQualityContract.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."
@@ -1336,6 +1687,8 @@ fn section_generation_rules(
                 .to_string(),
             "Runtime delivery is a code-level contract. Do not require Docker, clean install, registry access, or deploy success here."
                 .to_string(),
+            "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
+                .to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -1347,6 +1700,14 @@ fn section_generation_rules(
             "detailCoverage must store detailId plus artifact refs; do not copy full detail summaries."
                 .to_string(),
             "Omit reason when coverageStatus=covered; write a non-empty reason when coverageStatus is partial, not_applicable, deferred, or uncovered."
+                .to_string(),
+            "Write content.architectureQuality with non-empty decisions, nfrs, and risks arrays using currentSectionContract.resultTemplate shape."
+                .to_string(),
+            "Each architectureQuality decision must include alternativesConsidered, consequences, sourceRefs, and verificationHints."
+                .to_string(),
+            "Each architectureQuality nfr must be concrete enough for TaskPlan or Review to verify; do not write vague quality words without a verificationStrategy."
+                .to_string(),
+            "Each architectureQuality risk must include severity, likelihood, impact, mitigation, ownerArtifactRefs, and verificationHints."
                 .to_string(),
             "Record only architecture trade-offs that affect later implementation, verification, or repair routing."
                 .to_string(),

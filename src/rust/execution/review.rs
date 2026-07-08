@@ -206,15 +206,22 @@ fn build_review_request(
     let detail_review_matrix = build_detail_review_matrix(task_plan, task_results);
     let engineering_quality_review_matrix =
         build_engineering_quality_review_matrix(task_plan, task_results);
+    let architecture_quality_review_matrix =
+        build_architecture_quality_review_matrix(task_plan, task_results, architecture_contract);
+    let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
+    let code_quality_review_matrix = build_code_quality_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
         build_frontend_quality_review_matrix(task_plan, task_results);
     let review_matrix_summary = compact_review_matrix_summary(
         &concept_review_matrix,
         &detail_review_matrix,
         &engineering_quality_review_matrix,
+        &architecture_quality_review_matrix,
+        &api_contract_review_matrix,
+        &code_quality_review_matrix,
         &frontend_quality_review_matrix,
     );
-    Ok(json!({
+    let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "review_gate",
         "requestId": review_id,
@@ -254,6 +261,9 @@ fn build_review_request(
         "conceptReviewMatrix": concept_review_matrix,
         "detailReviewMatrix": detail_review_matrix,
         "engineeringQualityReviewMatrix": engineering_quality_review_matrix,
+        "architectureQualityReviewMatrix": architecture_quality_review_matrix,
+        "apiContractReviewMatrix": api_contract_review_matrix,
+        "codeQualityReviewMatrix": code_quality_review_matrix,
         "frontendQualityReviewMatrix": frontend_quality_review_matrix,
         "reviewMatrixSummary": review_matrix_summary,
         "enumRefs": {
@@ -270,6 +280,9 @@ fn build_review_request(
                 "acceptance_not_satisfied",
                 "frontend_experience",
                 "architecture_design_gap",
+                "architecture_quality",
+                "api_contract",
+                "code_quality",
                 "task_scope_mismatch",
                 "task_verification_mapping_issue",
                 "environment_or_dependency",
@@ -287,8 +300,9 @@ fn build_review_request(
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
-                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, frontend workflow closure, or frontend UI quality.",
+                "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
+                "If outputContract.reviewSignals contains architecture_quality with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
                 "Blocking findings must cite a task, group, artifact, or file location unless the route is manual_review or needs_user_decision."
             ],
             "changeSetRules": change_set_rules(&change_context_mode),
@@ -392,16 +406,20 @@ fn build_review_request(
                 {
                     "groupId": "review_matrices",
                     "required": true,
-                    "purpose": "Read compact concept, requirement detail, engineering quality, frontend quality, and runtime review signals.",
+                    "purpose": "Read compact concept, requirement detail, engineering quality, architecture quality, API contract, code quality, frontend quality, and runtime review signals.",
                     "whenToRead": "Read before deciding approval or repair route.",
                     "selectors": read_selectors_value_from_paths([
                         "reviewMatrixSummary.concept",
                         "reviewMatrixSummary.detail",
                         "reviewMatrixSummary.engineeringQuality",
+                        "reviewMatrixSummary.architectureQuality",
+                        "reviewMatrixSummary.apiContract",
+                        "reviewMatrixSummary.codeQuality",
                         "reviewMatrixSummary.frontendQuality",
                         "outputContract.reviewSignals.items"
                     ])
                 },
+                review_quality_read_group(),
                 {
                     "groupId": "review_rules",
                     "required": true,
@@ -454,7 +472,64 @@ fn build_review_request(
                 }
             ]
         }
-    }))
+    });
+    root["reviewQualityProfile"] = review_quality_profile();
+    Ok(root)
+}
+
+fn review_quality_read_group() -> Value {
+    json!({
+        "groupId": "review_quality_profile",
+        "required": true,
+        "purpose": "Read the review quality method and selected review references.",
+        "whenToRead": "Read after review matrices and before writing findings.",
+        "selectors": read_selectors_value_from_paths([
+            "reviewQualityProfile.loadMode",
+            "reviewQualityProfile.reviewMode",
+            "reviewQualityProfile.reviewStageOrder",
+            "reviewQualityProfile.referenceLoadPlan"
+        ])
+    })
+}
+
+fn review_quality_profile() -> Value {
+    json!({
+        "loadMode": "mcp_reference_load_plan",
+        "reviewMode": "phase_run_review",
+        "reviewStageOrder": [
+            "spec_compliance",
+            "implementation_quality",
+            "evidence_quality",
+            "routing_decision"
+        ],
+        "referenceLoadPlan": [
+            {
+                "refId": "rv.core",
+                "path": "tech/review/core.md",
+                "reason": "Review gate posture, order, decision discipline, and route selection."
+            },
+            {
+                "refId": "rv.spec",
+                "path": "tech/review/spec-compliance.md",
+                "reason": "Current-phase requirement compliance before implementation quality review."
+            },
+            {
+                "refId": "rv.defects",
+                "path": "tech/review/defect-patterns.md",
+                "reason": "Common correctness, security, persistence, reliability, performance, and maintainability defects."
+            },
+            {
+                "refId": "rv.evidence",
+                "path": "tech/review/test-evidence.md",
+                "reason": "Verification and evidence sufficiency review."
+            },
+            {
+                "refId": "rv.findings",
+                "path": "tech/review/finding-quality.md",
+                "reason": "Actionable ReviewFinding severity, category, evidence, and repair route guidance."
+            }
+        ]
+    })
 }
 
 fn review_result_template(
@@ -1442,21 +1517,43 @@ fn validate_review_signals(
         item.get("kind").and_then(Value::as_str) == Some("frontend_ui_quality")
             && item.get("uiQualitySatisfied").and_then(Value::as_bool) == Some(false)
     });
+    let unsatisfied_architecture_quality = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("architecture_quality")
+            && item
+                .get("architectureQualitySatisfied")
+                .and_then(Value::as_bool)
+                == Some(false)
+    });
+    let unsatisfied_api_contract = signals.as_array().into_iter().flatten().any(|item| {
+        item.get("kind").and_then(Value::as_str) == Some("api_contract")
+            && item.get("apiContractSatisfied").and_then(Value::as_bool) == Some(false)
+    });
     let missing_workflow_task_assignment = signals.as_array().into_iter().flatten().any(|item| {
         item.get("kind").and_then(Value::as_str) == Some("frontend_workflow_closure")
             && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
             && item.get("recommendedNextAction").and_then(Value::as_str) == Some("taskplan_repair")
     });
+    let missing_architecture_quality_task_assignment =
+        signals.as_array().into_iter().flatten().any(|item| {
+            item.get("kind").and_then(Value::as_str) == Some("architecture_quality")
+                && item.get("missingTaskAssignment").and_then(Value::as_bool) == Some(true)
+                && item.get("recommendedNextAction").and_then(Value::as_str)
+                    == Some("taskplan_repair")
+        });
     if matches!(result.decision.as_str(), "approved" | "approved_with_notes")
-        && (unsatisfied_detail || unsatisfied_frontend || unsatisfied_frontend_quality)
+        && (unsatisfied_detail
+            || unsatisfied_frontend
+            || unsatisfied_frontend_quality
+            || unsatisfied_architecture_quality
+            || unsatisfied_api_contract)
     {
         issues.push(issue(
             "REVIEW_RESULT_STATUS_INCONSISTENT",
             "decision",
-            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, or frontend UI quality.",
+            "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, architecture quality, or API contract.",
         ));
     }
-    if missing_workflow_task_assignment {
+    if missing_workflow_task_assignment || missing_architecture_quality_task_assignment {
         let has_higher_priority_blocker = result.findings.iter().any(|finding| {
             is_blocking_finding(finding)
                 && [
@@ -1473,14 +1570,14 @@ fn validate_review_signals(
             issues.push(issue(
                 "REVIEW_RESULT_STATUS_INCONSISTENT",
                 "nextAction.type",
-                "Missing workflow closure task assignment must route taskplan_repair unless a higher-priority blocking finding applies.",
+                "Missing workflow closure or architecture quality task assignment must route taskplan_repair unless a higher-priority blocking finding applies.",
             ));
         }
         if !has_higher_priority_blocker && !has_taskplan_repair_finding {
             issues.push(issue(
                 "REVIEW_RESULT_STATUS_INCONSISTENT",
                 "findings",
-                "Missing workflow closure task assignment requires a blocking taskplan_repair finding.",
+                "Missing workflow closure or architecture quality task assignment requires a blocking taskplan_repair finding.",
             ));
         }
     }
@@ -2392,6 +2489,260 @@ fn build_engineering_quality_review_matrix(
         .collect()
 }
 
+fn build_code_quality_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .code_quality_requirements
+        .iter()
+        .flat_map(|requirement| {
+            requirement.applies_to_task_ids.iter().map(|task_id| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == *task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .code_quality_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
+                let satisfied = result
+                    .map(|result| {
+                        matches!(
+                            result.status,
+                            contracts::TaskResultStatus::Completed
+                                | contracts::TaskResultStatus::CompletedWithNotes
+                        ) && evidence
+                            .map(|evidence| {
+                                let expected_paths = requirement
+                                    .reference_load_plan
+                                    .iter()
+                                    .map(|item| item.path.as_str())
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                let checked_paths = evidence
+                                    .reference_files_checked
+                                    .iter()
+                                    .map(String::as_str)
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                let files_satisfied = expected_paths.is_empty()
+                                    || (expected_paths.is_subset(&checked_paths)
+                                        && checked_paths.is_subset(&expected_paths));
+                                evidence.status == "satisfied"
+                                    && !evidence.reference_groups_checked.is_empty()
+                                    && files_satisfied
+                                    && !evidence.verification_ids.is_empty()
+                            })
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "kind": requirement.kind,
+                    "taskId": task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "referenceGroups": requirement.reference_groups,
+                    "referenceLoadPlan": requirement.reference_load_plan,
+                    "focusTags": requirement.focus_tags,
+                    "implementationObligations": requirement.implementation_obligations,
+                    "verificationObligations": requirement.verification_obligations,
+                    "evidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "referenceGroupsChecked": evidence
+                        .map(|evidence| json!(evidence.reference_groups_checked.clone()))
+                        .unwrap_or_else(|| json!({})),
+                    "referenceFilesChecked": evidence
+                        .map(|evidence| json!(evidence.reference_files_checked.clone()))
+                        .unwrap_or_else(|| json!([])),
+                    "knownGapCount": evidence
+                        .map(|evidence| evidence.known_gaps.len())
+                        .unwrap_or(0),
+                    "qualitySatisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
+fn build_architecture_quality_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+    architecture_contract: Option<&ArchitectureArtifactContract>,
+) -> Vec<Value> {
+    let assigned_decisions = task_plan
+        .tasks
+        .iter()
+        .flat_map(|task| task.write_boundary.artifact_refs.decisions.clone())
+        .collect::<BTreeSet<_>>();
+    let assigned_nfrs = task_plan
+        .tasks
+        .iter()
+        .flat_map(|task| task.write_boundary.artifact_refs.nfrs.clone())
+        .collect::<BTreeSet<_>>();
+    let assigned_risks = task_plan
+        .tasks
+        .iter()
+        .flat_map(|task| task.write_boundary.artifact_refs.risks.clone())
+        .collect::<BTreeSet<_>>();
+    let mut items = Vec::new();
+    if let Some(aac) = architecture_contract {
+        for decision in &aac.architecture_quality.decisions {
+            if !assigned_decisions.contains(&decision.decision_id) {
+                items.push(json!({
+                    "requirementId": decision.decision_id,
+                    "qualityKind": "decision",
+                    "category": decision.category,
+                    "taskId": Value::Null,
+                    "taskResultId": Value::Null,
+                    "missingTaskAssignment": true,
+                    "qualitySatisfied": false,
+                    "recommendedNextAction": "taskplan_repair"
+                }));
+            }
+        }
+        for nfr in &aac.architecture_quality.nfrs {
+            if !assigned_nfrs.contains(&nfr.nfr_id) {
+                items.push(json!({
+                    "requirementId": nfr.nfr_id,
+                    "qualityKind": "nfr",
+                    "category": nfr.category,
+                    "taskId": Value::Null,
+                    "taskResultId": Value::Null,
+                    "missingTaskAssignment": true,
+                    "qualitySatisfied": false,
+                    "recommendedNextAction": "taskplan_repair"
+                }));
+            }
+        }
+        for risk in &aac.architecture_quality.risks {
+            if !assigned_risks.contains(&risk.risk_id) {
+                items.push(json!({
+                    "requirementId": risk.risk_id,
+                    "qualityKind": "risk",
+                    "category": risk.category,
+                    "severity": risk.severity,
+                    "taskId": Value::Null,
+                    "taskResultId": Value::Null,
+                    "missingTaskAssignment": true,
+                    "qualitySatisfied": false,
+                    "recommendedNextAction": "taskplan_repair"
+                }));
+            }
+        }
+    }
+    for requirement in &task_plan.architecture_quality_requirements {
+        for task_id in &requirement.applies_to_task_ids {
+            let result = task_results
+                .iter()
+                .find(|result| result.task_id == *task_id);
+            let evidence = result.and_then(|result| {
+                result
+                    .architecture_quality_evidence
+                    .iter()
+                    .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+            });
+            let passed_verification_ids = result
+                .map(|result| {
+                    result
+                        .verification_results
+                        .iter()
+                        .filter(|verification| verification.status == "passed")
+                        .map(|verification| verification.verification_id.clone())
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            let evidence_verifications = evidence
+                .map(|evidence| evidence.verification_ids.clone())
+                .unwrap_or_default();
+            let verification_supported = !evidence_verifications.is_empty()
+                && evidence_verifications
+                    .iter()
+                    .all(|id| passed_verification_ids.contains(id));
+            let satisfied = evidence
+                .map(|evidence| evidence.status == "satisfied" && verification_supported)
+                .unwrap_or(false);
+            items.push(json!({
+                "requirementId": requirement.requirement_id,
+                "qualityKind": requirement.kind,
+                "taskId": task_id,
+                "taskResultId": result.map(|result| result.task_result_id.clone()),
+                "decisionRefs": requirement.decision_refs,
+                "nfrRefs": requirement.nfr_refs,
+                "riskRefs": requirement.risk_refs,
+                "implementationObligations": requirement.implementation_obligations,
+                "verificationObligations": requirement.verification_obligations,
+                "architectureQualityEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                "verificationSupported": verification_supported,
+                "qualitySatisfied": satisfied,
+                "missingTaskAssignment": false,
+                "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+            }));
+        }
+    }
+    items
+}
+
+fn build_api_contract_review_matrix(
+    task_plan: &TaskPlan,
+    task_results: &[TaskResult],
+) -> Vec<Value> {
+    task_plan
+        .api_contract_requirements
+        .iter()
+        .flat_map(|requirement| {
+            requirement.applies_to_task_ids.iter().map(|task_id| {
+                let result = task_results
+                    .iter()
+                    .find(|result| result.task_id == *task_id);
+                let evidence = result.and_then(|result| {
+                    result
+                        .api_contract_evidence
+                        .iter()
+                        .find(|evidence| evidence.requirement_id == requirement.requirement_id)
+                });
+                let passed_verification_ids = result
+                    .map(|result| {
+                        result
+                            .verification_results
+                            .iter()
+                            .filter(|verification| verification.status == "passed")
+                            .map(|verification| verification.verification_id.clone())
+                            .collect::<BTreeSet<_>>()
+                    })
+                    .unwrap_or_default();
+                let evidence_verifications = evidence
+                    .map(|evidence| evidence.verification_ids.clone())
+                    .unwrap_or_default();
+                let verification_supported = !evidence_verifications.is_empty()
+                    && evidence_verifications
+                        .iter()
+                        .all(|id| passed_verification_ids.contains(id));
+                let satisfied = evidence
+                    .map(|evidence| {
+                        evidence.status == "satisfied"
+                            && evidence.known_gaps.is_empty()
+                            && verification_supported
+                    })
+                    .unwrap_or(false);
+                json!({
+                    "requirementId": requirement.requirement_id,
+                    "qualityKind": requirement.kind,
+                    "taskId": task_id,
+                    "taskResultId": result.map(|result| result.task_result_id.clone()),
+                    "interfaceRefs": requirement.interface_refs,
+                    "implementationObligations": requirement.implementation_obligations,
+                    "verificationObligations": requirement.verification_obligations,
+                    "apiContractEvidenceStatus": evidence.map(|evidence| evidence.status.clone()),
+                    "verificationSupported": verification_supported,
+                    "knownGapCount": evidence.map(|evidence| evidence.known_gaps.len()).unwrap_or(0),
+                    "contractSatisfied": satisfied,
+                    "recommendedNextAction": if satisfied { "none" } else { "execution_repair" }
+                })
+            })
+        })
+        .collect()
+}
+
 fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
     result
         .verification_results
@@ -2442,13 +2793,19 @@ fn build_frontend_quality_review_matrix(
                 .map(serde_json::to_value)
                 .and_then(Result::ok)
                 .unwrap_or(Value::Null);
-            let expected_refs = value_string_array(
+            let expected_refs = reference_groups(
                 ui_quality_contract
                     .get("referenceProfile")
                     .unwrap_or(&Value::Null),
-                "referenceIds",
+                "groups",
             );
-            let checked_refs = value_string_array(&self_check, "referenceIdsChecked");
+            let checked_refs = reference_groups(&self_check, "referenceGroupsChecked");
+            let expected_reference_files = reference_load_plan_paths(
+                ui_quality_contract
+                    .get("referenceProfile")
+                    .unwrap_or(&Value::Null),
+            );
+            let checked_reference_files = string_array_field(&self_check, "referenceFilesChecked");
             let expected_states =
                 object_array_string_field(ui_quality_contract, "requiredUiStates", "state");
             let covered_states = object_array_string_field(&self_check, "statesCovered", "state");
@@ -2456,7 +2813,9 @@ fn build_frontend_quality_review_matrix(
                 object_array_string_field(ui_quality_contract, "businessUiRules", "ruleId");
             let checked_rules =
                 object_array_string_field(&self_check, "businessUiRulesChecked", "ruleId");
-            let missing_reference_ids = missing_strings(&expected_refs, &checked_refs);
+            let missing_reference_groups = missing_reference_groups(&expected_refs, &checked_refs);
+            let missing_reference_files =
+                missing_strings(&expected_reference_files, &checked_reference_files);
             let missing_ui_states = missing_strings(&expected_states, &covered_states);
             let missing_business_ui_rule_ids = missing_strings(&expected_rules, &checked_rules);
             let forbidden_violation_count = self_check
@@ -2524,7 +2883,8 @@ fn build_frontend_quality_review_matrix(
                 == Some("satisfied")
                 && scenario_matches
                 && quality_level_matches
-                && missing_reference_ids.is_empty()
+                && missing_reference_groups.is_empty()
+                && missing_reference_files.is_empty()
                 && missing_ui_states.is_empty()
                 && missing_business_ui_rule_ids.is_empty()
                 && token_asset_satisfied
@@ -2539,7 +2899,10 @@ fn build_frontend_quality_review_matrix(
                 "actualQualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
                 "actualStatus": self_check.get("status").and_then(Value::as_str),
                 "qualitySatisfied": quality_satisfied,
-                "missingReferenceIds": missing_reference_ids,
+                "missingReferenceGroups": missing_reference_groups,
+                "referenceFiles": expected_reference_files,
+                "referenceFilesChecked": checked_reference_files,
+                "missingReferenceFiles": missing_reference_files,
                 "missingUiStates": missing_ui_states,
                 "missingBusinessUiRuleIds": missing_business_ui_rule_ids,
                 "designTokenAsset": {
@@ -2565,6 +2928,9 @@ fn compact_review_matrix_summary(
     concept_matrix: &[Value],
     detail_matrix: &[Value],
     engineering_quality_matrix: &[Value],
+    architecture_quality_matrix: &[Value],
+    api_contract_matrix: &[Value],
+    code_quality_matrix: &[Value],
     frontend_quality_matrix: &[Value],
 ) -> Value {
     json!({
@@ -2594,6 +2960,41 @@ fn compact_review_matrix_summary(
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "architectureQuality": architecture_quality_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
+                "qualityKind": item.get("qualityKind").cloned().unwrap_or(Value::Null),
+                "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
+                "missingTaskAssignment": item.get("missingTaskAssignment").cloned().unwrap_or(Value::Bool(false)),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "apiContract": api_contract_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
+                "interfaceRefs": item.get("interfaceRefs").cloned().unwrap_or_else(|| json!([])),
+                "contractSatisfied": item.get("contractSatisfied").cloned().unwrap_or(Value::Null),
+                "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
+            })
+        }).collect::<Vec<_>>(),
+        "codeQuality": code_quality_matrix.iter().map(|item| {
+            json!({
+                "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
+                "requirementId": item.get("requirementId").cloned().unwrap_or(Value::Null),
+                "referenceGroupCount": reference_group_entry_count(
+                    item.get("referenceGroups").unwrap_or(&Value::Null)
+                ),
+                "referenceFileCount": item
+                    .get("referenceLoadPlan")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
                 "recommendedNextAction": item.get("recommendedNextAction").cloned().unwrap_or(Value::Null)
             })
         }).collect::<Vec<_>>(),
@@ -2719,10 +3120,16 @@ fn build_review_signals(
             "taskRefs": [task_id],
             "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
             "qualitySatisfied": quality_satisfied,
-            "stackSignals": item.get("stackSignals").cloned().unwrap_or_else(|| json!({})),
-            "alignmentTargets": item.get("alignmentTargets").cloned().unwrap_or_else(|| json!([])),
-            "riskFieldKinds": item.get("riskFieldKinds").cloned().unwrap_or_else(|| json!([])),
-            "verificationObligations": item.get("verificationObligations").cloned().unwrap_or_else(|| json!([])),
+            "alignmentTargetCount": item
+                .get("alignmentTargets")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            "riskFieldKindCount": item
+                .get("riskFieldKinds")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
             "passedVerificationCount": item
                 .get("passedVerificationSummaries")
                 .and_then(Value::as_array)
@@ -2733,6 +3140,133 @@ fn build_review_signals(
                 "TaskResult contains passed verification evidence for the referenced engineering quality requirement."
             } else {
                 "TaskResult is missing passed verification evidence for the referenced engineering quality requirement."
+            }
+        }));
+    }
+    for item in
+        build_architecture_quality_review_matrix(task_plan, task_results, architecture_contract)
+    {
+        let requirement_id = item
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or("architecture_quality");
+        let task_id = item.get("taskId").and_then(Value::as_str).unwrap_or("task");
+        let quality_satisfied = item
+            .get("qualitySatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let missing_task_assignment = item
+            .get("missingTaskAssignment")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-architecture-quality-{}-{}",
+                safe_signal_id(requirement_id),
+                safe_signal_id(task_id)
+            ),
+            "kind": "architecture_quality",
+            "requirementId": requirement_id,
+            "qualityKind": item.get("qualityKind").cloned().unwrap_or(Value::Null),
+            "taskRefs": item.get("taskId").and_then(Value::as_str).map(|task_id| vec![task_id.to_string()]).unwrap_or_default(),
+            "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "decisionRefs": item.get("decisionRefs").cloned().unwrap_or_else(|| json!([])),
+            "nfrRefs": item.get("nfrRefs").cloned().unwrap_or_else(|| json!([])),
+            "riskRefs": item.get("riskRefs").cloned().unwrap_or_else(|| json!([])),
+            "architectureQualitySatisfied": quality_satisfied,
+            "missingTaskAssignment": missing_task_assignment,
+            "recommendedNextAction": if missing_task_assignment {
+                "taskplan_repair"
+            } else if quality_satisfied {
+                "none"
+            } else {
+                "execution_repair"
+            },
+            "reason": if missing_task_assignment {
+                "TaskPlan does not assign this architecture quality item to an implementation task."
+            } else if quality_satisfied {
+                "TaskResult contains supported architecture quality evidence for the referenced requirement."
+            } else {
+                "TaskResult is missing supported architecture quality evidence for the referenced requirement."
+            }
+        }));
+    }
+    for item in build_api_contract_review_matrix(task_plan, task_results) {
+        let requirement_id = item
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or("api_contract");
+        let task_id = item.get("taskId").and_then(Value::as_str).unwrap_or("task");
+        let contract_satisfied = item
+            .get("contractSatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-api-contract-{}-{}",
+                safe_signal_id(requirement_id),
+                safe_signal_id(task_id)
+            ),
+            "kind": "api_contract",
+            "requirementId": requirement_id,
+            "qualityKind": item.get("qualityKind").cloned().unwrap_or(Value::Null),
+            "taskRefs": [task_id],
+            "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "interfaceRefs": item.get("interfaceRefs").cloned().unwrap_or_else(|| json!([])),
+            "apiContractSatisfied": contract_satisfied,
+            "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
+            "recommendedNextAction": if contract_satisfied { "none" } else { "execution_repair" },
+            "reason": if contract_satisfied {
+                "TaskResult contains supported API contract evidence for the referenced requirement."
+            } else {
+                "TaskResult is missing supported API contract evidence for the referenced requirement."
+            }
+        }));
+    }
+    for item in build_code_quality_review_matrix(task_plan, task_results) {
+        let requirement_id = item
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or("code_quality");
+        let task_id = item.get("taskId").and_then(Value::as_str).unwrap_or("task");
+        let quality_satisfied = item
+            .get("qualitySatisfied")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        signals.push(json!({
+            "signalId": format!(
+                "sig-code-quality-{}-{}",
+                safe_signal_id(requirement_id),
+                safe_signal_id(task_id)
+            ),
+            "kind": "code_quality",
+            "requirementId": requirement_id,
+            "qualityKind": item.get("kind").cloned().unwrap_or(Value::Null),
+            "taskRefs": [task_id],
+            "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
+            "referenceGroupCount": reference_group_entry_count(
+                item.get("referenceGroups").unwrap_or(&Value::Null)
+            ),
+            "referenceFileCount": item
+                .get("referenceLoadPlan")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            "referenceGroupCheckedCount": reference_group_entry_count(
+                item.get("referenceGroupsChecked").unwrap_or(&Value::Null)
+            ),
+            "referenceFileCheckedCount": item
+                .get("referenceFilesChecked")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            "codeQualitySatisfied": quality_satisfied,
+            "knownGapCount": item.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
+            "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
+            "reason": if quality_satisfied {
+                "TaskResult contains supported code quality evidence for selected language/framework references."
+            } else {
+                "TaskResult is missing supported code quality evidence for selected language/framework references."
             }
         }));
     }
@@ -2873,6 +3407,34 @@ fn value_string_array(value: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
+fn reference_groups(value: &Value, key: &str) -> Vec<(String, String)> {
+    value
+        .get(key)
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|object| object.iter())
+        .flat_map(|(group, items)| {
+            items
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.as_str())
+                .map(|item| (group.clone(), item.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn reference_group_entry_count(value: &Value) -> usize {
+    value
+        .as_object()
+        .into_iter()
+        .flat_map(|object| object.values())
+        .filter_map(Value::as_array)
+        .map(Vec::len)
+        .sum()
+}
+
 fn object_array_string_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {
     value
         .get(array_key)
@@ -2887,12 +3449,49 @@ fn object_array_string_field(value: &Value, array_key: &str, field_key: &str) ->
         .collect()
 }
 
+fn string_array_field(value: &Value, array_key: &str) -> Vec<String> {
+    value
+        .get(array_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.as_str().map(str::to_string))
+        .collect()
+}
+
+fn reference_load_plan_paths(value: &Value) -> Vec<String> {
+    value
+        .get("referenceLoadPlan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_string))
+        .collect()
+}
+
 fn missing_strings(expected: &[String], actual: &[String]) -> Vec<String> {
     let actual = actual.iter().collect::<BTreeSet<_>>();
     expected
         .iter()
         .filter(|item| !actual.contains(item))
         .cloned()
+        .collect()
+}
+
+fn missing_reference_groups(
+    expected: &[(String, String)],
+    actual: &[(String, String)],
+) -> Vec<Value> {
+    let actual = actual.iter().collect::<BTreeSet<_>>();
+    expected
+        .iter()
+        .filter(|item| !actual.contains(item))
+        .map(|(group, item)| {
+            json!({
+                "group": group,
+                "item": item
+            })
+        })
         .collect()
 }
 
@@ -2972,7 +3571,10 @@ fn compact_task_summaries(tasks: &[TaskDefinition]) -> Vec<Value> {
                 }).collect::<Vec<_>>(),
                 "frontendExperienceRequired": task.frontend_experience_requirement.is_some(),
                 "runtimeDeliveryRequired": task.runtime_delivery_requirement.is_some(),
-                "engineeringQualityRequirementRefs": task.engineering_quality_requirement_refs
+                "engineeringQualityRequirementRefs": task.engineering_quality_requirement_refs,
+                "architectureQualityRequirementRefs": task.architecture_quality_requirement_refs,
+                "apiContractRequirementRefs": task.api_contract_requirement_refs,
+                "codeQualityRequirementRefs": task.code_quality_requirement_refs
             })
         })
         .collect()
@@ -2986,7 +3588,7 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                 "taskResultId": result.task_result_id,
                 "taskId": result.task_id,
                 "status": result.status,
-                "changedFiles": result.changed_files,
+                "changedFileCount": result.changed_files.len(),
                 "verificationResults": result.verification_results.iter().map(|verification| {
                     json!({
                         "verificationId": verification.verification_id,
@@ -2998,15 +3600,45 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                     json!({
                         "detailId": evidence.detail_id,
                         "status": evidence.status,
-                        "verificationIds": evidence.verification_ids,
-                        "evidenceRefs": evidence.evidence_refs
+                        "verificationIdCount": evidence.verification_ids.len(),
+                        "evidenceRefCount": evidence.evidence_refs.len()
                     })
                 }).collect::<Vec<_>>(),
                 "conceptEvidence": result.concept_evidence.iter().map(|evidence| {
                     json!({
                         "conceptRef": evidence.concept_ref,
                         "evidenceType": evidence.evidence_type,
-                        "refs": evidence.refs
+                        "refCount": evidence.refs.len()
+                    })
+                }).collect::<Vec<_>>(),
+                "architectureQualityEvidence": result.architecture_quality_evidence.iter().map(|evidence| {
+                    json!({
+                        "requirementId": evidence.requirement_id,
+                        "status": evidence.status,
+                        "verificationIdCount": evidence.verification_ids.len()
+                    })
+                }).collect::<Vec<_>>(),
+                "apiContractEvidence": result.api_contract_evidence.iter().map(|evidence| {
+                    json!({
+                        "requirementId": evidence.requirement_id,
+                        "status": evidence.status,
+                        "interfaceRefCount": evidence.interface_refs.len(),
+                        "verificationIdCount": evidence.verification_ids.len(),
+                        "knownGapCount": evidence.known_gaps.len()
+                    })
+                }).collect::<Vec<_>>(),
+                "codeQualityEvidence": result.code_quality_evidence.iter().map(|evidence| {
+                    json!({
+                        "requirementId": evidence.requirement_id,
+                        "status": evidence.status,
+                        "referenceGroupCount": evidence
+                            .reference_groups_checked
+                            .values()
+                            .map(Vec::len)
+                            .sum::<usize>(),
+                        "referenceFileCount": evidence.reference_files_checked.len(),
+                        "verificationIdCount": evidence.verification_ids.len(),
+                        "knownGapCount": evidence.known_gaps.len()
                     })
                 }).collect::<Vec<_>>(),
                 "frontendExperienceSelfCheckPresent": result.frontend_experience_self_check.is_some(),
@@ -3049,17 +3681,13 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
         "status": self_check.get("status").and_then(Value::as_str),
         "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
         "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceIdsCheckedCount": self_check
-            .get("referenceIdsChecked")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0),
+        "referenceGroupCheckCount": reference_groups(&self_check, "referenceGroupsChecked").len(),
         "statesCoveredCount": self_check
             .get("statesCovered")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "businessUiRulesCheckedCount": self_check
+        "businessUiRuleCheckCount": self_check
             .get("businessUiRulesChecked")
             .and_then(Value::as_array)
             .map(Vec::len)

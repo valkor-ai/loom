@@ -1,10 +1,13 @@
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use contracts::{
     validate_ui_quality_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
     ArchitectureArtifactSource, ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry,
-    ArchitectureHandoff, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
+    ArchitectureHandoff, ArchitectureQuality, ArchitectureSectionCandidateAgentWritable,
+    ArchitectureSectionGroup, ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -183,7 +186,7 @@ where
     let project_root = Path::new(&input.project_root);
     let candidate_file = from_project_relative(project_root, &target.path)?;
     let raw = state::store::read_json_value(&candidate_file)?;
-    let candidate: ArchitectureSectionCandidateAgentWritable =
+    let mut candidate: ArchitectureSectionCandidateAgentWritable =
         match serde_json::from_value(raw.clone()) {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -265,6 +268,14 @@ where
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let mut candidate_normalized = false;
+    if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
+        candidate_normalized = normalize_coverage_deferred_reasons(
+            project_root,
+            &source_refs,
+            &mut candidate.content,
+        )?;
+    }
 
     let mut issues = validate_candidate_identity(
         &candidate,
@@ -302,6 +313,9 @@ where
         &authorized.request_id,
         candidate.section,
     );
+    if candidate_normalized {
+        state::store::write_json_atomic(&candidate_file, &candidate)?;
+    }
     state::store::write_json_atomic(&snapshot_file, &candidate)?;
 
     let next_section = next_section(candidate.section);
@@ -1164,7 +1178,362 @@ fn validate_coverage_section(
         );
     }
     validate_coverage_handoff(content.get("handoff"), &mut issues);
+    validate_architecture_quality(
+        content.get("architectureQuality"),
+        allowed_refs,
+        &mut issues,
+    );
     issues
+}
+
+fn normalize_coverage_deferred_reasons(
+    project_root: &Path,
+    source_refs: &Value,
+    content: &mut Value,
+) -> Result<bool, state::store::StateError> {
+    let Some(planning_ref) = source_refs
+        .get("planningContractRef")
+        .and_then(Value::as_str)
+    else {
+        return Ok(false);
+    };
+    let planning: contracts::PlanningGenerationContract =
+        read_project_json(project_root, planning_ref)?;
+    let reason_by_detail = planning
+        .requirement_details
+        .items
+        .iter()
+        .filter(|detail| {
+            !detail.required_for_current_phase
+                || detail.kind == "deferred_or_excluded_boundary"
+                || detail.lifecycle_stage == "deferred"
+        })
+        .map(|detail| {
+            (
+                detail.detail_id.clone(),
+                format!(
+                    "Deferred by the confirmed phase boundary: {}",
+                    detail.summary
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let Some(rows) = content
+        .get_mut("detailCoverage")
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(false);
+    };
+    let mut normalized = false;
+    for row in rows {
+        if row.get("coverageStatus").and_then(Value::as_str) != Some("deferred") {
+            continue;
+        }
+        let has_reason = row
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if has_reason {
+            continue;
+        }
+        let Some(detail_id) = row.get("detailId").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(reason) = reason_by_detail.get(detail_id) else {
+            continue;
+        };
+        if let Some(object) = row.as_object_mut() {
+            object.insert("reason".to_string(), Value::String(reason.clone()));
+            normalized = true;
+        }
+    }
+    Ok(normalized)
+}
+
+fn validate_architecture_quality(
+    value: Option<&Value>,
+    allowed_refs: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(value) = value else {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_REQUIRED",
+            "content.architectureQuality",
+            "coverage section must include architectureQuality.",
+        ));
+        return;
+    };
+    let Ok(model) = serde_json::from_value::<ArchitectureQuality>(value.clone()) else {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_INVALID",
+            "content.architectureQuality",
+            "architectureQuality must follow the declared decisions, nfrs, and risks object shape.",
+        ));
+        return;
+    };
+    if model.decisions.is_empty() {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_INCOMPLETE",
+            "content.architectureQuality.decisions",
+            "architectureQuality.decisions must include at least one current-phase architecture decision.",
+        ));
+    }
+    if model.nfrs.is_empty() {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_INCOMPLETE",
+            "content.architectureQuality.nfrs",
+            "architectureQuality.nfrs must include at least one current-phase non-functional requirement.",
+        ));
+    }
+    if model.risks.is_empty() {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_INCOMPLETE",
+            "content.architectureQuality.risks",
+            "architectureQuality.risks must include at least one current-phase architecture risk or failure mode.",
+        ));
+    }
+    let allowed_decision_categories = BTreeSet::from([
+        "architecture_style",
+        "module_boundary",
+        "data_boundary",
+        "integration_boundary",
+        "runtime_boundary",
+        "security_boundary",
+        "operability",
+    ]);
+    let allowed_nfr_categories = BTreeSet::from([
+        "performance",
+        "reliability",
+        "security",
+        "maintainability",
+        "observability",
+        "cost",
+    ]);
+    let allowed_risk_categories = BTreeSet::from([
+        "data_integrity",
+        "integration",
+        "runtime",
+        "security",
+        "operability",
+        "maintainability",
+    ]);
+    let allowed_statuses = BTreeSet::from(["accepted", "needs_user_decision"]);
+    let allowed_severities = BTreeSet::from(["low", "medium", "high", "critical"]);
+    let allowed_likelihoods = BTreeSet::from(["low", "medium", "high"]);
+    let allowed_scope_refs = string_set(allowed_refs.pointer("/scopeRefs"));
+    let allowed_acceptance_refs = string_set(allowed_refs.pointer("/acceptanceRefs"));
+    let allowed_detail_refs = string_set(allowed_refs.pointer("/requirementDetailIds"));
+    let decision_ids = model
+        .decisions
+        .iter()
+        .map(|decision| decision.decision_id.clone())
+        .collect::<BTreeSet<_>>();
+    let nfr_ids = model
+        .nfrs
+        .iter()
+        .map(|nfr| nfr.nfr_id.clone())
+        .collect::<BTreeSet<_>>();
+    let risk_ids = model
+        .risks
+        .iter()
+        .map(|risk| risk.risk_id.clone())
+        .collect::<BTreeSet<_>>();
+    for (index, decision) in model.decisions.iter().enumerate() {
+        validate_non_empty(
+            &decision.decision_id,
+            &format!("content.architectureQuality.decisions[{index}].decisionId"),
+            issues,
+        );
+        validate_non_empty(
+            &decision.title,
+            &format!("content.architectureQuality.decisions[{index}].title"),
+            issues,
+        );
+        validate_non_empty(
+            &decision.context,
+            &format!("content.architectureQuality.decisions[{index}].context"),
+            issues,
+        );
+        validate_non_empty(
+            &decision.decision,
+            &format!("content.architectureQuality.decisions[{index}].decision"),
+            issues,
+        );
+        if !allowed_decision_categories.contains(decision.category.as_str()) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.decisions[{index}].category"),
+                "decision category must come from enumRefs.architectureQuality.decisionCategory.",
+            ));
+        }
+        if !allowed_statuses.contains(decision.status.as_str()) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.decisions[{index}].status"),
+                "decision status must be accepted or needs_user_decision.",
+            ));
+        }
+        if decision.alternatives_considered.is_empty() {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INCOMPLETE",
+                &format!("content.architectureQuality.decisions[{index}].alternativesConsidered"),
+                "architecture decisions must include at least one alternative with a rejectedBecause reason.",
+            ));
+        }
+        if decision.verification_hints.is_empty() {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INCOMPLETE",
+                &format!("content.architectureQuality.decisions[{index}].verificationHints"),
+                "architecture decisions must include verificationHints for downstream tasks or review.",
+            ));
+        }
+        validate_ref_members(
+            &decision.source_refs.scope_refs,
+            &allowed_scope_refs,
+            &format!("content.architectureQuality.decisions[{index}].sourceRefs.scopeRefs"),
+            issues,
+        );
+        validate_ref_members(
+            &decision.source_refs.acceptance_refs,
+            &allowed_acceptance_refs,
+            &format!("content.architectureQuality.decisions[{index}].sourceRefs.acceptanceRefs"),
+            issues,
+        );
+        validate_ref_members(
+            &decision.source_refs.requirement_detail_refs,
+            &allowed_detail_refs,
+            &format!(
+                "content.architectureQuality.decisions[{index}].sourceRefs.requirementDetailRefs"
+            ),
+            issues,
+        );
+    }
+    for (index, nfr) in model.nfrs.iter().enumerate() {
+        validate_non_empty(
+            &nfr.nfr_id,
+            &format!("content.architectureQuality.nfrs[{index}].nfrId"),
+            issues,
+        );
+        validate_non_empty(
+            &nfr.target,
+            &format!("content.architectureQuality.nfrs[{index}].target"),
+            issues,
+        );
+        validate_non_empty(
+            &nfr.rationale,
+            &format!("content.architectureQuality.nfrs[{index}].rationale"),
+            issues,
+        );
+        validate_non_empty(
+            &nfr.verification_strategy,
+            &format!("content.architectureQuality.nfrs[{index}].verificationStrategy"),
+            issues,
+        );
+        if !allowed_nfr_categories.contains(nfr.category.as_str()) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.nfrs[{index}].category"),
+                "nfr category must come from enumRefs.architectureQuality.nfrCategory.",
+            ));
+        }
+        validate_ref_members(
+            &nfr.architecture_refs.decisions,
+            &decision_ids,
+            &format!("content.architectureQuality.nfrs[{index}].architectureRefs.decisions"),
+            issues,
+        );
+        validate_ref_members(
+            &nfr.architecture_refs.risks,
+            &risk_ids,
+            &format!("content.architectureQuality.nfrs[{index}].architectureRefs.risks"),
+            issues,
+        );
+    }
+    for (index, risk) in model.risks.iter().enumerate() {
+        validate_non_empty(
+            &risk.risk_id,
+            &format!("content.architectureQuality.risks[{index}].riskId"),
+            issues,
+        );
+        validate_non_empty(
+            &risk.impact,
+            &format!("content.architectureQuality.risks[{index}].impact"),
+            issues,
+        );
+        validate_non_empty(
+            &risk.mitigation,
+            &format!("content.architectureQuality.risks[{index}].mitigation"),
+            issues,
+        );
+        if !allowed_risk_categories.contains(risk.category.as_str()) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.risks[{index}].category"),
+                "risk category must come from enumRefs.architectureQuality.riskCategory.",
+            ));
+        }
+        if !allowed_severities.contains(risk.severity.as_str()) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.risks[{index}].severity"),
+                "risk severity must be low, medium, high, or critical.",
+            ));
+        }
+        if !allowed_likelihoods.contains(risk.likelihood.as_str()) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INVALID",
+                &format!("content.architectureQuality.risks[{index}].likelihood"),
+                "risk likelihood must be low, medium, or high.",
+            ));
+        }
+        validate_ref_members(
+            &risk.owner_artifact_refs.decisions,
+            &decision_ids,
+            &format!("content.architectureQuality.risks[{index}].ownerArtifactRefs.decisions"),
+            issues,
+        );
+        validate_ref_members(
+            &risk.owner_artifact_refs.nfrs,
+            &nfr_ids,
+            &format!("content.architectureQuality.risks[{index}].ownerArtifactRefs.nfrs"),
+            issues,
+        );
+        if risk.verification_hints.is_empty() {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_INCOMPLETE",
+                &format!("content.architectureQuality.risks[{index}].verificationHints"),
+                "architecture risks must include verificationHints for downstream tasks or review.",
+            ));
+        }
+    }
+}
+
+fn validate_non_empty(value: &str, field_path: &str, issues: &mut Vec<delivery_core::RepairIssue>) {
+    if value.trim().is_empty() {
+        issues.push(issue(
+            "ARCHITECTURE_QUALITY_INCOMPLETE",
+            field_path,
+            "architectureQuality string fields must be non-empty.",
+        ));
+    }
+}
+
+fn validate_ref_members(
+    values: &[String],
+    allowed: &BTreeSet<String>,
+    field_path: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    for (index, value) in values.iter().enumerate() {
+        if !allowed.contains(value) {
+            issues.push(issue(
+                "ARCHITECTURE_QUALITY_REF_INVALID",
+                &format!("{field_path}[{index}]"),
+                "architectureQuality refs must come from the current AAC or allowedRefs.",
+            ));
+        }
+    }
 }
 
 fn validate_array_entries_are_strings(
@@ -1416,12 +1785,14 @@ fn update_request_for_next_section(
         .get("frontendExperienceSource")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let api_quality_seed = root.get("apiQualitySeed").cloned().unwrap_or(Value::Null);
     root["requestReadPlan"]["groups"] = architecture_read_groups(
         next_section,
         include_repair_context,
         include_repair_source_ref,
         source_refs,
         &frontend_experience_source,
+        &api_quality_seed,
     );
     Ok(root)
 }
@@ -1573,6 +1944,14 @@ fn assemble_architecture_contract(
     )
     .map_err(state::store::StateError::Json)?;
     let handoff = parse_handoff(coverage.content.get("handoff").cloned())?;
+    let architecture_quality: ArchitectureQuality = serde_json::from_value(
+        coverage
+            .content
+            .get("architectureQuality")
+            .cloned()
+            .unwrap_or_else(|| json!({ "decisions": [], "nfrs": [], "risks": [] })),
+    )
+    .map_err(state::store::StateError::Json)?;
     Ok(ArchitectureArtifactContract {
         schema_version: "1.0".to_string(),
         architecture_artifact_contract_id: format!(
@@ -1626,11 +2005,7 @@ fn assemble_architecture_contract(
         runtime_delivery: runtime.content.get("runtimeDelivery").cloned(),
         acceptance_matrix,
         detail_coverage,
-        risks_and_decisions: coverage
-            .content
-            .get("risksAndDecisions")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
+        architecture_quality,
         handoff,
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
@@ -1648,9 +2023,17 @@ fn parse_handoff(value: Option<Value>) -> Result<ArchitectureHandoff, state::sto
     serde_json::from_value(value).map_err(state::store::StateError::Json)
 }
 
+fn read_project_json<T: serde::de::DeserializeOwned>(
+    project_root: &Path,
+    relative: &str,
+) -> Result<T, state::store::StateError> {
+    let path = from_project_relative(project_root, relative)?;
+    state::store::read_json(&path)
+}
+
 fn needs_user_decision(coverage_content: &Value) -> bool {
     coverage_content
-        .pointer("/risksAndDecisions/decisions")
+        .pointer("/architectureQuality/decisions")
         .and_then(Value::as_array)
         .map(|decisions| {
             decisions.iter().any(|decision| {

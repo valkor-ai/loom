@@ -22,7 +22,7 @@ use delivery_core::{
 };
 use deploy::{
     accept_deploy_execution_repair_file, deploy_bootstrap, deploy_inspect, deploy_prepare,
-    deploy_repair, deploy_status, deploy_up, deploy_validate, DeployBootstrapInput,
+    deploy_repair, deploy_run, deploy_status, deploy_up, deploy_validate, DeployBootstrapInput,
     DeployToolInput,
 };
 use serde_json::{json, Value};
@@ -385,7 +385,8 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     .expect("backend dockerfile");
     assert!(dockerfile.contains("FROM maven:3-eclipse-temurin-21 AS builder"));
     assert!(dockerfile.contains("WORKDIR /workspace/backend"));
-    assert!(dockerfile.contains("COPY backend/ ./"));
+    assert!(dockerfile.contains("COPY backend/pom.xml ./"));
+    assert!(dockerfile.contains("COPY backend/src ./src"));
     assert!(dockerfile.contains("RUN mvn -DskipTests package"));
     assert!(!dockerfile.contains("RUN ./mvnw package"), "{dockerfile}");
 
@@ -430,6 +431,108 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     assert!(
         frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
         "{frontend_dockerfile}"
+    );
+}
+
+#[test]
+fn prepare_splits_cd_combined_commands_into_service_level_model() {
+    let fixture = Fixture::new("deploy-cd-combined-service-model");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "react web plus spring boot api",
+        "deploymentShape": "frontend-and-backend",
+        "build": { "command": "cd web && npm run build && cd ../server && ./mvnw -q package -DskipTests" },
+        "start": { "command": "cd server && ./mvnw spring-boot:run & cd ../web && npm run dev", "port": 8080 },
+        "httpProbes": {
+            "previewPath": "/requests",
+            "apiPaths": ["/api/health", "/api/replenishment-requests"]
+        },
+        "environment": {
+            "required": ["DATABASE_URL"],
+            "optional": ["APP_PORT", "WEB_PORT"]
+        }
+    }));
+    fixture.write_text(
+        "web/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("web/package-lock.json", "{}\n");
+    fixture.write_text("web/vite.config.ts", "export default {}\n");
+    fixture.write_text(
+        "server/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>replenishment</artifactId></project>"#,
+    );
+    fixture.write_text("server/mvnw", "#!/bin/sh\n");
+    fixture.write_text("server/src/main/java/app/App.java", "class App {}\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    let frontend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    let backend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "backend")
+        .expect("backend service");
+    assert_eq!(frontend.root, "web");
+    assert_eq!(frontend.build_command.as_deref(), Some("npm run build"));
+    assert_eq!(frontend.manifest_refs, vec!["web/package.json"]);
+    assert_eq!(frontend.lockfile_refs, vec!["web/package-lock.json"]);
+    assert_eq!(frontend.artifact_refs, vec!["web/dist"]);
+    assert_eq!(backend.root, "server");
+    assert_eq!(
+        backend.build_command.as_deref(),
+        Some("./mvnw -q package -DskipTests")
+    );
+    assert_eq!(backend.package_manager, Some(PackageManager::Maven));
+    assert_eq!(backend.manifest_refs, vec!["server/pom.xml"]);
+    assert!(backend
+        .artifact_refs
+        .iter()
+        .any(|item| item == "server/target/*.jar"));
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(frontend_dockerfile.contains("WORKDIR /workspace/web"));
+    assert!(frontend_dockerfile.contains("COPY web/package-lock.json web/package.json ./"));
+    assert!(frontend_dockerfile.contains("COPY web/ ./"));
+    assert!(frontend_dockerfile.contains("RUN npm run build"));
+    assert!(
+        frontend_dockerfile
+            .contains("COPY --from=builder /workspace/web/dist /usr/share/nginx/html"),
+        "{frontend_dockerfile}"
+    );
+
+    let backend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.backend"),
+    )
+    .expect("backend dockerfile");
+    assert!(backend_dockerfile.contains("WORKDIR /workspace/server"));
+    assert!(backend_dockerfile.contains("COPY server/pom.xml ./"));
+    assert!(backend_dockerfile.contains("COPY server/src ./src"));
+    assert!(backend_dockerfile.contains("RUN mvn -q package -DskipTests"));
+    assert!(
+        !backend_dockerfile.contains("npm run build"),
+        "{backend_dockerfile}"
     );
 }
 
@@ -1114,6 +1217,128 @@ exit 0
     assert!(log.contains("config ok"), "{log}");
 }
 
+#[cfg(unix)]
+#[test]
+fn deploy_run_reuses_existing_spec_after_asset_repair_without_regenerating() {
+    let fixture = Fixture::new("deploy-run-no-regenerate-after-repair");
+    fixture.write_runtime_delivery(plugin_style_dual_service_runtime_delivery());
+    fixture.write_text(
+        "frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("frontend/package-lock.json", "{}\n");
+    fixture.write_text("frontend/vite.config.ts", "export default {}\n");
+    fixture.write_text(
+        "backend/pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>demo</artifactId></project>"#,
+    );
+    fixture.write_text("backend/mvnw", "#!/bin/sh\n");
+    fixture.write_text("backend/src/main/java/app/App.java", "class App {}\n");
+    let prepared = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    assert_eq!(serde_json::to_value(prepared).unwrap()["state"], "done");
+    let dockerfile_path = fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.backend");
+    let patched =
+        read_text(&dockerfile_path).expect("backend dockerfile") + "\n# patched-by-repair\n";
+    std::fs::write(&dockerfile_path, patched).expect("patch generated dockerfile");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "failed to connect to the docker API at unix:///tmp/docker.sock" >&2
+  exit 1
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_run(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy run json");
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    let dockerfile = read_text(&dockerfile_path).expect("backend dockerfile after deployRun");
+    assert!(
+        dockerfile.contains("# patched-by-repair"),
+        "deployRun must not regenerate generated assets when a spec already exists: {dockerfile}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_prevalidates_generated_assets_before_docker_build() {
+    let fixture = Fixture::new("deploy-up-asset-preflight");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"},"dependencies":{"vite":"latest"}}"#,
+    );
+    let prepared = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    assert_eq!(serde_json::to_value(prepared).unwrap()["state"], "done");
+    let dockerfile_path = fixture
+        .root
+        .join(".loom/deployment/specs/generated/Dockerfile.app");
+    let dockerfile = read_text(&dockerfile_path)
+        .expect("dockerfile")
+        .replace("COPY package.json ./", "COPY missing/package.json ./");
+    std::fs::write(&dockerfile_path, dockerfile).expect("write invalid dockerfile");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "compose up should not run after asset preflight failure" >&2
+  exit 99
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+    assert_eq!(value["next"]["kind"], "deploy_repair_assets");
+    assert_eq!(
+        fixture.repair_action_value()["failureKind"],
+        "deploy_asset_invalid"
+    );
+    assert!(fixture.repair_action_value()["errorWindow"]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|line| line
+            .as_str()
+            .is_some_and(|text| text.contains("missing/package.json"))));
+}
+
 #[test]
 fn deploy_validate_success_writes_state_and_clears_failure_artifacts() {
     let fixture = Fixture::new("deploy-validate-clears-failure");
@@ -1222,6 +1447,61 @@ fn deploy_validate_flags_compose_dockerfile_paths_that_do_not_resolve() {
         .any(|issue| issue
             .as_str()
             .is_some_and(|text| text.contains("compose dockerfile path"))));
+}
+
+#[test]
+fn deploy_validate_accepts_json_array_copy_sources_in_existing_dockerfile() {
+    let fixture = Fixture::new("deploy-validate-json-copy");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "compose.yaml",
+        "services:\n  web:\n    build:\n      context: .\n      dockerfile: Dockerfile\n    ports:\n      - \"5555:8080\"\n",
+    );
+    fixture.write_text(
+        "Dockerfile",
+        r#"FROM node:22-alpine
+WORKDIR /app
+COPY ["package.json", "package-lock.json", "./"]
+RUN npm ci
+COPY ["server.js", "./"]
+CMD ["node", "server.js"]
+"#,
+    );
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"start":"node server.js"},"dependencies":{}}"#,
+    );
+    fixture.write_text("package-lock.json", "{}\n");
+    fixture.write_text("server.js", "require('http').createServer().listen(8080)\n");
+
+    let prepared = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    assert_eq!(serde_json::to_value(prepared).unwrap()["state"], "done");
+    assert_eq!(
+        fixture.read_spec().provider,
+        DeployProvider::ComposeExisting
+    );
+
+    let result = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("validate json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["composeValid"], true, "{value:#}");
+    assert_eq!(value["details"]["assetIssues"], json!([]), "{value:#}");
 }
 
 #[test]
@@ -2131,6 +2411,76 @@ exit 0
         .filter_map(Value::as_str)
         .any(|action| action.contains("registry_network")));
     assert_forbidden_cli_fields_absent(&value);
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_classifies_docker_socket_failure_as_environment_blocker() {
+    let fixture = Fixture::new("deploy-docker-socket-environment");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","start":"node dist/server.js"},"dependencies":{"vite":"latest"}}"#,
+    );
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then exit 0; fi
+if [ "$1" = "compose" ] && [ "$4" = "up" ]; then
+  echo "unable to get image 'demo:latest': failed to connect to the docker API at unix:///Users/test/.docker/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /Users/test/.docker/run/docker.sock: connect: no such file or directory" >&2
+  exit 1
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    assert_eq!(
+        value["details"]["repairSummary"]["failureKind"], "docker_unavailable",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["failureOwner"], "environment",
+        "{value:#}"
+    );
+    assert_eq!(
+        value["details"]["repairSummary"]["repairRoute"], "none",
+        "{value:#}"
+    );
+    let repair_action = fixture.repair_action_value();
+    assert!(repair_action
+        .get("editableFiles")
+        .and_then(Value::as_array)
+        .map(Vec::is_empty)
+        .unwrap_or(true));
+    assert!(repair_action["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|diagnostic| diagnostic["code"] == "docker_unavailable"));
 }
 
 #[test]
