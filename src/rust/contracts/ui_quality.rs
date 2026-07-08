@@ -104,7 +104,8 @@ pub const UI_CORE_REFERENCE_ITEMS: [&str; 6] = [
     "verification",
 ];
 
-pub const UI_FOCUS_REFERENCE_ITEMS: [&str; 3] = ["data", "mobile", "frameworks"];
+pub const UI_FOCUS_REFERENCE_ITEMS: [&str; 4] =
+    ["data", "mobile", "frameworks", "web-implementation"];
 
 pub const UI_TOKEN_REFERENCE_ITEMS: [&str; 6] = [
     "color-system",
@@ -525,6 +526,9 @@ pub fn ui_quality_gates_for_contract(
             &["changed_files", "component_split_evidence"],
         );
     }
+    if reference_group_contains(reference_groups, "focus", "web-implementation") {
+        push_web_implementation_gates(&mut gates);
+    }
     if reference_group_contains(reference_groups, "stacks", "react") {
         push_gate(
             &mut gates,
@@ -606,6 +610,51 @@ fn push_mobile_gates(gates: &mut Vec<Value>) {
         &["record_list", "record_detail", "page"],
         "Responsive record-management UI must keep the workflow usable on narrow screens through cards, drawer/detail route, or an explicit source-checked fallback; do not rely only on shrinking a dense table.",
         &["changed_files", "viewport_check", "responsive_source_check"],
+    );
+}
+
+fn push_web_implementation_gates(gates: &mut Vec<Value>) {
+    push_gate(
+        gates,
+        "web.semantic_accessibility",
+        "uix.focus.web-implementation",
+        "must",
+        &[
+            "app_shell",
+            "page",
+            "navigation",
+            "record_list",
+            "record_detail",
+            "form",
+            "action_panel",
+        ],
+        "Web UI must use native semantics before ARIA, provide accessible names for icon-only controls and form fields, preserve visible focus, and announce scoped async feedback when it changes user state.",
+        &["changed_files", "source_check", "accessibility_source_evidence"],
+    );
+    push_gate(
+        gates,
+        "web.form_and_state_resilience",
+        "uix.focus.web-implementation",
+        "must",
+        &["form", "action_panel"],
+        "Web forms and business actions must include meaningful field metadata, keep input recoverable on failure, show inline errors near affected fields or controls, and avoid blocking paste or double submission.",
+        &["changed_files", "source_check", "state_coverage", "form_resilience_evidence"],
+    );
+    push_gate(
+        gates,
+        "web.runtime_layout_safety",
+        "uix.focus.web-implementation",
+        "must",
+        &[
+            "app_shell",
+            "page",
+            "record_list",
+            "record_detail",
+            "form",
+            "action_panel",
+        ],
+        "Web surfaces must handle long content, empty collections, media sizing, large lists, reduced motion, locale formatting, hydration-sensitive values, and restorable navigation state where those concerns are in scope.",
+        &["changed_files", "source_check", "state_coverage", "layout_resilience_evidence"],
     );
 }
 
@@ -858,6 +907,9 @@ fn required_reference_groups(
             push_reference_group_item(&mut groups, "stacks", item);
         }
     }
+    if should_load_web_implementation_reference(scenario, stack_items) {
+        push_reference_group_item(&mut groups, "focus", "web-implementation");
+    }
     if let Some(template_id) = design_token_plan.get("templateId").and_then(Value::as_str) {
         push_reference_group_item(&mut groups, "templates", template_id);
     }
@@ -983,12 +1035,54 @@ fn density_candidates(primary: &str) -> Vec<&'static str> {
     }
 }
 
+fn should_load_web_implementation_reference(scenario: &str, stack_items: &[String]) -> bool {
+    if stack_items
+        .iter()
+        .any(|item| matches!(item.as_str(), "native-mobile" | "uniapp"))
+    {
+        return false;
+    }
+    if stack_items
+        .iter()
+        .any(|item| matches!(item.as_str(), "react" | "vue" | "svelte" | "plain-html"))
+    {
+        return true;
+    }
+    if stack_items.iter().any(|item| item == "threejs") {
+        return false;
+    }
+    matches!(
+        scenario,
+        "admin_dashboard"
+            | "data_console"
+            | "fintech_workstation"
+            | "fintech_consumer_app"
+            | "consumer_app"
+            | "mobile_responsive"
+            | "marketing_site"
+            | "corporate_site"
+            | "docs_site"
+            | "developer_tool"
+    )
+}
+
 fn infer_stack_reference_items(baseline: Option<&TechnicalBaselineContract>) -> Vec<String> {
     let stack = baseline
         .map(|item| item.stack.to_string().to_lowercase())
         .unwrap_or_default();
     let mut refs = Vec::new();
-    if contains_any(&stack, &["react", "next", "vite"]) {
+    let native_mobile_stack = contains_any(
+        &stack,
+        &[
+            "react native",
+            "flutter",
+            "swift",
+            "kotlin",
+            "ios",
+            "android",
+        ],
+    );
+    if !native_mobile_stack && contains_any(&stack, &["react", "next", "vite"]) {
         refs.push("react".to_string());
     }
     if contains_any(&stack, &["vue", "nuxt"]) {
@@ -1000,17 +1094,7 @@ fn infer_stack_reference_items(baseline: Option<&TechnicalBaselineContract>) -> 
     if contains_any(&stack, &["html", "vanilla", "plain"]) {
         refs.push("plain-html".to_string());
     }
-    if contains_any(
-        &stack,
-        &[
-            "react native",
-            "flutter",
-            "swift",
-            "kotlin",
-            "ios",
-            "android",
-        ],
-    ) {
+    if native_mobile_stack {
         refs.push("native-mobile".to_string());
     }
     if contains_any(&stack, &["three", "webgl", "3d"]) {
@@ -1854,13 +1938,15 @@ mod tests {
 
     use super::{
         build_ui_quality_seed, known_ui_reference_groups, scenario_supporting_reference_items,
-        UI_CORE_REFERENCE_ITEMS, UI_DESIGN_TOKEN_TEMPLATE_IDS, UI_TOKEN_REFERENCE_ITEMS,
+        ui_quality_contract_template, UI_CORE_REFERENCE_ITEMS, UI_DESIGN_TOKEN_TEMPLATE_IDS,
+        UI_TOKEN_REFERENCE_ITEMS,
     };
     use crate::{
         ConfidenceLevel, ProjectKind, TechnicalBaselineApproval, TechnicalBaselineApprovalType,
         TechnicalBaselineContract, TechnicalBaselineScope, TechnicalBaselineSource,
         TechnicalBaselineStatus,
     };
+    use serde_json::Value;
 
     #[test]
     fn known_ui_reference_groups_resolve_to_shared_reference_files() {
@@ -1919,30 +2005,7 @@ mod tests {
 
     #[test]
     fn ui_quality_seed_adds_frameworks_when_stack_reference_exists() {
-        let baseline = TechnicalBaselineContract {
-            schema_version: "1.0".to_string(),
-            technical_baseline_id: "tbr-test".to_string(),
-            delivery_id: "delivery-test".to_string(),
-            phase_id: "phase-test".to_string(),
-            status: TechnicalBaselineStatus::Confirmed,
-            source: TechnicalBaselineSource::UserConfirmed,
-            project_kind: ProjectKind::NewProject,
-            scope: TechnicalBaselineScope::Project,
-            stack: serde_json::json!("React + Tailwind"),
-            constraints: vec![],
-            evidence: vec![],
-            approval: TechnicalBaselineApproval {
-                r#type: TechnicalBaselineApprovalType::UserConfirmed,
-                confirmed_at: Some("2026-07-02T00:00:00Z".to_string()),
-                reason: Some("test".to_string()),
-            },
-            confidence: ConfidenceLevel::High,
-            requires_user_confirmation: Some(false),
-            reasoning_summary: vec![],
-            alternatives: vec![],
-            created_at: "2026-07-02T00:00:00Z".to_string(),
-            updated_at: "2026-07-02T00:00:00Z".to_string(),
-        };
+        let baseline = technical_baseline_with_stack(serde_json::json!("React + Tailwind"));
         let seed = build_ui_quality_seed(None, Some(&baseline));
         let reference_groups = seed
             .get("requiredReferenceGroups")
@@ -1956,6 +2019,85 @@ mod tests {
             group_contains(reference_groups, "stacks", "react"),
             "stack-aware UI seed must include stacks.react"
         );
+    }
+
+    #[test]
+    fn web_stack_ui_quality_seed_loads_web_implementation_reference_and_gates() {
+        let baseline =
+            technical_baseline_with_stack(serde_json::json!("Next.js + React + TypeScript"));
+        let seed = build_ui_quality_seed(None, Some(&baseline));
+        let reference_groups = seed
+            .get("requiredReferenceGroups")
+            .expect("seed must include requiredReferenceGroups");
+
+        assert!(
+            group_contains(reference_groups, "focus", "web-implementation"),
+            "browser UI seed must include focus.web-implementation"
+        );
+        let reference_plan = seed
+            .get("referenceLoadPlan")
+            .and_then(Value::as_array)
+            .expect("seed must include referenceLoadPlan");
+        assert!(
+            reference_plan
+                .iter()
+                .any(|item| item.get("path").and_then(Value::as_str)
+                    == Some("uix/web-implementation.md")),
+            "browser UI seed must load uix/web-implementation.md"
+        );
+
+        let contract = ui_quality_contract_template(&seed);
+        let gate_ids = contract
+            .get("qualityGates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
+            .collect::<std::collections::BTreeSet<_>>();
+        for expected in [
+            "web.semantic_accessibility",
+            "web.form_and_state_resilience",
+            "web.runtime_layout_safety",
+        ] {
+            assert!(
+                gate_ids.contains(expected),
+                "browser UI contract must include {expected}"
+            );
+        }
+
+        let mixed_scene_baseline =
+            technical_baseline_with_stack(serde_json::json!("React + Three.js"));
+        let mixed_scene_seed = build_ui_quality_seed(None, Some(&mixed_scene_baseline));
+        assert!(
+            group_contains(
+                mixed_scene_seed
+                    .get("requiredReferenceGroups")
+                    .expect("seed must include requiredReferenceGroups"),
+                "focus",
+                "web-implementation"
+            ),
+            "React browser UI with a 3D scene still needs web implementation rules"
+        );
+    }
+
+    #[test]
+    fn native_and_threejs_ui_quality_seed_do_not_load_web_implementation_reference() {
+        for stack in [
+            serde_json::json!("React Native + TypeScript"),
+            serde_json::json!("Flutter + Dart"),
+            serde_json::json!("Three.js + WebGL"),
+        ] {
+            let baseline = technical_baseline_with_stack(stack);
+            let seed = build_ui_quality_seed(None, Some(&baseline));
+            let reference_groups = seed
+                .get("requiredReferenceGroups")
+                .expect("seed must include requiredReferenceGroups");
+
+            assert!(
+                !group_contains(reference_groups, "focus", "web-implementation"),
+                "native, mini-app, or primary 3D stacks must not load focus.web-implementation"
+            );
+        }
     }
 
     #[test]
@@ -2023,6 +2165,33 @@ mod tests {
             .into_iter()
             .flatten()
             .any(|value| value.as_str() == Some(item))
+    }
+
+    fn technical_baseline_with_stack(stack: serde_json::Value) -> TechnicalBaselineContract {
+        TechnicalBaselineContract {
+            schema_version: "1.0".to_string(),
+            technical_baseline_id: "tbr-test".to_string(),
+            delivery_id: "delivery-test".to_string(),
+            phase_id: "phase-test".to_string(),
+            status: TechnicalBaselineStatus::Confirmed,
+            source: TechnicalBaselineSource::UserConfirmed,
+            project_kind: ProjectKind::NewProject,
+            scope: TechnicalBaselineScope::Project,
+            stack,
+            constraints: vec![],
+            evidence: vec![],
+            approval: TechnicalBaselineApproval {
+                r#type: TechnicalBaselineApprovalType::UserConfirmed,
+                confirmed_at: Some("2026-07-02T00:00:00Z".to_string()),
+                reason: Some("test".to_string()),
+            },
+            confidence: ConfidenceLevel::High,
+            requires_user_confirmation: Some(false),
+            reasoning_summary: vec![],
+            alternatives: vec![],
+            created_at: "2026-07-02T00:00:00Z".to_string(),
+            updated_at: "2026-07-02T00:00:00Z".to_string(),
+        }
     }
 
     fn reference_file_for_item(group: &str, item: &str) -> String {
