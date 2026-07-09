@@ -3,6 +3,7 @@ mod bootstrap;
 mod code_evidence;
 mod down;
 mod existing;
+mod facts;
 mod generate;
 mod inspect;
 mod logs;

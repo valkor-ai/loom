@@ -280,6 +280,9 @@ where
     if normalize_frontend_ui_quality_contract(&mut candidate.content, &request_root) {
         candidate_normalized = true;
     }
+    if normalize_runtime_delivery_deployment_shape(&mut candidate.content) {
+        candidate_normalized = true;
+    }
 
     let mut issues = validate_candidate_identity(
         &candidate,
@@ -637,6 +640,159 @@ fn normalize_frontend_ui_quality_contract(content: &mut Value, request_root: &Va
     };
     let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
     normalize_ui_quality_contract_for_persist(frontend_experience, ui_quality_seed)
+}
+
+fn normalize_runtime_delivery_deployment_shape(content: &mut Value) -> bool {
+    let Some(runtime) = content.get_mut("runtimeDelivery") else {
+        return false;
+    };
+    if runtime.pointer("/status").and_then(Value::as_str) != Some("modified") {
+        return false;
+    }
+    let shape = derived_runtime_deployment_shape(runtime);
+    let current = runtime
+        .get("deploymentShape")
+        .and_then(Value::as_str)
+        .map(str::trim);
+    if current == Some(shape) {
+        return false;
+    }
+    let Some(object) = runtime.as_object_mut() else {
+        return false;
+    };
+    object.insert("deploymentShape".to_string(), json!(shape));
+    true
+}
+
+fn derived_runtime_deployment_shape(runtime: &Value) -> &'static str {
+    if runtime_frontend_is_served_by_integrated_app(runtime) {
+        return "single-service";
+    }
+    let api_paths = runtime
+        .pointer("/httpProbes/apiPaths")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
+    let has_frontend_endpoint = runtime_endpoint_present(runtime, "frontend");
+    let has_api_endpoint = runtime_endpoint_present(runtime, "api");
+    let has_frontend_surface = runtime_has_surface_kind(runtime, &["frontend", "web", "ui"]);
+    let has_api_surface = runtime_has_surface_kind(runtime, &["api", "backend"]);
+
+    if (has_frontend_endpoint && (has_api_endpoint || api_paths))
+        || (has_api_endpoint && has_frontend_surface)
+        || (has_frontend_surface && has_api_surface)
+        || (api_paths && runtime_labeled_commands_declare_frontend_and_backend(runtime))
+    {
+        "frontend-and-backend"
+    } else {
+        "single-service"
+    }
+}
+
+fn runtime_endpoint_present(runtime: &Value, field: &str) -> bool {
+    let Some(endpoint) = runtime.get(field) else {
+        return false;
+    };
+    endpoint.get("required").and_then(Value::as_bool) == Some(true)
+        || endpoint.as_object().is_some_and(|object| {
+            object.iter().any(|(key, value)| {
+                key != "required"
+                    && value
+                        .as_str()
+                        .map(|text| !text.trim().is_empty())
+                        .unwrap_or_else(|| value.as_array().is_some_and(|items| !items.is_empty()))
+            })
+        })
+}
+
+fn runtime_frontend_is_served_by_integrated_app(runtime: &Value) -> bool {
+    [
+        "/frontend/servedBy",
+        "/frontend/servedByRef",
+        "/deliveryMechanics/staticAssets/servedBy",
+    ]
+    .iter()
+    .filter_map(|pointer| runtime.pointer(pointer).and_then(Value::as_str))
+    .any(|value| {
+        let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
+        [
+            "springbootstatic",
+            "backendstatic",
+            "serverstatic",
+            "servicestatic",
+            "appstatic",
+            "sameprocess",
+            "sameapp",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    })
+}
+
+fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
+    runtime
+        .get("runtimeSurfaces")
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            surfaces.iter().any(|surface| {
+                surface
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .map(|kind| {
+                        let normalized = kind.to_ascii_lowercase().replace(['_', '-'], "");
+                        accepted
+                            .iter()
+                            .any(|item| normalized.contains(&item.replace(['_', '-'], "")))
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn runtime_labeled_commands_declare_frontend_and_backend(runtime: &Value) -> bool {
+    let mut labels = Vec::new();
+    for command in [
+        runtime.pointer("/build/command").and_then(Value::as_str),
+        runtime.pointer("/buildCommand").and_then(Value::as_str),
+        runtime.pointer("/start/command").and_then(Value::as_str),
+        runtime.pointer("/startCommand").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        labels.extend(runtime_labeled_command_segments(command));
+    }
+    let has_frontend = labels
+        .iter()
+        .any(|label| matches!(label.as_str(), "frontend" | "web" | "client" | "ui"));
+    let has_backend = labels
+        .iter()
+        .any(|label| matches!(label.as_str(), "backend" | "api" | "service" | "server"));
+    has_frontend && has_backend
+}
+
+fn runtime_labeled_command_segments(command: &str) -> Vec<String> {
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let (label, rest) = trimmed.split_once(':')?;
+            let label = label.trim();
+            if rest.trim().is_empty()
+                || label.is_empty()
+                || label.contains(char::is_whitespace)
+                || !label
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+            {
+                return None;
+            }
+            Some(label.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 fn validate_runtime_rules(

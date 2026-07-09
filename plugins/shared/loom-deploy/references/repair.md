@@ -18,6 +18,34 @@ Use this reference when the current Loom MCP deploy action asks for deployment r
 - `build_command_failed`, `start_command_failed`, `http_probe_failed`, `preview_not_verified`: if the current MCP action reports `repairRoute=execution_repair`, do not edit deploy assets. Execute the returned repair action, write its result, submit with the returned submit tool, then retry through the returned deploy action.
 - `unknown`: classify from stdout/stderr before editing.
 
+## Repair Decision Tree
+
+Follow this order for every deploy repair:
+
+1. Check whether the failure is outside generated assets.
+   - Docker daemon unavailable, registry/network/auth failure, missing real credentials, and protected user asset mismatches are blockers or user-action items.
+   - Do not edit Dockerfile/Compose for these failures.
+2. Check facts/source/topology consistency.
+   - Compare `factsRef`, `sourceModelRef`, `topologyRef`, and `DeploymentSpec.runtime.ports`.
+   - If topology says `frontend_gateway_backend_api`, generated assets must include a public gateway and API proxy route.
+   - If topology says `backend_served_frontend_api`, generated assets must package frontend output into the backend and must not invent a proxy requirement.
+   - If the spec facts contradict each other, the MCP generator is wrong. Do not hide it by inventing a different topology in repair.
+3. Check generated asset closure.
+   - Compose service ids must match `sourceModel.services[].serviceId`.
+   - Compose build context, Dockerfile path, Dockerfile `WORKDIR`, and `COPY` sources must be a valid path closure.
+   - Runtime ports, `EXPOSE`, host bindings, and healthcheck paths must match the port plan.
+   - Environment values must come from environment/dependency facts.
+4. Classify the failing phase.
+   - Compose config failure: patch Compose structure, paths, env shape, or unsupported syntax.
+   - Image build failure: patch generated Dockerfile, ignore file, dependency install, or build context.
+   - Container start failure: patch generated command, env, dependency URL, bind host, or runtime artifact selection.
+   - Healthcheck/proxy failure: patch healthcheck candidates, public gateway config, route order, bind host, startup timing, or topology-consistent port wiring.
+5. Escalate to execution repair when logs prove application code/build scripts are the failing surface and the MCP action routes to `execution_repair`.
+   - In that route, do not edit deploy assets.
+   - Execute the returned synthetic task, submit the result, then retry the returned deploy step.
+
+This tree prevents blind Dockerfile edits. A Dockerfile repair is correct only after the source model and Compose build context have been checked.
+
 ## Platform-Specific Native Dependency Failures
 
 - If logs mention `@next/swc-linux-*`, `@tailwindcss/oxide-linux-*`, `tailwindcss-oxide.linux-*.node`, `lightningcss.linux-*.node`, `sharp`, `esbuild`, `rollup-*`, or similar native optional packages, treat OS/libc/CPU as part of the repair.
@@ -72,6 +100,15 @@ Repair is a bounded fallback, not the primary template engine. Before patching, 
 If the generated template was structurally wrong, repair the generated asset in the smallest durable way and keep the fix aligned with the source model. Avoid scenario-specific fixes such as hard-coding one framework's port, one folder name, or one database unless the source model or diagnostics proves that exact stack.
 
 Ask the user only when the next action requires real credentials, destructive bootstrap/migration execution, changing protected user-owned Compose/Dockerfile assets, or decisions that cannot be inferred from repository evidence.
+
+## Protected Asset Boundary
+
+Existing Compose and Dockerfile assets are user-owned unless the user forced a generated provider or explicitly approved editing them.
+
+- For `compose-existing`, inspect and report the user Compose topology. Do not inject generated proxy, dependency, or healthcheck services into it.
+- For `dockerfile-existing`, generate or repair the Compose wrapper and environment around the protected Dockerfile. Do not change the Dockerfile when its assumptions are merely inconvenient.
+- For generated providers, generated files under `.loom/deployment/specs/generated/` are editable and should be repaired when they contradict facts.
+- If a protected asset cannot satisfy the accepted runtime contract, report the protected-asset blocker and the exact required change. Loom may fall back to generated assets only when provider policy allows it.
 
 ## Retry Rules
 

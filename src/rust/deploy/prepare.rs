@@ -28,6 +28,7 @@ use crate::{
         analyze_existing_compose, find_existing_deployment_files, selected_compose_port,
         ExistingDeploymentFiles,
     },
+    facts::build_deployment_facts,
     generate::{generate_deployment_files, generated_file_refs},
     paths::{deployment_paths, DeploymentPaths},
     port_plan::{build_deployment_runtime, primary_url},
@@ -130,6 +131,7 @@ pub fn deploy_prepare_inner(
     let topology_ref =
         to_project_relative(project_root, &paths.generated_dir.join("topology.json"))?;
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
+    let facts_ref = to_project_relative(project_root, &paths.generated_dir.join("facts.json"))?;
     let environment = env_diagnostics(&runtime_contract, &code_probe);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
     let runtime = build_deployment_runtime(
@@ -152,6 +154,13 @@ pub fn deploy_prepare_inner(
         &topology,
         &existing,
     )?;
+    let facts = build_deployment_facts(
+        strategy.provider,
+        &runtime_contract,
+        &source_model,
+        &topology,
+        &runtime,
+    );
     let spec = DeploymentSpec {
         schema_version: 1,
         provider: strategy.provider,
@@ -166,9 +175,11 @@ pub fn deploy_prepare_inner(
         source_model_ref: source_model_ref.clone(),
         topology_ref: topology_ref.clone(),
         code_evidence_ref: code_evidence_ref.clone(),
+        facts_ref: facts_ref.clone(),
         runtime_contract,
         source_model,
         topology,
+        facts,
         environment,
         bootstrap,
         compose: compose_info,
@@ -184,6 +195,7 @@ pub fn deploy_prepare_inner(
         &spec.source_model,
     )?;
     write_json_atomic(&paths.generated_dir.join("topology.json"), &spec.topology)?;
+    write_json_atomic(&paths.generated_dir.join("facts.json"), &spec.facts)?;
     let mut code_evidence = code_probe.evidence.clone();
     if let Some(object) = code_evidence.as_object_mut() {
         object.insert(
@@ -198,6 +210,7 @@ pub fn deploy_prepare_inner(
             "topologyRef".to_string(),
             serde_json::Value::String(topology_ref),
         );
+        object.insert("factsRef".to_string(), serde_json::Value::String(facts_ref));
     }
     write_json_atomic(&paths.code_evidence_file, &code_evidence)?;
     let generated = generate_deployment_files(&spec);
@@ -573,6 +586,17 @@ pub(crate) fn deployment_prepare_details(
         "sourceModelRef": spec.source_model_ref,
         "topologyRef": spec.topology_ref,
         "codeEvidenceRef": spec.code_evidence_ref,
+        "factsRef": spec.facts_ref,
+        "deployFactsSummary": {
+            "topologyClass": spec.facts.topology_class,
+            "layoutKind": spec.facts.layout_kind,
+            "stackKinds": spec.facts.stack_kinds,
+            "serviceRoots": spec.facts.service_roots,
+            "dependencyKinds": spec.facts.dependency_kinds,
+            "publicPortCount": spec.facts.public_port_count,
+            "internalPortCount": spec.facts.internal_port_count,
+            "generatedAssetPolicy": spec.facts.generated_asset_policy
+        },
         "sourceModelSummary": {
             "shape": spec.source_model.shape,
             "primaryServiceId": spec.source_model.primary_service_id,

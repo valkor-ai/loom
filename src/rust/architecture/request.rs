@@ -1114,7 +1114,6 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
         "runtimeDelivery": {
             "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
             "runtimeKind": "string",
-            "deploymentShape": "single-service | frontend-and-backend",
             "basis": Value::Object(basis),
             "build": {
                 "command": "string",
@@ -1550,7 +1549,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
         "runtimeDelivery": {
             "status": "modified",
             "runtimeKind": "",
-            "deploymentShape": "single-service",
             "basis": Value::Object(basis),
             "build": {
                 "command": "",
@@ -1797,6 +1795,7 @@ fn section_generation_rules(
             runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
             "For status=modified, fill build.command, runtimeSurfaces, httpProbes.previewPath, httpProbes.expectedStatus, and taskPlanningGuidance so TaskPlan and Deploy do not guess runtime facts."
                 .to_string(),
+            "Do not choose deploymentShape manually. MCP derives it during submit from frontend/api endpoint objects, runtimeSurfaces, apiPaths, servedBy, and role-labeled commands.".to_string(),
             "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
                 .to_string(),
             "Omit unknown optional runtime fields instead of writing null; include start.port only when a fixed port is known."

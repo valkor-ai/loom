@@ -2453,7 +2453,6 @@ fn architecture_repair_section_content_template(
             "runtimeDelivery": {
                 "status": "modified",
                 "runtimeKind": "",
-                "deploymentShape": "single-service",
                 "basis": {
                     "technicalBaselineRef": ""
                 },

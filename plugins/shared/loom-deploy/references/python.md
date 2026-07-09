@@ -38,3 +38,39 @@ Use this reference when implementing or repairing loom deploy support for Python
 
 - Most Python startup failures are wrong module names (`main:app` vs `app:app`), missing runtime dependencies, or binding to `127.0.0.1`.
 - Keep fixes in generated Dockerfile/Compose unless the user approves source changes.
+
+## Scanner Signals To Deploy Facts
+
+Translate Python scanner evidence into deploy facts before generating files:
+
+- Dependency manifests become service root, package manager, lockfile, and install command facts.
+- FastAPI/Flask/Django/Streamlit/stdlib HTTP signals become runtime framework and port facts.
+- ASGI/WSGI symbols such as `app = FastAPI()`, `Flask(__name__)`, `application`, and Django settings become start command candidates.
+- `manage.py` and Django settings become app root and framework env facts.
+- Env examples and settings modules become required/generated environment facts.
+- SQLAlchemy/Django database settings, Alembic, Redis/Celery, and driver dependencies become dependency service facts.
+- Plain scripts without HTTP server signals become non-preview or command-style deploy facts instead of fake HTTP apps.
+
+## Generated Asset Expectations
+
+Generated Python assets should show:
+
+- `python:3.12-slim` unless project metadata selects a more specific compatible Python version.
+- Install step matching pip, uv, or Poetry facts.
+- Runtime command using the detected ASGI/WSGI/stdlib entrypoint and binding to `0.0.0.0`.
+- `PORT` set to the selected container port.
+- Django local preview env includes safe local secret/allowed-host defaults only when Django is detected.
+- Dependency URLs use Compose service DNS names and generated local credentials.
+- Healthcheck candidates prefer explicit source/docs paths before generic `/`.
+
+## Repair Boundary
+
+Repair generated Python deploy assets when:
+
+- Dockerfile installs from the wrong manifest or package manager.
+- Entrypoint/module name is wrong but can be inferred from source evidence.
+- Uvicorn/Gunicorn/Flask/Django command binds to localhost or wrong port.
+- Generated env misses safe local framework defaults.
+- Dependency service URL points at localhost.
+
+Do not edit Python source, settings modules, migrations, or dependency manifests during deploy asset repair unless the MCP action routes to execution repair.

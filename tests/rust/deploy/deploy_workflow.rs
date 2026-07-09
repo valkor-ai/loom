@@ -41,9 +41,12 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     });
     let value = serde_json::to_value(result).expect("result json");
     assert_eq!(value["state"], "done", "{value:#}");
-    let reference_ids = &value["details"]["deployReferenceProfile"]["referenceIds"];
+    let reference_profile = &value["details"]["deployReferenceProfile"];
     for expected in [
         "deploy.providers",
+        "deploy.matrix",
+        "deploy.source-model",
+        "deploy.topology",
         "deploy.compose",
         "deploy.dockerfile",
         "deploy.environment",
@@ -51,12 +54,9 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
         "deploy.stacks.node",
         "deploy.stacks.java",
     ] {
-        assert_json_array_contains(reference_ids, expected);
+        assert_reference_load_plan_contains(reference_profile, expected);
     }
-    assert_eq!(
-        value["details"]["deployReferenceProfile"]["loadMode"],
-        "skill_reference_by_id"
-    );
+    assert_deploy_reference_profile_shape(reference_profile);
 
     let spec: DeploymentSpec = read_json(&fixture.root.join(".loom/deployment/specs/local.json"))
         .expect("deployment spec");
@@ -83,6 +83,16 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
         .iter()
         .any(|dependency| dependency.service_name == "postgres"));
     assert_eq!(spec.topology.public_entry_service_id, "frontend");
+    assert_eq!(
+        serde_json::to_value(spec.facts.topology_class).unwrap(),
+        json!("frontend_gateway_backend_api")
+    );
+    assert_eq!(
+        serde_json::to_value(spec.facts.layout_kind).unwrap(),
+        json!("workspace_app")
+    );
+    assert_eq!(spec.facts.public_entry_service_id, "frontend");
+    assert_eq!(spec.facts.primary_service_id, "backend");
     assert!(serde_json::to_string(&spec.topology)
         .unwrap()
         .contains("\"kind\":\"http-proxy\""));
@@ -435,6 +445,303 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
 }
 
 #[test]
+fn prepare_promotes_single_service_frontend_api_contract_to_proxy_topology() {
+    let fixture = Fixture::new("deploy-root-composite-single-shape");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "web_frontend_plus_api",
+        "deploymentShape": "single-service",
+        "build": {
+            "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package",
+            "workingDirectory": "."
+        },
+        "start": {
+            "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run",
+            "workingDirectory": "."
+        },
+        "httpProbes": {
+            "previewPath": "/",
+            "apiPaths": ["/api/health", "/api/purchase-requests"],
+            "expectedStatus": "2xx_or_3xx"
+        },
+        "runtimeSurfaces": [
+            { "surfaceId": "runtime_surface_frontend", "kind": "frontend", "urlPath": "/" },
+            { "surfaceId": "runtime_surface_api", "kind": "api", "urlPath": "/api" }
+        ],
+        "environment": {
+            "required": ["DATABASE_URL"],
+            "optional": ["SERVER_PORT", "SPRING_PROFILES_ACTIVE"]
+        }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","dev":"vite --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("package-lock.json", "{}\n");
+    fixture.write_text("vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>purchase</artifactId><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>"#,
+    );
+    fixture.write_text("mvnw", "#!/bin/sh\n");
+    fixture.write_text(
+        "src/main/resources/application.yml",
+        "spring:\n  application:\n    name: purchase\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(
+        spec.runtime_contract.deployment_shape,
+        Some(DeploymentShape::FrontendAndBackend)
+    );
+    assert_eq!(spec.source_model.shape, DeploymentShape::FrontendAndBackend);
+    assert_eq!(spec.source_model.primary_service_id, "backend");
+    assert_eq!(spec.source_model.preview_service_id, "frontend");
+    assert_eq!(spec.topology.public_entry_service_id, "frontend");
+    assert!(serde_json::to_string(&spec.topology)
+        .unwrap()
+        .contains("\"kind\":\"http-proxy\""));
+    assert!(serde_json::to_string(&spec.topology)
+        .unwrap()
+        .contains("\"publicPath\":\"/api\""));
+
+    let frontend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    let backend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "backend")
+        .expect("backend service");
+    assert_eq!(frontend.root, ".");
+    assert_eq!(frontend.manifest_refs, vec!["package.json"]);
+    assert_eq!(frontend.lockfile_refs, vec!["package-lock.json"]);
+    assert_eq!(frontend.output_directory.as_deref(), Some("dist"));
+    assert_eq!(frontend.build_command.as_deref(), Some("npm run build"));
+    assert_eq!(frontend.package_manager, Some(PackageManager::Npm));
+    assert!(frontend.has_lockfile);
+    assert_eq!(backend.root, ".");
+    assert_eq!(backend.manifest_refs, vec!["pom.xml"]);
+    assert_eq!(
+        backend.build_command.as_deref(),
+        Some("./mvnw -DskipTests package")
+    );
+    assert_eq!(backend.package_manager, Some(PackageManager::Maven));
+    assert_eq!(backend.framework.as_deref(), Some("spring-boot"));
+    assert_eq!(backend.healthcheck_path.as_deref(), Some("/api/health"));
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(frontend_dockerfile.contains("WORKDIR /workspace"));
+    assert!(frontend_dockerfile.contains("COPY package-lock.json package.json ./"));
+    assert!(frontend_dockerfile.contains("RUN npm run build"));
+    assert!(
+        !frontend_dockerfile.contains("./mvnw"),
+        "{frontend_dockerfile}"
+    );
+
+    let backend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.backend"),
+    )
+    .expect("backend dockerfile");
+    assert!(backend_dockerfile.contains("COPY pom.xml ./"));
+    assert!(backend_dockerfile.contains("RUN mvn -DskipTests package"));
+    assert!(
+        !backend_dockerfile.contains("npm run build"),
+        "{backend_dockerfile}"
+    );
+
+    let nginx = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/nginx.frontend.conf"),
+    )
+    .expect("nginx config");
+    assert!(nginx.contains("location = /api"), "{nginx}");
+    assert!(nginx.contains("proxy_pass http://backend:8080;"), "{nginx}");
+
+    let validate = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let validate_value = serde_json::to_value(validate).expect("validate json");
+    assert_eq!(
+        validate_value["details"]["assetIssues"],
+        json!([]),
+        "{validate_value:#}"
+    );
+
+    let evidence: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/evidence/latest-code-evidence.json"),
+    )
+    .expect("code evidence");
+    assert_eq!(evidence["repositoryShape"], "multi_application");
+    assert!(serde_json::to_string(&evidence)
+        .unwrap()
+        .contains("frontend_package_file"));
+}
+
+#[test]
+fn deploy_validate_allows_single_app_api_paths_without_proxy_topology() {
+    let fixture = Fixture::new("deploy-api-single-service-no-proxy");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "spring boot api",
+        "deploymentShape": "single-service",
+        "build": { "command": "./mvnw -DskipTests package" },
+        "start": { "command": "./mvnw spring-boot:run", "port": 8080 },
+        "httpProbes": {
+            "previewPath": "/api/health",
+            "apiPaths": ["/api/health"]
+        },
+        "runtimeSurfaces": [
+            { "surfaceId": "runtime_surface_api", "kind": "api", "urlPath": "/api" }
+        ],
+        "environment": {
+            "required": [],
+            "optional": []
+        }
+    }));
+    fixture.write_text(
+        "pom.xml",
+        r#"<project><modelVersion>4.0.0</modelVersion><artifactId>api</artifactId><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>"#,
+    );
+    fixture.write_text("mvnw", "#!/bin/sh\n");
+    fixture.write_text("src/main/java/app/App.java", "class App {}\n");
+
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.source_model.shape, DeploymentShape::SingleService);
+    assert!(spec.topology.routes.is_empty(), "{:#?}", spec.topology);
+
+    let validate = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let validate_value = serde_json::to_value(validate).expect("validate json");
+    assert!(
+        !validate_value["details"]["assetIssues"]
+            .as_array()
+            .expect("asset issues")
+            .iter()
+            .any(|issue| issue
+                .as_str()
+                .unwrap_or_default()
+                .contains("topology has apiPaths but no http-proxy route")),
+        "{validate_value:#}"
+    );
+}
+
+#[test]
+fn prepare_builds_deploy_facts_for_supported_single_service_stacks() {
+    assert_probe_stack(
+        "deploy-python-matrix",
+        &[
+            (
+                "pyproject.toml",
+                "[project]\ndependencies = ['fastapi', 'uvicorn']\n",
+            ),
+            ("main.py", "from fastapi import FastAPI\napp = FastAPI()\n"),
+        ],
+        RuntimeKind::Python,
+        "deploy.stacks.python",
+        "single_service_app",
+    );
+    assert_probe_stack(
+        "deploy-go-matrix",
+        &[
+            ("services/api/go.mod", "module example.com/app\n"),
+            ("services/api/main.go", "package main\nfunc main() {}\n"),
+        ],
+        RuntimeKind::Go,
+        "deploy.stacks.go",
+        "single_service_app",
+    );
+    assert_probe_stack(
+        "deploy-dotnet-matrix",
+        &[
+            (
+                "apps/api/App.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk.Web\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>\n",
+            ),
+            (
+                "apps/api/Program.cs",
+                "var builder = WebApplication.CreateBuilder(args);\n",
+            ),
+        ],
+        RuntimeKind::Dotnet,
+        "deploy.stacks.dotnet",
+        "single_service_app",
+    );
+    assert_probe_stack(
+        "deploy-php-matrix",
+        &[
+            (
+                "composer.json",
+                "{\"require\":{\"laravel/framework\":\"^11.0\"}}\n",
+            ),
+            ("public/index.php", "<?php echo 'ok';\n"),
+        ],
+        RuntimeKind::Php,
+        "deploy.stacks.php",
+        "single_service_app",
+    );
+    assert_probe_stack(
+        "deploy-ruby-matrix",
+        &[
+            ("Gemfile", "gem 'rails'\n"),
+            (
+                "config/application.rb",
+                "module Demo; class Application < Rails::Application; end; end\n",
+            ),
+        ],
+        RuntimeKind::Ruby,
+        "deploy.stacks.ruby",
+        "single_service_app",
+    );
+    assert_probe_stack(
+        "deploy-static-matrix",
+        &[("index.html", "<!doctype html><div>ok</div>\n")],
+        RuntimeKind::Static,
+        "deploy.stacks.static",
+        "static_site",
+    );
+}
+
+#[test]
 fn prepare_splits_cd_combined_commands_into_service_level_model() {
     let fixture = Fixture::new("deploy-cd-combined-service-model");
     fixture.write_runtime_delivery(json!({
@@ -772,6 +1079,8 @@ fn deploy_prepare_returns_refs_and_compact_summaries_without_full_spec_sections(
     assert!(details["sourceModelRef"].as_str().is_some(), "{value:#}");
     assert!(details["topologyRef"].as_str().is_some(), "{value:#}");
     assert!(details["codeEvidenceRef"].as_str().is_some(), "{value:#}");
+    assert!(details["factsRef"].as_str().is_some(), "{value:#}");
+    assert!(details["deployFactsSummary"].is_object(), "{value:#}");
     assert!(details["sourceModelSummary"].is_object(), "{value:#}");
     assert!(details["topologySummary"].is_object(), "{value:#}");
     assert!(details["generatedFileRefs"].is_array(), "{value:#}");
@@ -1036,7 +1345,7 @@ exit 0
     });
     let value = serde_json::to_value(result).expect("deploy up json");
     assert_eq!(fixture.read_spec().provider, DeployProvider::Generated);
-    let reference_ids = &value["next"]["deployReferenceProfile"]["referenceIds"];
+    let reference_profile = &value["next"]["deployReferenceProfile"];
     for expected in [
         "deploy.providers",
         "deploy.compose",
@@ -1044,9 +1353,10 @@ exit 0
         "deploy.repair",
         "deploy.stacks.node",
     ] {
-        assert_json_array_contains(reference_ids, expected);
+        assert_reference_load_plan_contains(reference_profile, expected);
     }
-    assert_json_array_excludes(reference_ids, "deploy.external-references");
+    assert_reference_load_plan_excludes(reference_profile, "deploy.external-references");
+    assert_deploy_reference_profile_shape(reference_profile);
     let repair = fixture.repair_action_value();
     assert!(!repair["protectedFiles"]
         .as_array()
@@ -2713,20 +3023,148 @@ fn assert_forbidden_cli_fields_absent(value: &Value) {
     }
 }
 
-fn assert_json_array_contains(value: &Value, expected: &str) {
-    let contains = value
+fn assert_deploy_reference_profile_shape(profile: &Value) {
+    assert_eq!(
+        profile["loadMode"], "mcp_reference_load_plan",
+        "{profile:#}"
+    );
+    assert!(
+        profile.get("referenceIds").is_none(),
+        "deployReferenceProfile must not expose legacy referenceIds: {profile:#}"
+    );
+    let plan = profile["referenceLoadPlan"]
         .as_array()
-        .map(|items| items.iter().any(|item| item == expected))
-        .unwrap_or(false);
-    assert!(contains, "expected {expected} in {value:#}");
+        .expect("deployReferenceProfile.referenceLoadPlan array");
+    assert!(
+        !plan.is_empty(),
+        "deployReferenceProfile.referenceLoadPlan must not be empty"
+    );
+    for item in plan {
+        assert!(item["refId"].as_str().is_some(), "missing refId: {item:#}");
+        assert!(item["path"].as_str().is_some(), "missing path: {item:#}");
+        assert!(
+            item["reason"].as_str().is_some(),
+            "missing reason: {item:#}"
+        );
+    }
 }
 
-fn assert_json_array_excludes(value: &Value, forbidden: &str) {
-    let contains = value
+fn assert_reference_load_plan_contains(profile: &Value, expected_ref_id: &str) {
+    let expected_path = expected_deploy_reference_path(expected_ref_id);
+    let contains = profile["referenceLoadPlan"]
         .as_array()
-        .map(|items| items.iter().any(|item| item == forbidden))
+        .map(|items| {
+            items.iter().any(|item| {
+                item["refId"] == expected_ref_id
+                    && item["path"] == expected_path
+                    && item["reason"]
+                        .as_str()
+                        .is_some_and(|reason| !reason.is_empty())
+            })
+        })
         .unwrap_or(false);
-    assert!(!contains, "forbidden {forbidden} appears in {value:#}");
+    assert!(
+        contains,
+        "expected {expected_ref_id} -> {expected_path} in {profile:#}"
+    );
+}
+
+fn assert_reference_load_plan_excludes(profile: &Value, forbidden_ref_id: &str) {
+    let contains = profile["referenceLoadPlan"]
+        .as_array()
+        .map(|items| items.iter().any(|item| item["refId"] == forbidden_ref_id))
+        .unwrap_or(false);
+    assert!(
+        !contains,
+        "forbidden {forbidden_ref_id} appears in {profile:#}"
+    );
+}
+
+fn expected_deploy_reference_path(ref_id: &str) -> &'static str {
+    match ref_id {
+        "deploy.providers" => "providers.md",
+        "deploy.matrix" => "matrix.md",
+        "deploy.source-model" => "source-model.md",
+        "deploy.topology" => "topology.md",
+        "deploy.compose" => "compose.md",
+        "deploy.dockerfile" => "dockerfile.md",
+        "deploy.environment" => "environment.md",
+        "deploy.workspaces" => "workspaces.md",
+        "deploy.bootstrap" => "bootstrap.md",
+        "deploy.repair" => "repair.md",
+        "deploy.stacks.node" => "node.md",
+        "deploy.stacks.python" => "python.md",
+        "deploy.stacks.go" => "go.md",
+        "deploy.stacks.java" => "java.md",
+        "deploy.stacks.dotnet" => "dotnet.md",
+        "deploy.stacks.php" => "php.md",
+        "deploy.stacks.ruby" => "ruby.md",
+        "deploy.stacks.static" => "static.md",
+        other => panic!("no expected deploy reference path for {other}"),
+    }
+}
+
+fn assert_probe_stack(
+    name: &str,
+    files: &[(&str, &str)],
+    expected_kind: RuntimeKind,
+    expected_reference_id: &str,
+    expected_topology_class: &str,
+) {
+    let fixture = Fixture::new(name);
+    for (path, text) in files {
+        fixture.write_text(path, text);
+    }
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    let reference_profile = &value["details"]["deployReferenceProfile"];
+    assert_deploy_reference_profile_shape(reference_profile);
+    assert_reference_load_plan_contains(reference_profile, "deploy.matrix");
+    assert_reference_load_plan_contains(reference_profile, "deploy.source-model");
+    assert_reference_load_plan_contains(reference_profile, expected_reference_id);
+
+    let spec = fixture.read_spec();
+    assert!(
+        spec.facts.stack_kinds.contains(&expected_kind),
+        "{:#?}",
+        spec.facts
+    );
+    assert_eq!(
+        serde_json::to_value(spec.facts.topology_class).unwrap(),
+        json!(expected_topology_class)
+    );
+    let service = &spec.source_model.services[0];
+    assert_eq!(service.runtime_kind, expected_kind);
+    if service.root != "." && matches!(expected_kind, RuntimeKind::Go | RuntimeKind::Dotnet) {
+        let dockerfile = read_text(
+            &fixture
+                .root
+                .join(".loom/deployment/specs/generated/Dockerfile.app"),
+        )
+        .expect("generated dockerfile");
+        assert!(
+            dockerfile.contains(&format!("WORKDIR /src/{}", service.root)),
+            "{dockerfile}"
+        );
+    }
+    let validate = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let validate_value = serde_json::to_value(validate).expect("validate json");
+    assert_eq!(
+        validate_value["details"]["assetIssues"],
+        json!([]),
+        "{validate_value:#}"
+    );
 }
 
 struct Fixture {

@@ -30,7 +30,7 @@ use crate::{
         deploy_execution_repair_action_file, deploy_execution_repair_result_file, deployment_paths,
     },
     prepare::{deployment_generated_file_refs, read_spec},
-    references::reference_profile,
+    references::{reference_profile, repair_only_reference_profile},
     run::deploy_retry_after_repair,
     DeployToolInput,
 };
@@ -193,10 +193,7 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                     deploy_reference_profile: spec
                         .as_ref()
                         .map(|spec| reference_profile(spec, Some(request.failure_kind), true))
-                        .unwrap_or(delivery_core::DeployReferenceProfile {
-                            reference_ids: vec!["deploy.repair".to_string()],
-                            load_mode: "skill_reference_by_id".to_string(),
-                        }),
+                        .unwrap_or_else(repair_only_reference_profile),
                     retry_tool: "loom.deployUp".to_string(),
                 }),
             ))

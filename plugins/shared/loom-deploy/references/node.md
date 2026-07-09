@@ -73,3 +73,42 @@ Use this reference when implementing or repairing loom deploy support for Node-f
 - Dependency services should use Compose internal networking with `expose`, not host `ports`, to avoid local port conflicts.
 - If only one SQL service is detected, assign `DATABASE_URL`.
 - If both Postgres and MySQL are detected, avoid ambiguous `DATABASE_URL`; assign `POSTGRES_URL` and `MYSQL_URL` instead.
+
+## Scanner Signals To Deploy Facts
+
+Translate Node scanner evidence into deploy facts before generating files:
+
+- `package.json` path becomes the service root and manifest ref.
+- Lockfile and `packageManager` metadata become package manager facts and install command selection.
+- `scripts.build`, `scripts.start`, `scripts.preview`, framework config, and docs become build/start/runtime command candidates.
+- Framework signals become runtime family details: Next.js, Vite/static preview, Astro, Remix, Express/Fastify/Koa/Hono, Bun, or static export.
+- Output directory signals such as `dist`, `build`, `out`, `.next`, and `.next/standalone` become generated asset expectations.
+- Frontend-only signals plus backend API signals in another service should produce `frontend_gateway_backend_api`, not a single app container.
+- Server-side Node/API signals without a frontend surface should produce `single_service_app` or `api_only_single_service`.
+- Dependency package/env signals become dependency service facts and generated environment URLs.
+
+## Generated Asset Expectations
+
+Generated Node assets should show:
+
+- Compose service id matching the source model service id.
+- Build context that contains the package manifest, lockfile, and workspace manifests needed for install.
+- Dockerfile install step matching the package manager and lockfile.
+- Build command only when the project has a build step or framework output requirement.
+- Runtime command bound to `0.0.0.0` and the selected container port.
+- Static or gateway service when frontend assets are served separately from backend API.
+- API base env pointing at the public proxy path for browser code when a frontend gateway exists.
+- Linux optional dependency handling for Next/Tailwind/CSS pipelines in the generated image, not host `node_modules`.
+
+## Repair Boundary
+
+Repair generated Node deploy assets when:
+
+- Build context omits workspace root lockfiles or package manifests.
+- Install command mismatches lockfile/package manager facts.
+- Runtime command uses a dev server when a production preview/server is available.
+- Server binds to `127.0.0.1` or the wrong port.
+- Frontend code points at `localhost:<api-port>` instead of the gateway route.
+- Native optional packages fail inside Linux containers.
+
+Do not edit application source or package scripts unless the MCP action routes to execution repair or the user approves source changes.

@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
-use contracts::{DependencyService, PackageManager, RuntimeKind};
+use contracts::{DependencyService, DependencyServiceKind, PackageManager, RuntimeKind};
 use serde_json::{json, Value};
 use state::{
     paths::to_project_relative,
@@ -69,9 +69,11 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     let has_root_gradle = root_gradle.exists() || project_root.join("gradlew").exists();
     let has_root_maven = root_pom.exists() || project_root.join("mvnw").exists();
     let has_root_node = root_package.exists();
+    let has_root_frontend = root_frontend_detected(project_root);
     let env_defaults = collect_env_defaults(project_root);
     let spring_ddl_auto_validate = spring_ddl_auto_validate(project_root);
     let flyway_detected = flyway_detected(project_root);
+    let services = collect_dependency_services(project_root);
 
     if let Some(backend) = backend {
         let package_manager = Some(backend.package_manager);
@@ -105,7 +107,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             healthcheck_path: Some("/".to_string()),
             working_directory: None,
             workspace_package_json_paths: frontend_package_refs.clone(),
-            services: vec![],
+            services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
@@ -188,11 +190,36 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
         } else {
             Some(PackageManager::Maven)
         };
+        let root_frontend_package_refs = has_root_frontend
+            .then(|| vec!["package.json".to_string()])
+            .unwrap_or_default();
+        let root_frontend_files = if has_root_frontend {
+            vec![
+                file_fact(project_root, "package.json", "frontend_package_file"),
+                file_fact(project_root, "package-lock.json", "frontend_lockfile"),
+                file_fact(project_root, "pnpm-lock.yaml", "frontend_lockfile"),
+                file_fact(project_root, "yarn.lock", "frontend_lockfile"),
+                file_fact(project_root, "bun.lockb", "frontend_lockfile"),
+                file_fact(project_root, "vite.config.ts", "frontend_config"),
+                file_fact(project_root, "vite.config.js", "frontend_config"),
+                file_fact(project_root, "next.config.js", "frontend_config"),
+                file_fact(project_root, "next.config.mjs", "frontend_config"),
+            ]
+        } else {
+            vec![]
+        };
+        let mut files = vec![
+            file_fact(project_root, "build.gradle", "backend_build_file"),
+            file_fact(project_root, "gradlew", "backend_build_wrapper"),
+            file_fact(project_root, "pom.xml", "backend_build_file"),
+            file_fact(project_root, "mvnw", "backend_build_wrapper"),
+        ];
+        files.extend(root_frontend_files);
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Java,
             package_manager,
-            has_lockfile: false,
-            framework: Some("java".to_string()),
+            has_lockfile: has_root_frontend && has_node_lockfile(project_root),
+            framework: Some(java_framework(project_root, ".").to_string()),
             runtime_version: None,
             runtime_version_source: None,
             build_command: Some(if project_root.join("gradlew").exists() {
@@ -205,27 +232,287 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
                 "mvn -DskipTests package".to_string()
             }),
             start_command: None,
-            output_directory: None,
+            output_directory: has_root_frontend.then(|| "dist".to_string()),
             port: 8080,
             healthcheck_path: Some("/".to_string()),
             working_directory: None,
+            workspace_package_json_paths: root_frontend_package_refs.clone(),
+            services: services.clone(),
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
+            evidence: evidence_value(
+                project_root,
+                if has_root_frontend {
+                    "multi_application"
+                } else {
+                    "single_service"
+                },
+                RuntimeKind::Java,
+                package_manager,
+                8080,
+                files,
+                root_frontend_package_refs,
+            )?,
+        });
+    }
+
+    if let Some(root) = find_stack_root(
+        project_root,
+        &[
+            "requirements.txt",
+            "pyproject.toml",
+            "uv.lock",
+            "poetry.lock",
+            "Pipfile",
+            "manage.py",
+            "main.py",
+            "app.py",
+            "server.py",
+        ],
+    ) {
+        let package_root = project_root.join(&root);
+        let package_manager = python_package_manager(&package_root);
+        let framework = python_framework(&package_root);
+        let port = python_default_port(framework.as_deref());
+        return Ok(DeploymentCodeProbe {
+            kind: RuntimeKind::Python,
+            package_manager,
+            has_lockfile: has_python_lockfile(&package_root),
+            framework,
+            runtime_version: None,
+            runtime_version_source: None,
+            build_command: None,
+            start_command: Some(python_start_command(&package_root, port)),
+            output_directory: None,
+            port,
+            healthcheck_path: Some("/".to_string()),
+            working_directory: (root != ".").then_some(root.clone()),
             workspace_package_json_paths: vec![],
-            services: vec![],
+            services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
                 "single_service",
-                RuntimeKind::Java,
+                RuntimeKind::Python,
                 package_manager,
-                8080,
-                vec![
-                    file_fact(project_root, "build.gradle", "backend_build_file"),
-                    file_fact(project_root, "gradlew", "backend_build_wrapper"),
-                    file_fact(project_root, "pom.xml", "backend_build_file"),
-                    file_fact(project_root, "mvnw", "backend_build_wrapper"),
-                ],
+                port,
+                stack_file_facts(
+                    project_root,
+                    &root,
+                    &[
+                        "requirements.txt",
+                        "pyproject.toml",
+                        "uv.lock",
+                        "poetry.lock",
+                        "manage.py",
+                        "main.py",
+                        "app.py",
+                        "server.py",
+                    ],
+                    "python_runtime_file",
+                ),
+                vec![],
+            )?,
+        });
+    }
+
+    if let Some(root) = find_stack_root(project_root, &["go.mod", "main.go"]) {
+        let package_root = project_root.join(&root);
+        let port = go_default_port(&package_root);
+        return Ok(DeploymentCodeProbe {
+            kind: RuntimeKind::Go,
+            package_manager: Some(PackageManager::Go),
+            has_lockfile: project_root.join(&root).join("go.sum").exists(),
+            framework: Some("go".to_string()),
+            runtime_version: None,
+            runtime_version_source: None,
+            build_command: Some("go build -o /out/server .".to_string()),
+            start_command: Some("/app/server".to_string()),
+            output_directory: None,
+            port,
+            healthcheck_path: Some("/".to_string()),
+            working_directory: (root != ".").then_some(root.clone()),
+            workspace_package_json_paths: vec![],
+            services: services.clone(),
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
+            evidence: evidence_value(
+                project_root,
+                "single_service",
+                RuntimeKind::Go,
+                Some(PackageManager::Go),
+                port,
+                stack_file_facts(
+                    project_root,
+                    &root,
+                    &["go.mod", "go.sum", "main.go"],
+                    "go_runtime_file",
+                ),
+                vec![],
+            )?,
+        });
+    }
+
+    if let Some(root) = find_dotnet_root(project_root) {
+        let package_root = project_root.join(&root);
+        let port = dotnet_default_port(&package_root);
+        return Ok(DeploymentCodeProbe {
+            kind: RuntimeKind::Dotnet,
+            package_manager: Some(PackageManager::Dotnet),
+            has_lockfile: false,
+            framework: dotnet_framework(&package_root),
+            runtime_version: dotnet_runtime_version(&package_root),
+            runtime_version_source: None,
+            build_command: Some("dotnet publish -c Release -o /app/publish".to_string()),
+            start_command: Some("dotnet \"$(find /app -maxdepth 1 -name '*.dll' ! -name '*.Views.dll' | sort | head -n 1)\"".to_string()),
+            output_directory: None,
+            port,
+            healthcheck_path: Some("/".to_string()),
+            working_directory: (root != ".").then_some(root.clone()),
+            workspace_package_json_paths: vec![],
+            services: services.clone(),
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
+            evidence: evidence_value(
+                project_root,
+                "single_service",
+                RuntimeKind::Dotnet,
+                Some(PackageManager::Dotnet),
+                port,
+                dotnet_file_facts(project_root, &root),
+                vec![],
+            )?,
+        });
+    }
+
+    if let Some(root) = find_stack_root(
+        project_root,
+        &["composer.json", "artisan", "public/index.php"],
+    ) {
+        let package_root = project_root.join(&root);
+        let port = 8000;
+        return Ok(DeploymentCodeProbe {
+            kind: RuntimeKind::Php,
+            package_manager: Some(PackageManager::Composer),
+            has_lockfile: package_root.join("composer.lock").exists(),
+            framework: php_framework(&package_root),
+            runtime_version: None,
+            runtime_version_source: None,
+            build_command: None,
+            start_command: Some(php_start_command(&package_root, port)),
+            output_directory: None,
+            port,
+            healthcheck_path: Some("/".to_string()),
+            working_directory: (root != ".").then_some(root.clone()),
+            workspace_package_json_paths: vec![],
+            services: services.clone(),
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
+            evidence: evidence_value(
+                project_root,
+                "single_service",
+                RuntimeKind::Php,
+                Some(PackageManager::Composer),
+                port,
+                stack_file_facts(
+                    project_root,
+                    &root,
+                    &[
+                        "composer.json",
+                        "composer.lock",
+                        "artisan",
+                        "public/index.php",
+                    ],
+                    "php_runtime_file",
+                ),
+                vec![],
+            )?,
+        });
+    }
+
+    if let Some(root) = find_stack_root(
+        project_root,
+        &["Gemfile", "config.ru", "config/application.rb"],
+    ) {
+        let package_root = project_root.join(&root);
+        let port = 3000;
+        return Ok(DeploymentCodeProbe {
+            kind: RuntimeKind::Ruby,
+            package_manager: Some(PackageManager::Bundler),
+            has_lockfile: package_root.join("Gemfile.lock").exists(),
+            framework: ruby_framework(&package_root),
+            runtime_version: ruby_runtime_version(&package_root),
+            runtime_version_source: None,
+            build_command: None,
+            start_command: Some(ruby_start_command(&package_root, port)),
+            output_directory: None,
+            port,
+            healthcheck_path: Some("/".to_string()),
+            working_directory: (root != ".").then_some(root.clone()),
+            workspace_package_json_paths: vec![],
+            services: services.clone(),
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
+            evidence: evidence_value(
+                project_root,
+                "single_service",
+                RuntimeKind::Ruby,
+                Some(PackageManager::Bundler),
+                port,
+                stack_file_facts(
+                    project_root,
+                    &root,
+                    &[
+                        "Gemfile",
+                        "Gemfile.lock",
+                        "config.ru",
+                        "config/application.rb",
+                    ],
+                    "ruby_runtime_file",
+                ),
+                vec![],
+            )?,
+        });
+    }
+
+    if let Some(root) = find_static_root(project_root) {
+        return Ok(DeploymentCodeProbe {
+            kind: RuntimeKind::Static,
+            package_manager: None,
+            has_lockfile: false,
+            framework: Some("static".to_string()),
+            runtime_version: None,
+            runtime_version_source: None,
+            build_command: None,
+            start_command: None,
+            output_directory: Some(root.clone()),
+            port: 80,
+            healthcheck_path: Some("/".to_string()),
+            working_directory: (root != ".").then_some(root.clone()),
+            workspace_package_json_paths: vec![],
+            services: services.clone(),
+            env_defaults,
+            spring_ddl_auto_validate,
+            flyway_detected,
+            evidence: evidence_value(
+                project_root,
+                "static_site",
+                RuntimeKind::Static,
+                None,
+                80,
+                stack_file_facts(
+                    project_root,
+                    &root,
+                    &["index.html", "404.html"],
+                    "static_runtime_file",
+                ),
                 vec![],
             )?,
         });
@@ -269,7 +556,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             healthcheck_path: Some("/".to_string()),
             working_directory: (root != ".").then_some(root.to_string()),
             workspace_package_json_paths: vec![package_path.clone()],
-            services: vec![],
+            services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
@@ -340,6 +627,108 @@ fn find_frontend_root(project_root: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
+fn find_stack_root(project_root: &Path, markers: &[&str]) -> Option<String> {
+    candidate_roots(project_root).into_iter().find(|root| {
+        markers
+            .iter()
+            .any(|marker| project_root.join(root).join(marker).exists())
+    })
+}
+
+fn candidate_roots(project_root: &Path) -> Vec<String> {
+    let mut roots = vec![
+        ".".to_string(),
+        "service".to_string(),
+        "backend".to_string(),
+        "api".to_string(),
+        "server".to_string(),
+        "app".to_string(),
+    ];
+    for parent in ["apps", "services", "packages"] {
+        let dir = project_root.join(parent);
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                roots.push(format!("{parent}/{name}"));
+            }
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn find_dotnet_root(project_root: &Path) -> Option<String> {
+    candidate_roots(project_root).into_iter().find(|root| {
+        let path = project_root.join(root);
+        path.join("global.json").exists()
+            || fs::read_dir(&path)
+                .map(|entries| {
+                    entries.flatten().any(|entry| {
+                        matches!(
+                            entry
+                                .path()
+                                .extension()
+                                .and_then(|extension| extension.to_str()),
+                            Some("csproj" | "sln")
+                        )
+                    })
+                })
+                .unwrap_or(false)
+    })
+}
+
+fn find_static_root(project_root: &Path) -> Option<String> {
+    for root in ["dist", "build", "public", "out", "_site", "."] {
+        if project_root.join(root).join("index.html").exists() {
+            return Some(root.to_string());
+        }
+    }
+    None
+}
+
+fn root_frontend_detected(project_root: &Path) -> bool {
+    if !project_root.join("package.json").exists() {
+        return false;
+    }
+    if [
+        "vite.config.js",
+        "vite.config.ts",
+        "next.config.js",
+        "next.config.mjs",
+        "index.html",
+    ]
+    .iter()
+    .any(|relative| project_root.join(relative).exists())
+    {
+        return true;
+    }
+    let Ok(package_json) = fs::read_to_string(project_root.join("package.json")) else {
+        return false;
+    };
+    let lower = package_json.to_ascii_lowercase();
+    [
+        "\"vite\"",
+        "\"next\"",
+        "\"react\"",
+        "\"vue\"",
+        "\"svelte\"",
+        "\"@angular/",
+        "vite build",
+        "next build",
+        "react-scripts build",
+        "ng build",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 fn backend_build_command(backend: &JavaBackendRoot) -> String {
     match (backend.package_manager, backend.has_wrapper) {
         (PackageManager::Gradle, true) => {
@@ -359,6 +748,31 @@ fn backend_build_command(backend: &JavaBackendRoot) -> String {
         }
         _ => format!("cd {} && true", backend.root),
     }
+}
+
+fn java_framework(project_root: &Path, root: &str) -> &'static str {
+    let base = if root == "." {
+        project_root.to_path_buf()
+    } else {
+        project_root.join(root)
+    };
+    for relative in [
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "src/main/resources/application.yml",
+        "src/main/resources/application.yaml",
+        "src/main/resources/application.properties",
+    ] {
+        let Ok(text) = fs::read_to_string(base.join(relative)) else {
+            continue;
+        };
+        let lower = text.to_ascii_lowercase();
+        if lower.contains("spring-boot") || lower.contains("org.springframework") {
+            return "spring-boot";
+        }
+    }
+    "java"
 }
 
 fn evidence_value(
@@ -550,5 +964,342 @@ fn package_manager_run(package_manager: PackageManager, script: &str) -> String 
         PackageManager::Yarn => format!("yarn {script}"),
         PackageManager::Bun => format!("bun run {script}"),
         _ => format!("npm run {script}"),
+    }
+}
+
+fn python_package_manager(root: &Path) -> Option<PackageManager> {
+    if root.join("uv.lock").exists()
+        || file_contains(root.join("pyproject.toml").as_path(), "[tool.uv]")
+    {
+        Some(PackageManager::Uv)
+    } else if root.join("poetry.lock").exists()
+        || file_contains(root.join("pyproject.toml").as_path(), "[tool.poetry]")
+    {
+        Some(PackageManager::Poetry)
+    } else {
+        Some(PackageManager::Pip)
+    }
+}
+
+fn has_python_lockfile(root: &Path) -> bool {
+    ["uv.lock", "poetry.lock", "Pipfile.lock"]
+        .iter()
+        .any(|name| root.join(name).exists())
+}
+
+fn python_framework(root: &Path) -> Option<String> {
+    let signals = read_stack_signals(
+        root,
+        &[
+            "requirements.txt",
+            "pyproject.toml",
+            "Pipfile",
+            "manage.py",
+            "main.py",
+            "app.py",
+            "server.py",
+        ],
+    );
+    if root.join("manage.py").exists() || signals.contains("django") {
+        Some("django".to_string())
+    } else if signals.contains("fastapi") || signals.contains("uvicorn") {
+        Some("fastapi".to_string())
+    } else if signals.contains("flask") {
+        Some("flask".to_string())
+    } else if signals.contains("streamlit") {
+        Some("streamlit".to_string())
+    } else {
+        Some("python".to_string())
+    }
+}
+
+fn python_default_port(framework: Option<&str>) -> u16 {
+    if framework == Some("streamlit") {
+        8501
+    } else {
+        8000
+    }
+}
+
+fn python_start_command(root: &Path, port: u16) -> String {
+    if root.join("manage.py").exists() {
+        return format!("python manage.py runserver 0.0.0.0:${{PORT:-{port}}}");
+    }
+    let framework = python_framework(root).unwrap_or_else(|| "python".to_string());
+    if framework == "fastapi" {
+        let module = if root.join("main.py").exists() {
+            "main"
+        } else {
+            "app"
+        };
+        return format!("python -m uvicorn {module}:app --host 0.0.0.0 --port ${{PORT:-{port}}}");
+    }
+    if framework == "flask" {
+        let app = if root.join("app.py").exists() {
+            "app.py"
+        } else {
+            "main.py"
+        };
+        return format!("python -m flask --app {app} run --host=0.0.0.0 --port=${{PORT:-{port}}}");
+    }
+    if framework == "streamlit" {
+        let entry = if root.join("app.py").exists() {
+            "app.py"
+        } else {
+            "main.py"
+        };
+        return format!(
+            "streamlit run {entry} --server.address 0.0.0.0 --server.port ${{PORT:-{port}}}"
+        );
+    }
+    for entry in ["server.py", "main.py", "app.py"] {
+        if root.join(entry).exists() {
+            return format!("python {entry} --host 0.0.0.0 --port ${{PORT:-{port}}}");
+        }
+    }
+    "python -m http.server ${PORT:-8000} --bind 0.0.0.0".to_string()
+}
+
+fn go_default_port(root: &Path) -> u16 {
+    let signals = read_stack_signals(root, &["main.go", "go.mod"]);
+    extract_port_from_text(&signals).unwrap_or(8080)
+}
+
+fn dotnet_framework(root: &Path) -> Option<String> {
+    let signals = read_dotnet_project_signals(root);
+    if signals.contains("microsoft.net.sdk.web") || signals.contains("aspnetcore") {
+        Some("aspnet".to_string())
+    } else {
+        Some("dotnet".to_string())
+    }
+}
+
+fn dotnet_default_port(root: &Path) -> u16 {
+    extract_port_from_text(&read_stack_signals(
+        root,
+        &["appsettings.json", "Properties/launchSettings.json"],
+    ))
+    .unwrap_or(8080)
+}
+
+fn dotnet_runtime_version(root: &Path) -> Option<String> {
+    let signals = read_dotnet_project_signals(root);
+    for major in ["10", "9", "8", "7", "6"] {
+        if signals.contains(&format!("net{major}.0")) {
+            return Some(major.to_string());
+        }
+    }
+    None
+}
+
+fn php_framework(root: &Path) -> Option<String> {
+    let signals = read_stack_signals(root, &["composer.json", "artisan", "public/index.php"]);
+    if root.join("artisan").exists() || signals.contains("laravel") {
+        Some("laravel".to_string())
+    } else if signals.contains("symfony") {
+        Some("symfony".to_string())
+    } else {
+        Some("php".to_string())
+    }
+}
+
+fn php_start_command(root: &Path, port: u16) -> String {
+    if root.join("artisan").exists() {
+        return format!("php artisan serve --host=0.0.0.0 --port=${{PORT:-{port}}}");
+    }
+    let docroot = if root.join("public/index.php").exists() {
+        "public"
+    } else {
+        "."
+    };
+    format!("php -S 0.0.0.0:${{PORT:-{port}}} -t {docroot}")
+}
+
+fn ruby_framework(root: &Path) -> Option<String> {
+    let signals = read_stack_signals(root, &["Gemfile", "config.ru", "config/application.rb"]);
+    if root.join("config/application.rb").exists() || signals.contains("rails") {
+        Some("rails".to_string())
+    } else if signals.contains("sinatra") {
+        Some("sinatra".to_string())
+    } else {
+        Some("ruby".to_string())
+    }
+}
+
+fn ruby_start_command(root: &Path, port: u16) -> String {
+    if ruby_framework(root).as_deref() == Some("rails") {
+        format!("bundle exec rails server -b 0.0.0.0 -p ${{PORT:-{port}}}")
+    } else {
+        format!("bundle exec rackup -o 0.0.0.0 -p ${{PORT:-{port}}}")
+    }
+}
+
+fn ruby_runtime_version(root: &Path) -> Option<String> {
+    fs::read_to_string(root.join(".ruby-version"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn collect_dependency_services(project_root: &Path) -> Vec<DependencyService> {
+    let signals = dependency_signal_text(project_root);
+    let mut services = Vec::new();
+    for (kind, needles) in [
+        (
+            DependencyServiceKind::Postgres,
+            &[
+                "postgres",
+                "postgresql",
+                "jdbc:postgresql",
+                "npgsql",
+                "psycopg",
+            ] as &[&str],
+        ),
+        (
+            DependencyServiceKind::Mysql,
+            &["mysql", "mariadb", "jdbc:mysql", "mysql2"] as &[&str],
+        ),
+        (
+            DependencyServiceKind::Redis,
+            &["redis", "ioredis", "lettuce", "jedis"] as &[&str],
+        ),
+    ] {
+        if needles.iter().any(|needle| signals.contains(needle)) {
+            services.push(crate::runtime_contract::service_definition(kind));
+        }
+    }
+    services
+}
+
+fn dependency_signal_text(project_root: &Path) -> String {
+    let mut text = String::new();
+    for root in candidate_roots(project_root) {
+        let base = project_root.join(root);
+        for name in [
+            "package.json",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "requirements.txt",
+            "pyproject.toml",
+            "go.mod",
+            "composer.json",
+            "Gemfile",
+            "appsettings.json",
+            "application.properties",
+            "src/main/resources/application.properties",
+            "src/main/resources/application.yml",
+            "src/main/resources/application.yaml",
+        ] {
+            if let Ok(value) = fs::read_to_string(base.join(name)) {
+                text.push_str(&value);
+                text.push('\n');
+            }
+        }
+    }
+    text.to_ascii_lowercase()
+}
+
+fn stack_file_facts(project_root: &Path, root: &str, files: &[&str], kind: &str) -> Vec<Value> {
+    files
+        .iter()
+        .map(|file| file_fact(project_root, &join_root(root, file), kind))
+        .collect()
+}
+
+fn dotnet_file_facts(project_root: &Path, root: &str) -> Vec<Value> {
+    let mut facts = stack_file_facts(
+        project_root,
+        root,
+        &[
+            "global.json",
+            "appsettings.json",
+            "Properties/launchSettings.json",
+        ],
+        "dotnet_runtime_file",
+    );
+    let base = project_root.join(root);
+    if let Ok(entries) = fs::read_dir(base) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("csproj" | "sln")
+            ) {
+                if let Ok(relative) = to_project_relative(project_root, &path) {
+                    facts.push(json!({ "path": relative, "kind": "dotnet_project_file" }));
+                }
+            }
+        }
+    }
+    facts
+}
+
+fn read_dotnet_project_signals(root: &Path) -> String {
+    let mut text = read_stack_signals(
+        root,
+        &[
+            "global.json",
+            "appsettings.json",
+            "Properties/launchSettings.json",
+        ],
+    );
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("csproj" | "sln")
+            ) {
+                if let Ok(value) = fs::read_to_string(path) {
+                    text.push_str(&value.to_ascii_lowercase());
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    text
+}
+
+fn read_stack_signals(root: &Path, files: &[&str]) -> String {
+    files
+        .iter()
+        .filter_map(|file| fs::read_to_string(root.join(file)).ok())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase()
+}
+
+fn file_contains(path: &Path, needle: &str) -> bool {
+    fs::read_to_string(path)
+        .map(|text| text.contains(needle))
+        .unwrap_or(false)
+}
+
+fn extract_port_from_text(text: &str) -> Option<u16> {
+    for marker in ["port", "PORT", "listen"] {
+        let Some(index) = text.find(marker) else {
+            continue;
+        };
+        let after = &text[index + marker.len()..];
+        let digits = after
+            .chars()
+            .skip_while(|ch| !ch.is_ascii_digit())
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if let Ok(port) = digits.parse::<u16>() {
+            if port > 0 {
+                return Some(port);
+            }
+        }
+    }
+    None
+}
+
+fn join_root(root: &str, path: &str) -> String {
+    if root == "." || root.is_empty() {
+        path.to_string()
+    } else {
+        format!("{}/{}", root.trim_matches('/'), path)
     }
 }

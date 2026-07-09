@@ -348,6 +348,15 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(root
             .join("skills/loom-deploy/references/compose.md")
             .exists());
+        assert!(root
+            .join("skills/loom-deploy/references/matrix.md")
+            .exists());
+        assert!(root
+            .join("skills/loom-deploy/references/source-model.md")
+            .exists());
+        assert!(root
+            .join("skills/loom-deploy/references/topology.md")
+            .exists());
     }
 
     assert!(env
@@ -414,6 +423,18 @@ fn install_projects_shared_references_to_agent_read_paths() {
     assert!(env
         .opencode_home
         .join("references/loom-deploy/compose.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom-deploy/matrix.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom-deploy/source-model.md")
+        .exists());
+    assert!(env
+        .opencode_home
+        .join("references/loom-deploy/topology.md")
         .exists());
     assert!(env
         .opencode_home
@@ -751,6 +772,15 @@ fn package_layout_copies_current_runtime_and_plugin_sources() {
     assert!(package
         .join("plugins/shared/loom-deploy/references/compose.md")
         .is_file());
+    assert!(package
+        .join("plugins/shared/loom-deploy/references/matrix.md")
+        .is_file());
+    assert!(package
+        .join("plugins/shared/loom-deploy/references/source-model.md")
+        .is_file());
+    assert!(package
+        .join("plugins/shared/loom-deploy/references/topology.md")
+        .is_file());
     assert!(package.join("checksums.txt").is_file());
 }
 
@@ -805,6 +835,7 @@ fn deploy_plugin_templates_obey_active_operation_policy_fields() {
     let plugin_root = repo.join("plugins");
     for file in [
         "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/commands/loom-deploy.md",
         "claude-code/skills/loom-deploy/SKILL.md",
         "opencode/.opencode/commands/loom-deploy.md",
     ] {
@@ -892,8 +923,8 @@ fn opencode_commands_expose_mcp_result_discipline() {
         "loom.inspectRequest",
         "loom.readFieldGroup",
         "deployReferenceProfile",
-        "deploy.providers",
-        "../references/loom-deploy/compose.md",
+        "../references/loom-deploy/",
+        "referenceLoadPlan",
         "requestReadPlan.groups",
         "Do not copy deployment stack rules",
     ] {
@@ -973,23 +1004,57 @@ fn agent_templates_expose_reference_loading_protocol() {
         for required in [
             "## Reference Loading",
             "Protocol:",
-            "deployReferenceProfile.referenceIds",
-            "MCP-selected deploy references:",
-            "deploy.providers",
-            "deploy.stacks.java",
+            "deployReferenceProfile.referenceLoadPlan",
+            "Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`",
             "Do not infer extra files",
             "do not paste reference prose",
             "If the current deploy action has no `deployReferenceProfile`",
-            "external-references.md` is maintainer research material only",
         ] {
             assert!(
                 content.contains(required),
                 "{file} missing deploy reference loading protocol fragment {required}"
             );
         }
+        for forbidden in [
+            "deployReferenceProfile.referenceIds",
+            "MCP-selected deploy references:",
+            "`deploy.providers` ->",
+            "`deploy.matrix` ->",
+            "`deploy.stacks.java`",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{file} must not retain deploy reference id map fragment {forbidden}"
+            );
+        }
         assert!(
-            !content.contains("references/external-references.md`: comparing external"),
-            "{file} must not expose external-references as a normal deploy reference"
+            !content.contains("external-references"),
+            "{file} must not expose maintainer research as a deploy reference"
+        );
+    }
+
+    let claude_deploy_command =
+        fs::read_to_string(plugin_root.join("claude-code/commands/loom-deploy.md")).unwrap();
+    assert!(
+        claude_deploy_command.contains("load the installed `loom-deploy` skill"),
+        "claude-code/commands/loom-deploy.md must delegate deploy reference loading to the installed skill"
+    );
+    assert!(
+        claude_deploy_command.contains("must not maintain a separate deploy reference path map"),
+        "claude-code/commands/loom-deploy.md must document that the command is not a second reference map"
+    );
+    for forbidden in [
+        "## Reference Loading",
+        "MCP-selected deploy references:",
+        "`deploy.providers` ->",
+        "`deploy.matrix` ->",
+        "`deploy.stacks.java`",
+        "../references/loom-deploy/",
+        "../skills/loom/skills/loom-deploy/references/",
+    ] {
+        assert!(
+            !claude_deploy_command.contains(forbidden),
+            "claude-code/commands/loom-deploy.md must not retain duplicated deploy reference map fragment {forbidden}"
         );
     }
 }
@@ -1352,8 +1417,15 @@ fn deploy_references_explain_profile_and_provider_fallback_without_external_runt
     let deploy_refs = repo.join("plugins/shared/loom-deploy/references");
     let providers = fs::read_to_string(deploy_refs.join("providers.md")).unwrap();
     let compose = fs::read_to_string(deploy_refs.join("compose.md")).unwrap();
+    let dockerfile = fs::read_to_string(deploy_refs.join("dockerfile.md")).unwrap();
+    let environment = fs::read_to_string(deploy_refs.join("environment.md")).unwrap();
     let repair = fs::read_to_string(deploy_refs.join("repair.md")).unwrap();
-    let external = fs::read_to_string(deploy_refs.join("external-references.md")).unwrap();
+    let workspaces = fs::read_to_string(deploy_refs.join("workspaces.md")).unwrap();
+    let matrix = fs::read_to_string(deploy_refs.join("matrix.md")).unwrap();
+    let source_model = fs::read_to_string(deploy_refs.join("source-model.md")).unwrap();
+    let topology = fs::read_to_string(deploy_refs.join("topology.md")).unwrap();
+    let external =
+        fs::read_to_string(repo.join("docs/maintainer/deploy-external-research.md")).unwrap();
 
     for required in [
         "Existing assets are tried first when the user did not force a provider",
@@ -1376,6 +1448,10 @@ fn deploy_references_explain_profile_and_provider_fallback_without_external_runt
         "build.context",
         "build.dockerfile",
         "Frontend plus backend projects",
+        "Topology-Aware Compose Contract",
+        "publicEntryServiceId",
+        "Internal backend",
+        "Multi-port",
     ] {
         assert!(
             compose.contains(required),
@@ -1384,10 +1460,35 @@ fn deploy_references_explain_profile_and_provider_fallback_without_external_runt
     }
 
     for required in [
+        "Source Root, Build Context, Workdir, And COPY Closure",
+        "Backend-served frontend",
+        "Existing Dockerfile wrapper",
+    ] {
+        assert!(
+            dockerfile.contains(required),
+            "dockerfile.md missing context closure guardrail {required}"
+        );
+    }
+
+    for required in [
+        "Environment Fact Flow",
+        "File database handling is not SQLite-specific",
+        "Service Dependency URLs",
+        "Framework Local Safety Defaults",
+    ] {
+        assert!(
+            environment.contains(required),
+            "environment.md missing environment guardrail {required}"
+        );
+    }
+
+    for required in [
+        "Repair Decision Tree",
         "Generation-First Repair Posture",
         "sourceModelRef",
         "topologyRef",
         "Ask the user only when",
+        "Protected Asset Boundary",
     ] {
         assert!(
             repair.contains(required),
@@ -1395,9 +1496,63 @@ fn deploy_references_explain_profile_and_provider_fallback_without_external_runt
         );
     }
 
+    for required in [
+        "App Path And Build Context Matrix",
+        "The selected app path is not always the build context",
+        "Source Root Repair Boundary",
+    ] {
+        assert!(
+            workspaces.contains(required),
+            "workspaces.md missing workspace matrix {required}"
+        );
+    }
+
+    for (file, content, required) in [
+        (
+            "matrix.md",
+            &matrix,
+            "Do not collapse the matrix into a single \"one container serves everything\" assumption",
+        ),
+        (
+            "source-model.md",
+            &source_model,
+            "`DeploymentSourceModel` is generated by Loom and is the authority",
+        ),
+        (
+            "topology.md",
+            &topology,
+            "`DeploymentTopology` is generated from Loom deploy facts",
+        ),
+    ] {
+        assert!(
+            content.contains(required),
+            "{file} missing deploy fact authority statement {required}"
+        );
+    }
+
+    for name in [
+        "node", "java", "python", "go", "dotnet", "php", "ruby", "static",
+    ] {
+        let content = fs::read_to_string(deploy_refs.join(format!("{name}.md"))).unwrap();
+        for required in [
+            "Scanner Signals To Deploy Facts",
+            "Generated Asset Expectations",
+            "Repair Boundary",
+        ] {
+            assert!(
+                content.contains(required),
+                "{name}.md missing stack deploy closure section {required}"
+            );
+        }
+    }
+
     assert!(
         external.contains("Maintainer-only research note"),
-        "external-references.md must be clearly maintainer-only"
+        "deploy external research doc must be clearly maintainer-only"
+    );
+    assert!(
+        !deploy_refs.join("external-references.md").exists(),
+        "maintainer research must not live under runtime deploy references"
     );
 }
 
@@ -1768,16 +1923,18 @@ impl Fixture {
             "dockerfile",
             "dotnet",
             "environment",
-            "external-references",
             "go",
             "java",
+            "matrix",
             "node",
             "php",
             "providers",
             "python",
             "repair",
             "ruby",
+            "source-model",
             "static",
+            "topology",
             "workspaces",
         ] {
             write_file(

@@ -338,12 +338,24 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
             full_log_ref: "Read full logs only if compact evidence is insufficient.".to_string(),
         },
         deploy_reference_profile: delivery_core::DeployReferenceProfile {
-            reference_ids: vec![
-                "deploy.repair".to_string(),
-                "deploy.compose".to_string(),
-                "deploy.dockerfile".to_string(),
+            load_mode: "mcp_reference_load_plan".to_string(),
+            reference_load_plan: vec![
+                delivery_core::ReferenceLoadPlanItem {
+                    ref_id: "deploy.repair".to_string(),
+                    path: "repair.md".to_string(),
+                    reason: "Deploy repair decision tree.".to_string(),
+                },
+                delivery_core::ReferenceLoadPlanItem {
+                    ref_id: "deploy.compose".to_string(),
+                    path: "compose.md".to_string(),
+                    reason: "Compose repair guidance.".to_string(),
+                },
+                delivery_core::ReferenceLoadPlanItem {
+                    ref_id: "deploy.dockerfile".to_string(),
+                    path: "dockerfile.md".to_string(),
+                    reason: "Dockerfile repair guidance.".to_string(),
+                },
             ],
-            load_mode: "skill_reference_by_id".to_string(),
         },
         retry_tool: "loom.deployUp".to_string(),
     })

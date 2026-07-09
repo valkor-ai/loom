@@ -1,6 +1,6 @@
-# External Docker Skill References
+# External Docker Skill Research
 
-Maintainer-only research note. Do not load this file during normal `loom deploy` prepare, up, validate, inspect, repair, or agent execution repair.
+Maintainer-only research note. This file is not part of the runtime deploy reference set and must not be loaded during normal `loom deploy` prepare, up, validate, inspect, repair, or agent execution repair.
 
 Use this file only when evaluating whether loom deploy should absorb ideas from external Docker/agent skill projects. Do not vendor third-party skills or generators directly into loom unless the product explicitly adopts their license, update policy, and runtime contract.
 
@@ -34,10 +34,10 @@ Use this file only when evaluating whether loom deploy should absorb ideas from 
 
 When adding a new external idea, decide where it belongs:
 
-- Stable Docker/Compose practice -> `references/dockerfile.md` or `references/compose.md`.
-- Stack-specific deployment pattern -> `references/<stack>.md`.
-- Provider selection behavior -> `references/providers.md`.
-- Repair-loop behavior -> `references/repair.md`.
+- Stable Docker/Compose practice -> `plugins/shared/loom-deploy/references/dockerfile.md` or `plugins/shared/loom-deploy/references/compose.md`.
+- Stack-specific deployment pattern -> `plugins/shared/loom-deploy/references/<stack>.md`.
+- Provider selection behavior -> `plugins/shared/loom-deploy/references/providers.md`.
+- Repair-loop behavior -> `plugins/shared/loom-deploy/references/repair.md`.
 - Runtime code -> `src/rust/deploy/`, with tests or smoke coverage.
 
-If an idea cannot be validated through `deploy prepare`, `deploy up`, `deploy validate`, or `deploy repair`, keep it as reference guidance only.
+If an idea cannot be validated through `deploy prepare`, `deploy up`, `deploy validate`, or `deploy repair`, keep it as maintainer research only.

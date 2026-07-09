@@ -1,5 +1,7 @@
-use contracts::{DeployProvider, DeploymentFailureKind, DeploymentSpec, RuntimeKind};
-use delivery_core::DeployReferenceProfile;
+use contracts::{
+    DeployProvider, DeploymentFailureKind, DeploymentSpec, DeploymentTopologyClass, RuntimeKind,
+};
+use delivery_core::{DeployReferenceProfile, ReferenceLoadPlanItem};
 use serde_json::json;
 
 pub(crate) fn reference_profile_value(
@@ -9,8 +11,8 @@ pub(crate) fn reference_profile_value(
 ) -> serde_json::Value {
     let profile = reference_profile(spec, failure_kind, repair);
     json!({
-        "referenceIds": profile.reference_ids,
         "loadMode": profile.load_mode,
+        "referenceLoadPlan": profile.reference_load_plan,
     })
 }
 
@@ -20,19 +22,31 @@ pub(crate) fn reference_profile(
     repair: bool,
 ) -> DeployReferenceProfile {
     DeployReferenceProfile {
-        reference_ids: reference_ids(spec, failure_kind, repair),
-        load_mode: "skill_reference_by_id".to_string(),
+        load_mode: "mcp_reference_load_plan".to_string(),
+        reference_load_plan: reference_load_plan(spec, failure_kind, repair),
     }
 }
 
-fn reference_ids(
+pub(crate) fn repair_only_reference_profile() -> DeployReferenceProfile {
+    DeployReferenceProfile {
+        load_mode: "mcp_reference_load_plan".to_string(),
+        reference_load_plan: vec![reference_load_plan_item("deploy.repair")],
+    }
+}
+
+fn reference_load_plan(
     spec: &DeploymentSpec,
     failure_kind: Option<DeploymentFailureKind>,
     repair: bool,
-) -> Vec<String> {
+) -> Vec<ReferenceLoadPlanItem> {
     let mut ids = Vec::new();
     push(&mut ids, "deploy.providers");
+    push(&mut ids, "deploy.matrix");
+    push(&mut ids, "deploy.source-model");
     push(&mut ids, "deploy.compose");
+    if topology_reference_needed(spec) {
+        push(&mut ids, "deploy.topology");
+    }
 
     if repair {
         push(&mut ids, "deploy.repair");
@@ -67,13 +81,112 @@ fn reference_ids(
     }
 
     if let Some(kind) = failure_kind {
-        add_failure_reference_ids(&mut ids, kind);
+        add_failure_references(&mut ids, kind);
     }
 
-    ids
+    ids.into_iter()
+        .map(|reference_id| reference_load_plan_item(&reference_id))
+        .collect()
 }
 
-fn add_failure_reference_ids(ids: &mut Vec<String>, kind: DeploymentFailureKind) {
+fn reference_load_plan_item(reference_id: &str) -> ReferenceLoadPlanItem {
+    let (path, reason) = reference_metadata(reference_id);
+    ReferenceLoadPlanItem {
+        ref_id: reference_id.to_string(),
+        path: path.to_string(),
+        reason: reason.to_string(),
+    }
+}
+
+fn reference_metadata(reference_id: &str) -> (&'static str, &'static str) {
+    match reference_id {
+        "deploy.providers" => (
+            "providers.md",
+            "Provider selection and generated/existing asset policy.",
+        ),
+        "deploy.matrix" => (
+            "matrix.md",
+            "Deployment topology, runtime, layout, port, and dependency matrix.",
+        ),
+        "deploy.source-model" => (
+            "source-model.md",
+            "Repository evidence to deployable service model guidance.",
+        ),
+        "deploy.topology" => (
+            "topology.md",
+            "Public entry, proxy route, and validation topology guidance.",
+        ),
+        "deploy.compose" => (
+            "compose.md",
+            "Compose service wiring, ports, dependencies, and health guidance.",
+        ),
+        "deploy.dockerfile" => (
+            "dockerfile.md",
+            "Dockerfile context, workdir, copy, build, and runtime guidance.",
+        ),
+        "deploy.environment" => (
+            "environment.md",
+            "Environment, local defaults, dependency URL, and state guidance.",
+        ),
+        "deploy.workspaces" => (
+            "workspaces.md",
+            "Workspace app path, source root, and build context guidance.",
+        ),
+        "deploy.bootstrap" => (
+            "bootstrap.md",
+            "Migration/bootstrap diagnostics and approval boundary guidance.",
+        ),
+        "deploy.repair" => (
+            "repair.md",
+            "Deploy repair decision tree and editable asset boundary.",
+        ),
+        "deploy.stacks.node" => (
+            "node.md",
+            "Node-family scanner, generated asset, and repair guidance.",
+        ),
+        "deploy.stacks.python" => (
+            "python.md",
+            "Python scanner, generated asset, and repair guidance.",
+        ),
+        "deploy.stacks.go" => ("go.md", "Go scanner, generated asset, and repair guidance."),
+        "deploy.stacks.java" => (
+            "java.md",
+            "Java scanner, generated asset, and repair guidance.",
+        ),
+        "deploy.stacks.dotnet" => (
+            "dotnet.md",
+            ".NET scanner, generated asset, and repair guidance.",
+        ),
+        "deploy.stacks.php" => (
+            "php.md",
+            "PHP scanner, generated asset, and repair guidance.",
+        ),
+        "deploy.stacks.ruby" => (
+            "ruby.md",
+            "Ruby scanner, generated asset, and repair guidance.",
+        ),
+        "deploy.stacks.static" => (
+            "static.md",
+            "Static site scanner, generated asset, and repair guidance.",
+        ),
+        _ => ("providers.md", "Deploy reference selected by MCP."),
+    }
+}
+
+fn topology_reference_needed(spec: &DeploymentSpec) -> bool {
+    matches!(
+        spec.facts.topology_class,
+        DeploymentTopologyClass::FrontendGatewayBackendApi
+            | DeploymentTopologyClass::BackendServedFrontendApi
+            | DeploymentTopologyClass::MultiService
+            | DeploymentTopologyClass::ExistingCompose
+            | DeploymentTopologyClass::ExistingDockerfileWrapper
+    ) || !spec.topology.routes.is_empty()
+        || !spec.topology.validation.api_paths.is_empty()
+        || spec.source_model.services.len() > 1
+}
+
+fn add_failure_references(ids: &mut Vec<String>, kind: DeploymentFailureKind) {
     match kind {
         DeploymentFailureKind::ComposeConfig
         | DeploymentFailureKind::Healthcheck

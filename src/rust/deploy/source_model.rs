@@ -36,11 +36,7 @@ pub fn source_model_from_runtime_contract(
             ],
             &["frontend", "web", "client", "ui"],
         );
-        let frontend_root = if frontend_root == "." {
-            frontend_root_from_probe(fallback_probe).unwrap_or(frontend_root)
-        } else {
-            frontend_root
-        };
+        let frontend_root = resolve_frontend_root(frontend_root, fallback_probe);
         let backend_root = service_root_from_refs(
             &[
                 runtime.api.as_ref().and_then(|item| item.entry.as_deref()),
@@ -53,34 +49,36 @@ pub fn source_model_from_runtime_contract(
             ],
             &["backend", "api", "service", "server"],
         );
-        let backend_root = if backend_root == "." {
-            backend_root_from_probe(fallback_probe).unwrap_or(backend_root)
-        } else {
-            backend_root
-        };
+        let backend_root = resolve_backend_root(backend_root, fallback_probe);
         let backend_kind = runtime_kind_from_signals(&[
             runtime.api.as_ref().and_then(|api| api.kind.as_deref()),
             runtime.start_command.as_deref(),
             runtime.runtime_kind.as_deref(),
         ]);
-        let frontend_build = command_for_root(
+        let frontend_build = command_for_service(
             runtime
                 .frontend
                 .as_ref()
                 .and_then(|item| item.build_command.clone())
                 .or_else(|| runtime.build_command.clone()),
             &frontend_root,
+            &["frontend", "web", "client", "ui"],
         );
-        let backend_build = command_for_root(
+        let backend_build = command_for_service(
             runtime
                 .api
                 .as_ref()
                 .and_then(|item| item.build_command.clone())
                 .or_else(|| runtime.build_command.clone()),
             &backend_root,
+            &["backend", "api", "service", "server"],
         );
-        let backend_start = command_for_root(runtime.start_command.clone(), &backend_root)
-            .filter(|command| start_command_is_runtime_safe(backend_kind, command));
+        let backend_start = command_for_service(
+            runtime.start_command.clone(),
+            &backend_root,
+            &["backend", "api", "service", "server"],
+        )
+        .filter(|command| start_command_is_runtime_safe(backend_kind, command));
         let frontend = DeploymentSourceService {
             service_id: "frontend".to_string(),
             role: SourceServiceRole::Frontend,
@@ -189,9 +187,18 @@ pub fn source_model_from_runtime_contract(
             runtime.start_command.as_deref(),
         ])
     };
+    let service_runtime_kind = if contract_kind == RuntimeKind::Unknown {
+        fallback_probe.kind
+    } else {
+        contract_kind
+    };
     let service = DeploymentSourceService {
         service_id: "app".to_string(),
-        role: SourceServiceRole::App,
+        role: if service_runtime_kind == RuntimeKind::Static {
+            SourceServiceRole::Frontend
+        } else {
+            SourceServiceRole::App
+        },
         root: fallback_probe
             .working_directory
             .clone()
@@ -201,11 +208,7 @@ pub fn source_model_from_runtime_contract(
         manifest_refs: probe_manifest_refs(fallback_probe),
         lockfile_refs: probe_lockfile_refs(fallback_probe),
         artifact_refs: probe_artifact_refs(fallback_probe),
-        runtime_kind: if contract_kind == RuntimeKind::Unknown {
-            fallback_probe.kind
-        } else {
-            contract_kind
-        },
+        runtime_kind: service_runtime_kind,
         package_manager: runtime
             .build_command
             .as_deref()
@@ -265,7 +268,11 @@ fn source_model_from_probe(
 ) -> DeploymentSourceModel {
     let service = DeploymentSourceService {
         service_id: "app".to_string(),
-        role: SourceServiceRole::App,
+        role: if probe.kind == RuntimeKind::Static {
+            SourceServiceRole::Frontend
+        } else {
+            SourceServiceRole::App
+        },
         root: probe
             .working_directory
             .clone()
@@ -314,6 +321,13 @@ fn dependencies_from_runtime_or_probe(
 }
 
 fn frontend_root_from_probe(probe: &DeploymentCodeProbe) -> Option<String> {
+    if probe
+        .workspace_package_json_paths
+        .iter()
+        .any(|path| path == "package.json")
+    {
+        return Some(".".to_string());
+    }
     probe
         .workspace_package_json_paths
         .iter()
@@ -321,6 +335,9 @@ fn frontend_root_from_probe(probe: &DeploymentCodeProbe) -> Option<String> {
         .find(|root| !root.is_empty())
         .or_else(|| {
             probe.output_directory.as_ref().and_then(|output| {
+                if !output.contains('/') && !output.is_empty() {
+                    return Some(".".to_string());
+                }
                 output
                     .split_once('/')
                     .map(|(root, _)| root.to_string())
@@ -337,6 +354,43 @@ fn backend_root_from_probe(probe: &DeploymentCodeProbe) -> Option<String> {
             service_root_from_cd_segments(command, &["backend", "api", "service", "server"])
         })
         .or_else(|| probe.working_directory.clone().filter(|root| root != "."))
+        .or_else(|| {
+            matches!(
+                probe.kind,
+                RuntimeKind::Java
+                    | RuntimeKind::Python
+                    | RuntimeKind::Go
+                    | RuntimeKind::Dotnet
+                    | RuntimeKind::Php
+                    | RuntimeKind::Ruby
+            )
+            .then(|| ".".to_string())
+        })
+}
+
+fn resolve_frontend_root(candidate: String, probe: &DeploymentCodeProbe) -> String {
+    if frontend_root_matches_probe(&candidate, probe) {
+        return candidate;
+    }
+    frontend_root_from_probe(probe).unwrap_or(candidate)
+}
+
+fn resolve_backend_root(candidate: String, probe: &DeploymentCodeProbe) -> String {
+    if candidate == "." {
+        return candidate;
+    }
+    if backend_root_from_probe(probe).as_deref() == Some(candidate.as_str()) {
+        return candidate;
+    }
+    backend_root_from_probe(probe).unwrap_or(candidate)
+}
+
+fn frontend_root_matches_probe(root: &str, probe: &DeploymentCodeProbe) -> bool {
+    let manifest = join_root(root, "package.json");
+    probe
+        .workspace_package_json_paths
+        .iter()
+        .any(|path| path == &manifest)
 }
 
 fn node_manifest_refs(root: &str) -> Vec<String> {
@@ -426,13 +480,19 @@ fn probe_lockfile_refs(probe: &DeploymentCodeProbe) -> Vec<String> {
     let root = probe.working_directory.as_deref().unwrap_or(".");
     match probe.kind {
         RuntimeKind::Node => node_lockfile_refs(probe, root),
-        RuntimeKind::Python if probe.package_manager == Some(PackageManager::Poetry) => {
+        RuntimeKind::Python
+            if probe.has_lockfile && probe.package_manager == Some(PackageManager::Poetry) =>
+        {
             vec![join_root(root, "poetry.lock")]
         }
-        RuntimeKind::Php if probe.package_manager == Some(PackageManager::Composer) => {
+        RuntimeKind::Php
+            if probe.has_lockfile && probe.package_manager == Some(PackageManager::Composer) =>
+        {
             vec![join_root(root, "composer.lock")]
         }
-        RuntimeKind::Ruby if probe.package_manager == Some(PackageManager::Bundler) => {
+        RuntimeKind::Ruby
+            if probe.has_lockfile && probe.package_manager == Some(PackageManager::Bundler) =>
+        {
             vec![join_root(root, "Gemfile.lock")]
         }
         _ => vec![],
@@ -507,11 +567,7 @@ fn node_lockfile_for_root(probe: &DeploymentCodeProbe, root: &str) -> bool {
     if !probe.has_lockfile {
         return false;
     }
-    let package_path = if root == "." {
-        "package.json".to_string()
-    } else {
-        format!("{}/package.json", root.trim_matches('/'))
-    };
+    let package_path = join_root(root, "package.json");
     probe
         .workspace_package_json_paths
         .iter()
@@ -634,6 +690,15 @@ fn runtime_kind_from_signals(signals: &[Option<&str>]) -> RuntimeKind {
     if text.contains("go") || text.contains("golang") {
         return RuntimeKind::Go;
     }
+    if text.contains("php") || text.contains("laravel") || text.contains("symfony") {
+        return RuntimeKind::Php;
+    }
+    if text.contains("ruby") || text.contains("rails") || text.contains("rack") {
+        return RuntimeKind::Ruby;
+    }
+    if text.contains("static") || text.contains("nginx") {
+        return RuntimeKind::Static;
+    }
     RuntimeKind::Unknown
 }
 
@@ -649,6 +714,14 @@ fn normalized_framework_label(value: &str) -> Option<String> {
         Some("flask".to_string())
     } else if lower.contains("aspnet") || lower.contains("asp.net") {
         Some("aspnet".to_string())
+    } else if lower.contains("laravel") {
+        Some("laravel".to_string())
+    } else if lower.contains("symfony") {
+        Some("symfony".to_string())
+    } else if lower.contains("rails") {
+        Some("rails".to_string())
+    } else if lower.contains("sinatra") {
+        Some("sinatra".to_string())
     } else if lower.contains("express") {
         Some("express".to_string())
     } else if lower.contains("next") {
@@ -680,6 +753,10 @@ fn package_manager_from_command(command: Option<&str>) -> Option<PackageManager>
         Some(PackageManager::Uv)
     } else if value.contains("pip") {
         Some(PackageManager::Pip)
+    } else if value.contains("composer") {
+        Some(PackageManager::Composer)
+    } else if value.contains("bundle") {
+        Some(PackageManager::Bundler)
     } else {
         None
     }
@@ -756,16 +833,26 @@ fn prefix_root(value: &str) -> Option<String> {
         .map(|item| item.trim_matches('"').trim_matches('\'').to_string())
 }
 
-fn command_for_root(command: Option<String>, root: &str) -> Option<String> {
+fn command_for_service(
+    command: Option<String>,
+    root: &str,
+    role_labels: &[&str],
+) -> Option<String> {
     let command = command?;
+    if let Some(segment) = labeled_command_for_labels(&command, role_labels) {
+        return Some(segment);
+    }
     if let Some(segment) = labeled_command_for_root(&command, root) {
         return Some(segment);
     }
     if let Some(segment) = cd_command_for_root(&command, root) {
         return Some(segment);
     }
-    if root == "." {
+    if root == "." && labeled_command_segments(&command).is_empty() {
         return Some(command);
+    }
+    if root == "." {
+        return None;
     }
     Some(
         command
@@ -859,6 +946,13 @@ fn normalize_cd_target(current_root: &str, target: &str) -> String {
 
 fn labeled_command_for_root(command: &str, root: &str) -> Option<String> {
     let aliases = root_aliases(root);
+    labeled_command_for_labels(
+        command,
+        &aliases.iter().map(String::as_str).collect::<Vec<_>>(),
+    )
+}
+
+fn labeled_command_for_labels(command: &str, labels: &[&str]) -> Option<String> {
     command
         .split(';')
         .flat_map(|part| part.split("&&"))
@@ -867,7 +961,7 @@ fn labeled_command_for_root(command: &str, root: &str) -> Option<String> {
             let trimmed = part.trim();
             let (label, rest) = trimmed.split_once(':')?;
             let label = label.trim().to_ascii_lowercase();
-            if !aliases.iter().any(|alias| alias == &label) {
+            if !labels.iter().any(|alias| *alias == label) {
                 return None;
             }
             let rest = rest.trim();

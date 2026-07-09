@@ -11,7 +11,10 @@ use delivery_core::{
 };
 use mcp_server::server::LoomMcpServer;
 use serde_json::{json, Value};
-use state::{store::write_json_atomic, write_native_request, NativeRequestInput};
+use state::{
+    store::{read_json_value, write_json_atomic},
+    write_native_request, NativeRequestInput,
+};
 
 #[test]
 fn submit_tool_returns_repairable_error_for_missing_target_file() {
@@ -1552,12 +1555,24 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .unwrap(),
         json!("2xx_or_3xx")
     );
+    assert!(
+        runtime_contract
+            .pointer("/schemaShape/content/runtimeDelivery/deploymentShape")
+            .is_none(),
+        "deploymentShape is MCP-derived and must not be agent-writable: {runtime_contract:#}"
+    );
     assert_eq!(
         runtime_contract
             .pointer("/resultTemplate/content/runtimeDelivery/httpProbes/expectedStatus")
             .cloned()
             .unwrap(),
         json!("2xx_or_3xx")
+    );
+    assert!(
+        runtime_contract
+            .pointer("/resultTemplate/content/runtimeDelivery/deploymentShape")
+            .is_none(),
+        "deploymentShape is MCP-derived and must not appear in resultTemplate: {runtime_contract:#}"
     );
     assert!(runtime_contract
         .pointer("/resultTemplate/content/runtimeDelivery/start/port")
@@ -2235,6 +2250,96 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
     assert_eq!(
         projected_details["fullDetailSource"],
         "sourceRefs.planningContractRef#/requirementDetails"
+    );
+}
+
+#[test]
+fn architecture_runtime_delivery_submit_derives_frontend_backend_shape() {
+    let fixture = Fixture::new("architecture-runtime-derives-dual-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    let runtime = candidate["content"]["runtimeDelivery"]
+        .as_object_mut()
+        .expect("runtime object");
+    runtime.insert("runtimeKind".to_string(), json!("web_frontend_plus_api"));
+    runtime.insert("deploymentShape".to_string(), json!("single-service"));
+    runtime.insert(
+        "build".to_string(),
+        json!({
+            "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package",
+            "workingDirectory": ".",
+            "outputs": ["dist", "target/*.jar"],
+            "codeLevelExpectations": ["Frontend and backend build commands are declared."]
+        }),
+    );
+    runtime.insert(
+        "start".to_string(),
+        json!({
+            "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run",
+            "workingDirectory": ".",
+            "codeLevelExpectations": ["Frontend and backend runtime commands are declared."]
+        }),
+    );
+    runtime.insert(
+        "runtimeSurfaces".to_string(),
+        json!([
+            { "surfaceId": "runtime_surface_frontend", "kind": "frontend", "urlPath": "/", "purpose": "Public staff UI." },
+            { "surfaceId": "runtime_surface_api", "kind": "api", "urlPath": "/api", "purpose": "Backend API." }
+        ]),
+    );
+    runtime.insert(
+        "httpProbes".to_string(),
+        json!({
+            "previewPath": "/",
+            "apiPaths": ["/api/health"],
+            "expectedStatus": "2xx_or_3xx"
+        }),
+    );
+    runtime.remove("frontend");
+    runtime.remove("api");
+    runtime.remove("deliveryMechanics");
+    let target_path = architecture_write_target_path(&fixture, &architecture_request_ref);
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let normalized: Value =
+        read_json_value(&fixture.root.join(target_path)).expect("normalized runtime");
+    assert_eq!(
+        normalized["content"]["runtimeDelivery"]["deploymentShape"],
+        json!("frontend-and-backend")
+    );
+}
+
+#[test]
+fn architecture_runtime_delivery_submit_derives_integrated_static_shape() {
+    let fixture = Fixture::new("architecture-runtime-derives-integrated-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["runtimeDelivery"]["deploymentShape"] = json!("frontend-and-backend");
+    candidate["content"]["runtimeDelivery"]["frontend"]["servedBy"] = json!("spring_boot_static");
+    let target_path = architecture_write_target_path(&fixture, &architecture_request_ref);
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let normalized: Value =
+        read_json_value(&fixture.root.join(target_path)).expect("normalized runtime");
+    assert_eq!(
+        normalized["content"]["runtimeDelivery"]["deploymentShape"],
+        json!("single-service")
     );
 }
 
@@ -7851,6 +7956,12 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         architecture_section_contract(&fixture, &repair_action_ref, "runtime_delivery")
             ["resultTemplate"]["content"]
             .clone();
+    assert!(
+        repair_runtime_template
+            .pointer("/runtimeDelivery/deploymentShape")
+            .is_none(),
+        "deploymentShape is MCP-derived and must not appear in repair resultTemplate: {repair_runtime_template:#}"
+    );
     assert!(repair_runtime_template
         .pointer("/runtimeDelivery/start/port")
         .is_none());
@@ -8403,14 +8514,18 @@ fn run_knowledge_context(
 }
 
 fn write_candidate_target(fixture: &Fixture, request_ref: &str, value: &Value) {
+    let path = architecture_write_target_path(fixture, request_ref);
+    write_json_atomic(&fixture.root.join(path), value).expect("write candidate");
+}
+
+fn architecture_write_target_path(fixture: &Fixture, request_ref: &str) -> String {
     let inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
     })
     .expect("inspect request");
     let target = inspected.write_targets.first().expect("write target");
-    let path = target["path"].as_str().expect("target path");
-    write_json_atomic(&fixture.root.join(path), value).expect("write candidate");
+    target["path"].as_str().expect("target path").to_string()
 }
 
 fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
