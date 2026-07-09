@@ -172,6 +172,104 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
 }
 
 #[test]
+fn deploy_prepare_applies_healthcheck_input_to_single_service_spec_and_compose() {
+    let fixture = Fixture::new("deploy-healthcheck-input-single");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run start", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","start":"node server.js"},"dependencies":{"express":"latest"}}"#,
+    );
+    fixture.write_text("package-lock.json", "{}\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: Some("http://localhost:8080/ready?deep=true".to_string()),
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.runtime_contract.health_path.as_deref(), Some("/ready"));
+    let app = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "app")
+        .expect("app service");
+    assert_eq!(app.healthcheck_path.as_deref(), Some("/ready"));
+    assert_eq!(spec.topology.validation.preview_paths, vec!["/ready"]);
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("curl -fsS http://127.0.0.1:8080/ready || exit 1"),
+        "{compose}"
+    );
+}
+
+#[test]
+fn deploy_prepare_applies_backend_healthcheck_without_inventing_public_gateway_probe() {
+    let fixture = Fixture::new("deploy-healthcheck-input-composite");
+    fixture.write_runtime_delivery(runtime_delivery());
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: Some("actuator/health".to_string()),
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(
+        spec.runtime_contract.health_path.as_deref(),
+        Some("/actuator/health")
+    );
+    let backend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "backend")
+        .expect("backend service");
+    assert_eq!(
+        backend.healthcheck_path.as_deref(),
+        Some("/actuator/health")
+    );
+    assert_eq!(spec.topology.validation.preview_paths, vec!["/"]);
+    assert!(!spec
+        .topology
+        .validation
+        .api_paths
+        .iter()
+        .any(|path| path == "/actuator/health"));
+
+    let compose = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/compose.yaml"),
+    )
+    .expect("compose");
+    assert!(
+        compose.contains("curl -fsS http://127.0.0.1:8080/actuator/health || exit 1"),
+        "{compose}"
+    );
+}
+
+#[test]
 fn prepare_uses_repository_code_evidence_for_gradle_vite_workspace() {
     let fixture = Fixture::new("deploy-gradle-vite");
     fixture.write_runtime_delivery(json!({
@@ -2875,6 +2973,136 @@ fn deploy_bootstrap_returns_confirmation_gate_with_declared_tasks() {
         "npx prisma migrate deploy"
     );
     assert_forbidden_cli_fields_absent(&value);
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_bootstrap_executes_confirmed_task_inside_compose_service() {
+    let fixture = Fixture::new("deploy-bootstrap-compose-exec");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"}}"#,
+    );
+    fixture.write_text(
+        "prisma/schema.prisma",
+        "datasource db { provider = \"sqlite\" }\n",
+    );
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+printf '%s\n' "$@" >> docker-args.txt
+if [ "$1" = "compose" ] && [ "$4" = "ps" ]; then
+  echo "app"
+  exit 0
+fi
+if [ "$1" = "compose" ] && [ "$4" = "exec" ]; then
+  if [ "$5" = "-T" ] && [ "$6" = "app" ] && [ "$7" = "sh" ] && [ "$8" = "-lc" ]; then
+    echo "$9" > bootstrap-command.txt
+    echo "migration ok"
+    exit 0
+  fi
+  echo "unexpected exec args: $*" >&2
+  exit 12
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_bootstrap(DeployBootstrapInput {
+        project_root: fixture.root_str(),
+        confirm: true,
+        kind: Some("prisma".to_string()),
+    });
+    let value = serde_json::to_value(result).expect("bootstrap json");
+
+    assert_eq!(value["state"], "done", "{value:#}");
+    assert_eq!(value["details"]["executed"][0]["kind"], "prisma");
+    assert_eq!(
+        value["details"]["executed"][0]["command"],
+        "npx prisma migrate deploy"
+    );
+    assert_eq!(value["details"]["executed"][0]["serviceId"], "app");
+    assert_eq!(value["details"]["executed"][0]["status"], "passed");
+    assert_eq!(
+        read_text(&fixture.root.join("bootstrap-command.txt")).expect("bootstrap command"),
+        "npx prisma migrate deploy\n"
+    );
+    let docker_args = read_text(&fixture.root.join("docker-args.txt")).expect("docker args");
+    assert!(
+        docker_args.contains("exec\n-T\napp\nsh\n-lc\nnpx prisma migrate deploy"),
+        "{docker_args}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_bootstrap_blocks_when_compose_service_is_not_running() {
+    let fixture = Fixture::new("deploy-bootstrap-service-not-running");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "node",
+        "deploymentShape": "single-service",
+        "build": { "command": "npm run build" },
+        "start": { "command": "npm run preview", "port": 8080 },
+        "httpProbes": { "previewPath": "/" }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","preview":"vite preview"}}"#,
+    );
+    fixture.write_text(
+        "prisma/schema.prisma",
+        "datasource db { provider = \"sqlite\" }\n",
+    );
+    let _ = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    fixture.write_mock_docker(
+        r##"#!/bin/sh
+if [ "$1" = "compose" ] && [ "$4" = "ps" ]; then
+  exit 0
+fi
+if [ "$1" = "compose" ] && [ "$4" = "exec" ]; then
+  echo "unexpected exec" > bootstrap-command.txt
+  exit 13
+fi
+exit 0
+"##,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_bootstrap(DeployBootstrapInput {
+        project_root: fixture.root_str(),
+        confirm: true,
+        kind: Some("prisma".to_string()),
+    });
+    let value = serde_json::to_value(result).expect("bootstrap json");
+
+    assert_eq!(value["state"], "blocked", "{value:#}");
+    assert_eq!(value["recommendedTool"], "loom.deployUp");
+    assert_eq!(value["details"]["serviceId"], "app");
+    assert_eq!(value["details"]["status"], "not_running");
+    assert!(
+        !fixture.root.join("bootstrap-command.txt").exists(),
+        "bootstrap must not exec when the service is not running"
+    );
 }
 
 #[test]

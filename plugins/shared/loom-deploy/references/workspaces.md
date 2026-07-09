@@ -1,6 +1,6 @@
 # Workspace / Monorepo Deploy Guidance
 
-Use this reference when `loom deploy prepare/run --project-root` is pointed at a monorepo root rather than a single application directory.
+Use this reference when `loom.deployPrepare` or `loom.deployRun` receives a `projectRoot` that points at a monorepo root rather than a single application directory.
 
 ## Detection
 
@@ -33,7 +33,7 @@ The selected app path is not always the build context. The build context is the 
 
 ## Explicit App Path
 
-`--app-path <relative-path>` overrides automatic workspace selection. It must stay inside `--project-root` and point to an existing directory.
+`DeployToolInput.appPath` overrides automatic workspace selection. It must stay inside `projectRoot` and point to an existing directory.
 
 Use explicit app paths when a repo has multiple deployable targets, such as `apps/web`, `apps/admin`, and `services/api`. loom still stores one current local deployment under the root `.loom`; selecting a different app rewrites the current generated deployment spec/assets.
 

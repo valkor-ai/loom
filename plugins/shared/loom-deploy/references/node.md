@@ -57,7 +57,7 @@ Use this reference when implementing or repairing loom deploy support for Node-f
 ## Existing Compose Reuse
 
 - Prefer root-level Compose files over generated templates.
-- Do not overwrite existing Compose files during `deploy prepare`.
+- Do not overwrite existing Compose files during `loom.deployPrepare`.
 - Infer preview URL from the first simple published port mapping like `8080:80`; use the host side as the local preview port.
 
 ## Dependency Services

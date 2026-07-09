@@ -10,7 +10,7 @@ Use this reference when the current Loom MCP deploy action asks for deployment r
 - `healthcheck`: fix HTTP healthcheck path/candidates, app listen address, startup timing, exposed port, or app command.
 - Missing environment diagnostics live in `environment.missing`; check them before assuming a Dockerfile, port, or healthcheck problem.
 - Bootstrap diagnostics live in `bootstrap.tasks`; treat Prisma, Django, Rails, Laravel, Flyway, and Liquibase migration commands as advisory unless the user explicitly approves running them.
-- If the user approves bootstrap execution, use `loom deploy bootstrap --project-root /abs/project --kind <kind> --confirm` instead of hand-running migration commands.
+- If the user approves bootstrap execution, use `loom.deployBootstrap` with `kind` and `confirm: true` instead of hand-running migration commands.
 - Failure diagnostics live in `diagnostics`; use diagnostic `code`, `evidence`, and `suggestedAction` to prioritize the repair. These diagnostics may show missing native packages, missing modules, port conflicts, dependency connection/auth failures, pending migrations, missing env, or permissions.
 - `logs`: verify the Compose project/service still exists before editing files.
 - `docker_unavailable`: do not edit files. Ask the user to start Docker Desktop/the Docker daemon, verify `docker version` works from the same terminal/session, and enable full local access or Docker command permission if Docker works outside the agent chat but not inside it.
@@ -112,12 +112,12 @@ Existing Compose and Dockerfile assets are user-owned unless the user forced a g
 
 ## Retry Rules
 
-- For a fresh deploy request, use the MCP deploy run action; it prepares missing specs, builds, starts, validates, reports status, and returns the next repair action when the full flow cannot complete.
+- For a fresh deploy request, use `loom.deployRun`; it prepares missing specs, builds, starts, validates, reports status, and returns the next repair action when the full flow cannot complete.
 - After each repair edit, call the returned `retryTool`. For asset repair this is `loom.deployUp`.
 - `loom.deployUp` retries with the current `.loom/deployment/specs/local.json` and generated assets. It must not regenerate Dockerfile, Compose, nginx, or dockerignore files.
 - Do not call `loom.deployRun` as a repair retry. `deployRun` is a high-level entry point, while repair retry is an execution step against the current spec.
-- If it succeeds, run `loom deploy status --project-root /abs/project`.
-- If it fails, run `loom deploy repair --project-root /abs/project` again and use the new request.
+- If it succeeds, call `loom.deployStatus` for the same `projectRoot`.
+- If it fails, call `loom.deployRepair` for the same `projectRoot` again and use the new request.
 - Default `maxAttempts` is 10.
 - Default Docker Compose build/start timeout is 10 minutes because first-time dependency installation can be slow on real projects.
 - Stop when `attempts >= maxAttempts` or when the next repair requires protected files.

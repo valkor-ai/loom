@@ -68,7 +68,11 @@ pub fn deploy_prepare_inner(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.logs_dir)?;
 
-    let runtime_contract = load_runtime_contract(project_root)?;
+    let mut runtime_contract = load_runtime_contract(project_root)?;
+    let healthcheck_override = normalize_healthcheck_override(input.healthcheck.as_deref());
+    if let Some(path) = &healthcheck_override {
+        runtime_contract.health_path = Some(path.clone());
+    }
     let requested_deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
     let deployment_root = deployment_root_for_runtime_contract(
         project_root,
@@ -113,7 +117,7 @@ pub fn deploy_prepare_inner(
         None
     };
     let compose_port = compose_info.as_ref().and_then(selected_compose_port);
-    let source_model = if strategy.provider == DeployProvider::ComposeExisting {
+    let mut source_model = if strategy.provider == DeployProvider::ComposeExisting {
         compose_port
             .as_ref()
             .map(|port| source_model_with_preview_port(source_model.clone(), port.container_port))
@@ -121,6 +125,9 @@ pub fn deploy_prepare_inner(
     } else {
         source_model
     };
+    if let Some(path) = &healthcheck_override {
+        apply_healthcheck_override(&mut source_model, path);
+    }
     let topology = build_topology(&runtime_contract, &source_model);
     let runtime_contract_ref = to_project_relative(
         project_root,
@@ -254,6 +261,65 @@ pub fn deploy_prepare_inner(
 
 pub fn read_spec(project_root: &Path) -> StateResult<DeploymentSpec> {
     state::store::read_json(&deployment_paths(project_root).spec_file)
+}
+
+fn apply_healthcheck_override(source_model: &mut DeploymentSourceModel, path: &str) {
+    let target_service_id = source_model.primary_service_id.clone();
+    let target_index = source_model
+        .services
+        .iter()
+        .position(|service| service.service_id == target_service_id)
+        .or_else(|| {
+            source_model
+                .services
+                .iter()
+                .position(|service| service.role != contracts::SourceServiceRole::Frontend)
+        })
+        .or_else(|| (!source_model.services.is_empty()).then_some(0));
+    if let Some(service) = target_index.and_then(|index| source_model.services.get_mut(index)) {
+        service.healthcheck_path = Some(path.to_string());
+    }
+    source_model.notes.push(format!(
+        "Deployment healthcheck path was overridden by DeployToolInput.healthcheck: {path}."
+    ));
+}
+
+fn normalize_healthcheck_override(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let without_query = value.split(['?', '#']).next().unwrap_or(value).trim();
+    let mut path = if let Some(index) = without_query.find("://") {
+        let after_scheme = &without_query[index + 3..];
+        after_scheme
+            .find('/')
+            .map(|path_start| &after_scheme[path_start..])
+            .unwrap_or("/")
+    } else if !without_query.starts_with('/') {
+        without_query
+            .find('/')
+            .filter(|slash| {
+                let prefix = &without_query[..*slash];
+                prefix.contains(':') || prefix.contains('.')
+            })
+            .map(|slash| &without_query[slash..])
+            .unwrap_or(without_query)
+    } else {
+        without_query
+    }
+    .trim()
+    .to_string();
+    if path.is_empty() {
+        return None;
+    }
+    if !path.starts_with('/') {
+        path = format!("/{path}");
+    }
+    if path.len() > 1 {
+        path = path.trim_end_matches('/').to_string();
+    }
+    Some(path)
 }
 
 fn env_diagnostics(

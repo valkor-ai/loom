@@ -111,7 +111,7 @@ When multiple public app ports exist, publish each explicit public runtime port 
 
 - App health probing belongs to loom validation unless the generated Compose file has an obvious HTTP endpoint.
 - Probe common health candidates such as `/`, `/health`, `/healthz`, `/api/health`, `/ready`, `/readiness`, and framework-specific endpoints such as Spring Boot `/actuator/health` or Laravel/Rails `/up`.
-- Respect user healthcheck overrides from `--healthcheck-path`, `--healthcheck-candidate`, `--healthcheck-disabled`, `--healthcheck-attempts`, `--healthcheck-interval-ms`, `--healthcheck-timeout-ms`, and `--healthcheck-expected-status-max`.
+- Respect healthcheck paths and candidates already recorded in `DeploymentSpec`, `sourceModel.services[].healthcheckPath`, and topology validation. Do not invent unrelated probes during Compose repair.
 - When a candidate succeeds, persist that path back into `DeploymentSpec.runtime.healthcheck`.
 - Log parsing should target the selected app service for existing Compose and identify fatal startup failures before reporting a preview URL.
 - If the app has no HTTP server, Compose can still build/start it, but the deploy result should not invent an HTTP preview URL.

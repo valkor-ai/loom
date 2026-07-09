@@ -4,7 +4,7 @@ Use this reference when Loom selects `deploy.matrix`. It defines the deployment 
 
 ## Matrix Dimensions
 
-Every deploy prepare result should be explainable by these dimensions:
+Every `loom.deployPrepare` result should be explainable by these dimensions:
 
 - Topology class: `single_service_app`, `api_only_single_service`, `static_site`, `backend_served_frontend_api`, `frontend_gateway_backend_api`, `multi_service`, `existing_compose`, or `existing_dockerfile_wrapper`.
 - Runtime families: Node, Java, Python, Go, .NET, PHP, Ruby, Static, or Unknown.

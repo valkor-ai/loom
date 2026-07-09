@@ -7,6 +7,7 @@ pub fn build_topology(
     runtime: &DeploymentRuntimeContract,
     source_model: &DeploymentSourceModel,
 ) -> DeploymentTopology {
+    let health_path = runtime.health_path.as_deref().map(normalize_path);
     let preview_service = preview_service(source_model);
     let public_entry = preview_service
         .map(|service| service.service_id.clone())
@@ -30,13 +31,34 @@ pub fn build_topology(
             });
         }
     }
+    let mut preview_paths = if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend)
+    {
+        vec![runtime.preview_path.clone()]
+    } else {
+        health_path
+            .clone()
+            .map(|path| vec![path])
+            .unwrap_or_else(|| vec![runtime.preview_path.clone()])
+    };
+    if preview_paths.is_empty() {
+        preview_paths.push("/".to_string());
+    }
+    let mut api_paths = runtime.api_paths.clone();
+    if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend) {
+        if let Some(path) = &health_path {
+            let base_path = api_base_path(runtime);
+            if path_is_under_base(path, &base_path) {
+                api_paths.push(path.clone());
+            }
+        }
+    }
     DeploymentTopology {
         schema_version: 1,
         public_entry_service_id: public_entry,
         routes,
         validation: DeploymentTopologyValidation {
-            preview_paths: dedupe_paths(vec![runtime.preview_path.clone()]),
-            api_paths: dedupe_paths(runtime.api_paths.clone()),
+            preview_paths: dedupe_paths(preview_paths),
+            api_paths: dedupe_paths(api_paths),
         },
     }
 }
@@ -107,6 +129,15 @@ fn api_base_path(runtime: &DeploymentRuntimeContract) -> String {
                 .map(|segment| format!("/{segment}"))
         })
         .unwrap_or_else(|| "/api".to_string())
+}
+
+fn path_is_under_base(path: &str, base: &str) -> bool {
+    let path = normalize_path(path);
+    let base = normalize_path(base);
+    if base == "/" {
+        return true;
+    }
+    path == base || path.starts_with(&format!("{base}/"))
 }
 
 fn dedupe_paths(paths: Vec<String>) -> Vec<String> {
