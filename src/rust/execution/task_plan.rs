@@ -2414,42 +2414,66 @@ fn requirement_detail_transfer(
         .filter(|item| item.required_for_current_phase)
         .map(|item| {
             let coverage = detail_coverage.get(&item.detail_id);
-            json!({
-                "detailId": item.detail_id,
-                "kind": item.kind,
-                "title": item.title,
-                "summary": item.summary,
-                "priority": item.priority,
-                "impactTags": item.impact_tags,
-                "lifecycleStage": item.lifecycle_stage,
-                "quality": item.quality,
-                "scopeRefs": item.scope_refs,
-                "acceptanceRefs": item.acceptance_refs,
-                "conceptRefs": item.concept_refs,
-                "frontendRefs": item.frontend_refs,
-                "coverageStatus": coverage
-                    .and_then(|value| value.get("coverageStatus"))
-                    .cloned()
-                    .unwrap_or_else(|| Value::String("uncovered".to_string())),
-                "artifactRefs": coverage
-                    .and_then(|value| value.get("artifactRefs"))
-                    .cloned()
-                    .unwrap_or(Value::Null),
-                "coverageReason": coverage
+            let coverage_status = coverage
+                .and_then(|value| value.get("coverageStatus"))
+                .cloned()
+                .unwrap_or_else(|| Value::String("uncovered".to_string()));
+            let artifact_hints = coverage
+                .and_then(|value| value.get("artifactRefs"))
+                .map(compact_requirement_artifact_hints)
+                .unwrap_or_else(|| json!({}));
+            let summary = if item.summary.trim().is_empty() {
+                item.title.clone()
+            } else {
+                item.summary.clone()
+            };
+            json!([
+                item.detail_id,
+                item.kind,
+                item.priority,
+                item.impact_tags,
+                item.quality,
+                item.lifecycle_stage,
+                item.scope_refs,
+                item.acceptance_refs,
+                item.concept_refs,
+                item.frontend_refs,
+                coverage_status,
+                summary,
+                artifact_hints,
+                coverage
                     .and_then(|value| value.get("reason"))
                     .cloned()
                     .unwrap_or(Value::Null)
-            })
+            ])
         })
         .collect::<Vec<_>>();
     json!({
         "authority": "planning_generation_contract_plus_architecture_artifact_contract",
         "requirementDetailAssignment": {
+            "itemEncoding": "row_array",
+            "itemColumns": [
+                "detailId",
+                "kind",
+                "priority",
+                "impactTags",
+                "quality",
+                "lifecycleStage",
+                "scopeRefs",
+                "acceptanceRefs",
+                "conceptRefs",
+                "frontendRefs",
+                "coverageStatus",
+                "summary",
+                "artifactRefHints",
+                "coverageReason"
+            ],
             "items": requirement_items,
             "assignmentRule": "Every item with coverageStatus=covered must be assigned to at least one task.requirementDetailRefs entry using its detailId.",
             "verificationRule": "Every assigned covered detail must be referenced by at least one verificationIntents[].requirementDetailRefs entry that proves the concrete behavior.",
             "verificationSubsetRule": "Every verificationIntents[].requirementDetailRefs entry must also be present in the same parent task.requirementDetailRefs.",
-            "insufficientAacRule": "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks."
+            "insufficientAacRule": "If a required detail has coverageStatus other than covered because AAC lacks a taskable artifact, write blocked output with blockedReasonCode AAC_INSUFFICIENT instead of inventing vague tasks.",
+            "artifactRefHintRule": "artifactRefHints are compact routing hints for task grouping. Use architectureDetails, acceptanceDetails, and businessFlowDetails as the authoritative source for full object shape and behavior."
         },
         "currentPhaseScope": {
             "included": pgc.phase_scope.included,
@@ -2477,11 +2501,53 @@ fn requirement_detail_transfer(
         },
         "taskPlanningFieldMapping": {
             "taskObjective": "Name the concrete business object, rule, flow, state, UI, API, operation path, blocking detail, or feedback detail the task owns.",
-            "taskRequirementDetailRefs": "Use detailId values from requirementDetailAssignment.items.",
+            "taskRequirementDetailRefs": "Use the detailId column from requirementDetailAssignment.items row arrays.",
             "frontendExperienceRequirement": "Use when the task owns UI surfaces, workflows, states, bindings, or operation paths.",
             "runtimeDeliveryRequirement": "Use when the task touches build, start, runtime entry, static serving, generated artifacts, or runtime surface."
         }
     })
+}
+
+fn compact_requirement_artifact_hints(artifact_refs: &Value) -> Value {
+    let mut hints = serde_json::Map::new();
+    for key in [
+        "modules",
+        "entities",
+        "interfaces",
+        "userFlows",
+        "stateMachines",
+        "constraints",
+        "acceptanceMatrix",
+        "frontendActions",
+        "frontendDataViews",
+        "frontendOperationPaths",
+    ] {
+        insert_string_array_hint(&mut hints, artifact_refs, key, key);
+    }
+    let fields = string_array_at(artifact_refs, "fields");
+    if !fields.is_empty() {
+        hints.insert(
+            "fieldRefs".to_string(),
+            json!({
+                "count": fields.len(),
+                "examples": fields.iter().take(6).cloned().collect::<Vec<_>>(),
+                "fullSource": "contextProjection.requirementDetailTransfer.architectureDetails.entities"
+            }),
+        );
+    }
+    Value::Object(hints)
+}
+
+fn insert_string_array_hint(
+    hints: &mut serde_json::Map<String, Value>,
+    source: &Value,
+    source_key: &str,
+    target_key: &str,
+) {
+    let values = string_array_at(source, source_key);
+    if !values.is_empty() {
+        hints.insert(target_key.to_string(), json!(values));
+    }
 }
 
 fn frontend_experience_required(aac: &ArchitectureArtifactContract) -> bool {
@@ -2975,7 +3041,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "verificationEvidenceRules": [
             "verificationIntents must use enumRefs.verificationEvidence.",
             "Each implementation task must have at least one verification intent.",
-            "Every covered current-phase detailId from contextProjection.requirementDetailTransfer.requirementDetailAssignment.items must appear in at least one task.requirementDetailRefs.",
+            "Every covered current-phase detailId from the detailId column in contextProjection.requirementDetailTransfer.requirementDetailAssignment.items must appear in at least one task.requirementDetailRefs.",
             "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
             "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
             "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",

@@ -201,7 +201,7 @@ where
     } else {
         json!({})
     };
-    let task: TaskDefinition = serde_json::from_value(json!({
+    let mut task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
         "title": "",
@@ -227,6 +227,13 @@ where
         "codeQualityRequirementRefs": array_field(&fields, "task.codeQualityRequirementRefs")
     }))
     .map_err(state::store::StateError::Json)?;
+    if repair_submit {
+        if let Some(stored_task) =
+            private_request_value(&input.project_root, &authorized.request_id, "task")?
+        {
+            task = serde_json::from_value(stored_task).map_err(state::store::StateError::Json)?;
+        }
+    }
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let code_quality_requirements =
@@ -3005,7 +3012,6 @@ fn materialize_task_result_repair(
             "task.frontendExperienceRequirement.executionGuidance.uiQuality",
             "task.frontendExperienceRequirement.uiQualityContractRef",
         ]);
-        context_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if runtime_delivery_evidence_applies(&context.task) {
         context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
@@ -3253,6 +3259,11 @@ fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) 
 }
 
 fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base: Value) -> Value {
+    let field_path = base
+        .get("fieldPath")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let ui_quality_contract = context
         .task
         .frontend_experience_requirement
@@ -3265,23 +3276,67 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         .get("frontendQualitySelfCheck")
         .cloned()
         .unwrap_or(Value::Null);
+    let expected_reference_groups = reference_groups_at(
+        ui_quality_contract
+            .get("referenceProfile")
+            .unwrap_or(&Value::Null),
+        "groups",
+    );
+    let checked_reference_groups = reference_groups_at(&self_check, "referenceGroupsChecked");
+    let expected_reference_files = reference_load_plan_paths(&ui_quality_contract);
+    let checked_reference_files = string_set_from_array(&self_check, "referenceFilesChecked");
+    let expected_gates = frontend_quality_gates_for_task(&context.task, &ui_quality_contract);
+    let expected_gate_ids = gate_ids_from_gates(&expected_gates);
+    let reported_gate_ids = object_array_string_field(&self_check, "gateResults", "gateId");
+    let expected_state_ids = object_array_id_set(&ui_quality_contract, "requiredUiStates", "state");
+    let checked_state_ids = object_array_id_set(&self_check, "statesCovered", "state");
+    let expected_business_rule_ids =
+        object_array_id_set(&ui_quality_contract, "businessUiRules", "ruleId");
+    let checked_business_rule_ids =
+        object_array_id_set(&self_check, "businessUiRulesChecked", "ruleId");
+    let expected_surface_ids = context
+        .task
+        .frontend_experience_requirement
+        .as_ref()
+        .map(|requirement| {
+            object_array_id_set_at_pointer(
+                requirement,
+                "/executionGuidance/surfacesInScope",
+                "surfaceId",
+            )
+        })
+        .unwrap_or_default();
+    let checked_surface_ids = object_array_id_set(&self_check, "surfacesCovered", "surfaceId");
+    let affected_gate_result = affected_gate_result_summary(&self_check, &field_path);
+    let affected_gate_id = affected_gate_result
+        .get("gateId")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let affected_gate_requirement = affected_gate_id
+        .as_deref()
+        .and_then(|gate_id| expected_gate_summary(&expected_gates, gate_id))
+        .unwrap_or(Value::Null);
     base["current"] = json!({
         "status": self_check.get("status").and_then(Value::as_str),
         "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
         "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupsChecked": self_check
-            .get("referenceGroupsChecked")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
-        "referenceFilesChecked": self_check
+        "referenceGroupCount": checked_reference_groups.len(),
+        "referenceFilesCheckedCount": self_check
             .get("referenceFilesChecked")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-        "designTokenEvidence": self_check.get("designTokenEvidence").cloned().unwrap_or(Value::Null),
-        "gateResults": self_check
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0),
+        "designTokenEvidence": design_token_evidence_summary(&self_check),
+        "gateResultsCount": self_check
             .get("gateResults")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0),
+        "stateIdsCovered": checked_state_ids,
+        "businessUiRuleIdsChecked": checked_business_rule_ids,
+        "surfaceIdsCovered": checked_surface_ids,
+        "reportedGateIds": reported_gate_ids,
+        "affectedGateResult": affected_gate_result,
         "knownGapsCount": self_check
             .get("knownGaps")
             .and_then(Value::as_array)
@@ -3290,32 +3345,38 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
     base["expected"] = json!({
         "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
         "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroups": ui_quality_contract
-            .pointer("/referenceProfile/groups")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
-        "referenceLoadPlan": ui_quality_contract
-            .pointer("/referenceProfile/referenceLoadPlan")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-        "requiredUiStates": ui_quality_contract.get("requiredUiStates").cloned().unwrap_or_else(|| json!([])),
-        "businessUiRules": ui_quality_contract.get("businessUiRules").cloned().unwrap_or_else(|| json!([])),
-        "designTokenAssetPlan": ui_quality_contract
-            .get("designTokenAssetPlan")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "uiTaskQualityGates": context
-            .task
-            .frontend_experience_requirement
-            .as_ref()
-            .and_then(|requirement| requirement.get("uiTaskQualityGates"))
-            .cloned()
-            .or_else(|| ui_quality_contract.get("qualityGates").cloned())
-            .unwrap_or_else(|| json!([])),
-        "forbiddenUserVisibleContent": ui_quality_contract
+        "referenceGroupCount": expected_reference_groups.len(),
+        "missingReferenceGroups": reference_group_difference(
+            &expected_reference_groups,
+            &checked_reference_groups
+        ),
+        "referenceFileCount": expected_reference_files.len(),
+        "missingReferenceFiles": string_set_difference(
+            &expected_reference_files,
+            &checked_reference_files
+        ),
+        "extraReferenceFiles": string_set_difference(
+            &checked_reference_files,
+            &expected_reference_files
+        ),
+        "requiredUiStateIds": expected_state_ids,
+        "missingUiStateIds": string_set_difference(&expected_state_ids, &checked_state_ids),
+        "businessUiRuleIds": expected_business_rule_ids,
+        "missingBusinessUiRuleIds": string_set_difference(
+            &expected_business_rule_ids,
+            &checked_business_rule_ids
+        ),
+        "surfaceIdsInScope": expected_surface_ids,
+        "missingSurfaceIds": string_set_difference(&expected_surface_ids, &checked_surface_ids),
+        "designTokenAssetPlan": design_token_plan_summary(&ui_quality_contract),
+        "expectedGateIds": expected_gate_ids,
+        "missingGateIds": string_set_difference(&expected_gate_ids, &reported_gate_ids),
+        "affectedGateRequirement": affected_gate_requirement,
+        "forbiddenUserVisibleContentCount": ui_quality_contract
             .get("forbiddenUserVisibleContent")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0)
     });
     base["validRepairChoices"] = json!([
         "Report every assigned uiTaskQualityGates gateId in frontendQualitySelfCheck.gateResults; do not invent or omit gate ids.",
@@ -3324,6 +3385,162 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         "If any must gate is missing, partial, or environment-blocked, keep frontendQualitySelfCheck.status below satisfied and record the specific gap."
     ]);
     base
+}
+
+fn reference_load_plan_paths(ui_quality_contract: &Value) -> BTreeSet<String> {
+    ui_quality_contract
+        .pointer("/referenceProfile/referenceLoadPlan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn string_set_from_array(value: &Value, field: &str) -> BTreeSet<String> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn string_set_difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
+    left.difference(right).cloned().collect()
+}
+
+fn reference_group_difference(
+    expected: &BTreeSet<(String, String)>,
+    checked: &BTreeSet<(String, String)>,
+) -> Vec<Value> {
+    expected
+        .difference(checked)
+        .map(|(group, item)| {
+            json!({
+                "group": group,
+                "item": item
+            })
+        })
+        .collect()
+}
+
+fn object_array_id_set(value: &Value, array_field: &str, id_field: &str) -> BTreeSet<String> {
+    value
+        .get(array_field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_field).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn object_array_id_set_at_pointer(
+    value: &Value,
+    pointer: &str,
+    id_field: &str,
+) -> BTreeSet<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_field).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn gate_ids_from_gates(gates: &[Value]) -> BTreeSet<String> {
+    gates
+        .iter()
+        .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn affected_gate_result_summary(self_check: &Value, field_path: &str) -> Value {
+    let Some(index) = gate_result_index(field_path) else {
+        return Value::Null;
+    };
+    let Some(gate_result) = self_check
+        .get("gateResults")
+        .and_then(Value::as_array)
+        .and_then(|items| items.get(index))
+    else {
+        return json!({
+            "index": index,
+            "present": false
+        });
+    };
+    json!({
+        "index": index,
+        "present": true,
+        "gateId": gate_result.get("gateId").and_then(Value::as_str),
+        "status": gate_result.get("status").and_then(Value::as_str),
+        "filesCount": gate_result.get("files").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "surfaceIds": string_array_at(gate_result, "surfaceIds"),
+        "viewportsChecked": string_array_at(gate_result, "viewportsChecked"),
+        "sourceChecksCount": gate_result.get("sourceChecks").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "attemptedChecksCount": gate_result.get("attemptedChecks").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "fallbackEvidenceCount": gate_result.get("fallbackEvidence").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "blockedReasonPresent": gate_result.get("blockedReason").and_then(Value::as_str).map(str::trim).is_some_and(|reason| !reason.is_empty()),
+        "evidencePresent": gate_result.get("evidence").and_then(Value::as_str).map(str::trim).is_some_and(|evidence| !evidence.is_empty())
+    })
+}
+
+fn gate_result_index(field_path: &str) -> Option<usize> {
+    let after_prefix = field_path.split("gateResults[").nth(1)?;
+    let index = after_prefix.split(']').next()?;
+    index.parse().ok()
+}
+
+fn expected_gate_summary(gates: &[Value], gate_id: &str) -> Option<Value> {
+    gates.iter().find_map(|gate| {
+        if gate.get("gateId").and_then(Value::as_str) != Some(gate_id) {
+            return None;
+        }
+        Some(json!({
+            "gateId": gate_id,
+            "sourceRefId": gate.get("sourceRefId").cloned().unwrap_or(Value::Null),
+            "severity": gate.get("severity").cloned().unwrap_or(Value::Null),
+            "requiredEvidence": gate.get("requiredEvidence").cloned().unwrap_or_else(|| json!([])),
+            "surfaceIds": gate.get("surfaceIds").cloned().unwrap_or_else(|| json!([])),
+            "expectation": gate.get("expectation").cloned().unwrap_or(Value::Null)
+        }))
+    })
+}
+
+fn design_token_evidence_summary(self_check: &Value) -> Value {
+    let evidence = self_check
+        .get("designTokenEvidence")
+        .unwrap_or(&Value::Null);
+    json!({
+        "present": !evidence.is_null(),
+        "strategyUsed": evidence.get("strategyUsed").and_then(Value::as_str),
+        "templateIdUsed": evidence.get("templateIdUsed").cloned().unwrap_or(Value::Null),
+        "tokenAssetFileCount": evidence.get("tokenAssetFiles").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "tokenConsumerFileCount": evidence.get("tokenConsumerFiles").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "existingTokenSystemReused": evidence.get("existingTokenSystemReused").and_then(Value::as_bool),
+        "parallelTokenSystemCreated": evidence.get("parallelTokenSystemCreated").and_then(Value::as_bool),
+        "mergeSummaryPresent": evidence.get("mergeSummary").and_then(Value::as_str).map(str::trim).is_some_and(|summary| !summary.is_empty())
+    })
+}
+
+fn design_token_plan_summary(ui_quality_contract: &Value) -> Value {
+    let plan = ui_quality_contract
+        .get("designTokenAssetPlan")
+        .unwrap_or(&Value::Null);
+    json!({
+        "strategy": plan.get("strategy").and_then(Value::as_str),
+        "templateId": plan.get("templateId").cloned().unwrap_or(Value::Null),
+        "targetFiles": plan.get("targetFiles").cloned().unwrap_or_else(|| json!([])),
+        "mergePolicy": plan.get("mergePolicy").and_then(Value::as_str),
+        "duplicationPolicy": plan.get("duplicationPolicy").and_then(Value::as_str)
+    })
 }
 
 fn task_result_runtime_conflict(context: &RepairContextInput, mut base: Value) -> Value {
@@ -4029,6 +4246,26 @@ fn frontend_experience_requirement_from_fields(
         requirement["uiTaskQualityGates"] = ui_task_quality_gates;
     }
     requirement
+}
+
+fn private_request_value(
+    project_root: &str,
+    request_id: &str,
+    key: &str,
+) -> Result<Option<Value>, state::store::StateError> {
+    let root = Path::new(project_root);
+    let manifest_file = state::paths::request_storage_manifest_file(root, request_id);
+    if state::store::path_exists(&manifest_file) {
+        if let Some(relative) = state::request_manifest::request_storage_ref(root, request_id, key)?
+        {
+            return read_project_json_value(root, &relative).map(Some);
+        }
+    }
+
+    let entry = state::request_index::get_request_index_entry(project_root, request_id)?;
+    let request_path = from_project_relative(root, &entry.request_file)?;
+    let request_root: Value = state::store::read_json(&request_path)?;
+    Ok(request_root.get(key).cloned())
 }
 
 fn read_project_json_value(

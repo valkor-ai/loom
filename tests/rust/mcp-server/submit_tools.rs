@@ -2717,12 +2717,43 @@ fn taskplan_request_keeps_deferred_scope_out_of_current_scope_refs() {
     );
     let assignment =
         &fields["contextProjection.requirementDetailTransfer.requirementDetailAssignment"].value;
-    let item = &assignment["items"][0];
-    assert!(item.get("coverage").is_none());
-    assert!(item["quality"].is_string());
-    assert!(item["coverageStatus"].is_string());
-    assert!(item["artifactRefs"].is_object() || item["artifactRefs"].is_null());
-    assert!(item["coverageReason"].is_null() || item["coverageReason"].is_string());
+    assert!(
+        serde_json::to_vec(assignment)
+            .expect("serialize compact assignment")
+            .len()
+            < 24_000,
+        "{assignment:#}"
+    );
+    assert_eq!(assignment["itemEncoding"], json!("row_array"));
+    let columns = assignment["itemColumns"]
+        .as_array()
+        .expect("assignment item columns")
+        .iter()
+        .map(|column| column.as_str().expect("column name"))
+        .collect::<Vec<_>>();
+    let column_index = |name: &str| {
+        columns
+            .iter()
+            .position(|column| column == &name)
+            .expect("assignment column")
+    };
+    let item = assignment["items"][0]
+        .as_array()
+        .expect("compact assignment row");
+    assert!(item[column_index("detailId")].is_string());
+    assert!(item[column_index("quality")].is_string());
+    assert!(item[column_index("coverageStatus")].is_string());
+    let artifact_hints = &item[column_index("artifactRefHints")];
+    assert!(artifact_hints.get("artifactRefs").is_none());
+    assert!(artifact_hints["modules"].is_array());
+    if artifact_hints.get("fieldRefs").is_some() {
+        assert!(artifact_hints["fieldRefs"]["count"].is_number());
+        assert!(artifact_hints["fieldRefs"]["examples"].is_array());
+    }
+    assert!(
+        item[column_index("coverageReason")].is_null()
+            || item[column_index("coverageReason")].is_string()
+    );
     assert!(assignment["verificationRule"]
         .as_str()
         .is_some_and(|rule| rule.contains("must be referenced")));
@@ -3118,7 +3149,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
 }
 
 #[test]
-fn task_result_repair_carries_frontend_quality_contract_fields() {
+fn task_result_repair_carries_compact_frontend_quality_context() {
     let fixture = Fixture::new("task-result-frontend-quality-repair");
     let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
         &fixture,
@@ -3188,18 +3219,13 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         .collect::<BTreeSet<_>>();
     assert!(repair_read_fields
         .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
-    assert!(repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"));
-    assert!(repair_read_fields.contains(
-        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-    ));
-    assert!(repair_read_fields.contains(
-        "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-    ));
+    assert!(repair_read_fields.contains("task.frontendExperienceRequirement.uiQualityContractRef"));
+    assert!(!repair_read_fields.iter().any(|field| field
+        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile")));
+    assert!(!repair_read_fields.iter().any(|field| field
+        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan")));
     assert!(!repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile"));
-    assert!(!repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"));
+        .contains("task.frontendExperienceRequirement.uiQualityContract.qualityGates"));
     assert!(repair_read_fields
         .contains("outputContract.schemaShape.properties.frontendQualitySelfCheck"));
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -3208,47 +3234,39 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         fields: vec![
             "repairContract.issueConflicts".to_string(),
             "repairContract.minimalRepairRules".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-                .to_string(),
             "outputContract.resultTemplate".to_string(),
             "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
         ],
     })
     .expect("read repair contract fields")
     .fields;
-    assert!(repair_fields["repairContract.issueConflicts"]
+    let issue_conflicts = repair_fields["repairContract.issueConflicts"]
         .value
         .as_array()
-        .expect("issue conflicts")
+        .expect("issue conflicts");
+    let frontend_issue = issue_conflicts
         .iter()
-        .any(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"));
+        .find(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+        .expect("frontend quality issue");
+    assert!(frontend_issue["current"]["gateResults"].is_null());
+    assert!(frontend_issue["current"]["gateResultsCount"].is_number());
+    assert!(frontend_issue["expected"]["referenceLoadPlan"].is_null());
+    assert!(frontend_issue["expected"]["expectedGateIds"]
+        .as_array()
+        .expect("expected gate ids")
+        .iter()
+        .any(|gate_id| gate_id == "verify.rendered_viewports"));
+    assert!(
+        serde_json::to_vec(frontend_issue)
+            .expect("serialize compact frontend issue")
+            .len()
+            < 8_000,
+        "{frontend_issue:#}"
+    );
     assert!(
         serde_json::to_string(&repair_fields["repairContract.minimalRepairRules"].value)
             .expect("serialize rules")
             .contains("frontendQualitySelfCheck")
-    );
-    assert!(repair_fields
-        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"]
-        .value["tokens"]
-        .as_array()
-        .expect("reference group items")
-        .contains(&json!("spacing")));
-    assert!(repair_fields
-        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"]
-        .value
-        .as_array()
-        .expect("reference load plan")
-        .iter()
-        .any(|item| item["path"] == json!("uix/tokens/spacing.md")));
-    assert_eq!(
-        repair_fields
-            ["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
-            .value,
-        json!("tokens-css")
     );
     assert!(repair_fields["outputContract.resultTemplate"]
         .value
