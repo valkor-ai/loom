@@ -15,7 +15,6 @@ use delivery_core::{
     OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
     TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
-use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -33,8 +32,8 @@ use crate::{
         api_contract_evidence_applies, architecture_quality_evidence_applies,
         code_quality_evidence_applies, code_quality_execution_context,
         frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_template_with_code_quality,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        runtime_delivery_evidence_applies, task_result_schema_shape,
+        task_result_template_with_code_quality, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -157,6 +156,8 @@ where
         "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
         "task.frontendExperienceRequirement.uiTaskQualityGates",
     ] {
         if allowed_read_fields.contains(optional_field) {
@@ -773,6 +774,9 @@ fn normalize_task_result_machine_fields(
     let detail_ids = required_requirement_detail_ids(task);
     normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
 
+    remove_non_applicable_evidence_fields(object, task);
+    normalize_applicable_evidence_array_fields(object, task);
+
     if let Some(concepts) = object
         .get_mut("conceptEvidence")
         .and_then(Value::as_array_mut)
@@ -789,8 +793,124 @@ fn normalize_task_result_machine_fields(
     if let Some(requirement) = &task.frontend_experience_requirement {
         normalize_frontend_experience_self_check(object, requirement);
     }
+    normalize_frontend_quality_self_check_shape(object);
 
     raw_result
+}
+
+fn remove_non_applicable_evidence_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    if !frontend_self_check_applies(task) {
+        object.remove("frontendExperienceSelfCheck");
+    }
+    if !frontend_quality_self_check_applies(task) {
+        object.remove("frontendQualitySelfCheck");
+    }
+    if !runtime_delivery_evidence_applies(task) {
+        object.remove("runtimeDeliveryEvidence");
+    }
+    if task.concept_refs.is_empty() {
+        object.remove("conceptEvidence");
+    }
+    if !architecture_quality_evidence_applies(task) {
+        object.remove("architectureQualityEvidence");
+    }
+    if !api_contract_evidence_applies(task) {
+        object.remove("apiContractEvidence");
+    }
+    if !code_quality_evidence_applies(task) {
+        object.remove("codeQualityEvidence");
+    }
+}
+
+fn normalize_applicable_evidence_array_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    for (applies, field) in [
+        (!task.concept_refs.is_empty(), "conceptEvidence"),
+        (
+            architecture_quality_evidence_applies(task),
+            "architectureQualityEvidence",
+        ),
+        (api_contract_evidence_applies(task), "apiContractEvidence"),
+        (code_quality_evidence_applies(task), "codeQualityEvidence"),
+    ] {
+        if applies && !object.get(field).is_some_and(Value::is_array) {
+            object.insert(field.to_string(), json!([]));
+        }
+    }
+}
+
+fn normalize_frontend_quality_self_check_shape(object: &mut serde_json::Map<String, Value>) {
+    let Some(self_check) = object
+        .get_mut("frontendQualitySelfCheck")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    normalize_object_array_field(self_check, "statesCovered");
+    normalize_object_array_field(self_check, "businessUiRulesChecked");
+    normalize_object_array_field(self_check, "surfacesCovered");
+    normalize_object_array_field(self_check, "gateResults");
+    normalize_string_array_field(self_check, "referenceFilesChecked");
+    normalize_string_array_field(self_check, "knownGaps");
+    if !self_check
+        .get("referenceGroupsChecked")
+        .is_some_and(Value::is_object)
+    {
+        self_check.insert("referenceGroupsChecked".to_string(), json!({}));
+    }
+    if !self_check
+        .get("forbiddenContentCheck")
+        .is_some_and(Value::is_object)
+    {
+        self_check.insert(
+            "forbiddenContentCheck".to_string(),
+            json!({
+                "checked": true,
+                "violations": []
+            }),
+        );
+    } else if let Some(forbidden) = self_check
+        .get_mut("forbiddenContentCheck")
+        .and_then(Value::as_object_mut)
+    {
+        if !forbidden.get("checked").is_some_and(Value::is_boolean) {
+            forbidden.insert("checked".to_string(), json!(true));
+        }
+        normalize_string_array_field(forbidden, "violations");
+    }
+    if self_check
+        .get("designTokenEvidence")
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        self_check.remove("designTokenEvidence");
+    }
+}
+
+fn normalize_object_array_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let Some(items) = object.get(field).and_then(Value::as_array).cloned() else {
+        object.insert(field.to_string(), json!([]));
+        return;
+    };
+    object.insert(
+        field.to_string(),
+        Value::Array(items.into_iter().filter(Value::is_object).collect()),
+    );
+}
+
+fn normalize_string_array_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let Some(items) = object.get(field).and_then(Value::as_array).cloned() else {
+        object.insert(field.to_string(), json!([]));
+        return;
+    };
+    object.insert(
+        field.to_string(),
+        Value::Array(items.into_iter().filter(Value::is_string).collect()),
+    );
 }
 
 fn is_iso_datetime_string(value: &str) -> bool {
@@ -2001,6 +2121,45 @@ fn validate_frontend_quality_self_check(
             break;
         }
     }
+    let expected_surface_ids = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.pointer("/executionGuidance/surfacesInScope"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("surfaceId").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !expected_surface_ids.is_empty() {
+        let covered_surface_ids = self_check
+            .get("surfacesCovered")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.get("surfaceId").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for surface_id in expected_surface_ids {
+            if !covered_surface_ids
+                .iter()
+                .any(|covered| covered == &surface_id)
+            {
+                issues.push(issue(
+                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                    "frontendQualitySelfCheck.surfacesCovered",
+                    "frontendQualitySelfCheck must cover every task frontend surface with structured surface evidence.",
+                ));
+                break;
+            }
+        }
+    }
     validate_design_token_evidence(&self_check, ui_quality_contract, issues);
     validate_frontend_quality_gate_results(&self_check, task, ui_quality_contract, issues);
     if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
@@ -2803,8 +2962,7 @@ fn materialize_task_result_repair(
             .join("requests")
             .join(format!("{request_id}.json")),
     )?;
-    let schema_shape = serde_json::to_value(schema_for!(TaskResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = task_result_schema_shape(&context.task);
     let result_template = task_result_repair_template(&context, &issues);
     let mut context_fields = vec![
         "source.taskPlanId",
@@ -3792,6 +3950,26 @@ fn frontend_experience_requirement_from_fields(
             fields,
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
         );
+    }
+    let surfaces_in_scope = array_field(
+        fields,
+        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+    );
+    if surfaces_in_scope
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        requirement["executionGuidance"]["surfacesInScope"] = surfaces_in_scope;
+    }
+    let actions_in_scope = array_field(
+        fields,
+        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+    );
+    if actions_in_scope
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        requirement["executionGuidance"]["actionsInScope"] = actions_in_scope;
     }
     let ui_quality_guidance = value_field(
         fields,

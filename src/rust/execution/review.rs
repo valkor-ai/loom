@@ -98,6 +98,7 @@ fn materialize_review_request_inner(
                 "phase {phase_id} does not exist in delivery {delivery_id}"
             ))
         })?;
+    let task_results = load_task_results(root, &locator, &task_plan, &run);
     if let Some(existing_request_ref) = phase.latest_refs.get("reviewRequestRef").cloned() {
         if state::inspect_request(delivery_core::InspectRequestInput {
             project_root: project_root.to_string(),
@@ -105,6 +106,11 @@ fn materialize_review_request_inner(
         })
         .map(|request| request.request_kind == "review_request")
         .unwrap_or(false)
+            && review_request_matches_current_task_results(
+                project_root,
+                &existing_request_ref,
+                &task_results,
+            )
         {
             return write_review_result(project_root, &existing_request_ref);
         }
@@ -113,7 +119,6 @@ fn materialize_review_request_inner(
     let review_id = format!("review_{}", state::store::now_millis());
     let result_file = to_project_relative(root, &review_result_candidate_file(root, &review_id))?;
     let request_file = to_project_relative(root, &review_request_file(root, &locator, &review_id))?;
-    let task_results = load_task_results(root, &locator, &task_plan, &run);
     let architecture_contract = phase
         .latest_refs
         .get("architectureArtifact")
@@ -178,6 +183,30 @@ fn materialize_review_request_inner(
     write_review_result(project_root, &stored.request_ref)
 }
 
+fn review_request_matches_current_task_results(
+    project_root: &str,
+    request_ref: &str,
+    task_results: &[TaskResult],
+) -> bool {
+    if task_results.is_empty() {
+        return false;
+    }
+    let expected = Value::Array(compact_task_result_summaries(task_results));
+    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["reviewPacket.taskResultSummaries".to_string()],
+    });
+    let Ok(fields) = fields else {
+        return false;
+    };
+    fields
+        .fields
+        .get("reviewPacket.taskResultSummaries")
+        .map(|field| field.value.clone())
+        .is_some_and(|actual| actual == expected)
+}
+
 fn build_review_request(
     project_root: &Path,
     review_id: &str,
@@ -190,8 +219,7 @@ fn build_review_request(
     architecture_contract: Option<&ArchitectureArtifactContract>,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Result<Value, state::store::StateError> {
-    let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = review_result_schema_shape();
     let review_signals = build_review_signals(task_plan, run, task_results, architecture_contract);
     let next_phase_preview = review_next_phase_preview(next_phase_handoff);
     let (change_set, change_context) =
@@ -529,6 +557,104 @@ fn review_quality_profile() -> Value {
                 "reason": "Actionable ReviewFinding severity, category, evidence, and repair route guidance."
             }
         ]
+    })
+}
+
+fn review_result_schema_shape() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "schemaVersion",
+            "reviewId",
+            "source",
+            "decision",
+            "findings",
+            "coverageAssessment",
+            "limitations",
+            "pendingActions",
+            "nextAction",
+            "createdAt",
+            "updatedAt"
+        ],
+        "properties": {
+            "schemaVersion": "1.0",
+            "reviewId": "outputContract.resultTemplate.reviewId",
+            "source": {
+                "requestId": "active review request id",
+                "phaseId": "source.phaseId",
+                "taskPlanId": "source.taskPlanId",
+                "taskPlanRunId": "source.taskPlanRunId"
+            },
+            "decision": "approved | approved_with_notes | changes_requested | blocked | needs_user_decision",
+            "findings": [{
+                "findingId": "string",
+                "findingType": "defect | note | limitation | contract_gap",
+                "severity": "critical | major | minor | note",
+                "severityClass": "blocking | warning | info",
+                "evidenceKind": "code | test | runtime | manual | contract | review_limitation",
+                "failureClass": "product_defect | environment_blocker | review_limitation | contract_gap",
+                "category": "enumRefs.findingCategory item",
+                "summary": "string",
+                "evidence": "string",
+                "readRefs": [{
+                    "type": "enumRefs.readRefType item",
+                    "ref": "allowed review read ref",
+                    "reason": "string"
+                }],
+                "evidenceRefs": [{
+                    "type": "enumRefs.evidenceRefType item",
+                    "ref": "allowed task result, verification, diff, changed file, or manual ref",
+                    "reason": "string"
+                }],
+                "groupRefs": ["allowed group id"],
+                "taskRefs": ["allowed task id"],
+                "acceptanceRefs": ["allowed acceptance ref"],
+                "artifactRefs": {},
+                "location": {},
+                "taskRelevance": "direct | indirect | not_applicable",
+                "scopeRelation": "within_task_changed_files | current_phase | outside_current_change_set",
+                "introducedByCurrentTask": "yes | no | unknown",
+                "recommendedNextAction": "enumRefs.nextAction item"
+            }],
+            "coverageAssessment": {
+                "mustAcceptance": [{
+                    "acceptanceRef": "reviewScope.acceptanceRefs item",
+                    "status": "satisfied | insufficient_evidence | not_satisfied | not_reviewed",
+                    "supportingTaskResults": ["outputContract.allowedRefs.taskResultIds item"],
+                    "evidenceStatus": "sufficient | insufficient | missing",
+                    "notes": ["string"]
+                }],
+                "summary": {
+                    "totalMust": 0,
+                    "satisfied": 0,
+                    "insufficientEvidence": 0,
+                    "notSatisfied": 0,
+                    "notReviewed": 0
+                }
+            },
+            "limitations": [{
+                "code": "string",
+                "summary": "string",
+                "impact": "string"
+            }],
+            "pendingActions": [{
+                "type": "enumRefs.nextAction item other than top-level nextAction.type",
+                "findingRefs": ["findings[].findingId"],
+                "reason": "string"
+            }],
+            "nextAction": {
+                "type": "enumRefs.nextAction item",
+                "reason": "string",
+                "targetNode": "string or null",
+                "targetPhaseId": "string or null",
+                "targetTaskIds": ["task id"],
+                "findingRefs": ["findings[].findingId"],
+                "userVisibleState": "string or null"
+            },
+            "createdAt": "ISO-8601 datetime",
+            "updatedAt": "ISO-8601 datetime"
+        },
+        "additionalProperties": false
     })
 }
 
@@ -990,7 +1116,8 @@ where
     }
     let root = Path::new(&input.project_root);
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let mut result: ReviewResult = match serde_json::from_value(raw) {
+    let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id);
+    let mut result: ReviewResult = match serde_json::from_value(normalized) {
         Ok(result) => result,
         Err(error) => {
             return repairable_or_fallback_manual_review(
@@ -1076,6 +1203,78 @@ where
         result_ref,
         dispatcher,
     )
+}
+
+fn normalize_review_result_machine_fields(mut raw: Value, request_id: &str) -> Value {
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    if let Some(source) = object.get_mut("source").and_then(Value::as_object_mut) {
+        source.insert("requestId".to_string(), json!(request_id));
+    }
+    let now = state::store::now_string();
+    if !object
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("createdAt".to_string(), json!(now.clone()));
+    }
+    if !object
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+    normalize_review_pending_actions(object);
+    raw
+}
+
+fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>) {
+    let Some(raw_items) = object
+        .get("pendingActions")
+        .and_then(Value::as_array)
+        .cloned()
+    else {
+        object.insert("pendingActions".to_string(), json!([]));
+        return;
+    };
+    let actions = raw_items
+        .into_iter()
+        .filter_map(|item| {
+            let mut action = item.as_object()?.clone();
+            let action_type = action
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?
+                .to_string();
+            action.insert("type".to_string(), json!(action_type));
+            if !action.get("findingRefs").is_some_and(Value::is_array) {
+                action.insert("findingRefs".to_string(), json!([]));
+            }
+            if !action
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                action.insert(
+                    "reason".to_string(),
+                    json!("Pending action was normalized from ReviewResult draft."),
+                );
+            }
+            Some(Value::Object(action))
+        })
+        .collect::<Vec<_>>();
+    object.insert("pendingActions".to_string(), Value::Array(actions));
+}
+
+fn is_iso_datetime_string(value: &str) -> bool {
+    value.contains('T')
+        && (value.ends_with('Z') || value.contains('+') || value.rsplit_once('-').is_some())
+        && !value.contains("ISO-8601")
 }
 
 fn validate_review_result(

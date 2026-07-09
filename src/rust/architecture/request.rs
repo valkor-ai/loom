@@ -2,15 +2,14 @@ use std::path::Path;
 
 use contracts::{
     api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
-    ui_quality_contract_shape, ui_quality_contract_template, ui_quality_enum_refs,
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    ui_quality_contract_agent_shape, ui_quality_contract_agent_template, ui_quality_enum_refs,
+    ArchitectureSectionGroup, PlanningGenerationContract, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
     LoomMcpFailureResult, RouteAction, RouteActionKind, TransitionStore,
 };
-use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -215,9 +214,6 @@ fn build_request_root(
     section_outputs: &[SectionOutput],
     api_quality_seed: &Value,
 ) -> Result<Value, state::store::StateError> {
-    let candidate_schema =
-        serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
-            .unwrap_or_else(|_| json!({ "type": "object" }));
     let source_refs = build_source_refs(
         planning_contract_ref,
         technical_baseline_ref,
@@ -281,7 +277,7 @@ fn build_request_root(
                 "required": true,
                 "description": format!("Write the {} Architecture section candidate JSON.", section_name(current_output.section))
             }],
-            "schemaShape": candidate_schema,
+            "schemaShape": current_output.schema_shape.clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
                     "schemaVersion",
@@ -505,6 +501,7 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.referenceLoadPlan",
+            "uiQualitySeed.qualityGatePreview",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -949,7 +946,7 @@ fn section_content_shape(
                         "interfaceRefs": ["string"]
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_shape(),
+                "uiQualityContract": ui_quality_contract_agent_shape(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": "string"
                 }
@@ -1302,7 +1299,7 @@ fn section_content_template(
                         "interfaceRefs": []
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
+                "uiQualityContract": ui_quality_contract_agent_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
@@ -1670,10 +1667,10 @@ fn section_generation_rules(
             "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
-            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; copy uiQualitySeed.referenceLoadPlan into referenceProfile.referenceLoadPlan and do not copy reference text.".to_string(),
+            "Write only agent-owned uiQualityContract decisions: scenario.kind/reason, quality level, surface policy, layout baseline, density, design token asset plan, required UI state expectations, and business UI rules. MCP will derive referenceProfile, referenceLoadPlan, scenario.reference, semanticTokenPolicy, forbiddenUserVisibleContent, and qualityGates during submit; do not hand-maintain those machine-owned fields.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
             "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
-            "Business UI surfaces must directly serve the selected scenario and task workflow; enforce uiQualityContract.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
+            "Business UI surfaces must directly serve the selected scenario and task workflow; honor uiQualitySeed.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."

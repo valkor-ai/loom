@@ -13,7 +13,6 @@ use delivery_core::{
     LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction, RouteActionKind,
     TransitionStore,
 };
-use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -30,7 +29,8 @@ use crate::{
         code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_template_with_code_quality, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        task_result_schema_shape, task_result_template_with_code_quality,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -260,8 +260,7 @@ fn build_execution_request(
     let api_contract_requirements = task_scoped_api_contract_requirements(task_plan, &request_task);
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, &request_task);
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
-    let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = task_result_schema_shape(&request_task);
     let dependency_results = dependency_results(run, task);
     let read_groups = task_execution_read_groups(
         &request_task,

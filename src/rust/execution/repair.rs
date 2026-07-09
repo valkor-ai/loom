@@ -5,10 +5,10 @@ use std::{
 
 use contracts::{
     api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
-    ui_quality_contract_template, ui_quality_enum_refs, ArchitectureSectionCandidateAgentWritable,
-    ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    ui_quality_contract_agent_template, ui_quality_enum_refs, ArchitectureSectionGroup,
+    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
@@ -41,9 +41,9 @@ use crate::{
         code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
-        task_result_required_top_level_fields, task_result_template_with_code_quality,
-        taskplan_group_result_template, taskplan_outline_result_template,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        task_result_required_top_level_fields, task_result_schema_shape,
+        task_result_template_with_code_quality, taskplan_group_result_template,
+        taskplan_outline_result_template, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -593,8 +593,7 @@ fn build_repair_execution_request(
     finding_refs: Vec<String>,
     attempt_count: u32,
 ) -> Value {
-    let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = task_result_schema_shape(task);
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
     let result_template = task_result_template_with_code_quality(
         &task_plan.task_plan_id,
@@ -1564,9 +1563,6 @@ fn materialize_architecture_repair_action(
             "architecture repair section outputs are empty".to_string(),
         )
     })?;
-    let candidate_schema =
-        serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
-            .unwrap_or_else(|_| json!({ "type": "object" }));
     let mut repair_context = json!({
         "sourceArchitectureRequestRef": original_request_ref
     });
@@ -1621,7 +1617,7 @@ fn materialize_architecture_repair_action(
                 "required": true,
                 "description": "Write the replacement foundation Architecture section candidate JSON."
             }],
-            "schemaShape": candidate_schema,
+            "schemaShape": current_output["schemaShape"].clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
                     "schemaVersion",
@@ -2016,6 +2012,7 @@ fn architecture_repair_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.referenceLoadPlan",
+            "uiQualitySeed.qualityGatePreview",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -2074,8 +2071,6 @@ fn build_architecture_repair_section_outputs(
     ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
-    let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
     Ok(ARCHITECTURE_SECTION_ORDER
         .iter()
         .map(|section| {
@@ -2084,21 +2079,24 @@ fn build_architecture_repair_section_outputs(
                 .join("agent-writable")
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
+            let result_template = architecture_repair_section_result_template(
+                request_id,
+                delivery_id,
+                phase_id,
+                *section,
+                frontend_experience_source,
+                context_projection,
+                ui_quality_seed,
+                api_quality_seed
+            );
+            let schema_shape =
+                architecture_repair_section_schema_shape(*section, &result_template["content"]);
             let mut output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
-                "schemaRef": format!("rust-contract://ArchitectureSectionCandidateAgentWritable/{}", section_name(*section)),
-                "schemaShape": schema_shape.clone(),
-                "resultTemplate": architecture_repair_section_result_template(
-                    request_id,
-                    delivery_id,
-                    phase_id,
-                    *section,
-                    frontend_experience_source,
-                    context_projection,
-                    ui_quality_seed,
-                    api_quality_seed
-                ),
+                "schemaRef": format!("architecture-section-{}-v1", section_name(*section)),
+                "schemaShape": schema_shape,
+                "resultTemplate": result_template,
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
@@ -2146,6 +2144,27 @@ fn architecture_repair_section_result_template(
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
+    })
+}
+
+fn architecture_repair_section_schema_shape(
+    section: ArchitectureSectionGroup,
+    content_shape: &Value,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": "string",
+        "deliveryId": "string",
+        "phaseId": "string",
+        "section": section,
+        "status": "ready | blocked",
+        "content": content_shape,
+        "blockedReasons": [{
+            "code": "string",
+            "message": "string",
+            "nextNode": "string"
+        }],
+        "createdAt": "string"
     })
 }
 
@@ -2355,7 +2374,7 @@ fn architecture_repair_section_content_template(
                         "interfaceRefs": []
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
+                "uiQualityContract": ui_quality_contract_agent_template(ui_quality_seed),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),

@@ -219,6 +219,41 @@ pub fn ui_quality_contract_shape() -> Value {
     })
 }
 
+pub fn ui_quality_contract_agent_shape() -> Value {
+    json!({
+        "scenario": {
+            "kind": UI_SCENARIO_KINDS.join(" | "),
+            "reason": "string"
+        },
+        "qualityLevel": UI_QUALITY_LEVELS.join(" | "),
+        "surfacePolicy": UI_SURFACE_POLICIES.join(" | "),
+        "layoutBaseline": UI_LAYOUT_BASELINES.join(" | "),
+        "density": UI_DENSITIES.join(" | "),
+        "designTokenAssetPlan": {
+            "strategy": UI_DESIGN_TOKEN_STRATEGIES.join(" | "),
+            "templateId": "known design token template item or null",
+            "targetFiles": ["project-relative path"],
+            "existingStyleEvidence": {
+                "tailwindConfigRefs": ["project-relative path"],
+                "tokenFileRefs": ["project-relative path"],
+                "globalStyleRefs": ["project-relative path"],
+                "componentThemeRefs": ["project-relative path"],
+                "summary": "string"
+            },
+            "mergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES.join(" | "),
+            "duplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES.join(" | ")
+        },
+        "requiredUiStates": [{
+            "state": UI_REQUIRED_STATES.join(" | "),
+            "expectation": "business-specific UI state expectation"
+        }],
+        "businessUiRules": [{
+            "ruleId": "string",
+            "expectation": "business-specific UI quality rule"
+        }]
+    })
+}
+
 pub fn build_ui_quality_seed(
     frontend: Option<&FrontendExperience>,
     baseline: Option<&TechnicalBaselineContract>,
@@ -230,6 +265,11 @@ pub fn build_ui_quality_seed(
     let required_reference_groups =
         required_reference_groups(primary_scenario, &stack_items, &design_token_seed);
     let reference_load_plan = ui_reference_load_plan(&required_reference_groups);
+    let quality_gate_preview = ui_quality_gates_for_contract(
+        primary_scenario,
+        &required_reference_groups,
+        &design_token_seed,
+    );
     json!({
         "required": required,
         "scenarioCandidates": scenario_candidates(primary_scenario),
@@ -240,11 +280,12 @@ pub fn build_ui_quality_seed(
         "semanticTokenPolicy": "semantic_tokens_required",
         "requiredReferenceGroups": required_reference_groups,
         "referenceLoadPlan": reference_load_plan,
+        "qualityGatePreview": quality_gate_preview,
         "stackReferenceCandidates": stack_items,
         "designTokenAssetPlan": design_token_seed,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": UI_REQUIRED_STATES,
-        "selectionRule": "Pick one scenarioKind from scenarioCandidates, copy requiredReferenceGroups into referenceProfile.groups, copy referenceLoadPlan into referenceProfile.referenceLoadPlan, and add only known group items from enumRefs.uiQuality. Use referenceLoadPlan as the only file-loading authority; groups are evidence labels."
+        "selectionRule": "Pick one scenarioKind from scenarioCandidates and write only agent-owned uiQualityContract decisions. referenceLoadPlan and qualityGatePreview describe required references and gates to honor, but MCP derives referenceProfile and qualityGates during submit."
     })
 }
 
@@ -348,6 +389,193 @@ pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
         ],
         "qualityGates": quality_gates
     })
+}
+
+pub fn ui_quality_contract_agent_template(ui_quality_seed: &Value) -> Value {
+    let scenario = ui_quality_seed
+        .pointer("/scenarioCandidates/0/kind")
+        .and_then(Value::as_str)
+        .unwrap_or("custom_product_ui");
+    let quality_level = ui_quality_seed
+        .get("qualityLevel")
+        .and_then(Value::as_str)
+        .unwrap_or("production_internal_product");
+    let surface_policy = ui_quality_seed
+        .pointer("/surfacePolicyCandidates/0")
+        .and_then(Value::as_str)
+        .unwrap_or("business_ui_only");
+    let layout_baseline = ui_quality_seed
+        .pointer("/layoutBaselineCandidates/0")
+        .and_then(Value::as_str)
+        .unwrap_or("custom_product_layout");
+    let density = ui_quality_seed
+        .pointer("/densityCandidates/0")
+        .and_then(Value::as_str)
+        .unwrap_or("balanced");
+    let design_token_asset_plan = ui_quality_seed
+        .get("designTokenAssetPlan")
+        .cloned()
+        .unwrap_or_else(default_design_token_asset_plan);
+
+    json!({
+        "scenario": {
+            "kind": scenario,
+            "reason": "Selected from uiQualitySeed.scenarioCandidates for the confirmed frontend surfaces and product context."
+        },
+        "qualityLevel": quality_level,
+        "surfacePolicy": surface_policy,
+        "layoutBaseline": layout_baseline,
+        "density": density,
+        "designTokenAssetPlan": design_token_asset_plan,
+        "requiredUiStates": [
+            {
+                "state": "loading",
+                "expectation": "Primary data surfaces provide stable loading treatment without layout jumps."
+            },
+            {
+                "state": "success",
+                "expectation": "Completed actions give business-language confirmation and refresh affected data."
+            },
+            {
+                "state": "error",
+                "expectation": "System errors are visible, recoverable, and do not expose implementation details."
+            },
+            {
+                "state": "empty",
+                "expectation": "Empty data views explain the business state and keep next actions available."
+            },
+            {
+                "state": "business_blocking",
+                "expectation": "Business-rule blocks are clearly separated from technical failures."
+            }
+        ],
+        "businessUiRules": [
+            {
+                "ruleId": "current_business_surface_complete",
+                "expectation": "The task-owned user-visible surface completes the current-phase business workflow with its required data, actions, and feedback."
+            }
+        ]
+    })
+}
+
+pub fn normalize_ui_quality_contract_for_persist(
+    frontend_experience: &mut Value,
+    ui_quality_seed: &Value,
+) -> bool {
+    let required = frontend_experience
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !required {
+        return false;
+    }
+    let Some(contract) = frontend_experience
+        .get_mut("uiQualityContract")
+        .and_then(Value::as_object_mut)
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+    let scenario = contract
+        .get("scenario")
+        .and_then(Value::as_object)
+        .and_then(|scenario| scenario.get("kind"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            ui_quality_seed
+                .pointer("/scenarioCandidates/0/kind")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("custom_product_ui")
+        .to_string();
+
+    let scenario_object = contract
+        .entry("scenario".to_string())
+        .or_insert_with(|| json!({}));
+    if let Some(scenario_object) = scenario_object.as_object_mut() {
+        set_value_if_changed(
+            scenario_object,
+            "reference",
+            scenario_reference_value(&scenario),
+            &mut changed,
+        );
+    }
+
+    let semantic_token_policy = ui_quality_seed
+        .get("semanticTokenPolicy")
+        .and_then(Value::as_str)
+        .unwrap_or("semantic_tokens_required");
+    set_value_if_changed(
+        contract,
+        "semanticTokenPolicy",
+        json!(semantic_token_policy),
+        &mut changed,
+    );
+
+    set_value_if_changed(
+        contract,
+        "forbiddenUserVisibleContent",
+        json!(UI_FORBIDDEN_USER_VISIBLE_CONTENT),
+        &mut changed,
+    );
+
+    if !contract
+        .get("designTokenAssetPlan")
+        .is_some_and(Value::is_object)
+    {
+        let design_token_asset_plan = ui_quality_seed
+            .get("designTokenAssetPlan")
+            .cloned()
+            .unwrap_or_else(default_design_token_asset_plan);
+        set_value_if_changed(
+            contract,
+            "designTokenAssetPlan",
+            design_token_asset_plan,
+            &mut changed,
+        );
+    }
+    let design_token_plan = contract
+        .get("designTokenAssetPlan")
+        .cloned()
+        .unwrap_or_else(default_design_token_asset_plan);
+    let stack_items = ui_quality_seed
+        .get("stackReferenceCandidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let reference_groups = required_reference_groups(&scenario, &stack_items, &design_token_plan);
+    let reference_load_plan = ui_reference_load_plan(&reference_groups);
+    let quality_gates =
+        ui_quality_gates_for_contract(&scenario, &reference_groups, &design_token_plan);
+    set_value_if_changed(
+        contract,
+        "referenceProfile",
+        json!({
+            "loadMode": "mcp_reference_load_plan",
+            "groups": reference_groups,
+            "referenceLoadPlan": reference_load_plan
+        }),
+        &mut changed,
+    );
+    set_value_if_changed(contract, "qualityGates", quality_gates, &mut changed);
+
+    changed
+}
+
+fn set_value_if_changed(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Value,
+    changed: &mut bool,
+) {
+    if object.get(key) != Some(&value) {
+        object.insert(key.to_string(), value);
+        *changed = true;
+    }
 }
 
 pub fn validate_ui_quality_contract(frontend_experience: &Value) -> Vec<RepairIssue> {

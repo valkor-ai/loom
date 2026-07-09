@@ -4,10 +4,11 @@ use std::{
 };
 
 use contracts::{
-    validate_ui_quality_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
-    ArchitectureArtifactSource, ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry,
-    ArchitectureHandoff, ArchitectureQuality, ArchitectureSectionCandidateAgentWritable,
-    ArchitectureSectionGroup, ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
+    normalize_ui_quality_contract_for_persist, validate_ui_quality_contract, AcceptanceMatrixEntry,
+    ArchitectureArtifactContract, ArchitectureArtifactSource, ArchitectureArtifactStatus,
+    ArchitectureDetailCoverageEntry, ArchitectureHandoff, ArchitectureQuality,
+    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, ArchitectureSectionStatus,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -275,6 +276,9 @@ where
             &source_refs,
             &mut candidate.content,
         )?;
+    }
+    if normalize_frontend_ui_quality_contract(&mut candidate.content, &request_root) {
+        candidate_normalized = true;
     }
 
     let mut issues = validate_candidate_identity(
@@ -625,6 +629,14 @@ fn validate_frontend_rules(
         issues.extend(validate_ui_quality_contract(frontend_experience));
     }
     issues
+}
+
+fn normalize_frontend_ui_quality_contract(content: &mut Value, request_root: &Value) -> bool {
+    let Some(frontend_experience) = content.get_mut("frontendExperience") else {
+        return false;
+    };
+    let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
+    normalize_ui_quality_contract_for_persist(frontend_experience, ui_quality_seed)
 }
 
 fn validate_runtime_rules(
@@ -1775,12 +1787,20 @@ fn update_request_for_next_section(
         .push(serde_json::to_value(completed_section).map_err(state::store::StateError::Json)?);
     root["currentSectionContract"] =
         serde_json::to_value(next_output).map_err(state::store::StateError::Json)?;
-    root["writeTargets"] = json!([{
+    let write_targets = json!([{
         "targetId": section_name(next_section),
-        "path": next_output.candidate_file,
+        "path": next_output.candidate_file.clone(),
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
+    root["writeTargets"] = write_targets.clone();
+    if root.get("outputContract").is_some() {
+        root["outputContract"]["writeTargets"] = write_targets;
+        root["outputContract"]["schemaShape"] = next_output.schema_shape.clone();
+        root["outputContract"]["schemaProjection"]["requiredContentKeys"] =
+            serde_json::to_value(crate::request::required_content_keys(next_section))
+                .map_err(state::store::StateError::Json)?;
+    }
     let frontend_experience_source = root
         .get("frontendExperienceSource")
         .cloned()
@@ -1829,10 +1849,11 @@ fn update_output_contract_ref(
     let mut output_contract = state::store::read_json_value(&output_contract_file)?;
     output_contract["writeTargets"] = json!([{
         "targetId": section_name(next_section),
-        "path": next_output.candidate_file,
+        "path": next_output.candidate_file.clone(),
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
+    output_contract["schemaShape"] = next_output.schema_shape.clone();
     output_contract["schemaProjection"]["requiredContentKeys"] =
         serde_json::to_value(crate::request::required_content_keys(next_section))
             .map_err(state::store::StateError::Json)?;

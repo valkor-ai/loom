@@ -303,6 +303,238 @@ pub(crate) fn task_result_template_with_code_quality(
     template
 }
 
+pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
+    let mut properties = serde_json::Map::new();
+    properties.insert("schemaVersion".to_string(), json!("1.0"));
+    properties.insert("taskResultId".to_string(), json!("string"));
+    properties.insert("taskId".to_string(), json!("string"));
+    properties.insert("taskPlanId".to_string(), json!("string"));
+    properties.insert(
+        "status".to_string(),
+        json!("completed | completed_with_notes | blocked | failed"),
+    );
+    properties.insert("changedFiles".to_string(), json!(["project-relative path"]));
+    properties.insert(
+        "noChangeReason".to_string(),
+        json!({
+            "shape": "object or null",
+            "code": "string",
+            "summary": "string"
+        }),
+    );
+    properties.insert(
+        "verificationResults".to_string(),
+        json!([{
+            "verificationId": "task.verificationIntents[].verificationId",
+            "status": "passed | not_run | failed | inconclusive",
+            "evidenceType": "one of the matching verification intent acceptableEvidence values",
+            "summary": "string"
+        }]),
+    );
+    properties.insert(
+        "selfRepairSummary".to_string(),
+        json!({
+            "attempted": false,
+            "attemptCount": 0,
+            "stopReason": "not_attempted | verification_passed | blocked_condition_detected | same_failure_repeated_without_progress | hard_attempt_limit_reached | repair_requires_contract_change | repair_requires_scope_expansion",
+            "progressObserved": false
+        }),
+    );
+    properties.insert(
+        "failure".to_string(),
+        json!({
+            "shape": "object or null",
+            "code": "required only when status=failed",
+            "summary": "required only when status=failed"
+        }),
+    );
+    properties.insert(
+        "executionContinuity".to_string(),
+        json!({
+            "taskResultSubmittedAfterVerification": true,
+            "agentOwnedLongRunningWork": "none | stopped | handed_off",
+            "notes": ["string"]
+        }),
+    );
+    properties.insert("notes".to_string(), json!(["string"]));
+    properties.insert(
+        "requirementDetailEvidence".to_string(),
+        json!([{
+            "detailId": "task.requirementDetailRefs or task.verificationIntents[].requirementDetailRefs item",
+            "status": "satisfied | partial | not_verified",
+            "verificationIds": ["task.verificationIntents[].verificationId"],
+            "evidenceRefs": ["project-relative evidence ref"],
+            "summary": "string"
+        }]),
+    );
+    properties.insert(
+        "blockedReasons".to_string(),
+        json!([{
+            "code": "outputContract.blockedReasonOptions[].code",
+            "nextNode": "outputContract.blockedReasonOptions[].nextNode",
+            "message": "string",
+            "details": {}
+        }]),
+    );
+    properties.insert("createdAt".to_string(), json!("ISO-8601 datetime"));
+    properties.insert("updatedAt".to_string(), json!("ISO-8601 datetime"));
+
+    if frontend_self_check_applies(task) {
+        properties.insert(
+            "frontendExperienceSelfCheck".to_string(),
+            json!({
+                "status": "satisfied | partial | blocked",
+                "closureRequirementIds": ["task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs[].closureId"],
+                "dataBinding": {
+                    "mode": "wired | partial | not_applicable",
+                    "knownGaps": ["string"]
+                },
+                "evidenceRefs": ["project-relative evidence ref"],
+                "summary": "string"
+            }),
+        );
+    }
+    if frontend_quality_self_check_applies(task) {
+        properties.insert(
+            "frontendQualitySelfCheck".to_string(),
+            json!({
+                "status": "satisfied | partial | missing | blocked_by_environment",
+                "scenarioKind": "task.frontendExperienceRequirement.uiQualityContract.scenario.kind",
+                "qualityLevel": "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
+                "referenceGroupsChecked": {"group": ["item"]},
+                "referenceFilesChecked": ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan[].path"],
+                "statesCovered": [{
+                    "state": "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates[].state",
+                    "status": "covered | partial | missing",
+                    "evidence": "string"
+                }],
+                "businessUiRulesChecked": [{
+                    "ruleId": "task.frontendExperienceRequirement.uiQualityContract.businessUiRules[].ruleId",
+                    "status": "satisfied | partial | missing",
+                    "evidence": "string"
+                }],
+                "forbiddenContentCheck": {
+                    "checked": true,
+                    "violations": ["string"]
+                },
+                "surfacesCovered": [{
+                    "surfaceId": "task.frontendExperienceRequirement.executionGuidance.surfacesInScope[].surfaceId",
+                    "surfaceRole": "app_shell | page | record_list | record_detail | form | action_panel | navigation",
+                    "files": ["project-relative UI file"],
+                    "states": ["covered state id"],
+                    "businessActions": ["covered action id"],
+                    "evidence": "string"
+                }],
+                "designTokenEvidence": {
+                    "strategyUsed": "reuse_existing | extend_existing | create_css_tokens | create_tailwind_tokens | not_applicable",
+                    "templateIdUsed": "tokens-css | tokens-tailwind | null",
+                    "tokenAssetFiles": ["project-relative token asset file"],
+                    "tokenConsumerFiles": ["project-relative UI file using declared tokens"],
+                    "existingTokenSystemReused": true,
+                    "parallelTokenSystemCreated": false,
+                    "mergeSummary": "string"
+                },
+                "gateResults": [{
+                    "gateId": "task.frontendExperienceRequirement.uiTaskQualityGates[].gateId",
+                    "status": "satisfied | partial | missing | blocked_by_environment | not_applicable",
+                    "files": ["project-relative file"],
+                    "surfaceIds": ["surface id"],
+                    "viewportsChecked": ["desktop 1280x800 | mobile 390x844"],
+                    "sourceChecks": ["project-relative file"],
+                    "attemptedChecks": ["command or probe"],
+                    "fallbackEvidence": ["string"],
+                    "blockedReason": "string or null",
+                    "evidence": "string"
+                }],
+                "knownGaps": ["string"],
+                "summary": "string"
+            }),
+        );
+    }
+    if runtime_delivery_evidence_applies(task) {
+        properties.insert(
+            "runtimeDeliveryEvidence".to_string(),
+            json!({
+                "requirementRef": "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+                "checkedFields": ["task.runtimeDeliveryRequirement.affectedContractFields item"],
+                "codeLevelChecks": [{
+                    "checkId": "task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId",
+                    "contractField": "string or null",
+                    "status": "passed | failed | blocked | not_applicable",
+                    "evidence": "string"
+                }],
+                "commandsRun": ["command"],
+                "unverifiedItems": ["string"],
+                "runtimeProbeCleanup": "string or null"
+            }),
+        );
+    }
+    if !task.concept_refs.is_empty() {
+        properties.insert(
+            "conceptEvidence".to_string(),
+            json!([{
+                "conceptRef": "task.conceptRefs item",
+                "evidenceType": "code | test | runtime | manual",
+                "refs": ["project-relative ref"],
+                "summary": "string"
+            }]),
+        );
+    }
+    if architecture_quality_evidence_applies(task) {
+        properties.insert(
+            "architectureQualityEvidence".to_string(),
+            json!([{
+                "requirementId": "task.architectureQualityRequirementRefs item",
+                "status": "satisfied | partial | not_verified",
+                "verificationIds": ["task.verificationIntents[].verificationId"],
+                "changedFiles": ["project-relative path"],
+                "summary": "string"
+            }]),
+        );
+    }
+    if api_contract_evidence_applies(task) {
+        properties.insert(
+            "apiContractEvidence".to_string(),
+            json!([{
+                "requirementId": "task.apiContractRequirementRefs item",
+                "status": "satisfied | partial | not_verified",
+                "interfaceRefs": ["task.writeBoundary.artifactRefs.interfaces item"],
+                "verificationIds": ["task.verificationIntents[].verificationId"],
+                "changedFiles": ["project-relative path"],
+                "successPaths": ["HTTP method/path or operation id"],
+                "errorPaths": ["HTTP method/path or operation id"],
+                "paginationPaths": ["HTTP method/path or operation id"],
+                "contractFileRefs": ["project-relative contract file"],
+                "knownGaps": ["string"],
+                "summary": "string"
+            }]),
+        );
+    }
+    if code_quality_evidence_applies(task) {
+        properties.insert(
+            "codeQualityEvidence".to_string(),
+            json!([{
+                "requirementId": "task.codeQualityRequirementRefs item",
+                "status": "satisfied | partial | not_verified",
+                "referenceGroupsChecked": {"language_or_framework": ["group"]},
+                "referenceFilesChecked": ["reference path"],
+                "verificationIds": ["task.verificationIntents[].verificationId"],
+                "changedFiles": ["project-relative path"],
+                "commandsRun": ["command"],
+                "knownGaps": ["string"],
+                "summary": "string"
+            }]),
+        );
+    }
+
+    json!({
+        "type": "object",
+        "required": task_result_required_top_level_fields(task),
+        "properties": properties,
+        "additionalProperties": false
+    })
+}
+
 fn template_verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
     let direct = task
         .verification_intents
