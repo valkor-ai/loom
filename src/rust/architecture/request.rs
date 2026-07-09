@@ -936,6 +936,53 @@ fn section_content_shape(
                         "surfaceId": "string",
                         "surfaceRole": "app_shell | page | panel | drawer | modal | table | form | detail | widget | navigation | feedback_area",
                         "businessPurpose": "string",
+                        "productIntent": {
+                            "userRole": "string",
+                            "businessObject": "string",
+                            "primaryJob": "string",
+                            "successOutcome": "string"
+                        },
+                        "compositionModel": {
+                            "requiredRegions": ["string"],
+                            "forbiddenRegions": ["string"],
+                            "primaryRegion": "string",
+                            "supportingRegions": ["string"]
+                        },
+                        "informationModel": {
+                            "mustShow": ["string"],
+                            "scanPriority": ["string"],
+                            "identityFields": ["string"],
+                            "statusFields": ["string"],
+                            "longContentPolicy": "string"
+                        },
+                        "actionModel": {
+                            "primaryActions": ["string"],
+                            "contextualActions": ["string"],
+                            "dangerousActions": ["string"],
+                            "placementRule": "string",
+                            "postSuccessUpdate": "string"
+                        },
+                        "statePlacementModel": {
+                            "loading": "string",
+                            "empty": "string",
+                            "error": "string",
+                            "success": "string",
+                            "business_blocking": "string",
+                            "validation": "string",
+                            "disabled": "string"
+                        },
+                        "visualModel": {
+                            "layoutBaseline": "string",
+                            "density": "string",
+                            "tokenPolicy": "string",
+                            "componentPolicy": "string",
+                            "antiDemoRules": ["string"]
+                        },
+                        "responsiveModel": {
+                            "desktop": "string",
+                            "tablet": "string",
+                            "mobile": "string"
+                        },
                         "requiredComposition": ["string"],
                         "forbiddenComposition": ["string"],
                         "stateRefs": ["loading | success | error | empty | business_blocking"],
@@ -1281,6 +1328,77 @@ fn section_content_template(
                         "surfaceId": "surface_1",
                         "surfaceRole": "page",
                         "businessPurpose": "",
+                        "productIntent": {
+                            "userRole": "",
+                            "businessObject": "",
+                            "primaryJob": "",
+                            "successOutcome": ""
+                        },
+                        "compositionModel": {
+                            "requiredRegions": [
+                                "business navigation or local context",
+                                "task-relevant data region",
+                                "task-relevant action region",
+                                "scoped feedback region"
+                            ],
+                            "forbiddenRegions": [
+                                "decorative or explanatory region that displaces the task workflow"
+                            ],
+                            "primaryRegion": "task-relevant data or form region",
+                            "supportingRegions": [
+                                "navigation/context",
+                                "detail/summary",
+                                "feedback"
+                            ]
+                        },
+                        "informationModel": {
+                            "mustShow": [
+                                "business object identity",
+                                "business object status",
+                                "fields required to complete the task"
+                            ],
+                            "scanPriority": [
+                                "identity",
+                                "status",
+                                "decision fields",
+                                "available actions"
+                            ],
+                            "identityFields": [],
+                            "statusFields": [],
+                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
+                        },
+                        "actionModel": {
+                            "primaryActions": ["task-owned primary action"],
+                            "contextualActions": [],
+                            "dangerousActions": [],
+                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
+                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
+                        },
+                        "statePlacementModel": {
+                            "loading": "Near the region or control waiting for data or mutation.",
+                            "empty": "In the data/form region with business next action when applicable.",
+                            "error": "Near the affected region with recovery path.",
+                            "success": "Inline object update plus short confirmation when useful.",
+                            "business_blocking": "Near the blocked field, row, detail, or action.",
+                            "validation": "Near the field and summary for longer forms.",
+                            "disabled": "On or near disabled controls with unlock reason when actionable."
+                        },
+                        "visualModel": {
+                            "layoutBaseline": "custom_product_layout",
+                            "density": "balanced",
+                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
+                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
+                            "antiDemoRules": [
+                                "no runtime commands or delivery notes in product UI",
+                                "no marketing hero for operational surfaces",
+                                "no decorative filler before required workflow content"
+                            ]
+                        },
+                        "responsiveModel": {
+                            "desktop": "Keep primary task surface and action path visible without layout shift.",
+                            "tablet": "Preserve task order while reducing secondary regions.",
+                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
+                        },
                         "requiredComposition": [
                             "business navigation or context",
                             "task-relevant data view",
@@ -1669,7 +1787,8 @@ fn section_generation_rules(
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
             "Write only agent-owned uiQualityContract decisions: scenario.kind/reason, quality level, surface policy, layout baseline, density, design token asset plan, required UI state expectations, and business UI rules. MCP will derive referenceProfile, referenceLoadPlan, scenario.reference, semanticTokenPolicy, forbiddenUserVisibleContent, and qualityGates during submit; do not hand-maintain those machine-owned fields.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
-            "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
+            "For each uiSurfaceRegistry surface, state the business purpose plus productIntent, compositionModel, informationModel, actionModel, statePlacementModel, visualModel, and responsiveModel. These fields are the product-grade source for TaskPlan ownership dimensions and execution uiProductionBrief.".to_string(),
+            "Use requiredComposition/forbiddenComposition/stateRefs/dataViewRefs/actionRefs/operationPathRefs/workflowRefs/interfaceRefs as compact linking fields. Put product quality meaning in the model objects, not in repeated prose.".to_string(),
             "Business UI surfaces must directly serve the selected scenario and task workflow; honor uiQualitySeed.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![

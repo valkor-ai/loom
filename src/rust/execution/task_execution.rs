@@ -24,7 +24,9 @@ use crate::{
         task_execution_request_file, task_execution_result_candidate_file, task_plan_file,
         task_plan_latest_file, task_plan_run_file, task_plan_run_latest_file,
     },
-    task_plan::{execute_task_next_from_request, update_run_summary},
+    task_plan::{
+        execute_task_next_from_request, update_run_summary, UI_OWNERSHIP_DIMENSION_VALUES,
+    },
     templates::{
         code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
@@ -1253,7 +1255,7 @@ fn build_frontend_execution_guidance(
             "detailAuthority": "Use closureRequirementRefs, frontendBackendBindings, and sourceContext.architectureArtifactProjection from this request.",
             "derivationRule": "Closure refs are derived from AAC frontendExperience surfaces or operationPaths, task userFlows, userFlow steps, and executable interfaces."
         },
-        "uiProductionBrief": ui_production_brief(task, frontend, &task_scope),
+        "uiProductionBrief": ui_production_brief(task, frontend, &task_scope, user_facing_language),
         "styleAssetPlan": style_asset_plan(task),
         "guidanceWarnings": warnings
     });
@@ -1291,6 +1293,7 @@ fn frontend_quality_execution_guidance(task: &TaskDefinition) -> Value {
 
 #[derive(Default)]
 struct FrontendTaskScope {
+    ownership_dimensions: Vec<String>,
     surface_refs: Vec<String>,
     data_view_refs: Vec<String>,
     action_refs: Vec<String>,
@@ -1369,6 +1372,10 @@ fn frontend_task_scope(
         push_unique_strings(
             &mut scope.state_refs,
             scope_refs_from_requirement(requirement, "/uiTaskScope/stateExpectation", &["state"]),
+        );
+        push_unique_strings(
+            &mut scope.ownership_dimensions,
+            ownership_dimensions_from_requirement(requirement),
         );
     }
     for detail in &aac.detail_coverage {
@@ -1463,7 +1470,47 @@ fn frontend_task_scope(
     scope.workflow_refs = unique_strings(scope.workflow_refs);
     scope.interface_refs = unique_strings(scope.interface_refs);
     scope.state_refs = unique_strings(scope.state_refs);
+    if scope.ownership_dimensions.is_empty() && task_has_frontend_execution(task) {
+        scope.ownership_dimensions = derived_execution_ownership_dimensions(&scope);
+    }
+    scope.ownership_dimensions = unique_strings(scope.ownership_dimensions);
     scope
+}
+
+fn ownership_dimensions_from_requirement(requirement: &Value) -> Vec<String> {
+    requirement
+        .pointer("/uiTaskScope/ownershipDimensions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|dimension| UI_OWNERSHIP_DIMENSION_VALUES.contains(dimension))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn derived_execution_ownership_dimensions(scope: &FrontendTaskScope) -> Vec<String> {
+    let mut dimensions = Vec::new();
+    if !scope.surface_refs.is_empty() {
+        dimensions.push("surface".to_string());
+        dimensions.push("layout".to_string());
+    }
+    if !scope.data_view_refs.is_empty() {
+        dimensions.push("data_view".to_string());
+    }
+    if !scope.action_refs.is_empty() || !scope.operation_path_refs.is_empty() {
+        dimensions.push("action".to_string());
+        dimensions.push("integration_feedback".to_string());
+    }
+    if !scope.state_refs.is_empty() {
+        dimensions.push("state".to_string());
+    }
+    dimensions.push("visual_system".to_string());
+    dimensions.push("content_boundary".to_string());
+    unique_strings(dimensions)
 }
 
 fn scope_refs_from_requirement(
@@ -1638,6 +1685,7 @@ fn ui_production_brief(
     task: &TaskDefinition,
     frontend: &Value,
     scope: &FrontendTaskScope,
+    user_facing_language: &Option<contracts::UserFacingLanguageConstraint>,
 ) -> Value {
     let contract = task
         .frontend_experience_requirement
@@ -1654,49 +1702,285 @@ fn ui_production_brief(
         "pathId",
         &scope.operation_path_refs,
     );
+    let ownership_dimensions = if scope.ownership_dimensions.is_empty() {
+        derived_execution_ownership_dimensions(scope)
+    } else {
+        scope.ownership_dimensions.clone()
+    };
     json!({
-        "scopeRule": "Apply this brief to every UI surface owned by the task. App entry first viewport is only one surface role, not the general rule.",
-        "surfaceRoles": unique_strings(surfaces.iter().map(surface_role).collect()),
-        "businessPurpose": compact_join(unique_strings(surfaces.iter().filter_map(surface_business_purpose).collect()), task.objective.as_str()),
-        "requiredComposition": composition_expectations(&surfaces, "requiredComposition", default_required_composition()),
-        "forbiddenComposition": composition_expectations(&surfaces, "forbiddenComposition", default_forbidden_composition(contract)),
-        "densityExpectation": contract.get("density").cloned().unwrap_or_else(|| json!("balanced")),
-        "layoutBaseline": contract.get("layoutBaseline").cloned().unwrap_or_else(|| json!("custom_product_layout")),
-        "stateExpectation": if scope.state_refs.is_empty() { object_array_field(contract, "requiredUiStates", "state") } else { scope.state_refs.clone() },
-        "interactionExpectation": actions.iter().filter_map(value_display_name).chain(operation_paths.iter().filter_map(value_display_name)).collect::<Vec<_>>(),
-        "dataExpectation": data_views.iter().filter_map(value_display_name).collect::<Vec<_>>(),
-        "forbiddenUserVisibleContent": contract.get("forbiddenUserVisibleContent").cloned().unwrap_or_else(|| json!([])),
-        "gateImplementationPlan": ui_gate_implementation_plan(task),
-        "qualityLevel": contract.get("qualityLevel").cloned().unwrap_or(Value::Null),
-        "surfacePolicy": contract.get("surfacePolicy").cloned().unwrap_or(Value::Null)
+        "schemaVersion": "1.1",
+        "briefKind": "task_ui_production_brief",
+        "appliesTo": {
+            "ownershipDimensions": ownership_dimensions,
+            "surfaceIds": scope.surface_refs.clone(),
+            "surfaceRoles": unique_strings(surfaces.iter().map(surface_role).collect()),
+            "dataViewIds": scope.data_view_refs.clone(),
+            "actionIds": scope.action_refs.clone(),
+            "operationPathIds": scope.operation_path_refs.clone()
+        },
+        "productIntent": product_intent(task, &surfaces, &data_views),
+        "layoutContract": layout_contract(&surfaces, contract),
+        "informationContract": information_contract(&surfaces, &data_views),
+        "actionContract": action_contract(&surfaces, &actions, &operation_paths),
+        "stateContract": state_contract(&surfaces, contract, scope),
+        "visualContract": visual_contract(&surfaces, contract),
+        "contentBoundary": content_boundary(contract, user_facing_language)
     })
 }
 
-fn ui_gate_implementation_plan(task: &TaskDefinition) -> Value {
-    let gates = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Value::Array(
-        gates
-            .into_iter()
-            .filter_map(|gate| {
-                let gate_id = gate.get("gateId").and_then(Value::as_str)?;
-                Some(json!({
-                    "gateId": gate_id,
-                    "severity": gate.get("severity").cloned().unwrap_or(Value::Null),
-                    "surfaceIds": gate.get("surfaceIds").cloned().unwrap_or_else(|| json!([])),
-                    "implementationTarget": "Implement this gate only in files and UI surfaces owned by the current task.",
-                    "expectation": gate.get("expectation").cloned().unwrap_or(Value::Null),
-                    "requiredEvidence": gate.get("requiredEvidence").cloned().unwrap_or_else(|| json!([])),
-                    "resultField": "frontendQualitySelfCheck.gateResults"
-                }))
+fn product_intent(task: &TaskDefinition, surfaces: &[Value], data_views: &[Value]) -> Value {
+    json!({
+        "userRole": surface_model_string(surfaces, "/productIntent/userRole")
+            .unwrap_or_else(|| "task user".to_string()),
+        "businessObject": surface_model_string(surfaces, "/productIntent/businessObject")
+            .unwrap_or_else(|| {
+                compact_join(
+                    unique_strings(data_views.iter().filter_map(value_display_name).collect()),
+                    "task-owned business object",
+                )
+            }),
+        "primaryJob": surface_model_string(surfaces, "/productIntent/primaryJob")
+            .unwrap_or_else(|| task.objective.clone()),
+        "successOutcome": surface_model_string(surfaces, "/productIntent/successOutcome")
+            .unwrap_or_else(|| "The user can complete the task-owned workflow and see the updated business state.".to_string())
+    })
+}
+
+fn layout_contract(surfaces: &[Value], contract: &Value) -> Value {
+    let layout_baseline = surface_model_string(surfaces, "/visualModel/layoutBaseline")
+        .or_else(|| string_at(contract, "layoutBaseline"))
+        .unwrap_or_else(|| "custom_product_layout".to_string());
+    let density = surface_model_string(surfaces, "/visualModel/density")
+        .or_else(|| string_at(contract, "density"))
+        .unwrap_or_else(|| "balanced".to_string());
+    json!({
+        "layoutBaseline": layout_baseline,
+        "density": density,
+        "requiredRegions": surface_model_array(surfaces, "/compositionModel/requiredRegions")
+            .or_else(|| composition_expectations_optional(surfaces, "requiredComposition"))
+            .unwrap_or_else(default_required_composition),
+        "forbiddenRegions": surface_model_array(surfaces, "/compositionModel/forbiddenRegions")
+            .or_else(|| composition_expectations_optional(surfaces, "forbiddenComposition"))
+            .unwrap_or_else(default_forbidden_composition),
+        "responsiveBehavior": responsive_behavior(surfaces),
+        "primaryRegion": surface_model_string(surfaces, "/compositionModel/primaryRegion")
+            .unwrap_or_else(|| "task-relevant data, form, detail, or action region".to_string()),
+        "supportingRegions": surface_model_array(surfaces, "/compositionModel/supportingRegions")
+            .unwrap_or_else(|| vec!["navigation/context".to_string(), "feedback".to_string()])
+    })
+}
+
+fn information_contract(surfaces: &[Value], data_views: &[Value]) -> Value {
+    let data_view_names =
+        unique_strings(data_views.iter().filter_map(value_display_name).collect());
+    json!({
+        "mustShow": surface_model_array(surfaces, "/informationModel/mustShow")
+            .unwrap_or_else(|| {
+                if data_view_names.is_empty() {
+                    vec![
+                        "business object identity".to_string(),
+                        "business object status".to_string(),
+                        "task-relevant fields".to_string(),
+                    ]
+                } else {
+                    data_view_names.clone()
+                }
+            }),
+        "scanPriority": surface_model_array(surfaces, "/informationModel/scanPriority")
+            .unwrap_or_else(|| vec![
+                "identity".to_string(),
+                "status".to_string(),
+                "decision fields".to_string(),
+                "available actions".to_string(),
+            ]),
+        "identityFields": surface_model_array(surfaces, "/informationModel/identityFields")
+            .unwrap_or_else(|| data_view_field_names(data_views, &["id", "identifier", "code", "name"])),
+        "statusFields": surface_model_array(surfaces, "/informationModel/statusFields")
+            .unwrap_or_else(|| data_view_field_names(data_views, &["status", "state", "phase", "result"])),
+        "longContentPolicy": surface_model_string(surfaces, "/informationModel/longContentPolicy")
+            .unwrap_or_else(|| "Long labels, notes, and identifiers must wrap, truncate with access to full value, or move into detail views without breaking layout.".to_string()),
+        "dataViews": data_view_names
+    })
+}
+
+fn action_contract(surfaces: &[Value], actions: &[Value], operation_paths: &[Value]) -> Value {
+    let action_names = unique_strings(
+        actions
+            .iter()
+            .filter_map(value_display_name)
+            .chain(operation_paths.iter().filter_map(value_display_name))
+            .collect(),
+    );
+    json!({
+        "primaryActions": surface_model_array(surfaces, "/actionModel/primaryActions")
+            .unwrap_or_else(|| {
+                if action_names.is_empty() {
+                    vec!["task-owned primary action".to_string()]
+                } else {
+                    action_names.clone()
+                }
+            }),
+        "contextualActions": surface_model_array(surfaces, "/actionModel/contextualActions")
+            .unwrap_or_default(),
+        "dangerousActions": surface_model_array(surfaces, "/actionModel/dangerousActions")
+            .unwrap_or_default(),
+        "placementRule": surface_model_string(surfaces, "/actionModel/placementRule")
+            .unwrap_or_else(|| "Place actions where the user makes the decision, keeping affected object identity visible.".to_string()),
+        "postSuccessUpdate": surface_model_string(surfaces, "/actionModel/postSuccessUpdate")
+            .unwrap_or_else(|| "Update the affected row, detail, count, state, or route; do not rely only on a toast.".to_string())
+    })
+}
+
+fn state_contract(surfaces: &[Value], contract: &Value, scope: &FrontendTaskScope) -> Value {
+    let state_refs = if scope.state_refs.is_empty() {
+        object_array_field(contract, "requiredUiStates", "state")
+    } else {
+        scope.state_refs.clone()
+    };
+    json!({
+        "statesInScope": state_refs,
+        "loading": state_rule(surfaces, "loading", "Near the region or control waiting for data or mutation."),
+        "empty": state_rule(surfaces, "empty", "In the data/form region with filters and business next action when applicable."),
+        "error": state_rule(surfaces, "error", "Near the affected region with recovery path and without stack traces."),
+        "success": state_rule(surfaces, "success", "Inline object update plus short confirmation when useful."),
+        "business_blocking": state_rule(surfaces, "business_blocking", "Near the blocked field, row, detail, or action with product-language reason."),
+        "validation": state_rule(surfaces, "validation", "Near the field and in a summary for longer forms."),
+        "disabled": state_rule(surfaces, "disabled", "On or near disabled controls with unlock reason when actionable.")
+    })
+}
+
+fn visual_contract(surfaces: &[Value], contract: &Value) -> Value {
+    let density = surface_model_string(surfaces, "/visualModel/density")
+        .or_else(|| string_at(contract, "density"))
+        .unwrap_or_else(|| "balanced".to_string());
+    json!({
+        "tokenPolicy": surface_model_string(surfaces, "/visualModel/tokenPolicy")
+            .unwrap_or_else(|| "Use existing or planned semantic tokens before page-local styling; do not create a second token system beside an existing one.".to_string()),
+        "componentPolicy": surface_model_string(surfaces, "/visualModel/componentPolicy")
+            .unwrap_or_else(|| "Use task-fit components for data, forms, details, actions, feedback, and navigation instead of decorative capability cards.".to_string()),
+        "densityRule": format!("Use {density} density consistently for spacing, row height, control sizing, and information grouping."),
+        "antiDemoRules": surface_model_array(surfaces, "/visualModel/antiDemoRules")
+            .unwrap_or_else(|| vec![
+                "no runtime commands, build notes, or delivery progress in product UI".to_string(),
+                "no marketing hero or explainer wall for operational surfaces".to_string(),
+                "no decorative filler before required workflow content".to_string(),
+                "no generic card grid when users need data, forms, filters, actions, or status".to_string(),
+            ])
+    })
+}
+
+fn content_boundary(
+    contract: &Value,
+    user_facing_language: &Option<contracts::UserFacingLanguageConstraint>,
+) -> Value {
+    json!({
+        "userFacingLanguage": user_facing_language
+            .as_ref()
+            .map(|constraint| constraint.rule.clone())
+            .unwrap_or_else(|| "Use the project's confirmed user-facing language and product vocabulary.".to_string()),
+        "forbiddenUserVisibleContent": contract
+            .get("forbiddenUserVisibleContent")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "copyRule": "Write product copy for the user's business task. Do not expose runtime commands, technical stack explanations, delivery progress, verification instructions, internal workflow terms, generated artifact ids, or validator language unless the product itself is a developer/runtime tool."
+    })
+}
+
+fn surface_model_string(surfaces: &[Value], pointer: &str) -> Option<String> {
+    surfaces
+        .iter()
+        .find_map(|surface| surface.pointer(pointer).and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn surface_model_array(surfaces: &[Value], pointer: &str) -> Option<Vec<String>> {
+    let values = unique_strings(
+        surfaces
+            .iter()
+            .flat_map(|surface| {
+                surface
+                    .pointer(pointer)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
             })
             .collect(),
-    )
+    );
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn composition_expectations_optional(surfaces: &[Value], key: &str) -> Option<Vec<String>> {
+    let values = unique_strings(
+        surfaces
+            .iter()
+            .flat_map(|surface| string_array_at(surface, key))
+            .collect(),
+    );
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
+fn responsive_behavior(surfaces: &[Value]) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = surface_model_string(surfaces, "/responsiveModel/desktop") {
+        parts.push(format!("desktop: {value}"));
+    }
+    if let Some(value) = surface_model_string(surfaces, "/responsiveModel/tablet") {
+        parts.push(format!("tablet: {value}"));
+    }
+    if let Some(value) = surface_model_string(surfaces, "/responsiveModel/mobile") {
+        parts.push(format!("mobile: {value}"));
+    }
+    if parts.is_empty() {
+        "Keep task order, object identity, primary action, and scoped feedback usable across required viewports; use cards, drill-down, stacking, or horizontal overflow only when they preserve the task.".to_string()
+    } else {
+        parts.join("; ")
+    }
+}
+
+fn data_view_field_names(data_views: &[Value], preferred_names: &[&str]) -> Vec<String> {
+    let mut fields = Vec::new();
+    for view in data_views {
+        let Some(items) = view.get("fields").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let name = item.as_str().map(str::to_string).or_else(|| {
+                item.get("field")
+                    .or_else(|| item.get("fieldId"))
+                    .or_else(|| item.get("name"))
+                    .or_else(|| item.get("label"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+            let Some(name) = name else {
+                continue;
+            };
+            let normalized = name.to_ascii_lowercase();
+            if preferred_names
+                .iter()
+                .any(|candidate| normalized.contains(candidate))
+            {
+                fields.push(name);
+            }
+        }
+    }
+    unique_strings(fields)
+}
+
+fn state_rule(surfaces: &[Value], state: &str, fallback: &str) -> String {
+    surface_model_string(surfaces, &format!("/statePlacementModel/{state}"))
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn style_asset_plan(task: &TaskDefinition) -> Value {
@@ -1720,30 +2004,10 @@ fn surface_role(surface: &Value) -> String {
         .unwrap_or_else(|| "page".to_string())
 }
 
-fn surface_business_purpose(surface: &Value) -> Option<String> {
-    string_at(surface, "businessPurpose")
-        .or_else(|| string_at(surface, "purpose"))
-        .or_else(|| string_at(surface, "name"))
-}
-
 fn value_display_name(value: &Value) -> Option<String> {
     string_at(value, "label")
         .or_else(|| string_at(value, "name"))
         .or_else(|| string_at(value, "title"))
-}
-
-fn composition_expectations(surfaces: &[Value], key: &str, fallback: Vec<String>) -> Vec<String> {
-    let values = unique_strings(
-        surfaces
-            .iter()
-            .flat_map(|surface| string_array_at(surface, key))
-            .collect(),
-    );
-    if values.is_empty() {
-        fallback
-    } else {
-        values
-    }
 }
 
 fn default_required_composition() -> Vec<String> {
@@ -1755,14 +2019,12 @@ fn default_required_composition() -> Vec<String> {
     ]
 }
 
-fn default_forbidden_composition(contract: &Value) -> Vec<String> {
-    let mut values = vec![
+fn default_forbidden_composition() -> Vec<String> {
+    vec![
         "surface composition unrelated to the task-owned business workflow".to_string(),
         "decorative or explanatory sections that displace required data, actions, states, or feedback"
             .to_string(),
-    ];
-    values.extend(string_array_at(contract, "forbiddenUserVisibleContent"));
-    unique_strings(values)
+    ]
 }
 
 fn object_array_field(value: &Value, array_key: &str, field_key: &str) -> Vec<String> {

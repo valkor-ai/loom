@@ -2592,6 +2592,18 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             .expect("ui quality token refs")
             .contains(&json!("spacing"))
     );
+    assert!(
+        frontend_requirement_template["uiTaskScope"]["ownershipDimensions"]
+            .as_array()
+            .expect("ownership dimensions")
+            .contains(&json!("surface"))
+    );
+    assert!(
+        frontend_requirement_template["uiTaskScope"]["ownershipDimensionRule"]
+            .as_str()
+            .expect("ownership dimension rule")
+            .contains("not a task-splitting strategy")
+    );
     let runtime_requirement_template =
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
     assert!(runtime_requirement_template.is_object());
@@ -2974,12 +2986,52 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["actionId"],
         json!("action_open_account")
     );
+    let ui_production_brief =
+        &fields["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"].value;
+    assert_eq!(
+        ui_production_brief["briefKind"],
+        json!("task_ui_production_brief")
+    );
+    assert!(ui_production_brief["appliesTo"]["ownershipDimensions"]
+        .as_array()
+        .expect("ownership dimensions")
+        .contains(&json!("surface")));
+    assert!(ui_production_brief["appliesTo"]["ownershipDimensions"]
+        .as_array()
+        .expect("ownership dimensions")
+        .contains(&json!("action")));
+    assert_eq!(
+        ui_production_brief["layoutContract"]["layoutBaseline"],
+        json!("sidebar_topbar_table_detail")
+    );
+    assert!(ui_production_brief["informationContract"]["mustShow"]
+        .as_array()
+        .expect("must show")
+        .iter()
+        .any(|item| item
+            .as_str()
+            .is_some_and(|value| value.contains("证券账户"))));
+    assert!(ui_production_brief["actionContract"]["primaryActions"]
+        .as_array()
+        .expect("primary actions")
+        .iter()
+        .any(|item| item
+            .as_str()
+            .is_some_and(|value| value.contains("新建证券账户"))));
+    assert!(ui_production_brief["stateContract"]["business_blocking"].is_string());
     assert!(
-        fields["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"].value
-            ["forbiddenUserVisibleContent"]
+        ui_production_brief["contentBoundary"]["forbiddenUserVisibleContent"]
             .as_array()
             .expect("forbidden user-visible content")
             .contains(&json!("runtime_commands"))
+    );
+    assert!(
+        ui_production_brief.get("referenceLoadPlan").is_none(),
+        "uiProductionBrief must not duplicate styleAssetPlan.referenceLoadPlan"
+    );
+    assert!(
+        ui_production_brief.get("gateImplementationPlan").is_none(),
+        "uiProductionBrief must not duplicate frontend quality gates"
     );
     assert!(
         fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"].value
@@ -7272,6 +7324,13 @@ fn taskplan_submit_normalizes_frontend_ui_quality_contract_on_ui_tasks() {
     assert_eq!(
         persisted["tasks"][0]["frontendExperienceRequirement"]["uiQualityContract"],
         expected["uiQualityContract"]
+    );
+    assert!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]["uiTaskScope"]
+            ["ownershipDimensions"]
+            .as_array()
+            .expect("normalized ownership dimensions")
+            .contains(&json!("content_boundary"))
     );
 }
 

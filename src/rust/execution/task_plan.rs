@@ -84,6 +84,17 @@ const VERIFICATION_EVIDENCE_VALUES: &[&str] = &[
     "agent_review_explanation",
 ];
 
+pub(crate) const UI_OWNERSHIP_DIMENSION_VALUES: &[&str] = &[
+    "surface",
+    "data_view",
+    "action",
+    "state",
+    "layout",
+    "visual_system",
+    "content_boundary",
+    "integration_feedback",
+];
+
 pub fn materialize_request(
     project_root: &str,
     delivery_id: &str,
@@ -1477,13 +1488,21 @@ fn normalize_frontend_experience_requirements(
         if !task_is_frontend_task(task) {
             continue;
         }
+        let task_kind = task.task_kind.clone();
+        let implementation_actions = task.implementation_actions.clone();
         let Some(requirement) = task.frontend_experience_requirement.as_mut() else {
-            task.frontend_experience_requirement = Some(template.clone());
+            let mut normalized = template.clone();
+            normalize_ui_task_scope(
+                &mut normalized,
+                &template,
+                &task_kind,
+                &implementation_actions,
+            );
+            task.frontend_experience_requirement = Some(normalized);
             continue;
         };
         if !requirement.is_object() {
             *requirement = template.clone();
-            continue;
         }
         requirement["frontendExperienceRef"] =
             json!("sourceRefs.architectureArtifactContractRef#/frontendExperience");
@@ -1502,11 +1521,118 @@ fn normalize_frontend_experience_requirements(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
         }
+        normalize_ui_task_scope(requirement, &template, &task_kind, &implementation_actions);
         if let Some(ui_quality_contract) = expected_ui_quality.as_ref() {
             requirement["uiTaskQualityGates"] =
                 ui_task_quality_gates_for_requirement(requirement, ui_quality_contract);
         }
     }
+}
+
+fn normalize_ui_task_scope(
+    requirement: &mut Value,
+    template: &Value,
+    task_kind: &TaskKind,
+    implementation_actions: &[ImplementationAction],
+) {
+    if !requirement
+        .get("uiTaskScope")
+        .is_some_and(|scope| scope.is_object())
+    {
+        requirement["uiTaskScope"] = template
+            .get("uiTaskScope")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+    }
+    let mut dimensions = existing_ui_ownership_dimensions(requirement);
+    push_unique_strings(
+        &mut dimensions,
+        derived_ui_ownership_dimensions(requirement, task_kind, implementation_actions),
+    );
+    if dimensions.is_empty() {
+        dimensions = vec![
+            "surface".to_string(),
+            "state".to_string(),
+            "visual_system".to_string(),
+            "content_boundary".to_string(),
+        ];
+    }
+    requirement["uiTaskScope"]["ownershipDimensions"] = json!(dimensions);
+}
+
+fn existing_ui_ownership_dimensions(requirement: &Value) -> Vec<String> {
+    requirement
+        .pointer("/uiTaskScope/ownershipDimensions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            unique_strings(
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|dimension| UI_OWNERSHIP_DIMENSION_VALUES.contains(dimension))
+                    .map(str::to_string)
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn derived_ui_ownership_dimensions(
+    requirement: &Value,
+    task_kind: &TaskKind,
+    implementation_actions: &[ImplementationAction],
+) -> Vec<String> {
+    let mut dimensions = Vec::new();
+    let scope = requirement.get("uiTaskScope").unwrap_or(&Value::Null);
+    let has_surface = scope_array_has_items(scope, "surfacesInScope");
+    let has_data_view = scope_array_has_items(scope, "dataViewsInScope");
+    let has_action = scope_array_has_items(scope, "actionsInScope")
+        || scope_array_has_items(scope, "operationPathsInScope");
+    let has_state = scope_array_has_items(scope, "stateExpectation");
+    let has_integration = scope_array_has_items(scope, "frontendBackendBindings");
+    if has_surface {
+        dimensions.push("surface".to_string());
+        dimensions.push("layout".to_string());
+    }
+    if has_data_view {
+        dimensions.push("data_view".to_string());
+    }
+    if has_action {
+        dimensions.push("action".to_string());
+    }
+    if has_state || task_kind_is_frontend(task_kind) {
+        dimensions.push("state".to_string());
+    }
+    if has_integration || has_action {
+        dimensions.push("integration_feedback".to_string());
+    }
+    if task_kind_is_frontend(task_kind)
+        || implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::ImplementFrontendExperienceContract
+            )
+        })
+    {
+        dimensions.push("visual_system".to_string());
+        dimensions.push("content_boundary".to_string());
+    }
+    unique_strings(dimensions)
+}
+
+fn task_kind_is_frontend(task_kind: &TaskKind) -> bool {
+    matches!(
+        task_kind,
+        TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+    )
+}
+
+fn scope_array_has_items(scope: &Value, key: &str) -> bool {
+    scope
+        .get(key)
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
 }
 
 fn normalize_verification_detail_parent_refs(tasks: &mut [TaskDefinition]) {
@@ -1918,8 +2044,56 @@ fn validate_frontend_quality_requirements(
             }
             validate_ui_task_quality_gates(task, requirement, expected, &mut issues);
         }
+        validate_ui_ownership_dimensions(task, requirement, &mut issues);
     }
     issues
+}
+
+fn validate_ui_ownership_dimensions(
+    task: &TaskDefinition,
+    requirement: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(dimensions) = requirement
+        .pointer("/uiTaskScope/ownershipDimensions")
+        .and_then(Value::as_array)
+    else {
+        issues.push(issue(
+            "FRONTEND_UI_OWNERSHIP_DIMENSIONS_REQUIRED",
+            "tasks[].frontendExperienceRequirement.uiTaskScope.ownershipDimensions",
+            "UI/frontend tasks must declare ownership dimensions so execution can compile a task-scoped uiProductionBrief.",
+            Some(&task.task_id),
+        ));
+        return;
+    };
+    if dimensions.is_empty() {
+        issues.push(issue(
+            "FRONTEND_UI_OWNERSHIP_DIMENSIONS_REQUIRED",
+            "tasks[].frontendExperienceRequirement.uiTaskScope.ownershipDimensions",
+            "uiTaskScope.ownershipDimensions cannot be empty for UI/frontend tasks.",
+            Some(&task.task_id),
+        ));
+        return;
+    }
+    for dimension in dimensions {
+        let Some(value) = dimension.as_str() else {
+            issues.push(issue(
+                "FRONTEND_UI_OWNERSHIP_DIMENSION_INVALID",
+                "tasks[].frontendExperienceRequirement.uiTaskScope.ownershipDimensions",
+                "Each ownership dimension must be a string enum value.",
+                Some(&task.task_id),
+            ));
+            continue;
+        };
+        if !UI_OWNERSHIP_DIMENSION_VALUES.contains(&value) {
+            issues.push(issue(
+                "FRONTEND_UI_OWNERSHIP_DIMENSION_INVALID",
+                "tasks[].frontendExperienceRequirement.uiTaskScope.ownershipDimensions",
+                "ownershipDimensions must use only surface, data_view, action, state, layout, visual_system, content_boundary, or integration_feedback.",
+                Some(&task.task_id),
+            ));
+        }
+    }
 }
 
 fn validate_requirement_detail_assignments(
@@ -2580,7 +2754,10 @@ fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) 
         "mustSatisfy": true,
         "uiTaskScope": {
             "source": "AAC frontendExperience.uiSurfaceRegistry plus frontend surfaces, dataViews, actions, and operationPaths",
-            "selectionRule": "For each frontend task, select only the surfaces, data views, actions, operation paths, states, and backend/API bindings owned by that task. Do not copy unrelated UI surfaces into the task.",
+            "selectionRule": "For each frontend task, select only the surfaces, data views, actions, operation paths, states, backend/API bindings, and ownership dimensions owned by that task. Do not copy unrelated UI surfaces into the task.",
+            "ownershipDimensionEnum": UI_OWNERSHIP_DIMENSION_VALUES,
+            "ownershipDimensionRule": "Choose dimensions from the current task's actual UI responsibility: surface, data_view, action, state, layout, visual_system, content_boundary, integration_feedback. ownershipDimensions are not a task-splitting strategy; use them to describe what this business task owns.",
+            "ownershipDimensions": ["surface", "state", "visual_system", "content_boundary"],
             "surfacesInScope": ["current-task uiSurfaceRegistry surface object"],
             "dataViewsInScope": ["current-task frontendExperience.dataViews object"],
             "actionsInScope": ["current-task frontendExperience.actions object"],
@@ -2997,6 +3174,11 @@ fn unique_strings(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn push_unique_strings(values: &mut Vec<String>, next: Vec<String>) {
+    values.extend(next);
+    *values = unique_strings(std::mem::take(values));
+}
+
 fn is_executable_interface(interface: &Value) -> bool {
     matches!(
         string_at(interface, "type").as_deref(),
@@ -3057,7 +3239,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "uiQualityContractSource": "outputContract.frontendExperienceRequirementTemplate.uiQualityContract",
             "uiSurfaceRegistrySource": "contextProjection.requirementDetailTransfer.frontendExperienceDetails.uiSurfaceRegistry",
             "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement.",
-            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must fill frontendExperienceRequirement.uiTaskScope from the AAC uiSurfaceRegistry and related frontend arrays. Select only the current task's surfaces, data views, actions, operation paths, states, and bindings.",
+            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, data views, actions, layout, visual system, or content boundary must fill frontendExperienceRequirement.uiTaskScope from the AAC uiSurfaceRegistry and related frontend arrays. Select only the current task's surfaces, data views, actions, operation paths, states, bindings, and ownershipDimensions.",
+            "ownershipDimensionRule": "ownershipDimensions describe what this business task owns; they are not a task-splitting strategy. Use surface, data_view, action, state, layout, visual_system, content_boundary, and integration_feedback only when the task changes that concern.",
             "uiQualityRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must copy outputContract.frontendExperienceRequirementTemplate.uiQualityContract into frontendExperienceRequirement; do not reinterpret scenario, qualityLevel, referenceProfile, or forbidden user-visible content."
         },
         "workflowClosureRules": {

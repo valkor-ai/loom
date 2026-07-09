@@ -10,6 +10,15 @@ Load this file when generating, refining, or reviewing user-visible UI. These ar
 - Developer/runtime products may show technical terms only when the user task is actually about those terms.
 - Empty states may explain the business state and next action; they must not explain the implementation process.
 
+## Brief Mapping
+
+`uiProductionBrief.visualContract.antiDemoRules` and `uiProductionBrief.contentBoundary.forbiddenUserVisibleContent` are blocking product constraints:
+
+- Treat anti-demo rules as implementation limits on layout, hierarchy, decorative treatment, and component choice.
+- Treat forbidden content as user-visible copy limits across pages, empty states, alerts, modals, tooltips, footers, and debug panels.
+- If a developer/runtime product legitimately needs technical terms, the product intent must say so; otherwise technical process language is a defect.
+- Do not replace business UI with explanation text that says what the system could do. Build the actual surface, state, or action.
+
 ## Demo-Looking UI
 
 - Avoid one-file app shells that mix routing, data fetching, form state, modal state, table state, and all styling once the screen has real workflow complexity.

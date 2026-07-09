@@ -12,6 +12,22 @@ Load this when the task creates or changes user actions, forms, navigation, tabl
 - Long-running actions show progress at the action source. Keep the object identity visible while the request is pending.
 - Mutations should define what changes after success: row state, detail summary, event history, count, or navigation.
 
+## Brief Mapping
+
+When `uiProductionBrief.actionContract` is present:
+
+- `primaryActions` must be directly reachable in the owning surface or flow.
+- `contextualActions` stay attached to the relevant row, record, field group, panel, or step.
+- `dangerousActions` require confirmation, undo, or a clear recovery path based on severity.
+- `placementRule` overrides generic component habits; keep the affected object visible at decision time.
+- `postSuccessUpdate` is part of the implementation, not just copy. Update the row, detail, count, state, route, or history that proves the mutation landed.
+
+When `uiProductionBrief.stateContract` is present:
+
+- Implement each listed state at the affected region, not only as a global spinner, banner, or toast.
+- Keep validation, technical failure, domain blocking, and disabled/unavailable states visually and semantically distinct.
+- For integration-backed actions, pending/error/success feedback must preserve object identity and user-entered values when practical.
+
 ## Forms
 
 - Use visible labels, not placeholder-only labels.

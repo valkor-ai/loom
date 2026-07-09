@@ -39,6 +39,24 @@ Apply the UI baseline whenever work:
 
 Do not apply UI rules to backend-only work, storage-only work, deployment-only work, or non-visible refactors unless their output changes a user-visible surface.
 
+## Production Brief Use
+
+The execution context may provide a task-scoped `uiProductionBrief`. Treat it as the current task's UI product contract, not as a design suggestion and not as a replacement for loading the listed references.
+
+The brief is compiled from product surface facts and task ownership, so keep implementation aligned to these dimensions:
+
+| Brief area | What to decide in code |
+| --- | --- |
+| `productIntent` | User role, business object, primary job, and the visible success outcome. |
+| `layoutContract` | Regions, density, responsive behavior, primary region, and forbidden filler. |
+| `informationContract` | Fields that must be visible, scan order, identity/status handling, and long-content behavior. |
+| `actionContract` | Primary/contextual/dangerous actions, placement, pending behavior, and post-success update. |
+| `stateContract` | Where loading, empty, validation, error, success, disabled, and business-blocking states appear. |
+| `visualContract` | Token usage, component choice, density consistency, and anti-demo visual rules. |
+| `contentBoundary` | Product-language copy and internal-process terms that must not appear in the UI. |
+
+Ownership dimensions scope the work. A task may own only action wiring, state feedback, layout, data views, visual system, content boundary, or integration feedback. Do not expand a task into unrelated surfaces just because the reference file contains a larger pattern.
+
 ## Implementation
 
 - Build the usable workflow first: users must be able to complete the confirmed task, understand outcome, recover from failure, and continue.

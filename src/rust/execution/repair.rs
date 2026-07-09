@@ -2356,6 +2356,77 @@ fn architecture_repair_section_content_template(
                         "surfaceId": "surface_1",
                         "surfaceRole": "page",
                         "businessPurpose": "",
+                        "productIntent": {
+                            "userRole": "",
+                            "businessObject": "",
+                            "primaryJob": "",
+                            "successOutcome": ""
+                        },
+                        "compositionModel": {
+                            "requiredRegions": [
+                                "business navigation or local context",
+                                "task-relevant data region",
+                                "task-relevant action region",
+                                "scoped feedback region"
+                            ],
+                            "forbiddenRegions": [
+                                "decorative or explanatory region that displaces the task workflow"
+                            ],
+                            "primaryRegion": "task-relevant data or form region",
+                            "supportingRegions": [
+                                "navigation/context",
+                                "detail/summary",
+                                "feedback"
+                            ]
+                        },
+                        "informationModel": {
+                            "mustShow": [
+                                "business object identity",
+                                "business object status",
+                                "fields required to complete the task"
+                            ],
+                            "scanPriority": [
+                                "identity",
+                                "status",
+                                "decision fields",
+                                "available actions"
+                            ],
+                            "identityFields": [],
+                            "statusFields": [],
+                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
+                        },
+                        "actionModel": {
+                            "primaryActions": ["task-owned primary action"],
+                            "contextualActions": [],
+                            "dangerousActions": [],
+                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
+                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
+                        },
+                        "statePlacementModel": {
+                            "loading": "Near the region or control waiting for data or mutation.",
+                            "empty": "In the data/form region with business next action when applicable.",
+                            "error": "Near the affected region with recovery path.",
+                            "success": "Inline object update plus short confirmation when useful.",
+                            "business_blocking": "Near the blocked field, row, detail, or action.",
+                            "validation": "Near the field and summary for longer forms.",
+                            "disabled": "On or near disabled controls with unlock reason when actionable."
+                        },
+                        "visualModel": {
+                            "layoutBaseline": "custom_product_layout",
+                            "density": "balanced",
+                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
+                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
+                            "antiDemoRules": [
+                                "no runtime commands or delivery notes in product UI",
+                                "no marketing hero for operational surfaces",
+                                "no decorative filler before required workflow content"
+                            ]
+                        },
+                        "responsiveModel": {
+                            "desktop": "Keep primary task surface and action path visible without layout shift.",
+                            "tablet": "Preserve task order while reducing secondary regions.",
+                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
+                        },
                         "requiredComposition": [
                             "business navigation or context",
                             "task-relevant data view",

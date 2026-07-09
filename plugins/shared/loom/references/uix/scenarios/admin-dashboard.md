@@ -9,6 +9,19 @@ Use for internal operations, staff consoles, CRM/ERP/CMS back offices, SaaS cont
 - Density is usually `workbench_dense` or `balanced`.
 - Visual style is restrained: quiet surfaces, strong information hierarchy, semantic status colors, and predictable controls.
 
+## Brief Extraction
+
+When this scenario is selected, map scenario rules into the task brief this way:
+
+| Brief area | Admin dashboard extraction |
+| --- | --- |
+| `layoutContract` | Sidebar/topbar/main/detail regions, workbench density, desktop split layout, tablet rail/drawer, mobile list-to-detail fallback. |
+| `informationContract` | Record identity, status, key decision fields, filters/search/sort/pagination, selected-detail summary, update/history context. |
+| `actionContract` | Primary create/submit/approve action near the working region; row/detail contextual actions; destructive actions with confirmation or recovery. |
+| `stateContract` | Results-region loading/empty/error, form validation, action pending/success, and business-blocking near row/detail/action. |
+| `visualContract` | Restrained operational surfaces, tokenized spacing/type/status colors, compact app identity, no hero/marketing/filler sections. |
+| `contentBoundary` | Product copy only: labels, status, validation, filters, actions, and help route. No runtime, delivery, stack, or verification language. |
+
 ## Required Patterns
 
 - Navigation: active section, grouped nav items, stable page title, breadcrumbs when depth is greater than one.

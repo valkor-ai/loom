@@ -849,7 +849,7 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         })
         .unwrap_or_default();
     let default_surface_states = frontend_execution_guidance
-        .and_then(|guidance| guidance.pointer("/uiProductionBrief/stateExpectation"))
+        .and_then(|guidance| guidance.pointer("/uiProductionBrief/stateContract/statesInScope"))
         .and_then(Value::as_array)
         .map(|states| {
             states
