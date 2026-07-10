@@ -67,7 +67,7 @@ Use for IDE-like tools, API explorers, SDK consoles, build/deploy tools, logs, d
 
 - Keyboard and copy flows work.
 - Long logs or JSON do not overflow the page.
-- Technical errors are useful to the developer without exposing unrelated internal Loom workflow details.
+- Technical errors are useful to the developer without exposing unrelated internal workflow details.
 
 ## Avoid
 

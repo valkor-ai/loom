@@ -31,7 +31,7 @@ Follow `LoomMcpActionResult.state`.
 - `repairable_error`: edit only the returned target file or target ids, then call the returned resubmit tool.
 - `done`, `blocked`, `failed`: stop and report the returned user-facing status.
 
-Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
+Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
 
 ## Request Reading
 
@@ -45,7 +45,7 @@ Write artifacts only to the returned `writeTargets`. Submit only through the ret
 
 For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowledgeInspectChunk`, fill the provided result template, and submit with `loom.knowledgeSemanticSubmitFile`. Continue pack by pack until the result is published, blocked, or user-gated.
 
-For `ExecuteTaskNext`, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
+For `ExecuteTaskNext`, inspect `next.requestRef`, read the declared groups, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
 
 For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress.
 
@@ -63,7 +63,7 @@ Protocol:
 - In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
-- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to the installed Loom references root for this agent.
+- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. In this Codex skill, resolve `path` as `references/<path>` relative to this `SKILL.md` directory, not relative to the project workspace.
 - Load exactly the listed paths for the current action. Do not derive paths from group names, scan reference directories, or load external language/API/architecture/UI skills.
 - Treat token template paths as merge baselines for project files, not as text to copy into Loom artifacts.
 

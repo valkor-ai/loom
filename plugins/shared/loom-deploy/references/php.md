@@ -34,3 +34,37 @@ Use this reference when implementing or repairing loom deploy support for PHP-fa
 - If Laravel starts but returns a 500, inspect logs for missing `APP_KEY`, write permissions in `storage`, database migration failures, or missing env values.
 - Do not copy real `.env` files into generated images by default; use `.env.example` to infer needed variables.
 - For production-grade PHP deployments, a future provider may use Nginx + PHP-FPM, but the v1 Dockerfile template is intentionally a local preview path.
+
+## Scanner Signals To Deploy Facts
+
+Translate PHP scanner evidence into deploy facts before generating files:
+
+- `composer.json` path becomes service root, manifest ref, and Composer install fact.
+- `composer.lock` becomes lockfile ref.
+- Laravel `artisan`, Symfony runtime/config, Slim route setup, or `public/index.php` decide framework/runtime facts.
+- `composer.json` `require.php` selects PHP image version when possible.
+- `public/` document root, `artisan serve`, and framework router signals become preview/start command facts.
+- `.env.example`, config files, DB drivers, queue/cache packages, and storage paths become environment/dependency facts.
+- Frontend asset `package.json` inside Laravel/Symfony does not override the PHP app role.
+
+## Generated Asset Expectations
+
+Generated PHP assets should show:
+
+- Composer install before source copy when lockfiles/manifests allow layer caching.
+- Required PHP extensions installed according to dependency facts, not a hard-coded database guess.
+- Laravel local preview includes generated `APP_KEY`, writable `storage` and `bootstrap/cache`, and a container-safe port.
+- Generic PHP/Slim/Symfony preview serves the detected public document root.
+- Dependency URLs/config point at Compose service DNS names and generated local credentials.
+- Real `.env` values are never copied into the image.
+
+## Repair Boundary
+
+Repair generated PHP deploy assets when:
+
+- Composer install fails because generated extension packages are incomplete.
+- The runtime command serves the wrong document root or binds the wrong host/port.
+- Laravel/Symfony local secrets/cache/storage defaults are missing from generated env or directories.
+- Dependency config uses localhost inside the container.
+
+Do not edit PHP application config, migrations, Composer requirements, or real env files during deploy asset repair unless the MCP action routes to execution repair.

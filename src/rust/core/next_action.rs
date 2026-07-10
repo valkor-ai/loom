@@ -390,8 +390,17 @@ pub struct DeployRepairAssetsNext {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployReferenceProfile {
-    pub reference_ids: Vec<String>,
     pub load_mode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_load_plan: Vec<ReferenceLoadPlanItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceLoadPlanItem {
+    pub ref_id: String,
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -13,6 +13,17 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 - Keep a stable object identity visible during selection, mutation, loading, and error states.
 - Use the domain's real identifiers rather than generated demo names when identifiers exist.
 
+## Brief Mapping
+
+When `uiProductionBrief.informationContract` is present, use it as the minimum data surface contract:
+
+- `mustShow` becomes visible fields, summaries, table columns, detail facts, or chart labels.
+- `scanPriority` determines visual order before decorative grouping or local component preference.
+- `identityFields` stay visible during selection, mutation, loading, and error states.
+- `statusFields` stay close to available actions so users can understand eligibility.
+- `longContentPolicy` controls wrapping, truncation, drill-down, overflow, or responsive card fallback.
+- `dataViews` names the exact views this task should implement or preserve; do not add unrelated dashboards or summaries.
+
 ## Record Workbench Pattern
 
 Use this for CRUD, approval, operations, case management, and account/order/request workflows:
@@ -110,3 +121,9 @@ A completed data UI should cite:
 - Query/list/detail/action states that were implemented.
 - Empty, loading, error, and business-blocking placement.
 - Overflow/responsive behavior for dense values and long labels.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `data.surface.scan_action_path` | The user can scan object identity, status, key fields, and available action in one path, with loading/empty/error/business-blocking states near the affected region. | Data is hidden behind generic cards, status/action are separated from the record, or state feedback appears only as a global toast/message. |

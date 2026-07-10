@@ -2,30 +2,32 @@ use contracts::{CodeQualityRequirement, TaskDefinition, TaskPlan};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 22] = [
-    "task.frontendExperienceRequirement.uiQualityContract.scenario",
-    "task.frontendExperienceRequirement.uiQualityContract.qualityLevel",
-    "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy",
-    "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline",
-    "task.frontendExperienceRequirement.uiQualityContract.density",
-    "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy",
-    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode",
-    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups",
-    "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tailwindConfigRefs",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tokenFileRefs",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.globalStyleRefs",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.componentThemeRefs",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.mergePolicy",
-    "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.duplicationPolicy",
-    "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent",
-    "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates",
-    "task.frontendExperienceRequirement.uiQualityContract.businessUiRules",
+pub(crate) const FRONTEND_QUALITY_CONTRACT_READ_FIELDS: [&str; 12] = [
+    "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+    "task.frontendExperienceRequirement.uiSurfaceOwnership",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.selectionMode",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.patternDecision",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contentBoundary",
+    "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope",
+    "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan",
+    "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan",
 ];
+
+pub(crate) fn frontend_surface_contract_applies(task: &TaskDefinition) -> bool {
+    task.frontend_experience_requirement
+        .as_ref()
+        .is_some_and(|requirement| {
+            requirement.get("uiSurfaceDecisionContractRef").is_some()
+                || requirement.get("uiSurfaceOwnership").is_some()
+                || requirement
+                    .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+                    .is_some_and(Value::is_object)
+        })
+}
 
 pub(crate) fn taskplan_outline_result_template(
     request_id: &str,
@@ -302,6 +304,240 @@ pub(crate) fn task_result_template_with_code_quality(
     template
 }
 
+pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
+    let mut properties = serde_json::Map::new();
+    properties.insert("schemaVersion".to_string(), json!("1.0"));
+    properties.insert("taskResultId".to_string(), json!("string"));
+    properties.insert("taskId".to_string(), json!("string"));
+    properties.insert("taskPlanId".to_string(), json!("string"));
+    properties.insert(
+        "status".to_string(),
+        json!("completed | completed_with_notes | blocked | failed"),
+    );
+    properties.insert("changedFiles".to_string(), json!(["project-relative path"]));
+    properties.insert(
+        "noChangeReason".to_string(),
+        json!({
+            "shape": "object or null",
+            "code": "string",
+            "summary": "string"
+        }),
+    );
+    properties.insert(
+        "verificationResults".to_string(),
+        json!([{
+            "verificationId": "task.verificationIntents[].verificationId",
+            "status": "passed | not_run | failed | inconclusive",
+            "evidenceType": "one of the matching verification intent acceptableEvidence values",
+            "summary": "string"
+        }]),
+    );
+    properties.insert(
+        "selfRepairSummary".to_string(),
+        json!({
+            "attempted": false,
+            "attemptCount": 0,
+            "stopReason": "not_attempted | verification_passed | blocked_condition_detected | same_failure_repeated_without_progress | hard_attempt_limit_reached | repair_requires_contract_change | repair_requires_scope_expansion",
+            "progressObserved": false
+        }),
+    );
+    properties.insert(
+        "failure".to_string(),
+        json!({
+            "shape": "object or null",
+            "code": "required only when status=failed",
+            "summary": "required only when status=failed"
+        }),
+    );
+    properties.insert(
+        "executionContinuity".to_string(),
+        json!({
+            "taskResultSubmittedAfterVerification": true,
+            "agentOwnedLongRunningWork": "none | stopped | handed_off",
+            "notes": ["string"]
+        }),
+    );
+    properties.insert("notes".to_string(), json!(["string"]));
+    properties.insert(
+        "requirementDetailEvidence".to_string(),
+        json!([{
+            "detailId": "task.requirementDetailRefs or task.verificationIntents[].requirementDetailRefs item",
+            "status": "satisfied | partial | not_verified",
+            "verificationIds": ["task.verificationIntents[].verificationId"],
+            "evidenceRefs": ["project-relative evidence ref"],
+            "summary": "string"
+        }]),
+    );
+    properties.insert(
+        "blockedReasons".to_string(),
+        json!([{
+            "code": "outputContract.blockedReasonOptions[].code",
+            "nextNode": "outputContract.blockedReasonOptions[].nextNode",
+            "message": "string",
+            "details": {}
+        }]),
+    );
+    properties.insert("createdAt".to_string(), json!("ISO-8601 datetime"));
+    properties.insert("updatedAt".to_string(), json!("ISO-8601 datetime"));
+
+    if frontend_self_check_applies(task) {
+        properties.insert(
+            "frontendExperienceSelfCheck".to_string(),
+            json!({
+                "status": "satisfied | partial | blocked",
+                "closureRequirementIds": ["task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs[].closureId"],
+                "dataBinding": {
+                    "mode": "wired | partial | not_applicable",
+                    "knownGaps": ["string"]
+                },
+                "evidenceRefs": ["project-relative evidence ref"],
+                "summary": "string"
+            }),
+        );
+    }
+    if frontend_quality_self_check_applies(task) {
+        properties.insert(
+            "frontendQualitySelfCheck".to_string(),
+            json!({
+                "status": "satisfied | partial | missing | blocked_by_environment",
+                "surfaceDecisionContractRef": "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+                "surfaceRegionEvidence": [{
+                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope[].regionId",
+                    "status": "satisfied | partial | missing | blocked_by_environment",
+                    "files": ["project-relative UI file"],
+                    "states": ["covered state id"],
+                    "actions": ["covered action id"],
+                    "evidence": "string"
+                }],
+                "surfaceActionEvidence": [{
+                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope[].actionId",
+                    "status": "satisfied | partial | missing | blocked_by_environment",
+                    "files": ["project-relative UI file"],
+                    "states": ["covered state id"],
+                    "actions": ["covered action id"],
+                    "evidence": "string"
+                }],
+                "surfaceStateEvidence": [{
+                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope[].state",
+                    "status": "satisfied | partial | missing | blocked_by_environment",
+                    "files": ["project-relative UI file"],
+                    "states": ["covered state id"],
+                    "actions": ["covered action id"],
+                    "evidence": "string"
+                }],
+                "surfaceQualityRuleEvidence": [{
+                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope[].ruleId",
+                    "status": "satisfied | partial | missing | blocked_by_environment",
+                    "files": ["project-relative UI file or check"],
+                    "states": ["covered state id"],
+                    "actions": ["covered action id"],
+                    "evidence": "string"
+                }],
+                "contentBoundaryEvidence": {
+                    "checked": true,
+                    "allowedContentExamples": ["string"],
+                    "forbiddenContentViolations": ["string"],
+                    "evidence": "string"
+                },
+                "referencePlanFilesChecked": ["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan[].path"],
+                "designTokenEvidence": {
+                    "strategyUsed": "reuse_existing | extend_existing | create_css_tokens | create_tailwind_tokens | not_applicable",
+                    "templateIdUsed": "tokens-css | tokens-tailwind | null",
+                    "tokenAssetFiles": ["project-relative token asset file"],
+                    "tokenConsumerFiles": ["project-relative UI file using declared tokens"],
+                    "existingTokenSystemReused": true,
+                    "parallelTokenSystemCreated": false,
+                    "mergeSummary": "string"
+                },
+                "knownGaps": ["string"],
+                "summary": "string"
+            }),
+        );
+    }
+    if runtime_delivery_evidence_applies(task) {
+        properties.insert(
+            "runtimeDeliveryEvidence".to_string(),
+            json!({
+                "requirementRef": "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+                "checkedFields": ["task.runtimeDeliveryRequirement.affectedContractFields item"],
+                "codeLevelChecks": [{
+                    "checkId": "task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId",
+                    "contractField": "string or null",
+                    "status": "passed | failed | blocked | not_applicable",
+                    "evidence": "string"
+                }],
+                "commandsRun": ["command"],
+                "unverifiedItems": ["string"],
+                "runtimeProbeCleanup": "string or null"
+            }),
+        );
+    }
+    if !task.concept_refs.is_empty() {
+        properties.insert(
+            "conceptEvidence".to_string(),
+            json!([{
+                "conceptRef": "task.conceptRefs item",
+                "evidenceType": "code | test | runtime | manual",
+                "refs": ["project-relative ref"],
+                "summary": "string"
+            }]),
+        );
+    }
+    if architecture_quality_evidence_applies(task) {
+        properties.insert(
+            "architectureQualityEvidence".to_string(),
+            json!([{
+                "requirementId": "task.architectureQualityRequirementRefs item",
+                "status": "satisfied | partial | not_verified",
+                "verificationIds": ["task.verificationIntents[].verificationId"],
+                "changedFiles": ["project-relative path"],
+                "summary": "string"
+            }]),
+        );
+    }
+    if api_contract_evidence_applies(task) {
+        properties.insert(
+            "apiContractEvidence".to_string(),
+            json!([{
+                "requirementId": "task.apiContractRequirementRefs item",
+                "status": "satisfied | partial | not_verified",
+                "interfaceRefs": ["task.writeBoundary.artifactRefs.interfaces item"],
+                "verificationIds": ["task.verificationIntents[].verificationId"],
+                "changedFiles": ["project-relative path"],
+                "successPaths": ["HTTP method/path or operation id"],
+                "errorPaths": ["HTTP method/path or operation id"],
+                "paginationPaths": ["HTTP method/path or operation id"],
+                "contractFileRefs": ["project-relative contract file"],
+                "knownGaps": ["string"],
+                "summary": "string"
+            }]),
+        );
+    }
+    if code_quality_evidence_applies(task) {
+        properties.insert(
+            "codeQualityEvidence".to_string(),
+            json!([{
+                "requirementId": "task.codeQualityRequirementRefs item",
+                "status": "satisfied | partial | not_verified",
+                "referenceGroupsChecked": {"language_or_framework": ["group"]},
+                "referenceFilesChecked": ["reference path"],
+                "verificationIds": ["task.verificationIntents[].verificationId"],
+                "changedFiles": ["project-relative path"],
+                "commandsRun": ["command"],
+                "knownGaps": ["string"],
+                "summary": "string"
+            }]),
+        );
+    }
+
+    json!({
+        "type": "object",
+        "required": task_result_required_top_level_fields(task),
+        "properties": properties,
+        "additionalProperties": false
+    })
+}
+
 fn template_verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
     let direct = task
         .verification_intents
@@ -390,12 +626,7 @@ pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
 }
 
 pub(crate) fn frontend_quality_self_check_applies(task: &TaskDefinition) -> bool {
-    frontend_self_check_applies(task)
-        && task
-            .frontend_experience_requirement
-            .as_ref()
-            .and_then(|requirement| requirement.get("uiQualityContract"))
-            .is_some()
+    frontend_self_check_applies(task) && frontend_surface_contract_applies(task)
 }
 
 fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
@@ -553,21 +784,21 @@ fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
 }
 
 fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
-    let ui_quality_contract = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiQualityContract"))
-        .unwrap_or(&Value::Null);
     let frontend_execution_guidance = task
         .frontend_experience_requirement
         .as_ref()
         .and_then(|requirement| requirement.get("executionGuidance"));
-    let reference_groups = ui_quality_contract
-        .pointer("/referenceProfile/groups")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let reference_files = ui_quality_contract
-        .pointer("/referenceProfile/referenceLoadPlan")
+    let surface_decision_ref = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiSurfaceDecisionContractRef"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let surface_decision_contract = frontend_execution_guidance
+        .and_then(|guidance| guidance.pointer("/uiProductionBrief/surfaceDecisionContract"))
+        .unwrap_or(&Value::Null);
+    let reference_plan_files = frontend_execution_guidance
+        .and_then(|guidance| guidance.pointer("/styleAssetPlan/referencePlan"))
         .and_then(Value::as_array)
         .map(|items| {
             items
@@ -576,38 +807,31 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let states_covered = ui_quality_contract
-        .get("requiredUiStates")
+    let surface_state_ids = surface_decision_contract
+        .get("statesInScope")
         .and_then(Value::as_array)
         .map(|states| {
             states
                 .iter()
-                .filter_map(|state| {
-                    state
-                        .get("state")
-                        .and_then(Value::as_str)
-                        .map(|state_name| {
-                            json!({
-                                "state": state_name,
-                                "status": "covered",
-                                "evidence": ""
-                            })
-                        })
-                })
+                .filter_map(|state| state.get("state").and_then(Value::as_str))
+                .map(str::to_string)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let business_rules_checked = ui_quality_contract
-        .get("businessUiRules")
+    let surface_region_evidence = surface_decision_contract
+        .get("regionsInScope")
         .and_then(Value::as_array)
-        .map(|rules| {
-            rules
+        .map(|regions| {
+            regions
                 .iter()
-                .filter_map(|rule| {
-                    rule.get("ruleId").and_then(Value::as_str).map(|rule_id| {
+                .filter_map(|region| {
+                    region.get("regionId").and_then(Value::as_str).map(|id| {
                         json!({
-                            "ruleId": rule_id,
+                            "id": id,
                             "status": "satisfied",
+                            "files": ["replace_with_ui_file_path_for_this_region"],
+                            "states": merged_state_refs(region, &surface_state_ids),
+                            "actions": region.get("actionRefs").cloned().unwrap_or_else(|| json!([])),
                             "evidence": ""
                         })
                     })
@@ -615,79 +839,71 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let default_surface_states = frontend_execution_guidance
-        .and_then(|guidance| guidance.pointer("/uiProductionBrief/stateExpectation"))
-        .and_then(Value::as_array)
-        .map(|states| {
-            states
-                .iter()
-                .filter_map(|state| {
-                    state.as_str().map(|value| json!(value)).or_else(|| {
-                        state
-                            .get("state")
-                            .and_then(Value::as_str)
-                            .map(|value| json!(value))
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let default_surface_actions = frontend_execution_guidance
-        .and_then(|guidance| guidance.get("actionsInScope"))
+    let surface_action_evidence = surface_decision_contract
+        .get("actionsInScope")
         .and_then(Value::as_array)
         .map(|actions| {
             actions
                 .iter()
                 .filter_map(|action| {
-                    action
-                        .get("actionId")
-                        .and_then(Value::as_str)
-                        .or_else(|| action.get("label").and_then(Value::as_str))
-                        .map(|value| json!(value))
+                    action.get("actionId").and_then(Value::as_str).map(|id| {
+                        json!({
+                            "id": id,
+                            "status": "satisfied",
+                            "files": ["replace_with_ui_file_path_for_this_action"],
+                            "states": [],
+                            "actions": [id],
+                            "evidence": ""
+                        })
+                    })
                 })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let surfaces_covered = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.pointer("/executionGuidance/surfacesInScope"))
+    let surface_state_evidence = surface_decision_contract
+        .get("statesInScope")
         .and_then(Value::as_array)
-        .map(|surfaces| {
-            surfaces
+        .map(|states| {
+            states
                 .iter()
-                .filter_map(|surface| {
-                    let surface_id = surface.get("surfaceId").and_then(Value::as_str)?;
-                    let states = surface
-                        .get("stateRefs")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .filter(|items| !items.is_empty())
-                        .unwrap_or_else(|| default_surface_states.clone());
-                    let business_actions = surface
-                        .get("actionRefs")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .filter(|items| !items.is_empty())
-                        .unwrap_or_else(|| default_surface_actions.clone());
-                    Some(json!({
-                        "surfaceId": surface_id,
-                        "surfaceRole": surface
-                            .get("surfaceRole")
-                            .or_else(|| surface.get("role"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("page"),
-                        "files": ["replace_with_ui_file_path_for_this_surface"],
-                        "states": states,
-                        "businessActions": business_actions,
-                        "evidence": "Describe how this surface implements the business purpose, layout composition, states, and actions."
-                    }))
+                .filter_map(|state| {
+                    state.get("state").and_then(Value::as_str).map(|id| {
+                        json!({
+                            "id": id,
+                            "status": "satisfied",
+                            "files": ["replace_with_ui_file_path_for_this_state"],
+                            "states": [id],
+                            "actions": [],
+                            "evidence": ""
+                        })
+                    })
                 })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let design_token_plan = ui_quality_contract
-        .get("designTokenAssetPlan")
+    let surface_quality_rule_evidence = surface_decision_contract
+        .get("qualityRulesInScope")
+        .and_then(Value::as_array)
+        .map(|rules| {
+            rules
+                .iter()
+                .filter_map(|rule| {
+                    rule.get("ruleId").and_then(Value::as_str).map(|id| {
+                        json!({
+                            "id": id,
+                            "status": "satisfied",
+                            "files": ["replace_with_ui_file_path_or_check_for_this_rule"],
+                            "states": [],
+                            "actions": [],
+                            "evidence": ""
+                        })
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let design_token_plan = frontend_execution_guidance
+        .and_then(|guidance| guidance.pointer("/styleAssetPlan/designTokenAssetPlan"))
         .cloned()
         .unwrap_or(Value::Null);
     let token_strategy = design_token_plan
@@ -704,18 +920,19 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .cloned()
         .unwrap_or_default();
     json!({
-        "status": "satisfied",
-        "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str).unwrap_or("custom_product_ui"),
-        "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str).unwrap_or("production_internal_product"),
-        "referenceGroupsChecked": reference_groups,
-        "referenceFilesChecked": reference_files,
-        "statesCovered": states_covered,
-        "businessUiRulesChecked": business_rules_checked,
-        "forbiddenContentCheck": {
+        "status": "partial",
+        "surfaceDecisionContractRef": surface_decision_ref,
+        "surfaceRegionEvidence": surface_region_evidence,
+        "surfaceActionEvidence": surface_action_evidence,
+        "surfaceStateEvidence": surface_state_evidence,
+        "surfaceQualityRuleEvidence": surface_quality_rule_evidence,
+        "contentBoundaryEvidence": {
             "checked": true,
-            "violations": []
+            "allowedContentExamples": [],
+            "forbiddenContentViolations": [],
+            "evidence": ""
         },
-        "surfacesCovered": surfaces_covered,
+        "referencePlanFilesChecked": reference_plan_files,
         "designTokenEvidence": {
             "strategyUsed": token_strategy,
             "templateIdUsed": template_id,
@@ -728,4 +945,122 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         "knownGaps": [],
         "summary": ""
     })
+}
+
+fn merged_state_refs(region: &Value, surface_state_ids: &[String]) -> Value {
+    let mut states = region
+        .get("stateRefs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    states.extend(surface_state_ids.iter().cloned());
+    Value::Array(states.into_iter().map(Value::String).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frontend_task(requirement: Value) -> TaskDefinition {
+        serde_json::from_value(json!({
+            "taskId": "task-ui-001",
+            "groupId": "group-ui",
+            "title": "UI task",
+            "taskKind": "frontend_experience",
+            "implementationActions": ["implement_frontend_experience_contract"],
+            "objective": "Implement the UI surface.",
+            "dependsOn": [],
+            "scopeRefs": [],
+            "acceptanceRefs": [],
+            "requirementDetailRefs": [],
+            "writeBoundary": {
+                "forbiddenPaths": [],
+                "artifactRefs": {}
+            },
+            "verificationIntents": [],
+            "conceptRefs": [],
+            "conceptResponsibilities": [],
+            "conceptVerificationIntents": [],
+            "frontendExperienceRequirement": requirement,
+            "architectureQualityRequirementRefs": [],
+            "apiContractRequirementRefs": [],
+            "codeQualityRequirementRefs": []
+        }))
+        .expect("valid task")
+    }
+
+    #[test]
+    fn surface_contract_read_fields_do_not_include_legacy_quality_contract() {
+        let task = frontend_task(json!({
+            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "executionGuidance": {
+                "uiProductionBrief": {
+                    "surfaceDecisionContract": {
+                        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
+                    }
+                }
+            }
+        }));
+
+        let fields = FRONTEND_QUALITY_CONTRACT_READ_FIELDS;
+
+        assert!(frontend_quality_self_check_applies(&task));
+        assert!(fields.contains(
+            &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef"
+        ));
+        assert!(
+            fields
+                .iter()
+                .all(|field| !field.contains("uiQualityContract")
+                    && !field.contains("uiTaskQualityGates")),
+            "{fields:#?}"
+        );
+    }
+
+    #[test]
+    fn frontend_quality_template_does_not_emit_legacy_self_check_fields() {
+        let task = frontend_task(json!({
+            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "executionGuidance": {
+                "uiProductionBrief": {
+                    "surfaceDecisionContract": {
+                        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+                        "regionsInScope": [{"regionId": "region_primary"}],
+                        "actionsInScope": [{"actionId": "action_create"}],
+                        "statesInScope": [{"state": "loading"}],
+                        "qualityRulesInScope": [{"ruleId": "surface.contract.evidence_coverage"}]
+                    }
+                },
+                "styleAssetPlan": {
+                    "referencePlan": [{"path": "uix/core.md"}],
+                    "designTokenAssetPlan": {
+                        "strategy": "create_css_tokens",
+                        "templateId": "tokens-css",
+                        "targetFiles": ["src/styles/tokens.css"]
+                    }
+                }
+            }
+        }));
+        let template = frontend_quality_self_check_template(&task);
+
+        for key in [
+            "scenarioKind",
+            "qualityLevel",
+            "referenceGroupsChecked",
+            "referenceFilesChecked",
+            "statesCovered",
+            "businessUiRulesChecked",
+            "forbiddenContentCheck",
+            "surfacesCovered",
+            "gateResults",
+        ] {
+            assert!(
+                template.get(key).is_none(),
+                "frontend quality template must not emit legacy field {key}: {template:#}"
+            );
+        }
+    }
 }

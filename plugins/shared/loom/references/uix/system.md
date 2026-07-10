@@ -9,7 +9,7 @@ Load this when creating or changing a visual system, app shell, shared component
 - Create primitives only when they remove repeated implementation: Button, Input, Select, Textarea, Checkbox/Switch, Badge, Alert, Table, Card/Panel, Modal/Dialog, Drawer/Sheet, Tabs, Tooltip, Toast, Pagination, Skeleton.
 - Keep component props semantic. Prefer `variant="danger"` over `color="#ef4444"`.
 
-## Minimal Token Contract
+## Minimal Token Set
 
 ```css
 :root {
@@ -32,10 +32,10 @@ Use the repo's existing names when present. The important part is that component
 ## Token Asset Workflow
 
 1. Inspect existing style assets before creating files: Tailwind config, global CSS, variables/theme files, component-library theme, native theme, or design-token package.
-2. If a compatible asset exists, extend it in place. If none exists, create the target file declared by `designTokenAssetPlan.targetFiles`.
+2. If a compatible asset exists, extend it in place. If none exists, create the token file selected for the current implementation.
 3. Import or register the token asset once at the app root. Do not make every page import its own token file.
 4. Convert page-local raw values into semantic aliases when the task creates shared or repeated UI. One-off raw values are acceptable only for asset dimensions or media crop details.
-5. Record token asset files and token consumer files in `frontendQualitySelfCheck.designTokenEvidence`.
+5. Record token asset files and the UI files that consume them in implementation evidence.
 
 Useful alias groups for product UI:
 
@@ -98,3 +98,9 @@ FormField / FieldError / Toast or InlineNotice
 ```
 
 Do not create decorative primitives before the workflow has the controls above. A business UI that lacks field errors, disabled states, row states, and detail actions is still demo-level even if it looks styled.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `token.single_source_consumed` | UI consumes one project token/theme source through the app style entry or component system, and evidence cites both token asset files and token consumer files. | New page-local token system competes with existing styles, token file is created but not imported/consumed, or raw values remain scattered across repeated UI. |

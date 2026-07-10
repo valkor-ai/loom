@@ -4,13 +4,15 @@ use std::{
 };
 
 use contracts::{
-    DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentGeneratedFiles,
-    DeploymentProviderPolicy, DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSpec,
+    DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentFacts,
+    DeploymentGeneratedFiles, DeploymentProviderPolicy, DeploymentRuntimeContract,
+    DeploymentSourceModel, DeploymentSpec, DeploymentTopology,
 };
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
     LoomMcpFailureResult,
 };
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use state::{
     lifecycle_store::init_project_state,
@@ -28,6 +30,7 @@ use crate::{
         analyze_existing_compose, find_existing_deployment_files, selected_compose_port,
         ExistingDeploymentFiles,
     },
+    facts::build_deployment_facts,
     generate::{generate_deployment_files, generated_file_refs},
     paths::{deployment_paths, DeploymentPaths},
     port_plan::{build_deployment_runtime, primary_url},
@@ -67,7 +70,11 @@ pub fn deploy_prepare_inner(
     ensure_dir(&paths.state_dir)?;
     ensure_dir(&paths.logs_dir)?;
 
-    let runtime_contract = load_runtime_contract(project_root)?;
+    let mut runtime_contract = load_runtime_contract(project_root)?;
+    let healthcheck_override = normalize_healthcheck_override(input.healthcheck.as_deref());
+    if let Some(path) = &healthcheck_override {
+        runtime_contract.health_path = Some(path.clone());
+    }
     let requested_deployment_root = deployment_root_for(project_root, input.app_path.as_deref())?;
     let deployment_root = deployment_root_for_runtime_contract(
         project_root,
@@ -112,7 +119,7 @@ pub fn deploy_prepare_inner(
         None
     };
     let compose_port = compose_info.as_ref().and_then(selected_compose_port);
-    let source_model = if strategy.provider == DeployProvider::ComposeExisting {
+    let mut source_model = if strategy.provider == DeployProvider::ComposeExisting {
         compose_port
             .as_ref()
             .map(|port| source_model_with_preview_port(source_model.clone(), port.container_port))
@@ -120,6 +127,9 @@ pub fn deploy_prepare_inner(
     } else {
         source_model
     };
+    if let Some(path) = &healthcheck_override {
+        apply_healthcheck_override(&mut source_model, path);
+    }
     let topology = build_topology(&runtime_contract, &source_model);
     let runtime_contract_ref = to_project_relative(
         project_root,
@@ -130,6 +140,7 @@ pub fn deploy_prepare_inner(
     let topology_ref =
         to_project_relative(project_root, &paths.generated_dir.join("topology.json"))?;
     let code_evidence_ref = to_project_relative(project_root, &paths.code_evidence_file)?;
+    let facts_ref = to_project_relative(project_root, &paths.generated_dir.join("facts.json"))?;
     let environment = env_diagnostics(&runtime_contract, &code_probe);
     let bootstrap = analyze_deployment_bootstrap(project_root, &code_probe);
     let runtime = build_deployment_runtime(
@@ -152,6 +163,13 @@ pub fn deploy_prepare_inner(
         &topology,
         &existing,
     )?;
+    let facts = build_deployment_facts(
+        strategy.provider,
+        &runtime_contract,
+        &source_model,
+        &topology,
+        &runtime,
+    );
     let spec = DeploymentSpec {
         schema_version: 1,
         provider: strategy.provider,
@@ -166,9 +184,11 @@ pub fn deploy_prepare_inner(
         source_model_ref: source_model_ref.clone(),
         topology_ref: topology_ref.clone(),
         code_evidence_ref: code_evidence_ref.clone(),
+        facts_ref: facts_ref.clone(),
         runtime_contract,
         source_model,
         topology,
+        facts,
         environment,
         bootstrap,
         compose: compose_info,
@@ -184,6 +204,7 @@ pub fn deploy_prepare_inner(
         &spec.source_model,
     )?;
     write_json_atomic(&paths.generated_dir.join("topology.json"), &spec.topology)?;
+    write_json_atomic(&paths.generated_dir.join("facts.json"), &spec.facts)?;
     let mut code_evidence = code_probe.evidence.clone();
     if let Some(object) = code_evidence.as_object_mut() {
         object.insert(
@@ -198,6 +219,7 @@ pub fn deploy_prepare_inner(
             "topologyRef".to_string(),
             serde_json::Value::String(topology_ref),
         );
+        object.insert("factsRef".to_string(), serde_json::Value::String(facts_ref));
     }
     write_json_atomic(&paths.code_evidence_file, &code_evidence)?;
     let generated = generate_deployment_files(&spec);
@@ -240,7 +262,105 @@ pub fn deploy_prepare_inner(
 }
 
 pub fn read_spec(project_root: &Path) -> StateResult<DeploymentSpec> {
-    state::store::read_json(&deployment_paths(project_root).spec_file)
+    let paths = deployment_paths(project_root);
+    let mut spec: DeploymentSpec = state::store::read_json(&paths.spec_file)?;
+    overlay_generated_sidecars(&paths, &mut spec)?;
+    Ok(spec)
+}
+
+fn overlay_generated_sidecars(
+    paths: &DeploymentPaths,
+    spec: &mut DeploymentSpec,
+) -> StateResult<()> {
+    if let Some(source_model) = read_generated_sidecar::<DeploymentSourceModel>(
+        &paths.generated_dir.join("source-model.json"),
+        "source-model.json",
+    )? {
+        spec.source_model = source_model;
+    }
+    if let Some(topology) = read_generated_sidecar::<DeploymentTopology>(
+        &paths.generated_dir.join("topology.json"),
+        "topology.json",
+    )? {
+        spec.topology = topology;
+    }
+    if let Some(facts) = read_generated_sidecar::<DeploymentFacts>(
+        &paths.generated_dir.join("facts.json"),
+        "facts.json",
+    )? {
+        spec.facts = facts;
+    }
+    Ok(())
+}
+
+fn read_generated_sidecar<T: DeserializeOwned>(path: &Path, label: &str) -> StateResult<Option<T>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    state::store::read_json(path).map(Some).map_err(|error| {
+        StateError::StateCorrupted(format!(
+            "generated deployment sidecar {label} is invalid: {error}"
+        ))
+    })
+}
+
+fn apply_healthcheck_override(source_model: &mut DeploymentSourceModel, path: &str) {
+    let target_service_id = source_model.primary_service_id.clone();
+    let target_index = source_model
+        .services
+        .iter()
+        .position(|service| service.service_id == target_service_id)
+        .or_else(|| {
+            source_model
+                .services
+                .iter()
+                .position(|service| service.role != contracts::SourceServiceRole::Frontend)
+        })
+        .or_else(|| (!source_model.services.is_empty()).then_some(0));
+    if let Some(service) = target_index.and_then(|index| source_model.services.get_mut(index)) {
+        service.healthcheck_path = Some(path.to_string());
+    }
+    source_model.notes.push(format!(
+        "Deployment healthcheck path was overridden by DeployToolInput.healthcheck: {path}."
+    ));
+}
+
+fn normalize_healthcheck_override(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let without_query = value.split(['?', '#']).next().unwrap_or(value).trim();
+    let mut path = if let Some(index) = without_query.find("://") {
+        let after_scheme = &without_query[index + 3..];
+        after_scheme
+            .find('/')
+            .map(|path_start| &after_scheme[path_start..])
+            .unwrap_or("/")
+    } else if !without_query.starts_with('/') {
+        without_query
+            .find('/')
+            .filter(|slash| {
+                let prefix = &without_query[..*slash];
+                prefix.contains(':') || prefix.contains('.')
+            })
+            .map(|slash| &without_query[slash..])
+            .unwrap_or(without_query)
+    } else {
+        without_query
+    }
+    .trim()
+    .to_string();
+    if path.is_empty() {
+        return None;
+    }
+    if !path.starts_with('/') {
+        path = format!("/{path}");
+    }
+    if path.len() > 1 {
+        path = path.trim_end_matches('/').to_string();
+    }
+    Some(path)
 }
 
 fn env_diagnostics(
@@ -573,6 +693,17 @@ pub(crate) fn deployment_prepare_details(
         "sourceModelRef": spec.source_model_ref,
         "topologyRef": spec.topology_ref,
         "codeEvidenceRef": spec.code_evidence_ref,
+        "factsRef": spec.facts_ref,
+        "deployFactsSummary": {
+            "topologyClass": spec.facts.topology_class,
+            "layoutKind": spec.facts.layout_kind,
+            "stackKinds": spec.facts.stack_kinds,
+            "serviceRoots": spec.facts.service_roots,
+            "dependencyKinds": spec.facts.dependency_kinds,
+            "publicPortCount": spec.facts.public_port_count,
+            "internalPortCount": spec.facts.internal_port_count,
+            "generatedAssetPolicy": spec.facts.generated_asset_policy
+        },
         "sourceModelSummary": {
             "shape": spec.source_model.shape,
             "primaryServiceId": spec.source_model.primary_service_id,
@@ -628,10 +759,24 @@ pub(crate) fn deployment_generated_file_refs(spec: &DeploymentSpec) -> Vec<Strin
         .reused
         .iter()
         .collect::<std::collections::BTreeSet<_>>();
-    deployment_file_refs(spec)
-        .into_iter()
+    let mut refs = deployment_file_refs(spec);
+    refs.extend(deployment_generated_sidecar_refs(spec));
+    refs.sort();
+    refs.dedup();
+    refs.into_iter()
         .filter(|item| !item.is_empty() && !reused.contains(item))
         .collect()
+}
+
+fn deployment_generated_sidecar_refs(spec: &DeploymentSpec) -> Vec<String> {
+    [
+        spec.source_model_ref.clone(),
+        spec.topology_ref.clone(),
+        spec.facts_ref.clone(),
+    ]
+    .into_iter()
+    .filter(|item| !item.is_empty())
+    .collect()
 }
 
 fn runtime_contract_blocked(project_root: &Path, error: StateError) -> LoomMcpActionResult {

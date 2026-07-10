@@ -11,7 +11,10 @@ use delivery_core::{
 };
 use mcp_server::server::LoomMcpServer;
 use serde_json::{json, Value};
-use state::{store::write_json_atomic, write_native_request, NativeRequestInput};
+use state::{
+    store::{read_json_value, write_json_atomic},
+    write_native_request, NativeRequestInput,
+};
 
 #[test]
 fn submit_tool_returns_repairable_error_for_missing_target_file() {
@@ -1404,6 +1407,7 @@ fn architecture_read_groups_follow_current_section() {
         "uiQualitySeed.requiredReferenceGroups",
         "uiQualitySeed.designTokenAssetPlan",
         "uiQualitySeed.requiredUiStates",
+        "uiQualitySeed.qualityRulePreview",
         "uiQualitySeed.selectionRule",
     ] {
         assert!(
@@ -1413,41 +1417,42 @@ fn architecture_read_groups_follow_current_section() {
     }
     let frontend_template =
         architecture_section_contract(&fixture, &architecture_request_ref, "frontend_experience");
-    let ui_quality_contract = frontend_template["resultTemplate"]["content"]["frontendExperience"]
-        ["uiQualityContract"]
+    let architecture_output_contract = private_output_contract(&fixture, &architecture_request_ref);
+    assert_eq!(
+        architecture_output_contract["writeTargets"][0]["targetId"],
+        json!("frontend_experience")
+    );
+    assert!(
+        architecture_output_contract["schemaShape"]
+            .get("properties")
+            .is_none(),
+        "architecture outputContract schemaShape must be the current section shape, not the full Rust candidate schema"
+    );
+    assert!(
+        architecture_output_contract["schemaShape"]
+            .pointer("/content/frontendExperience/uiQualityContract")
+            .is_none(),
+        "architecture outputContract schemaShape must not expose legacy uiQualityContract"
+    );
+    let frontend_result_template =
+        &frontend_template["resultTemplate"]["content"]["frontendExperience"];
+    let surface_decision_candidate = frontend_result_template["surfaceDecisionCandidate"]
         .as_object()
-        .expect("uiQualityContract template");
-    assert_eq!(
-        ui_quality_contract["semanticTokenPolicy"],
-        json!("semantic_tokens_required")
+        .expect("surfaceDecisionCandidate template");
+    assert!(
+        frontend_result_template.get("uiQualityContract").is_none(),
+        "frontend template must not ask agents to write legacy uiQualityContract"
     );
-    assert_eq!(
-        ui_quality_contract["designTokenAssetPlan"]["strategy"],
-        json!("create_css_tokens")
+    assert!(
+        surface_decision_candidate.get("selectedPattern").is_some(),
+        "frontend template must expose the semantic surface decision candidate"
     );
-    assert_eq!(
-        ui_quality_contract["designTokenAssetPlan"]["templateId"],
-        json!("tokens-css")
+    assert!(
+        surface_decision_candidate.get("referencePlan").is_none(),
+        "referencePlan is MCP-owned and should not be agent-writable"
     );
-    assert_eq!(
-        ui_quality_contract["designTokenAssetPlan"]["duplicationPolicy"],
-        json!("do_not_create_parallel_token_system")
-    );
-    assert_eq!(
-        ui_quality_contract["referenceProfile"]["loadMode"],
-        json!("mcp_reference_load_plan")
-    );
-    assert!(ui_quality_contract["referenceProfile"]["referenceLoadPlan"]
-        .as_array()
-        .expect("ui quality reference load plan")
-        .iter()
-        .any(|item| item["path"] == json!("uix/tokens/layout-grid.md")));
-    assert!(ui_quality_contract["referenceProfile"]["groups"]["tokens"]
-        .as_array()
-        .expect("ui quality token reference items")
-        .contains(&json!("layout-grid")));
     assert!(frontend_template["enumRefs"]
-        .pointer("/uiQuality/scenarioKind")
+        .pointer("/uiSurfaceDecision/patternMode")
         .and_then(Value::as_array)
         .is_some());
 
@@ -1533,12 +1538,24 @@ fn architecture_request_omits_previous_runtime_fields_without_previous_runtime()
             .unwrap(),
         json!("2xx_or_3xx")
     );
+    assert!(
+        runtime_contract
+            .pointer("/schemaShape/content/runtimeDelivery/deploymentShape")
+            .is_none(),
+        "deploymentShape is MCP-derived and must not be agent-writable: {runtime_contract:#}"
+    );
     assert_eq!(
         runtime_contract
             .pointer("/resultTemplate/content/runtimeDelivery/httpProbes/expectedStatus")
             .cloned()
             .unwrap(),
         json!("2xx_or_3xx")
+    );
+    assert!(
+        runtime_contract
+            .pointer("/resultTemplate/content/runtimeDelivery/deploymentShape")
+            .is_none(),
+        "deploymentShape is MCP-derived and must not appear in resultTemplate: {runtime_contract:#}"
     );
     assert!(runtime_contract
         .pointer("/resultTemplate/content/runtimeDelivery/start/port")
@@ -1830,7 +1847,7 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     assert!(
         frontend_template["resultTemplate"]["content"]["frontendExperience"]
             .get("uiQualityContract")
-            .is_some()
+            .is_none()
     );
 
     write_candidate_target(
@@ -1870,7 +1887,7 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
 }
 
 #[test]
-fn architecture_frontend_submit_repairs_missing_ui_quality_contract() {
+fn architecture_frontend_submit_accepts_candidate_without_legacy_ui_quality_contract() {
     let fixture = Fixture::new("architecture-frontend-ui-quality-required");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
@@ -1887,12 +1904,98 @@ fn architecture_frontend_submit_repairs_missing_ui_quality_contract() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"]
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+}
+
+#[test]
+fn architecture_frontend_submit_ignores_legacy_ui_quality_contract_fields() {
+    let fixture = Fixture::new("architecture-frontend-ui-quality-machine-owned");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: architecture_request_ref.clone(),
+    })
+    .expect("inspect frontend architecture request");
+    let target_path = inspected.write_targets[0]["path"]
+        .as_str()
+        .expect("candidate target path")
+        .to_string();
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["frontendExperience"]["uiQualityContract"] = json!({
+        "scenario": {
+            "kind": "marketing_site",
+            "reference": {"group": "wrong", "item": "wrong"}
+        },
+        "semanticTokenPolicy": "wrong_policy",
+        "forbiddenUserVisibleContent": ["agent_invented_forbidden_item"],
+        "referenceProfile": {
+            "loadMode": "manual",
+            "groups": {
+                "focus": ["unknown-reference"]
+            },
+            "referenceLoadPlan": []
+        },
+        "qualityGates": [{
+            "gateId": "invented.agent.gate",
+            "sourceRefId": "uix.fake",
+            "severity": "must",
+            "appliesToSurfaceRoles": ["page"],
+            "evidenceRequired": ["source_check"],
+            "expectation": "This agent-authored gate must be ignored."
+        }]
+    });
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let persisted = state::store::read_json_value(&fixture.root.join(target_path))
+        .expect("read normalized frontend candidate");
+    let persisted_frontend = &persisted["content"]["frontendExperience"];
+    assert!(
+        persisted_frontend.get("uiQualityContract").is_none(),
+        "submit must drop legacy uiQualityContract instead of repairing it"
+    );
+    let persisted_contract = &persisted_frontend["uiSurfaceDecisionContract"];
+    assert_eq!(
+        persisted_contract["semanticTokenPolicy"],
+        json!("semantic_tokens_required")
+    );
+    assert!(
+        persisted_contract["contentBoundary"]["forbiddenUserVisibleContent"]
+            .as_array()
+            .expect("forbidden user-visible content")
+            .contains(&json!("runtime_commands"))
+    );
+    assert!(
+        !persisted_contract["contentBoundary"]["forbiddenUserVisibleContent"]
+            .as_array()
+            .expect("forbidden user-visible content")
+            .contains(&json!("agent_invented_forbidden_item"))
+    );
+    assert_eq!(
+        persisted_contract["patternDecision"]["knownPattern"],
+        json!("collection_workbench")
+    );
+    assert!(persisted_contract["referencePlan"]
         .as_array()
-        .expect("issues")
+        .expect("referencePlan")
         .iter()
-        .any(|issue| issue["code"] == json!("UI_QUALITY_CONTRACT_REQUIRED")));
+        .any(|item| item["path"] == json!("uix/web-implementation.md")));
+    let rule_ids = persisted_contract["qualityRules"]
+        .as_array()
+        .expect("qualityRules")
+        .iter()
+        .filter_map(|rule| rule["ruleId"].as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(rule_ids.contains("web.semantic_accessibility"));
+    assert!(rule_ids.contains("web.runtime_layout_safety"));
+    assert!(!rule_ids.contains("invented.agent.gate"));
 }
 
 #[test]
@@ -2107,6 +2210,96 @@ fn planning_contract_preserves_brainstorm_requirement_detail_index() {
     assert_eq!(
         projected_details["fullDetailSource"],
         "sourceRefs.planningContractRef#/requirementDetails"
+    );
+}
+
+#[test]
+fn architecture_runtime_delivery_submit_derives_frontend_backend_shape() {
+    let fixture = Fixture::new("architecture-runtime-derives-dual-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    let runtime = candidate["content"]["runtimeDelivery"]
+        .as_object_mut()
+        .expect("runtime object");
+    runtime.insert("runtimeKind".to_string(), json!("web_frontend_plus_api"));
+    runtime.insert("deploymentShape".to_string(), json!("single-service"));
+    runtime.insert(
+        "build".to_string(),
+        json!({
+            "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package",
+            "workingDirectory": ".",
+            "outputs": ["dist", "target/*.jar"],
+            "codeLevelExpectations": ["Frontend and backend build commands are declared."]
+        }),
+    );
+    runtime.insert(
+        "start".to_string(),
+        json!({
+            "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run",
+            "workingDirectory": ".",
+            "codeLevelExpectations": ["Frontend and backend runtime commands are declared."]
+        }),
+    );
+    runtime.insert(
+        "runtimeSurfaces".to_string(),
+        json!([
+            { "surfaceId": "runtime_surface_frontend", "kind": "frontend", "urlPath": "/", "purpose": "Public staff UI." },
+            { "surfaceId": "runtime_surface_api", "kind": "api", "urlPath": "/api", "purpose": "Backend API." }
+        ]),
+    );
+    runtime.insert(
+        "httpProbes".to_string(),
+        json!({
+            "previewPath": "/",
+            "apiPaths": ["/api/health"],
+            "expectedStatus": "2xx_or_3xx"
+        }),
+    );
+    runtime.remove("frontend");
+    runtime.remove("api");
+    runtime.remove("deliveryMechanics");
+    let target_path = architecture_write_target_path(&fixture, &architecture_request_ref);
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let normalized: Value =
+        read_json_value(&fixture.root.join(target_path)).expect("normalized runtime");
+    assert_eq!(
+        normalized["content"]["runtimeDelivery"]["deploymentShape"],
+        json!("frontend-and-backend")
+    );
+}
+
+#[test]
+fn architecture_runtime_delivery_submit_derives_integrated_static_shape() {
+    let fixture = Fixture::new("architecture-runtime-derives-integrated-shape");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    advance_architecture_to_section(&fixture, &architecture_request_ref, "runtime_delivery");
+    let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
+    candidate["content"]["runtimeDelivery"]["deploymentShape"] = json!("frontend-and-backend");
+    candidate["content"]["runtimeDelivery"]["frontend"]["servedBy"] = json!("spring_boot_static");
+    let target_path = architecture_write_target_path(&fixture, &architecture_request_ref);
+    write_candidate_target(&fixture, &architecture_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.architectureSectionSubmitFile",
+        &architecture_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let normalized: Value =
+        read_json_value(&fixture.root.join(target_path)).expect("normalized runtime");
+    assert_eq!(
+        normalized["content"]["runtimeDelivery"]["deploymentShape"],
+        json!("single-service")
     );
 }
 
@@ -2422,6 +2615,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
             "outputContract.engineeringQualityRequirementTemplate".to_string(),
             "generationRules.runtimeDeliveryRules".to_string(),
             "generationRules.verificationEvidenceRules".to_string(),
+            "generationRules.detailOwnershipRules".to_string(),
             "generationRules.engineeringQualityRules".to_string(),
         ],
     })
@@ -2451,18 +2645,39 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     let frontend_requirement_template =
         &taskplan_contract_fields["outputContract.frontendExperienceRequirementTemplate"].value;
     assert_eq!(
-        frontend_requirement_template["uiQualityContract"]["semanticTokenPolicy"],
-        json!("semantic_tokens_required")
-    );
-    assert_eq!(
-        frontend_requirement_template["uiQualityContract"]["designTokenAssetPlan"]["templateId"],
-        json!("tokens-css")
+        frontend_requirement_template["uiSurfaceDecisionContractRef"],
+        json!("sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract")
     );
     assert!(
-        frontend_requirement_template["uiQualityContract"]["referenceProfile"]["groups"]["tokens"]
+        frontend_requirement_template
+            .get("uiQualityContract")
+            .is_none(),
+        "TaskPlan template must not copy legacy uiQualityContract"
+    );
+    assert!(
+        frontend_requirement_template
+            .get("uiTaskQualityGates")
+            .is_none(),
+        "TaskPlan template must not copy legacy uiTaskQualityGates"
+    );
+    assert!(
+        frontend_requirement_template["uiSurfaceOwnership"]["availableQualityRuleIds"]
             .as_array()
-            .expect("ui quality token refs")
-            .contains(&json!("spacing"))
+            .expect("available surface quality rule ids")
+            .iter()
+            .any(Value::is_string)
+    );
+    assert!(
+        frontend_requirement_template["uiTaskScope"]["ownershipDimensions"]
+            .as_array()
+            .expect("ownership dimensions")
+            .contains(&json!("surface"))
+    );
+    assert!(
+        frontend_requirement_template["uiTaskScope"]["ownershipDimensionRule"]
+            .as_str()
+            .expect("ownership dimension rule")
+            .contains("not a task-splitting strategy")
     );
     let runtime_requirement_template =
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
@@ -2521,6 +2736,14 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         serde_json::to_string(verification_rules).expect("serialize verification rules");
     assert!(verification_rules_text.contains("Every covered current-phase detailId"));
     assert!(verification_rules_text.contains("same parent task.requirementDetailRefs"));
+    let detail_ownership_rules =
+        &taskplan_contract_fields["generationRules.detailOwnershipRules"].value;
+    assert!(detail_ownership_rules["assignmentRule"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("artifactRefHints")));
+    assert!(detail_ownership_rules["acceptNormalization"]
+        .as_str()
+        .is_some_and(|rule| rule.contains("exactly one owner task")));
     let engineering_template =
         &taskplan_contract_fields["outputContract.engineeringQualityRequirementTemplate"].value;
     assert_eq!(
@@ -2589,12 +2812,43 @@ fn taskplan_request_keeps_deferred_scope_out_of_current_scope_refs() {
     );
     let assignment =
         &fields["contextProjection.requirementDetailTransfer.requirementDetailAssignment"].value;
-    let item = &assignment["items"][0];
-    assert!(item.get("coverage").is_none());
-    assert!(item["quality"].is_string());
-    assert!(item["coverageStatus"].is_string());
-    assert!(item["artifactRefs"].is_object() || item["artifactRefs"].is_null());
-    assert!(item["coverageReason"].is_null() || item["coverageReason"].is_string());
+    assert!(
+        serde_json::to_vec(assignment)
+            .expect("serialize compact assignment")
+            .len()
+            < 24_000,
+        "{assignment:#}"
+    );
+    assert_eq!(assignment["itemEncoding"], json!("row_array"));
+    let columns = assignment["itemColumns"]
+        .as_array()
+        .expect("assignment item columns")
+        .iter()
+        .map(|column| column.as_str().expect("column name"))
+        .collect::<Vec<_>>();
+    let column_index = |name: &str| {
+        columns
+            .iter()
+            .position(|column| column == &name)
+            .expect("assignment column")
+    };
+    let item = assignment["items"][0]
+        .as_array()
+        .expect("compact assignment row");
+    assert!(item[column_index("detailId")].is_string());
+    assert!(item[column_index("quality")].is_string());
+    assert!(item[column_index("coverageStatus")].is_string());
+    let artifact_hints = &item[column_index("artifactRefHints")];
+    assert!(artifact_hints.get("artifactRefs").is_none());
+    assert!(artifact_hints["modules"].is_array());
+    if artifact_hints.get("fieldRefs").is_some() {
+        assert!(artifact_hints["fieldRefs"]["count"].is_number());
+        assert!(artifact_hints["fieldRefs"]["examples"].is_array());
+    }
+    assert!(
+        item[column_index("coverageReason")].is_null()
+            || item[column_index("coverageReason")].is_string()
+    );
     assert!(assignment["verificationRule"]
         .as_str()
         .is_some_and(|rule| rule.contains("must be referenced")));
@@ -2713,30 +2967,30 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs".to_string()
     ));
-    assert!(frontend_fields
-        .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
     assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string()
     ));
     assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string()
     ));
-    assert!(frontend_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
-    ));
-    assert!(frontend_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-            .to_string()
-    ));
-    assert!(frontend_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-            .to_string()
-    ));
+    assert!(frontend_fields
+        .contains(&"task.frontendExperienceRequirement.uiSurfaceDecisionContractRef".to_string()));
+    assert!(frontend_fields
+        .contains(&"task.frontendExperienceRequirement.uiSurfaceOwnership".to_string()));
+    assert!(!frontend_fields
+        .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
     assert!(!frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
     ));
     assert!(!frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string()
+    ));
+    assert!(!frontend_fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
+    ));
+    assert!(!frontend_fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
+            .to_string()
     ));
     assert!(frontend_fields
         .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
@@ -2774,14 +3028,8 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "task.frontendExperienceRequirement.executionGuidance.actionsInScope".to_string(),
             "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
             "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
-            "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-                .to_string(),
+            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef".to_string(),
+            "task.frontendExperienceRequirement.uiSurfaceOwnership".to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
             "executionRules.frontendImplementationOrganizationRules".to_string(),
             "executionRules.interactiveVerificationProbePolicy".to_string(),
@@ -2815,19 +3063,58 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["actionId"],
         json!("action_open_account")
     );
+    let ui_production_brief =
+        &fields["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"].value;
+    assert_eq!(
+        ui_production_brief["briefKind"],
+        json!("task_ui_production_brief")
+    );
+    assert!(ui_production_brief["appliesTo"]["ownershipDimensions"]
+        .as_array()
+        .expect("ownership dimensions")
+        .contains(&json!("surface")));
+    assert!(ui_production_brief["appliesTo"]["ownershipDimensions"]
+        .as_array()
+        .expect("ownership dimensions")
+        .contains(&json!("action")));
+    assert_eq!(
+        ui_production_brief["layoutContract"]["layoutBaseline"],
+        json!("sidebar_topbar_table_detail")
+    );
+    assert!(!ui_production_brief["informationContract"]["mustShow"]
+        .as_array()
+        .expect("must show")
+        .is_empty());
+    assert!(!ui_production_brief["actionContract"]["primaryActions"]
+        .as_array()
+        .expect("primary actions")
+        .is_empty());
+    assert!(ui_production_brief["stateContract"]["business_blocking"].is_string());
     assert!(
-        fields["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"].value
-            ["forbiddenUserVisibleContent"]
+        ui_production_brief["contentBoundary"]["forbiddenUserVisibleContent"]
             .as_array()
             .expect("forbidden user-visible content")
             .contains(&json!("runtime_commands"))
     );
     assert!(
+        ui_production_brief.get("referenceLoadPlan").is_none(),
+        "uiProductionBrief must not duplicate styleAssetPlan.referenceLoadPlan"
+    );
+    assert!(
+        ui_production_brief.get("gateImplementationPlan").is_none(),
+        "uiProductionBrief must not duplicate frontend quality rules"
+    );
+    assert_eq!(
+        ui_production_brief["surfaceDecisionContract"]["contractRef"],
+        fields["task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"].value
+    );
+    assert!(
         fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"].value
-            ["referenceGroups"]["tokens"]
+            ["referencePlan"]
             .as_array()
-            .expect("style token reference items")
-            .contains(&json!("spacing"))
+            .expect("style reference plan")
+            .iter()
+            .any(|item| item["path"] == json!("uix/tokens/spacing.md"))
     );
     let interfaces = &fields["sourceContext.architectureArtifactProjection.interfaces"].value;
     assert_eq!(interfaces.as_array().expect("interfaces").len(), 1);
@@ -2852,92 +3139,50 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["closureRequirementIds"],
         json!(["closure:flow.account-lifecycle:step.submit-open-account"])
     );
-    assert_eq!(
-        fields["task.frontendExperienceRequirement.executionGuidance.uiQuality"].value
-            ["selfCheckField"],
-        json!("frontendQualitySelfCheck")
+    let frontend_quality_template =
+        &fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
+    assert!(
+        frontend_quality_template.get("scenarioKind").is_none(),
+        "frontend quality template must not emit legacy scenarioKind"
     );
     assert!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"]
-            .value["tokens"]
-            .as_array()
-            .expect("ui quality token reference items")
-            .contains(&json!("spacing"))
-    );
-    assert!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"]
-            .value
-            .as_array()
-            .expect("ui reference load plan")
-            .iter()
-            .any(|item| item["path"] == json!("uix/tokens/spacing.md"))
+        frontend_quality_template.get("qualityLevel").is_none(),
+        "frontend quality template must not emit legacy qualityLevel"
     );
     assert_eq!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
-            .value,
-        json!("tokens-css")
+        frontend_quality_template["surfaceDecisionContractRef"],
+        fields["task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"].value
     );
+    assert!(frontend_quality_template["referencePlanFilesChecked"]
+        .as_array()
+        .expect("reference plan files checked")
+        .contains(&json!("uix/tokens/spacing.md")));
+    assert!(frontend_quality_template["surfaceStateEvidence"][0].is_object());
+    assert!(frontend_quality_template["surfaceQualityRuleEvidence"][0].is_object());
     assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["scenarioKind"],
-        fields["task.frontendExperienceRequirement.uiQualityContract.scenario"].value["kind"]
-    );
-    assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["qualityLevel"],
-        json!("production_internal_product")
+        frontend_quality_template["surfaceRegionEvidence"][0]["id"],
+        json!("region_account_results")
     );
     assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["referenceGroupsChecked"]["tokens"]
+        frontend_quality_template["surfaceRegionEvidence"][0]["files"]
             .as_array()
-            .expect("reference group items checked")
-            .contains(&json!("spacing"))
+            .expect("region files")
+            .contains(&json!("replace_with_ui_file_path_for_this_region"))
     );
     assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["referenceFilesChecked"]
+        frontend_quality_template["surfaceRegionEvidence"][0]["states"]
             .as_array()
-            .expect("reference files checked")
-            .contains(&json!("uix/tokens/spacing.md"))
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["statesCovered"]
-            [0]
-        .is_object()
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["businessUiRulesChecked"][0]
-            .is_object()
-    );
-    assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["surfaceId"],
-        json!("surface_account_admin")
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["files"]
-            .as_array()
-            .expect("surface files")
-            .contains(&json!("replace_with_ui_file_path_for_this_surface"))
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["states"]
-            .as_array()
-            .expect("surface states")
+            .expect("region states")
             .contains(&json!("business_blocking"))
     );
     assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["businessActions"]
+        frontend_quality_template["surfaceActionEvidence"][0]["actions"]
             .as_array()
             .expect("surface actions")
             .contains(&json!("action_open_account"))
     );
     assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["designTokenEvidence"]["templateIdUsed"],
+        frontend_quality_template["designTokenEvidence"]["templateIdUsed"],
         json!("tokens-css")
     );
     assert!(fields["outputContract.resultRules"]
@@ -2990,7 +3235,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
 }
 
 #[test]
-fn task_result_repair_carries_frontend_quality_contract_fields() {
+fn task_result_repair_carries_compact_frontend_quality_context() {
     let fixture = Fixture::new("task-result-frontend-quality-repair");
     let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
         &fixture,
@@ -3058,20 +3303,21 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         .iter()
         .flat_map(read_group_fields_from_json)
         .collect::<BTreeSet<_>>();
-    assert!(repair_read_fields
+    assert!(!repair_read_fields
         .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
+    assert!(!repair_read_fields.contains("task.frontendExperienceRequirement.uiQualityContractRef"));
     assert!(repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"));
-    assert!(repair_read_fields.contains(
-        "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-    ));
-    assert!(repair_read_fields.contains(
-        "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-    ));
+        .contains("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"));
+    assert!(!repair_read_fields.iter().any(|field| field
+        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile")));
+    assert!(!repair_read_fields.iter().any(|field| field
+        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan")));
     assert!(!repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile"));
-    assert!(!repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"));
+        .contains("task.frontendExperienceRequirement.uiQualityContract.qualityGates"));
     assert!(repair_read_fields
         .contains("outputContract.schemaShape.properties.frontendQualitySelfCheck"));
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -3080,52 +3326,294 @@ fn task_result_repair_carries_frontend_quality_contract_fields() {
         fields: vec![
             "repairContract.issueConflicts".to_string(),
             "repairContract.minimalRepairRules".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-                .to_string(),
             "outputContract.resultTemplate".to_string(),
             "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
         ],
     })
     .expect("read repair contract fields")
     .fields;
-    assert!(repair_fields["repairContract.issueConflicts"]
+    let issue_conflicts = repair_fields["repairContract.issueConflicts"]
         .value
         .as_array()
-        .expect("issue conflicts")
+        .expect("issue conflicts");
+    let frontend_issue = issue_conflicts
         .iter()
-        .any(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"));
+        .find(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+        .expect("frontend quality issue");
+    assert!(frontend_issue["current"].get("gateResults").is_none());
+    assert!(frontend_issue["current"].get("gateResultsCount").is_none());
+    assert!(frontend_issue["expected"]
+        .get("referenceLoadPlan")
+        .is_none());
+    assert!(frontend_issue["expected"]["surfaceDecisionContractRef"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(!frontend_issue["expected"]["surfaceRegionIdsInScope"]
+        .as_array()
+        .expect("expected surface region ids")
+        .is_empty());
+    assert!(!frontend_issue["expected"]["surfaceQualityRuleIdsInScope"]
+        .as_array()
+        .expect("expected surface quality rule ids")
+        .is_empty());
+    assert!(
+        serde_json::to_vec(frontend_issue)
+            .expect("serialize compact frontend issue")
+            .len()
+            < 8_000,
+        "{frontend_issue:#}"
+    );
     assert!(
         serde_json::to_string(&repair_fields["repairContract.minimalRepairRules"].value)
             .expect("serialize rules")
             .contains("frontendQualitySelfCheck")
     );
-    assert!(repair_fields
-        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"]
-        .value["tokens"]
-        .as_array()
-        .expect("reference group items")
-        .contains(&json!("spacing")));
-    assert!(repair_fields
-        ["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"]
-        .value
-        .as_array()
-        .expect("reference load plan")
-        .iter()
-        .any(|item| item["path"] == json!("uix/tokens/spacing.md")));
-    assert_eq!(
-        repair_fields
-            ["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
-            .value,
-        json!("tokens-css")
-    );
     assert!(repair_fields["outputContract.resultTemplate"]
         .value
         .get("frontendQualitySelfCheck")
         .is_some());
+    assert!(
+        repair_fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
+            .value
+            .is_object()
+    );
+}
+
+#[test]
+fn continue_refreshes_stale_frontend_task_result_repair_contract() {
+    let fixture = Fixture::new("stale-frontend-task-result-repair-refresh");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    result
+        .as_object_mut()
+        .expect("result object")
+        .remove("frontendQualitySelfCheck");
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write invalid result");
+    let invalid = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(invalid["state"], "auto_runnable", "{invalid:#}");
+    assert_eq!(invalid["next"]["artifactKind"], "task_result_repair");
+    let stale_repair_ref = invalid["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef")
+        .to_string();
+    mutate_private_request_storage_value(&fixture, &stale_repair_ref, "task", |task| {
+        if let Some(requirement) = task
+            .get_mut("frontendExperienceRequirement")
+            .and_then(Value::as_object_mut)
+        {
+            requirement.remove("executionGuidance");
+        }
+    });
+
+    let refreshed = continue_delivery(fixture.root_str());
+
+    assert_eq!(refreshed["state"], "auto_runnable", "{refreshed:#}");
+    assert_eq!(refreshed["next"]["artifactKind"], "task_result_repair");
+    let refreshed_repair_ref = refreshed["next"]["requestRef"]
+        .as_str()
+        .expect("refreshed repair requestRef");
+    assert_ne!(refreshed_repair_ref, stale_repair_ref);
+    let refreshed_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: refreshed_repair_ref.to_string(),
+        fields: vec![
+            "repairContract.issueConflicts".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+        ],
+    })
+    .expect("read refreshed repair contract")
+    .fields;
+    let ui_production_brief = &refreshed_fields
+        ["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
+        .value;
+    assert!(
+        ui_production_brief["surfaceDecisionContract"].is_object(),
+        "{ui_production_brief:#}"
+    );
+    let issue_conflicts = refreshed_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts");
+    let frontend_issue = issue_conflicts
+        .iter()
+        .find(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+        .expect("frontend quality issue");
+    assert!(!frontend_issue["expected"]["surfaceRegionIdsInScope"]
+        .as_array()
+        .expect("expected region ids")
+        .is_empty());
+    assert!(!frontend_issue["expected"]["surfaceQualityRuleIdsInScope"]
+        .as_array()
+        .expect("expected quality rule ids")
+        .is_empty());
+}
+
+#[test]
+fn task_result_submit_hydrates_stale_frontend_task_guidance() {
+    let fixture = Fixture::new("task-result-stale-frontend-guidance");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    mutate_private_request_storage_value(&fixture, &execution_request_ref, "task", |task| {
+        if let Some(requirement) = task
+            .get_mut("frontendExperienceRequirement")
+            .and_then(Value::as_object_mut)
+        {
+            requirement.remove("executionGuidance");
+        }
+    });
+    write_task_result_candidate(&fixture, &execution_request_ref);
+
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(
+        accepted["next"]["artifactKind"], "task_result_repair",
+        "{accepted:#}"
+    );
+}
+
+#[test]
+fn review_execution_repair_carries_frontend_execution_guidance() {
+    let fixture = Fixture::new("review-exec-repair-frontend-guidance");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    assert_eq!(task_result["next"]["artifactKind"], "review_result");
+    let review_request_ref = task_result["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef")
+        .to_string();
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-frontend-quality",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "ui_quality",
+            "failureClass": "product_defect",
+            "category": "frontend_quality",
+            "summary": "The frontend quality implementation needs task-scoped repair.",
+            "evidence": "The review packet shows a frontend quality gap in the UI task.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec![
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
+            "outputContract.resultTemplate".to_string(),
+            "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
+        ],
+    })
+    .expect("read frontend repair execution fields")
+    .fields;
+    let ui_production_brief = &repair_fields
+        ["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
+        .value;
+    let surface_contract = &ui_production_brief["surfaceDecisionContract"];
+    assert!(surface_contract.is_object(), "{ui_production_brief:#}");
+    assert!(!surface_contract["regionsInScope"]
+        .as_array()
+        .expect("repair regions in scope")
+        .is_empty());
+    assert!(!surface_contract["actionsInScope"]
+        .as_array()
+        .expect("repair actions in scope")
+        .is_empty());
+    assert!(!surface_contract["qualityRulesInScope"]
+        .as_array()
+        .expect("repair quality rules in scope")
+        .is_empty());
+    assert!(
+        repair_fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"]
+            .value
+            .is_object()
+    );
+    let frontend_quality_template =
+        &repair_fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
+    assert_eq!(
+        frontend_quality_template["surfaceDecisionContractRef"],
+        surface_contract["contractRef"]
+    );
+    assert!(!frontend_quality_template["surfaceRegionEvidence"]
+        .as_array()
+        .expect("repair region evidence template")
+        .is_empty());
     assert!(
         repair_fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
             .value
@@ -3304,6 +3792,138 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
             .is_none(),
         "dataBinding must not duplicate top-level closure ids"
     );
+}
+
+#[test]
+fn task_result_contract_omits_and_strips_non_applicable_architecture_quality_evidence() {
+    let fixture = Fixture::new("task-result-strip-non-applicable-architecture-quality");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let request_id = request_id_from_ref(&execution_request_ref);
+    let output_contract_ref =
+        state::request_manifest::request_storage_ref(&fixture.root, &request_id, "outputContract")
+            .expect("output contract storage lookup")
+            .expect("output contract storage ref");
+    let output_contract: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(output_contract_ref))
+            .expect("read output contract"),
+    )
+    .expect("parse output contract");
+    assert!(
+        output_contract["schemaShape"]["properties"]
+            .get("architectureQualityEvidence")
+            .is_none(),
+        "non-applicable architectureQualityEvidence must not be exposed in schemaShape: {output_contract:#}"
+    );
+    assert!(
+        output_contract["resultTemplate"]
+            .get("architectureQualityEvidence")
+            .is_none(),
+        "non-applicable architectureQualityEvidence must not be exposed in resultTemplate"
+    );
+
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["taskResultId"] = json!("result-with-extra-architecture-quality");
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
+    result["architectureQualityEvidence"] = json!([{
+        "requirementId": "not-assigned",
+        "status": "satisfied",
+        "verificationIds": ["verify-account-ui-001"],
+        "changedFiles": ["src/App.tsx"],
+        "summary": "This field is not applicable to the task and should be stripped before validation."
+    }]);
+    write_json_atomic(&fixture.root.join(result_file), &result)
+        .expect("write task result with non-applicable evidence");
+
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(
+        accepted["next"]["artifactKind"],
+        json!("task_result_repair")
+    );
+
+    let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
+    let persisted_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "latestTaskResult");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(persisted_ref)).unwrap())
+            .expect("parse persisted task result");
+    assert!(persisted.get("architectureQualityEvidence").is_none());
+}
+
+#[test]
+fn task_result_submit_routes_invalid_frontend_surface_shape_to_quality_repair() {
+    let fixture = Fixture::new("task-result-invalid-frontend-surface-shape");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["taskResultId"] = json!("result-invalid-surface-shape");
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
+    result["frontendQualitySelfCheck"]["surfaceRegionEvidence"] = json!(["region_summary"]);
+    write_json_atomic(&fixture.root.join(result_file), &result)
+        .expect("write task result with invalid surface shape");
+
+    let rejected = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(rejected["state"], "auto_runnable", "{rejected:#}");
+    assert_eq!(rejected["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = rejected["next"]["requestRef"]
+        .as_str()
+        .expect("repair request ref");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read repair issue conflicts")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(
+            |issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"
+                && issue["fieldPath"]
+                    .as_str()
+                    .is_some_and(|path| path.contains("surfaceRegionEvidence"))
+        ));
 }
 
 #[test]
@@ -3545,6 +4165,51 @@ fn task_result_rejects_placeholder_jvm_production_package() {
 }
 
 #[test]
+fn task_result_rejects_satisfied_surface_quality_rule_without_evidence() {
+    let fixture = Fixture::new("task-result-surface-rule-evidence");
+    let execution_request_ref = start_planned_task_execution(&fixture);
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        let rules = result["frontendQualitySelfCheck"]["surfaceQualityRuleEvidence"]
+            .as_array_mut()
+            .expect("surface quality rule evidence");
+        let rule = rules.first_mut().expect("surface quality rule");
+        rule["status"] = json!("satisfied");
+        rule["evidence"] = json!("");
+    });
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read task result repair issues")
+    .fields;
+    assert!(repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"
+                && issue["fieldPath"].as_str().is_some_and(|path| {
+                    path.contains("surfaceQualityRuleEvidence") && path.ends_with(".evidence")
+                })
+        }));
+}
+
+#[test]
 fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     let fixture = Fixture::new("taskplan-execution-chain");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -3575,6 +4240,10 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .as_str()
         .expect("agent instruction")
         .contains("Do not stop at a progress recap"));
+    assert!(execution_result["agentInstruction"]
+        .as_str()
+        .expect("agent instruction")
+        .contains("Do not mark the workflow complete"));
     assert_eq!(execution_result["next"]["kind"], "execute_task");
     assert_eq!(
         execution_result["next"]["submitTool"],
@@ -3763,6 +4432,15 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .as_str()
         .expect("task result repair action requestRef")
         .to_string();
+    let status_after_repair_route: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(".loom/status.json")).expect("read status"),
+    )
+    .expect("parse status");
+    assert_eq!(
+        status_after_repair_route["deliveries"][0]["status"],
+        json!("executing"),
+        "TaskResult repair routing must keep project status aligned with delivery index"
+    );
     let resumed_task_result_repair = continue_delivery(fixture.root_str());
     assert_eq!(
         resumed_task_result_repair["state"], "auto_runnable",
@@ -5031,6 +5709,80 @@ fn task_result_requires_notes_for_unknown_long_running_work() {
 }
 
 #[test]
+fn completed_with_notes_task_result_rejects_partial_code_quality_evidence() {
+    let fixture = Fixture::new("task-result-completed-notes-partial-code-quality");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_with_persistence_quality(&fixture, taskplan_request_ref);
+    let accepted = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    let execution_request_ref = accepted["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result["status"] = json!("completed_with_notes");
+        result["notes"] = json!(["The task completed with an evidence note."]);
+        if let Some(evidence_items) = result
+            .get_mut("codeQualityEvidence")
+            .and_then(Value::as_array_mut)
+        {
+            for evidence in evidence_items {
+                evidence["status"] = json!("partial");
+                evidence["knownGaps"] =
+                    json!(["Selected Loom reference files were not resolved before submit."]);
+            }
+        }
+    });
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read task result repair issue conflicts")
+    .fields;
+    let issue_conflicts = repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts");
+    assert!(issue_conflicts.iter().any(|issue| {
+        issue["code"] == "TASK_RESULT_CODE_QUALITY_INVALID"
+            && issue["fieldPath"] == "codeQualityEvidence[].status"
+    }));
+    assert!(issue_conflicts.iter().any(|issue| {
+        issue["code"] == "TASK_RESULT_CODE_QUALITY_INVALID"
+            && issue["fieldPath"] == "codeQualityEvidence[].knownGaps"
+    }));
+}
+
+#[test]
 fn failed_task_result_routes_to_review_after_four_failed_attempts() {
     let fixture = Fixture::new("failed-task-result-retry-budget");
     let mut request_ref = start_planned_task_execution(&fixture);
@@ -5241,6 +5993,62 @@ fn review_accept_rejects_continue_without_next_phase_preview() {
         active_phase_id(fixture.root_str(), &delivery_id),
         "phase-1".to_string()
     );
+}
+
+#[test]
+fn completed_frontend_quality_task_result_rejects_partial_self_check() {
+    let fixture = Fixture::new("frontend-quality-partial-task-result-repair");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution result template")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut stale_result = fields["outputContract.resultTemplate"].value.clone();
+    stale_result["taskResultId"] = json!("result-before-frontend-repair");
+    stale_result["changedFiles"] = json!(["src/App.tsx"]);
+    complete_frontend_quality_token_evidence_for_test(&mut stale_result);
+    stale_result["frontendQualitySelfCheck"]["status"] = json!("partial");
+    stale_result["frontendQualitySelfCheck"]["knownGaps"] =
+        json!(["UI density needed one more repair pass."]);
+    write_json_atomic(&fixture.root.join(result_file), &stale_result)
+        .expect("write stale task result");
+
+    let result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["artifactKind"], "task_result_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec!["repairContract.issueConflicts".to_string()],
+    })
+    .expect("read frontend quality repair issues")
+    .fields;
+    let issue_conflicts = repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts");
+    assert!(issue_conflicts.iter().any(|issue| {
+        issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"
+            && issue["fieldPath"] == "frontendQualitySelfCheck.status"
+    }));
 }
 
 #[test]
@@ -5696,6 +6504,70 @@ fn review_accept_rejects_pending_action_refs_with_wrong_route() {
 }
 
 #[test]
+fn review_accept_drops_pending_action_that_duplicates_next_action() {
+    let fixture = Fixture::new("review-drops-duplicate-pending-action");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-product",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "code",
+            "failureClass": "product_defect",
+            "category": "functional_correctness",
+            "summary": "The implemented flow misses a required behavior.",
+            "evidence": "Task result evidence does not cover the required behavior.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+    mutate_review_result_candidate(&fixture, &review_request_ref, |candidate| {
+        candidate["pendingActions"] = json!([{
+            "type": "execution_repair",
+            "findingRefs": ["finding-product"],
+            "reason": "This duplicates the top-level route and should be normalized away."
+        }]);
+    });
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+}
+
+#[test]
+fn review_accept_drops_untyped_pending_action_drafts_before_schema_parse() {
+    let fixture = Fixture::new("review-drops-untyped-pending-action");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    mutate_review_result_candidate(&fixture, &review_request_ref, |candidate| {
+        candidate["pendingActions"] = json!([{
+            "findingRefs": [],
+            "reason": "Draft action without a route type should not cause a schema-level bounce."
+        }]);
+    });
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "done", "{result:#}");
+}
+
+#[test]
 fn review_accept_rejects_warning_only_repair_route() {
     let fixture = Fixture::new("review-warning-only-repair");
     let review_request_ref = complete_task_execution_to_review(&fixture);
@@ -6098,130 +6970,148 @@ fn review_flags_missing_workflow_closure_assignment_as_taskplan_repair() {
 }
 
 #[test]
-fn review_flags_frontend_quality_self_check_gaps() {
-    let fixture = Fixture::new("review-frontend-quality-gap");
-    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+fn review_accept_hydrates_execution_repair_targets_from_all_review_signals() {
+    let fixture = Fixture::new("review-hydrates-signal-targets");
+    let review_request_ref = complete_task_execution_to_review_with_candidate(
         &fixture,
         valid_candidate_with_frontend_json(),
     );
-    let taskplan_result = complete_architecture_sections_with(
-        &fixture,
-        &architecture_request_ref,
-        architecture_section_candidate_with_workflow_closure_no_runtime_json,
-    );
-    assert_eq!(
-        taskplan_result["state"], "auto_runnable",
-        "{taskplan_result:#}"
-    );
-    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
-        .as_str()
-        .expect("taskplan requestRef")
-        .to_string();
-    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, &taskplan_request_ref);
-    let execution_result = call_submit(
-        "loom.taskPlanAcceptFile",
-        &taskplan_request_ref,
-        fixture.root_str(),
-    );
-    assert_eq!(
-        execution_result["state"], "auto_runnable",
-        "{execution_result:#}"
-    );
-    let execution_request_ref = execution_result["next"]["requestRef"]
-        .as_str()
-        .expect("execution requestRef")
-        .to_string();
-    let execution_fields = state::read_request_fields(ReadRequestFieldsInput {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: execution_request_ref.clone(),
-        fields: vec![
-            "outputContract.resultFile".to_string(),
-            "outputContract.resultTemplate".to_string(),
-        ],
+        request_ref: review_request_ref.clone(),
+        fields: vec!["outputContract.allowedRefs.taskIds".to_string()],
     })
-    .expect("read execution result template")
+    .expect("read review allowed task ids")
     .fields;
-    let result_file = execution_fields["outputContract.resultFile"]
-        .value
-        .as_str()
-        .expect("result file");
-    let mut task_result_candidate = execution_fields["outputContract.resultTemplate"]
-        .value
-        .clone();
-    task_result_candidate["changedFiles"] = json!(["src/App.tsx"]);
-    complete_frontend_quality_token_evidence_for_test(&mut task_result_candidate);
-    task_result_candidate["frontendQualitySelfCheck"]["status"] = json!("needs_repair");
-    task_result_candidate["frontendQualitySelfCheck"]["knownGaps"] =
-        json!(["The UI quality pass found a remaining density/state polish gap."]);
-    write_json_atomic(&fixture.root.join(result_file), &task_result_candidate)
-        .expect("write task result with frontend quality gap");
-    let task_result = call_submit(
-        "loom.recordTaskResultFile",
-        &execution_request_ref,
-        fixture.root_str(),
-    );
-    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
-    assert_eq!(task_result["next"]["artifactKind"], "review_result");
-    let review_request_ref = task_result["next"]["requestRef"]
-        .as_str()
-        .expect("review requestRef")
-        .to_string();
-
-    let review_packets = state::read_field_group(ReadFieldGroupInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: review_request_ref.clone(),
-        group_id: "review_packets".to_string(),
-    })
-    .expect("read review packets");
-    assert_eq!(
-        review_packets.fields["reviewPacket.taskResultSummaries"].value[0]
-            ["frontendQualitySelfCheckPresent"],
-        json!(true)
-    );
-    assert_eq!(
-        review_packets.fields["reviewPacket.taskResultSummaries"].value[0]
-            ["frontendQualitySelfCheck"]["knownGapCount"],
-        json!(1)
-    );
-    let review_matrices = state::read_field_group(ReadFieldGroupInput {
-        project_root: fixture.root_str().to_string(),
-        request_ref: review_request_ref.clone(),
-        group_id: "review_matrices".to_string(),
-    })
-    .expect("read review matrices");
-    let quality_matrix = review_matrices.fields["reviewMatrixSummary.frontendQuality"]
+    let task_ids = fields["outputContract.allowedRefs.taskIds"]
         .value
         .as_array()
-        .expect("frontend quality matrix summary");
-    assert_eq!(quality_matrix[0]["qualitySatisfied"], json!(false));
-    assert_eq!(quality_matrix[0]["knownGapCount"], json!(1));
-    assert_eq!(
-        quality_matrix[0]["recommendedNextAction"],
-        json!("execution_repair")
-    );
-    let review_signals = review_matrices.fields["outputContract.reviewSignals.items"]
-        .value
-        .as_array()
-        .expect("review signals");
-    assert!(
-        review_signals.iter().any(|signal| {
-            signal["kind"] == json!("frontend_ui_quality")
-                && signal["uiQualitySatisfied"] == json!(false)
-                && signal["recommendedNextAction"] == json!("execution_repair")
-        }),
-        "review signals must include compact frontend quality failure fact: {review_signals:#?}"
+        .expect("task ids")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(task_ids.len() >= 2, "test requires at least two task ids");
+    let first_task_id = task_ids[0].clone();
+    let second_task_id = task_ids[1].clone();
+    mutate_private_request_storage_value(
+        &fixture,
+        &review_request_ref,
+        "outputContract",
+        |contract| {
+            contract["reviewSignals"]["items"] = json!([
+                {
+                    "signalId": "sig-code-quality-first-task",
+                    "kind": "code_quality",
+                    "taskRefs": [first_task_id],
+                    "codeQualitySatisfied": false,
+                    "recommendedNextAction": "execution_repair"
+                },
+                {
+                    "signalId": "sig-frontend-quality-second-task",
+                    "kind": "frontend_ui_quality",
+                    "taskRefs": [second_task_id],
+                    "uiQualitySatisfied": false,
+                    "recommendedNextAction": "execution_repair"
+                }
+            ]);
+        },
     );
 
-    write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-first-task-only",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "contract",
+            "failureClass": "contract_gap",
+            "category": "code_quality",
+            "summary": "Only one finding was written, but review signals identify two execution repair task targets.",
+            "evidence": "The review signals are the machine-owned source for execution repair target coverage.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRefs": [task_ids[0]],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
     let result = call_submit(
         "loom.reviewAcceptFile",
         &review_request_ref,
         fixture.root_str(),
     );
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT" && issue["fieldPath"] == "decision"
-    }));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    let review_result_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult");
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(&review_result_ref))
+            .expect("read persisted review result"),
+    )
+    .expect("parse persisted review result");
+    assert_eq!(
+        persisted["nextAction"]["targetTaskIds"],
+        json!([task_ids[0], task_ids[1]])
+    );
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(result["next"]["taskId"], json!(first_task_id));
+    let first_repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("first repair request ref")
+        .to_string();
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let active_details = &index["phases"][0]["nextAction"]["details"];
+    assert_eq!(active_details["currentTargetTaskId"], json!(first_task_id));
+    assert_eq!(
+        active_details["pendingTargetTaskIds"],
+        json!([second_task_id])
+    );
+
+    write_task_result_candidate(&fixture, &first_repair_request_ref);
+    let next_repair = call_submit(
+        "loom.recordTaskResultFile",
+        &first_repair_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(next_repair["state"], "auto_runnable", "{next_repair:#}");
+    assert_eq!(
+        next_repair["next"]["executionKind"], "delivery_execution_repair",
+        "{next_repair:#}"
+    );
+    assert_eq!(next_repair["next"]["taskId"], json!(second_task_id));
+    assert_ne!(
+        next_repair["next"]["artifactKind"],
+        json!("review_result"),
+        "{next_repair:#}"
+    );
+    assert_eq!(
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult"),
+        review_result_ref
+    );
+    let second_repair_request_ref = next_repair["next"]["requestRef"]
+        .as_str()
+        .expect("second repair request ref");
+    let second_repair_root = read_request_root_value(fixture.root_str(), second_repair_request_ref);
+    assert_eq!(
+        second_repair_root["repairContext"]["sourceRef"],
+        json!(review_result_ref)
+    );
+    assert_eq!(
+        second_repair_root["repairContext"]["findingRefs"],
+        json!(["finding-first-task-only"])
+    );
 }
 
 #[test]
@@ -6325,6 +7215,44 @@ fn review_execution_repair_materializes_repair_task() {
     let repair_core_fields = repair_core.expanded_fields();
     assert!(!repair_core_fields.contains(&"repairContext.attemptCount".to_string()));
     assert!(repair_core_fields.contains(&"repairContext.findingRefs".to_string()));
+    assert!(repair_core_fields.contains(&"task.architectureQualityRequirementRefs".to_string()));
+    assert!(
+        repair_core_fields.contains(&"sourceContext.architectureQualityRequirements".to_string())
+    );
+    let repair_result = inspected_repair
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "repair_result_contract")
+        .expect("repair result contract group");
+    let repair_result_fields = repair_result.expanded_fields();
+    assert!(repair_result_fields.contains(
+        &"outputContract.schemaShape.properties.architectureQualityEvidence".to_string()
+    ));
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec![
+            "outputContract.requiredTopLevelFields".to_string(),
+            "outputContract.resultTemplate".to_string(),
+            "outputContract.schemaShape.properties.architectureQualityEvidence".to_string(),
+        ],
+    })
+    .expect("read review repair result contract")
+    .fields;
+    assert!(repair_fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required fields")
+        .contains(&json!("architectureQualityEvidence")));
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("architectureQualityEvidence")
+        .is_some());
+    assert!(
+        repair_fields["outputContract.schemaShape.properties.architectureQualityEvidence"]
+            .value
+            .is_array()
+    );
 }
 
 #[test]
@@ -6544,7 +7472,88 @@ fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
 }
 
 #[test]
-fn taskplan_submit_requires_covered_requirement_detail_assignment() {
+fn taskplan_submit_normalizes_unique_missing_requirement_detail_owner() {
+    let fixture = Fixture::new("taskplan-detail-owner-normalization");
+    let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
+    let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef")
+        .to_string();
+
+    write_taskplan_grouped_candidates(&fixture, &taskplan_request_ref);
+    let mut detail_ref = None;
+    for group_file in taskplan_group_files(&fixture, &taskplan_request_ref) {
+        let group_path = fixture.root.join(&group_file);
+        let mut group_value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+                .expect("parse group file");
+        if detail_ref.is_none() {
+            detail_ref = group_value["tasks"]
+                .as_array()
+                .expect("group tasks")
+                .iter()
+                .find_map(|task| {
+                    task["requirementDetailRefs"]
+                        .as_array()
+                        .and_then(|refs| refs.first())
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+        }
+        for task in group_value["tasks"]
+            .as_array_mut()
+            .expect("group tasks")
+            .iter_mut()
+        {
+            task["requirementDetailRefs"] = json!([]);
+            for intent in task["verificationIntents"]
+                .as_array_mut()
+                .expect("verification intents")
+                .iter_mut()
+            {
+                intent["requirementDetailRefs"] = json!([]);
+            }
+        }
+        write_json_atomic(&group_path, &group_value).expect("write group without detail refs");
+    }
+    let detail_ref = detail_ref.expect("detail ref");
+
+    let result = call_submit(
+        "loom.taskPlanAcceptFile",
+        &taskplan_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &taskplan_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let persisted: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
+            .expect("parse persisted taskplan");
+    let detail_json = json!(detail_ref);
+    let owner_task = persisted["tasks"]
+        .as_array()
+        .expect("persisted tasks")
+        .iter()
+        .find(|task| {
+            task["taskKind"] != json!("runtime_delivery_closure")
+                && task["requirementDetailRefs"]
+                    .as_array()
+                    .is_some_and(|refs| refs.iter().any(|item| item == &detail_json))
+        })
+        .expect("normalized owner task");
+    assert!(owner_task["verificationIntents"]
+        .as_array()
+        .expect("verification intents")
+        .iter()
+        .any(|intent| intent["requirementDetailRefs"]
+            .as_array()
+            .is_some_and(|refs| refs.iter().any(|item| item == &detail_json))));
+}
+
+#[test]
+fn taskplan_submit_requires_covered_requirement_detail_assignment_when_owner_cannot_be_inferred() {
     let fixture = Fixture::new("taskplan-detail-assignment-required");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
@@ -6564,6 +7573,13 @@ fn taskplan_submit_requires_covered_requirement_detail_assignment() {
             .expect("group tasks")
             .iter_mut()
         {
+            if task["taskKind"] != json!("runtime_delivery_closure") {
+                task["taskKind"] = json!("verification_increment");
+                task["implementationActions"] = json!(["add_or_update_tests"]);
+                task.as_object_mut()
+                    .expect("task object")
+                    .remove("frontendExperienceRequirement");
+            }
             task["requirementDetailRefs"] = json!([]);
             for intent in task["verificationIntents"]
                 .as_array_mut()
@@ -6807,10 +7823,12 @@ fn taskplan_submit_normalizes_frontend_ui_quality_contract_on_ui_tasks() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["frontendExperienceRequirement"]
-        .as_object_mut()
-        .expect("frontend requirement object")
-        .remove("uiQualityContract");
+    group_value["tasks"][0]["frontendExperienceRequirement"]["uiQualityContract"] = json!({
+        "scenario": {"kind": "legacy_should_not_persist"},
+        "qualityGates": [{"gateId": "legacy.gate"}]
+    });
+    group_value["tasks"][0]["frontendExperienceRequirement"]["uiTaskQualityGates"] =
+        json!([{"gateId": "legacy.task.gate"}]);
     write_json_atomic(&group_path, &group_value)
         .expect("write frontend requirement without ui quality");
 
@@ -6826,11 +7844,24 @@ fn taskplan_submit_normalizes_frontend_ui_quality_contract_on_ui_tasks() {
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
             .expect("parse persisted taskplan");
-    let expected =
-        frontend_requirement_template_from_taskplan_request(&fixture, &taskplan_request_ref);
-    assert_eq!(
-        persisted["tasks"][0]["frontendExperienceRequirement"]["uiQualityContract"],
-        expected["uiQualityContract"]
+    assert!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]
+            .get("uiQualityContract")
+            .is_none(),
+        "TaskPlan persistence must drop legacy uiQualityContract"
+    );
+    assert!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]
+            .get("uiTaskQualityGates")
+            .is_none(),
+        "TaskPlan persistence must drop legacy uiTaskQualityGates"
+    );
+    assert!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]["uiTaskScope"]
+            ["ownershipDimensions"]
+            .as_array()
+            .expect("normalized ownership dimensions")
+            .contains(&json!("content_boundary"))
     );
 }
 
@@ -7315,6 +8346,10 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         .is_some());
     assert!(frontend_group
         .fields
+        .get("uiQualitySeed.qualityRulePreview")
+        .is_some());
+    assert!(frontend_group
+        .fields
         .get("uiQualitySeed.designTokenAssetPlan")
         .is_some());
     advance_architecture_to_section(&fixture, &repair_action_ref, "runtime_delivery");
@@ -7347,6 +8382,12 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         architecture_section_contract(&fixture, &repair_action_ref, "runtime_delivery")
             ["resultTemplate"]["content"]
             .clone();
+    assert!(
+        repair_runtime_template
+            .pointer("/runtimeDelivery/deploymentShape")
+            .is_none(),
+        "deploymentShape is MCP-derived and must not appear in repair resultTemplate: {repair_runtime_template:#}"
+    );
     assert!(repair_runtime_template
         .pointer("/runtimeDelivery/start/port")
         .is_none());
@@ -7421,10 +8462,45 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         frontend_template_refs["brainstormFrontendExperienceRef"],
         json!(frontend_authority_ref)
     );
+    let repair_frontend_template =
+        &frontend_section_contract["resultTemplate"]["content"]["frontendExperience"];
+    assert!(
+        repair_frontend_template.get("uiQualityContract").is_none(),
+        "repair frontend template must not ask agents to write legacy uiQualityContract"
+    );
+    assert!(
+        repair_frontend_template["surfaceDecisionCandidate"]
+            .get("selectedPattern")
+            .is_some(),
+        "repair frontend template must ask agents for the semantic surface decision candidate"
+    );
+    assert!(
+        repair_frontend_template["surfaceDecisionCandidate"]
+            .get("referencePlan")
+            .is_none(),
+        "repair frontend template must not ask agents to write MCP-owned referencePlan"
+    );
     let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
     assert!(
         repair_root.get("sectionOutputs").is_none(),
         "architecture repair request root must not expose all section contracts"
+    );
+    let repair_output_contract = private_output_contract(&fixture, &repair_action_ref);
+    assert_eq!(
+        repair_output_contract["writeTargets"][0]["targetId"],
+        json!("coverage")
+    );
+    assert!(
+        repair_output_contract["schemaShape"]
+            .get("properties")
+            .is_none(),
+        "architecture repair outputContract schemaShape must be the current section shape, not the full Rust candidate schema"
+    );
+    assert!(
+        repair_output_contract["schemaShape"]
+            .pointer("/content/frontendExperience/uiQualityContract")
+            .is_none(),
+        "architecture repair outputContract schemaShape must not expose legacy uiQualityContract"
     );
     let result = complete_architecture_sections(&fixture, &repair_action_ref);
 
@@ -7856,14 +8932,18 @@ fn run_knowledge_context(
 }
 
 fn write_candidate_target(fixture: &Fixture, request_ref: &str, value: &Value) {
+    let path = architecture_write_target_path(fixture, request_ref);
+    write_json_atomic(&fixture.root.join(path), value).expect("write candidate");
+}
+
+fn architecture_write_target_path(fixture: &Fixture, request_ref: &str) -> String {
     let inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
     })
     .expect("inspect request");
     let target = inspected.write_targets.first().expect("write target");
-    let path = target["path"].as_str().expect("target path");
-    write_json_atomic(&fixture.root.join(path), value).expect("write candidate");
+    target["path"].as_str().expect("target path").to_string()
 }
 
 fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
@@ -8857,6 +9937,14 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
 
 fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
     complete_architecture_quality_evidence_for_test(result);
+    if let Some(self_check) = result
+        .get_mut("frontendQualitySelfCheck")
+        .and_then(Value::as_object_mut)
+    {
+        self_check.insert("status".to_string(), json!("satisfied"));
+        self_check.insert("knownGaps".to_string(), json!([]));
+        complete_frontend_quality_surface_evidence_for_test(self_check);
+    }
     let Some(evidence) = result
         .pointer_mut("/frontendQualitySelfCheck/designTokenEvidence")
         .and_then(Value::as_object_mut)
@@ -8881,6 +9969,51 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
         );
     }
     evidence.insert("parallelTokenSystemCreated".to_string(), json!(false));
+}
+
+fn complete_frontend_quality_surface_evidence_for_test(
+    self_check: &mut serde_json::Map<String, Value>,
+) {
+    for field in [
+        "surfaceRegionEvidence",
+        "surfaceActionEvidence",
+        "surfaceStateEvidence",
+        "surfaceQualityRuleEvidence",
+    ] {
+        if let Some(items) = self_check.get_mut(field).and_then(Value::as_array_mut) {
+            for item in items {
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("surface-contract-item")
+                    .to_string();
+                item["status"] = json!("satisfied");
+                item["files"] = json!(["src/App.tsx"]);
+                item["evidence"] = json!(format!(
+                    "src/App.tsx implements and verifies the task-scoped UI contract item {id}."
+                ));
+            }
+        }
+    }
+    if let Some(content_boundary) = self_check
+        .get_mut("contentBoundaryEvidence")
+        .and_then(Value::as_object_mut)
+    {
+        content_boundary.insert("checked".to_string(), json!(true));
+        content_boundary.insert("forbiddenContentViolations".to_string(), json!([]));
+        content_boundary.insert(
+            "allowedContentExamples".to_string(),
+            json!(["Business-facing account workflow labels"]),
+        );
+        content_boundary.insert(
+            "evidence".to_string(),
+            json!("src/App.tsx was checked to keep user-visible content inside the business UI boundary."),
+        );
+    }
+    self_check.insert(
+        "summary".to_string(),
+        json!("Frontend quality evidence is complete for the task-scoped surface contract."),
+    );
 }
 
 fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
@@ -9186,6 +10319,70 @@ fn task_result_repair_template_preserves_previous_changed_files_for_replacement(
 }
 
 #[test]
+fn task_result_repair_submit_preserves_required_architecture_evidence_when_repair_refs_are_stale() {
+    let fixture = Fixture::new("task-result-repair-required-arch-stale-refs");
+    let execution_request_ref = start_planned_task_execution_without_runtime_closure(&fixture);
+
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        result
+            .as_object_mut()
+            .expect("task result object")
+            .remove("architectureQualityEvidence");
+    });
+    let repair_action = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(repair_action["state"], "auto_runnable", "{repair_action:#}");
+    assert_eq!(
+        repair_action["next"]["artifactKind"],
+        json!("task_result_repair")
+    );
+    let repair_request_ref = repair_action["next"]["requestRef"]
+        .as_str()
+        .expect("repair request ref");
+
+    mutate_private_request_storage_value(&fixture, repair_request_ref, "task", |task| {
+        task["architectureQualityRequirementRefs"] = Value::Null;
+    });
+    mutate_private_request_storage_value(
+        &fixture,
+        repair_request_ref,
+        "outputContract",
+        |contract| {
+            assert!(contract["requiredTopLevelFields"]
+                .as_array()
+                .expect("required fields")
+                .contains(&json!("architectureQualityEvidence")));
+            contract["resultTemplate"]
+                .as_object_mut()
+                .expect("result template object")
+                .remove("architectureQualityEvidence");
+            contract["schemaShape"]["properties"]
+                .as_object_mut()
+                .expect("schema properties object")
+                .remove("architectureQualityEvidence");
+        },
+    );
+
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    let accepted = call_submit(
+        "loom.repairSubmitFile",
+        repair_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(
+        accepted["next"]["artifactKind"],
+        json!("task_result_repair"),
+        "{accepted:#}"
+    );
+}
+
+#[test]
 fn task_result_submit_backfills_machine_owned_shape_fields() {
     let fixture = Fixture::new("task-result-backfills-machine-shape");
     let execution_request_ref = start_planned_task_execution_without_runtime_closure(&fixture);
@@ -9270,6 +10467,52 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {
     start_planned_task_execution_with_candidate(fixture, valid_candidate_json())
+}
+
+fn start_frontend_quality_task_execution_without_architecture_quality(fixture: &Fixture) -> String {
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    assert_eq!(
+        taskplan_result["state"], "auto_runnable",
+        "{taskplan_result:#}"
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_for_workflow_closure(fixture, taskplan_request_ref);
+    let group_file = first_taskplan_group_file(fixture, taskplan_request_ref);
+    let group_path = fixture.root.join(&group_file);
+    let mut group_value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
+            .expect("parse group file");
+    group_value["tasks"][0]["architectureQualityRequirementRefs"] = json!([]);
+    group_value["tasks"][0]["apiContractRequirementRefs"] = json!([]);
+    group_value["tasks"][0]["codeQualityRequirementRefs"] = json!([]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["decisions"] = json!([]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["nfrs"] = json!([]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["risks"] = json!([]);
+    write_json_atomic(&group_path, &group_value).expect("write frontend-only group file");
+
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string()
 }
 
 fn start_planned_task_execution_without_runtime_closure(fixture: &Fixture) -> String {
@@ -9859,11 +11102,6 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .map(|field| &field.value)
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let frontend_ui_quality_contract =
-        architecture_section_contract(fixture, request_ref, "frontend_experience")
-            ["resultTemplate"]["content"]["frontendExperience"]["uiQualityContract"]
-            .clone();
-
     let content = match section {
         "foundation" => json!({
             "source": {
@@ -9912,7 +11150,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 "dataViews": [],
                 "actions": [],
                 "operationPaths": [],
-                "uiQualityContract": frontend_ui_quality_contract,
+                "surfaceDecisionCandidate": frontend_surface_decision_candidate_json(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": frontend_authority_ref
                 }
@@ -10113,6 +11351,97 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     })
 }
 
+fn frontend_surface_decision_candidate_json() -> Value {
+    json!({
+        "patternRankings": [{
+            "kind": "collection_workbench",
+            "score": 0.9,
+            "matchedSignals": ["staff console", "record list", "business action"],
+            "missingSignals": [],
+            "mismatchSignals": [],
+            "evidenceRefs": ["surface_account_admin", "view_account_list", "action_open_account"]
+        }],
+        "selectedPattern": {
+            "mode": "known",
+            "knownPattern": "collection_workbench",
+            "primaryKnownPattern": null,
+            "secondaryKnownPatterns": [],
+            "customPattern": null,
+            "nearestKnownPatterns": [],
+            "confidence": "high",
+            "rationale": "The fixture frontend is a staff-facing record workbench with list, detail, and create action.",
+            "evidenceRefs": ["surface_account_admin", "view_account_list", "action_open_account"]
+        },
+        "semanticFacts": {
+            "userJobs": ["browse", "search", "create"],
+            "informationShapes": ["record_collection", "record_detail", "form_fields"],
+            "operationModels": ["filter_sort_paginate", "create_update"],
+            "riskFactors": ["business_blocking"],
+            "navigationModel": "module_shell",
+            "devicePosture": "responsive_web",
+            "productMode": "internal_business_product"
+        },
+        "layoutModel": {
+            "density": "workbench_dense",
+            "shell": "sidebar_topbar_content_detail",
+            "primaryWorkRegionId": "region_account_results",
+            "responsiveModel": "desktop_split_mobile_list_detail"
+        },
+        "regionModel": [{
+            "regionId": "region_account_results",
+            "role": "record_results",
+            "purpose": "Show account records and current status.",
+            "presentation": "table",
+            "stateRefs": ["loading", "empty", "error", "success"],
+            "actionRefs": ["action_open_account"]
+        }],
+        "informationModel": {
+            "primaryObjects": ["account"],
+            "fields": ["account id", "status", "investor name", "updated time"],
+            "scanOrder": ["identity", "status", "primary action", "detail"]
+        },
+        "actionModel": [{
+            "actionId": "action_open_account",
+            "kind": "primary",
+            "label": "新建证券账户",
+            "placement": "page_actions",
+            "risk": "business_blocking",
+            "feedbackStates": ["loading", "success", "error", "business_blocking"]
+        }],
+        "stateModel": [{
+            "state": "loading",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Scoped loading appears in the account results region."
+        }, {
+            "state": "empty",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Empty state explains the account list has no records and keeps the create action available."
+        }, {
+            "state": "error",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Recoverable error appears near the affected account region."
+        }, {
+            "state": "business_blocking",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Business block explains why an account action cannot continue."
+        }],
+        "compositionConstraints": {
+            "requiredComposition": ["navigation", "primary_work_region", "feedback_area"],
+            "forbiddenComposition": ["no_marketing_hero", "no_feature_explainer_wall"],
+            "antiDemoRules": ["no_internal_process_copy", "no_decorative_filler_before_workflow"]
+        },
+        "contentBoundary": {
+            "forbiddenUserVisibleContent": [
+                "runtime_commands",
+                "technical_stack_explanation",
+                "delivery_progress_notes",
+                "verification_instructions"
+            ],
+            "copyRule": "Use staff-facing account workflow language only."
+        }
+    })
+}
+
 fn architecture_section_candidate_with_workflow_closure_json(
     fixture: &Fixture,
     request_ref: &str,
@@ -10207,8 +11536,6 @@ fn architecture_section_candidate_with_workflow_closure_json(
         }
         "frontend_experience" => {
             let refs = candidate["content"]["frontendExperience"]["sourceRefs"].clone();
-            let ui_quality_contract =
-                candidate["content"]["frontendExperience"]["uiQualityContract"].clone();
             candidate["content"]["frontendExperience"] = json!({
                 "required": true,
                 "kind": "staff_console",
@@ -10235,7 +11562,7 @@ fn architecture_section_candidate_with_workflow_closure_json(
                     "dataViewRefs": ["view_account_list"],
                     "actionRefs": ["action_open_account"]
                 }],
-                "uiQualityContract": ui_quality_contract,
+                "surfaceDecisionCandidate": frontend_surface_decision_candidate_json(),
                 "sourceRefs": refs
             });
         }
@@ -10373,6 +11700,43 @@ fn private_architecture_section_outputs(fixture: &Fixture, request_ref: &str) ->
     let path = fixture.root.join(relative);
     serde_json::from_str(&std::fs::read_to_string(path).expect("read private sectionOutputs"))
         .expect("parse private sectionOutputs")
+}
+
+fn private_output_contract(fixture: &Fixture, request_ref: &str) -> Value {
+    let request_id = request_ref
+        .split("/requests/")
+        .nth(1)
+        .expect("request id in ref");
+    let relative =
+        state::request_manifest::request_storage_ref(&fixture.root, request_id, "outputContract")
+            .expect("read private outputContract ref")
+            .expect("private outputContract ref");
+    let path = fixture.root.join(relative);
+    serde_json::from_str(&std::fs::read_to_string(path).expect("read private outputContract"))
+        .expect("parse private outputContract")
+}
+
+fn mutate_private_request_storage_value<F>(
+    fixture: &Fixture,
+    request_ref: &str,
+    key: &str,
+    mutate: F,
+) where
+    F: FnOnce(&mut Value),
+{
+    let request_id = request_ref
+        .split("/requests/")
+        .nth(1)
+        .expect("request id in ref");
+    let relative = state::request_manifest::request_storage_ref(&fixture.root, request_id, key)
+        .expect("read private request storage ref")
+        .unwrap_or_else(|| panic!("private {key} storage ref"));
+    let path = fixture.root.join(relative);
+    let mut value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read private request value"))
+            .expect("parse private request value");
+    mutate(&mut value);
+    write_json_atomic(&path, &value).expect("write private request value");
 }
 
 fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {

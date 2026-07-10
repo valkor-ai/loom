@@ -1,16 +1,15 @@
 use std::path::Path;
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
-    ui_quality_contract_shape, ui_quality_contract_template, ui_quality_enum_refs,
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    PlanningGenerationContract, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
+    ui_surface_decision_candidate_shape, ui_surface_decision_candidate_template,
+    ui_surface_decision_enum_refs, ArchitectureSectionGroup, PlanningGenerationContract,
+    TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
     LoomMcpFailureResult, RouteAction, RouteActionKind, TransitionStore,
 };
-use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -136,7 +135,6 @@ fn materialize_request_inner(
         has_previous_runtime_delivery,
         &frontend_experience_source,
         &planning_contract,
-        &technical_baseline,
         &api_quality_seed,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
@@ -215,9 +213,6 @@ fn build_request_root(
     section_outputs: &[SectionOutput],
     api_quality_seed: &Value,
 ) -> Result<Value, state::store::StateError> {
-    let candidate_schema =
-        serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
-            .unwrap_or_else(|_| json!({ "type": "object" }));
     let source_refs = build_source_refs(
         planning_contract_ref,
         technical_baseline_ref,
@@ -260,7 +255,8 @@ fn build_request_root(
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
             "architectureQuality": architecture_quality_enum_refs(),
-            "uiQuality": ui_quality_enum_refs()
+            "uiQuality": ui_quality_enum_refs(),
+            "uiSurfaceDecision": ui_surface_decision_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -281,7 +277,7 @@ fn build_request_root(
                 "required": true,
                 "description": format!("Write the {} Architecture section candidate JSON.", section_name(current_output.section))
             }],
-            "schemaShape": candidate_schema,
+            "schemaShape": current_output.schema_shape.clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
                     "schemaVersion",
@@ -505,6 +501,7 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.referenceLoadPlan",
+            "uiQualitySeed.qualityRulePreview",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -786,16 +783,8 @@ fn build_section_outputs(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
-    technical_baseline: &TechnicalBaselineContract,
     api_quality_seed: &Value,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
-    let ui_quality_seed = build_ui_quality_seed(
-        planning_contract
-            .planning_inputs
-            .frontend_experience
-            .as_ref(),
-        Some(technical_baseline),
-    );
     SECTION_ORDER
         .iter()
         .copied()
@@ -820,7 +809,6 @@ fn build_section_outputs(
                     has_previous_runtime_delivery,
                     frontend_experience_source,
                     planning_contract,
-                    &ui_quality_seed,
                     api_quality_seed,
                 ),
                 enum_refs: section_enum_refs(
@@ -939,6 +927,53 @@ fn section_content_shape(
                         "surfaceId": "string",
                         "surfaceRole": "app_shell | page | panel | drawer | modal | table | form | detail | widget | navigation | feedback_area",
                         "businessPurpose": "string",
+                        "productIntent": {
+                            "userRole": "string",
+                            "businessObject": "string",
+                            "primaryJob": "string",
+                            "successOutcome": "string"
+                        },
+                        "compositionModel": {
+                            "requiredRegions": ["string"],
+                            "forbiddenRegions": ["string"],
+                            "primaryRegion": "string",
+                            "supportingRegions": ["string"]
+                        },
+                        "informationModel": {
+                            "mustShow": ["string"],
+                            "scanPriority": ["string"],
+                            "identityFields": ["string"],
+                            "statusFields": ["string"],
+                            "longContentPolicy": "string"
+                        },
+                        "actionModel": {
+                            "primaryActions": ["string"],
+                            "contextualActions": ["string"],
+                            "dangerousActions": ["string"],
+                            "placementRule": "string",
+                            "postSuccessUpdate": "string"
+                        },
+                        "statePlacementModel": {
+                            "loading": "string",
+                            "empty": "string",
+                            "error": "string",
+                            "success": "string",
+                            "business_blocking": "string",
+                            "validation": "string",
+                            "disabled": "string"
+                        },
+                        "visualModel": {
+                            "layoutBaseline": "string",
+                            "density": "string",
+                            "tokenPolicy": "string",
+                            "componentPolicy": "string",
+                            "antiDemoRules": ["string"]
+                        },
+                        "responsiveModel": {
+                            "desktop": "string",
+                            "tablet": "string",
+                            "mobile": "string"
+                        },
                         "requiredComposition": ["string"],
                         "forbiddenComposition": ["string"],
                         "stateRefs": ["loading | success | error | empty | business_blocking"],
@@ -949,7 +984,7 @@ fn section_content_shape(
                         "interfaceRefs": ["string"]
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_shape(),
+                "surfaceDecisionCandidate": ui_surface_decision_candidate_shape(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": "string"
                 }
@@ -1070,7 +1105,6 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
         "runtimeDelivery": {
             "status": runtime_delivery_status_values(has_previous_runtime_delivery).join(" | "),
             "runtimeKind": "string",
-            "deploymentShape": "single-service | frontend-and-backend",
             "basis": Value::Object(basis),
             "build": {
                 "command": "string",
@@ -1154,7 +1188,6 @@ fn section_result_template(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
@@ -1169,7 +1202,6 @@ fn section_result_template(
             has_previous_runtime_delivery,
             frontend_experience_source,
             planning_contract,
-            ui_quality_seed,
             api_quality_seed
         ),
         "blockedReasons": [],
@@ -1182,7 +1214,6 @@ fn section_content_template(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     match section {
@@ -1284,6 +1315,77 @@ fn section_content_template(
                         "surfaceId": "surface_1",
                         "surfaceRole": "page",
                         "businessPurpose": "",
+                        "productIntent": {
+                            "userRole": "",
+                            "businessObject": "",
+                            "primaryJob": "",
+                            "successOutcome": ""
+                        },
+                        "compositionModel": {
+                            "requiredRegions": [
+                                "business navigation or local context",
+                                "task-relevant data region",
+                                "task-relevant action region",
+                                "scoped feedback region"
+                            ],
+                            "forbiddenRegions": [
+                                "decorative or explanatory region that displaces the task workflow"
+                            ],
+                            "primaryRegion": "task-relevant data or form region",
+                            "supportingRegions": [
+                                "navigation/context",
+                                "detail/summary",
+                                "feedback"
+                            ]
+                        },
+                        "informationModel": {
+                            "mustShow": [
+                                "business object identity",
+                                "business object status",
+                                "fields required to complete the task"
+                            ],
+                            "scanPriority": [
+                                "identity",
+                                "status",
+                                "decision fields",
+                                "available actions"
+                            ],
+                            "identityFields": [],
+                            "statusFields": [],
+                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
+                        },
+                        "actionModel": {
+                            "primaryActions": ["task-owned primary action"],
+                            "contextualActions": [],
+                            "dangerousActions": [],
+                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
+                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
+                        },
+                        "statePlacementModel": {
+                            "loading": "Near the region or control waiting for data or mutation.",
+                            "empty": "In the data/form region with business next action when applicable.",
+                            "error": "Near the affected region with recovery path.",
+                            "success": "Inline object update plus short confirmation when useful.",
+                            "business_blocking": "Near the blocked field, row, detail, or action.",
+                            "validation": "Near the field and summary for longer forms.",
+                            "disabled": "On or near disabled controls with unlock reason when actionable."
+                        },
+                        "visualModel": {
+                            "layoutBaseline": "custom_product_layout",
+                            "density": "balanced",
+                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
+                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
+                            "antiDemoRules": [
+                                "no runtime commands or delivery notes in product UI",
+                                "no marketing hero for operational surfaces",
+                                "no decorative filler before required workflow content"
+                            ]
+                        },
+                        "responsiveModel": {
+                            "desktop": "Keep primary task surface and action path visible without layout shift.",
+                            "tablet": "Preserve task order while reducing secondary regions.",
+                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
+                        },
                         "requiredComposition": [
                             "business navigation or context",
                             "task-relevant data view",
@@ -1302,7 +1404,7 @@ fn section_content_template(
                         "interfaceRefs": []
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
+                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
@@ -1435,7 +1537,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
         "runtimeDelivery": {
             "status": "modified",
             "runtimeKind": "",
-            "deploymentShape": "single-service",
             "basis": Value::Object(basis),
             "build": {
                 "command": "",
@@ -1616,7 +1717,8 @@ fn section_enum_refs(
             json!({ "apiQuality": api_quality_enum_refs() })
         }
         ArchitectureSectionGroup::FrontendExperience => json!({
-            "uiQuality": ui_quality_enum_refs()
+            "uiQuality": ui_quality_enum_refs(),
+            "uiSurfaceDecision": ui_surface_decision_enum_refs()
         }),
         _ => json!({}),
     }
@@ -1667,13 +1769,16 @@ fn section_generation_rules(
         ],
         ArchitectureSectionGroup::FrontendExperience => vec![
             "Read frontendExperienceSource before writing this section.".to_string(),
-            "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
+            "Read uiQualitySeed before writing the UI surface decision candidate.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
-            "Write uiQualityContract from uiQualitySeed and enumRefs.uiQuality; copy uiQualitySeed.referenceLoadPlan into referenceProfile.referenceLoadPlan and do not copy reference text.".to_string(),
+            "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.".to_string(),
+            "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.".to_string(),
+            "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
-            "For each uiSurfaceRegistry surface, state the business purpose, required composition, forbidden composition, required UI states, data views, actions, operation paths, workflow refs, and interface refs when known.".to_string(),
-            "Business UI surfaces must directly serve the selected scenario and task workflow; enforce uiQualityContract.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
+            "For each uiSurfaceRegistry surface, state the business purpose plus productIntent, compositionModel, informationModel, actionModel, statePlacementModel, visualModel, and responsiveModel only when those details are not already better represented by surfaceDecisionCandidate model objects.".to_string(),
+            "Use requiredComposition/forbiddenComposition/stateRefs/dataViewRefs/actionRefs/operationPathRefs/workflowRefs/interfaceRefs as compact linking fields. Put product quality meaning in the model objects, not in repeated prose.".to_string(),
+            "Business UI surfaces must directly serve the selected scenario and task workflow; honor uiQualitySeed.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
         ArchitectureSectionGroup::RuntimeDelivery => vec![
             "Represent current-phase runtime delivery readiness, not a generic deployment wishlist."
@@ -1681,6 +1786,7 @@ fn section_generation_rules(
             runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
             "For status=modified, fill build.command, runtimeSurfaces, httpProbes.previewPath, httpProbes.expectedStatus, and taskPlanningGuidance so TaskPlan and Deploy do not guess runtime facts."
                 .to_string(),
+            "Do not choose deploymentShape manually. MCP derives it during submit from frontend/api endpoint objects, runtimeSurfaces, apiPaths, servedBy, and role-labeled commands.".to_string(),
             "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
                 .to_string(),
             "Omit unknown optional runtime fields instead of writing null; include start.port only when a fixed port is known."
@@ -1733,4 +1839,72 @@ fn read_technical_baseline(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontend_request_schema_exposes_surface_decision_candidate() {
+        let content_shape = section_content_shape(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            &Value::Null,
+        );
+
+        assert!(
+            content_shape
+                .pointer("/frontendExperience/surfaceDecisionCandidate/selectedPattern/mode")
+                .is_some(),
+            "frontend schema must ask the agent for a surface decision candidate"
+        );
+        assert!(
+            content_shape
+                .pointer("/frontendExperience/surfaceDecisionCandidate/semanticFacts")
+                .is_some(),
+            "frontend schema must collect semantic facts for MCP normalization"
+        );
+        assert!(
+            content_shape
+                .pointer("/frontendExperience/surfaceDecisionCandidate/contentBoundary")
+                .is_some(),
+            "frontend schema must collect content-boundary facts"
+        );
+    }
+
+    #[test]
+    fn frontend_request_exposes_surface_decision_enums_and_rules() {
+        let enum_refs = section_enum_refs(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            &Value::Null,
+        );
+        assert!(
+            enum_refs
+                .pointer("/uiSurfaceDecision/patternMode")
+                .is_some(),
+            "frontend enum refs must include surface decision enums"
+        );
+
+        let rules = section_generation_rules(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            &Value::Null,
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule.contains("surfaceDecisionCandidate")),
+            "frontend generation rules must name surfaceDecisionCandidate"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.contains("Custom is stricter")),
+            "custom mode must be described as stricter, not relaxed"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.contains("MCP owns reference")),
+            "reference and rule derivation must stay MCP-owned"
+        );
+    }
 }

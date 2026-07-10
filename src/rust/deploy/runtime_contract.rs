@@ -135,8 +135,14 @@ fn deployment_shape(
             return DeploymentShape::FrontendAndBackend;
         }
         if matches!(normalized.as_str(), "single-service" | "single") {
+            if runtime_requires_public_frontend_api_topology(runtime, frontend, api) {
+                return DeploymentShape::FrontendAndBackend;
+            }
             return DeploymentShape::SingleService;
         }
+    }
+    if runtime_requires_public_frontend_api_topology(runtime, frontend, api) {
+        return DeploymentShape::FrontendAndBackend;
     }
     if frontend.map(|item| item.required).unwrap_or(false)
         && api.map(|item| item.required).unwrap_or(false)
@@ -144,6 +150,127 @@ fn deployment_shape(
         return DeploymentShape::FrontendAndBackend;
     }
     DeploymentShape::SingleService
+}
+
+fn runtime_requires_public_frontend_api_topology(
+    runtime: &Value,
+    frontend: Option<&RuntimeContractEndpoint>,
+    api: Option<&RuntimeContractApi>,
+) -> bool {
+    if frontend_served_by_integrated_app(frontend) {
+        return false;
+    }
+    let api_paths = string_array_at(runtime, &["httpProbes", "apiPaths"]).unwrap_or_default();
+    let frontend_required = frontend.map(|item| item.required).unwrap_or(false);
+    let api_required = api.map(|item| item.required).unwrap_or(false);
+    let has_frontend_surface =
+        runtime_has_surface_kind(runtime, &["frontend", "web", "ui"]) || frontend_required;
+    let has_api_surface = runtime_has_surface_kind(runtime, &["api", "backend"])
+        || api_required
+        || !api_paths.is_empty();
+
+    if has_frontend_surface && api_required {
+        return true;
+    }
+    if frontend_required && has_api_surface {
+        return true;
+    }
+    if runtime_has_surface_kind(runtime, &["frontend", "web", "ui"])
+        && runtime_has_surface_kind(runtime, &["api", "backend"])
+    {
+        return true;
+    }
+    if !api_paths.is_empty() && has_frontend_surface {
+        return true;
+    }
+    labeled_commands_declare_frontend_and_backend(runtime) && !api_paths.is_empty()
+}
+
+fn frontend_served_by_integrated_app(frontend: Option<&RuntimeContractEndpoint>) -> bool {
+    [
+        frontend.and_then(|endpoint| endpoint.served_by.as_deref()),
+        frontend.and_then(|endpoint| endpoint.served_by_ref.as_deref()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|value| {
+        let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
+        [
+            "springbootstatic",
+            "backendstatic",
+            "serverstatic",
+            "servicestatic",
+            "appstatic",
+            "sameprocess",
+            "sameapp",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    })
+}
+
+fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
+    runtime
+        .get("runtimeSurfaces")
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            surfaces.iter().any(|surface| {
+                string_at(surface, &["kind"])
+                    .map(|kind| {
+                        let normalized = kind.to_ascii_lowercase().replace(['_', '-'], "");
+                        accepted
+                            .iter()
+                            .any(|item| normalized.contains(&item.replace(['_', '-'], "")))
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn labeled_commands_declare_frontend_and_backend(runtime: &Value) -> bool {
+    let mut labels = Vec::new();
+    for command in [
+        string_at(runtime, &["build", "command"]),
+        string_at(runtime, &["buildCommand"]),
+        string_at(runtime, &["start", "command"]),
+        string_at(runtime, &["startCommand"]),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        labels.extend(labeled_command_segments(&command));
+    }
+    let has_frontend = labels
+        .iter()
+        .any(|label| matches!(label.as_str(), "frontend" | "web" | "client" | "ui"));
+    let has_backend = labels
+        .iter()
+        .any(|label| matches!(label.as_str(), "backend" | "api" | "service" | "server"));
+    has_frontend && has_backend
+}
+
+fn labeled_command_segments(command: &str) -> Vec<String> {
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let (label, rest) = trimmed.split_once(':')?;
+            let label = label.trim();
+            if rest.trim().is_empty()
+                || label.is_empty()
+                || label.contains(char::is_whitespace)
+                || !label
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+            {
+                return None;
+            }
+            Some(label.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 fn load_runtime_contract_from_delivery(
@@ -260,7 +387,7 @@ fn dependency_services_from_runtime(runtime: &Value) -> Vec<DependencyService> {
     services
 }
 
-fn service_definition(kind: DependencyServiceKind) -> DependencyService {
+pub(crate) fn service_definition(kind: DependencyServiceKind) -> DependencyService {
     match kind {
         DependencyServiceKind::Postgres => DependencyService {
             kind,

@@ -4,10 +4,11 @@ use std::{
 };
 
 use contracts::{
-    validate_ui_quality_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
-    ArchitectureArtifactSource, ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry,
-    ArchitectureHandoff, ArchitectureQuality, ArchitectureSectionCandidateAgentWritable,
-    ArchitectureSectionGroup, ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
+    normalize_ui_surface_decision_contract_for_persist, validate_ui_surface_decision_contract,
+    AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
+    ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
+    ArchitectureQuality, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -275,6 +276,12 @@ where
             &source_refs,
             &mut candidate.content,
         )?;
+    }
+    if normalize_frontend_ui_surface_decision_contract(&mut candidate.content, &request_root) {
+        candidate_normalized = true;
+    }
+    if normalize_runtime_delivery_deployment_shape(&mut candidate.content) {
+        candidate_normalized = true;
     }
 
     let mut issues = validate_candidate_identity(
@@ -622,9 +629,179 @@ fn validate_frontend_rules(
         }
     }
     if let Some(frontend_experience) = candidate.content.get("frontendExperience") {
-        issues.extend(validate_ui_quality_contract(frontend_experience));
+        issues.extend(validate_ui_surface_decision_contract(frontend_experience));
     }
     issues
+}
+
+fn normalize_frontend_ui_surface_decision_contract(
+    content: &mut Value,
+    request_root: &Value,
+) -> bool {
+    let Some(frontend_experience) = content.get_mut("frontendExperience") else {
+        return false;
+    };
+    let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
+    let surface_contract_changed =
+        normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed);
+    let removed_legacy = frontend_experience
+        .as_object_mut()
+        .and_then(|object| object.remove("uiQualityContract"))
+        .is_some();
+    surface_contract_changed || removed_legacy
+}
+
+fn normalize_runtime_delivery_deployment_shape(content: &mut Value) -> bool {
+    let Some(runtime) = content.get_mut("runtimeDelivery") else {
+        return false;
+    };
+    if runtime.pointer("/status").and_then(Value::as_str) != Some("modified") {
+        return false;
+    }
+    let shape = derived_runtime_deployment_shape(runtime);
+    let current = runtime
+        .get("deploymentShape")
+        .and_then(Value::as_str)
+        .map(str::trim);
+    if current == Some(shape) {
+        return false;
+    }
+    let Some(object) = runtime.as_object_mut() else {
+        return false;
+    };
+    object.insert("deploymentShape".to_string(), json!(shape));
+    true
+}
+
+fn derived_runtime_deployment_shape(runtime: &Value) -> &'static str {
+    if runtime_frontend_is_served_by_integrated_app(runtime) {
+        return "single-service";
+    }
+    let api_paths = runtime
+        .pointer("/httpProbes/apiPaths")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false);
+    let has_frontend_endpoint = runtime_endpoint_present(runtime, "frontend");
+    let has_api_endpoint = runtime_endpoint_present(runtime, "api");
+    let has_frontend_surface = runtime_has_surface_kind(runtime, &["frontend", "web", "ui"]);
+    let has_api_surface = runtime_has_surface_kind(runtime, &["api", "backend"]);
+
+    if (has_frontend_endpoint && (has_api_endpoint || api_paths))
+        || (has_api_endpoint && has_frontend_surface)
+        || (has_frontend_surface && has_api_surface)
+        || (api_paths && runtime_labeled_commands_declare_frontend_and_backend(runtime))
+    {
+        "frontend-and-backend"
+    } else {
+        "single-service"
+    }
+}
+
+fn runtime_endpoint_present(runtime: &Value, field: &str) -> bool {
+    let Some(endpoint) = runtime.get(field) else {
+        return false;
+    };
+    endpoint.get("required").and_then(Value::as_bool) == Some(true)
+        || endpoint.as_object().is_some_and(|object| {
+            object.iter().any(|(key, value)| {
+                key != "required"
+                    && value
+                        .as_str()
+                        .map(|text| !text.trim().is_empty())
+                        .unwrap_or_else(|| value.as_array().is_some_and(|items| !items.is_empty()))
+            })
+        })
+}
+
+fn runtime_frontend_is_served_by_integrated_app(runtime: &Value) -> bool {
+    [
+        "/frontend/servedBy",
+        "/frontend/servedByRef",
+        "/deliveryMechanics/staticAssets/servedBy",
+    ]
+    .iter()
+    .filter_map(|pointer| runtime.pointer(pointer).and_then(Value::as_str))
+    .any(|value| {
+        let normalized = value.to_ascii_lowercase().replace(['_', '-'], "");
+        [
+            "springbootstatic",
+            "backendstatic",
+            "serverstatic",
+            "servicestatic",
+            "appstatic",
+            "sameprocess",
+            "sameapp",
+        ]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    })
+}
+
+fn runtime_has_surface_kind(runtime: &Value, accepted: &[&str]) -> bool {
+    runtime
+        .get("runtimeSurfaces")
+        .and_then(Value::as_array)
+        .map(|surfaces| {
+            surfaces.iter().any(|surface| {
+                surface
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .map(|kind| {
+                        let normalized = kind.to_ascii_lowercase().replace(['_', '-'], "");
+                        accepted
+                            .iter()
+                            .any(|item| normalized.contains(&item.replace(['_', '-'], "")))
+                    })
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn runtime_labeled_commands_declare_frontend_and_backend(runtime: &Value) -> bool {
+    let mut labels = Vec::new();
+    for command in [
+        runtime.pointer("/build/command").and_then(Value::as_str),
+        runtime.pointer("/buildCommand").and_then(Value::as_str),
+        runtime.pointer("/start/command").and_then(Value::as_str),
+        runtime.pointer("/startCommand").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        labels.extend(runtime_labeled_command_segments(command));
+    }
+    let has_frontend = labels
+        .iter()
+        .any(|label| matches!(label.as_str(), "frontend" | "web" | "client" | "ui"));
+    let has_backend = labels
+        .iter()
+        .any(|label| matches!(label.as_str(), "backend" | "api" | "service" | "server"));
+    has_frontend && has_backend
+}
+
+fn runtime_labeled_command_segments(command: &str) -> Vec<String> {
+    command
+        .split(';')
+        .flat_map(|part| part.split("&&"))
+        .flat_map(|part| part.split("||"))
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            let (label, rest) = trimmed.split_once(':')?;
+            let label = label.trim();
+            if rest.trim().is_empty()
+                || label.is_empty()
+                || label.contains(char::is_whitespace)
+                || !label
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+            {
+                return None;
+            }
+            Some(label.to_ascii_lowercase())
+        })
+        .collect()
 }
 
 fn validate_runtime_rules(
@@ -1775,12 +1952,20 @@ fn update_request_for_next_section(
         .push(serde_json::to_value(completed_section).map_err(state::store::StateError::Json)?);
     root["currentSectionContract"] =
         serde_json::to_value(next_output).map_err(state::store::StateError::Json)?;
-    root["writeTargets"] = json!([{
+    let write_targets = json!([{
         "targetId": section_name(next_section),
-        "path": next_output.candidate_file,
+        "path": next_output.candidate_file.clone(),
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
+    root["writeTargets"] = write_targets.clone();
+    if root.get("outputContract").is_some() {
+        root["outputContract"]["writeTargets"] = write_targets;
+        root["outputContract"]["schemaShape"] = next_output.schema_shape.clone();
+        root["outputContract"]["schemaProjection"]["requiredContentKeys"] =
+            serde_json::to_value(crate::request::required_content_keys(next_section))
+                .map_err(state::store::StateError::Json)?;
+    }
     let frontend_experience_source = root
         .get("frontendExperienceSource")
         .cloned()
@@ -1819,6 +2004,79 @@ fn repair_context_has_source_ref(
         .is_some_and(|field| !field.value.is_null()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contracts::{
+        build_ui_quality_seed, ui_surface_decision_candidate_template,
+        validate_ui_surface_decision_contract,
+    };
+
+    #[test]
+    fn frontend_submit_normalization_writes_surface_decision_contract() {
+        let ui_quality_seed = build_ui_quality_seed(None, None);
+        let mut candidate = ui_surface_decision_candidate_template();
+        candidate["patternRankings"][0]["score"] = json!(0.8);
+        candidate["patternRankings"][0]["matchedSignals"] =
+            json!(["record collection", "business action"]);
+        candidate["selectedPattern"]["rationale"] =
+            json!("The UI surface is a record workbench with scan, compare, and create actions.");
+        candidate["semanticFacts"]["userJobs"] = json!(["browse", "compare", "create"]);
+        candidate["semanticFacts"]["informationShapes"] =
+            json!(["record_collection", "record_detail"]);
+        candidate["semanticFacts"]["operationModels"] =
+            json!(["filter_sort_paginate", "create_update"]);
+        candidate["semanticFacts"]["riskFactors"] = json!(["none"]);
+        candidate["layoutModel"]["desktop"]["layoutIntent"] =
+            json!("Keep the working record region and primary action visible together.");
+        candidate["regionModel"][0]["purpose"] =
+            json!("Primary record work region for scanning and acting on business items.");
+        candidate["informationModel"]["primaryObjects"] = json!(["request"]);
+        candidate["informationModel"]["fields"] = json!(["id", "status"]);
+        candidate["actionModel"][0]["label"] = json!("Create request");
+        candidate["stateModel"][0]["placementRule"] =
+            json!("Place loading and errors near the affected record work region.");
+
+        let mut content = json!({
+            "frontendExperience": {
+                "required": true,
+                "surfaceDecisionCandidate": candidate
+            }
+        });
+        let request_root = json!({
+            "uiQualitySeed": ui_quality_seed
+        });
+
+        assert!(
+            normalize_frontend_ui_surface_decision_contract(&mut content, &request_root),
+            "submit normalization must write derived frontend quality fields"
+        );
+        let frontend = content
+            .get("frontendExperience")
+            .expect("frontendExperience must remain present");
+        assert!(
+            frontend.get("uiSurfaceDecisionContract").is_some(),
+            "submit normalization must derive uiSurfaceDecisionContract"
+        );
+        assert_eq!(
+            frontend
+                .pointer("/uiSurfaceDecisionContract/patternDecision/knownPattern")
+                .and_then(Value::as_str),
+            Some("collection_workbench"),
+            "uiSurfaceDecisionContract pattern must be derived from surfaceDecisionCandidate"
+        );
+        assert!(
+            frontend.get("uiQualityContract").is_none(),
+            "submit normalization must not persist legacy uiQualityContract"
+        );
+        let issues = validate_ui_surface_decision_contract(frontend);
+        assert!(
+            issues.is_empty(),
+            "derived surface decision contract should validate cleanly: {issues:?}"
+        );
+    }
+}
+
 fn update_output_contract_ref(
     project_root: &str,
     request_id: &str,
@@ -1829,10 +2087,11 @@ fn update_output_contract_ref(
     let mut output_contract = state::store::read_json_value(&output_contract_file)?;
     output_contract["writeTargets"] = json!([{
         "targetId": section_name(next_section),
-        "path": next_output.candidate_file,
+        "path": next_output.candidate_file.clone(),
         "required": true,
         "description": format!("Write the {} Architecture section candidate JSON.", section_name(next_section))
     }]);
+    output_contract["schemaShape"] = next_output.schema_shape.clone();
     output_contract["schemaProjection"]["requiredContentKeys"] =
         serde_json::to_value(crate::request::required_content_keys(next_section))
             .map_err(state::store::StateError::Json)?;

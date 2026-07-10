@@ -4,8 +4,8 @@ use std::{
 };
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
-    ui_quality_contract_template, ui_quality_enum_refs, ArchitectureSectionCandidateAgentWritable,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
+    ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
     ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
     TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
     TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
@@ -34,16 +34,16 @@ use crate::{
     },
     task_execution::{
         load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
-        task_execution_rules,
+        task_execution_rules, task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
         code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
-        task_result_required_top_level_fields, task_result_template_with_code_quality,
-        taskplan_group_result_template, taskplan_outline_result_template,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        task_result_required_top_level_fields, task_result_schema_shape,
+        task_result_template_with_code_quality, taskplan_group_result_template,
+        taskplan_outline_result_template,
     },
 };
 
@@ -75,15 +75,20 @@ pub fn dispatch_repair_route(
             ) {
                 return existing;
             }
-            materialize_taskplan_repair(project_root, delivery_id, phase_id, action.request_ref.clone())
-                .unwrap_or_else(|error| {
-                    failed(
-                        project_root,
-                        "TASKPLAN_REPAIR_FAILED",
-                        error.to_string(),
-                        "taskplan_repair",
-                    )
-                })
+            materialize_taskplan_repair(
+                project_root,
+                delivery_id,
+                phase_id,
+                action.request_ref.clone(),
+            )
+            .unwrap_or_else(|error| {
+                failed(
+                    project_root,
+                    "TASKPLAN_REPAIR_FAILED",
+                    error.to_string(),
+                    "taskplan_repair",
+                )
+            })
         }
         RouteActionKind::ArchitectureArtifactRepair => {
             if let Some(existing) = existing_active_repair_action(
@@ -97,33 +102,59 @@ pub fn dispatch_repair_route(
             ) {
                 return existing;
             }
-            materialize_architecture_repair(project_root, delivery_id, phase_id, action.request_ref.clone())
-                .unwrap_or_else(|error| {
-                    failed(
-                        project_root,
-                        "ARCHITECTURE_REPAIR_FAILED",
-                        error.to_string(),
-                        "architecture_artifact_repair",
-                    )
-                })
-        }
-        RouteActionKind::TaskResultRepair => existing_active_repair_action(
-            project_root,
-            delivery_id,
-            phase_id,
-            action,
-            "activeTaskResultRepairActionRef",
-            ArtifactKind::TaskResultRepair,
-            WriteMode::SingleJson,
-        )
-        .unwrap_or_else(|| {
-            failed(
+            materialize_architecture_repair(
                 project_root,
-                "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
-                "The active TaskResult correction action is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
-                "task_result_repair",
+                delivery_id,
+                phase_id,
+                action.request_ref.clone(),
             )
-        }),
+            .unwrap_or_else(|error| {
+                failed(
+                    project_root,
+                    "ARCHITECTURE_REPAIR_FAILED",
+                    error.to_string(),
+                    "architecture_artifact_repair",
+                )
+            })
+        }
+        RouteActionKind::TaskResultRepair => {
+            if let Some(request_ref) = action.request_ref.as_deref() {
+                match crate::task_result::refresh_stale_task_result_repair_action(
+                    project_root,
+                    delivery_id,
+                    phase_id,
+                    request_ref,
+                ) {
+                    Ok(Some(refreshed)) => return refreshed,
+                    Ok(None) => {}
+                    Err(error) => {
+                        return failed(
+                            project_root,
+                            "TASK_RESULT_REPAIR_REFRESH_FAILED",
+                            error.to_string(),
+                            "task_result_repair",
+                        );
+                    }
+                }
+            }
+            existing_active_repair_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                action,
+                "activeTaskResultRepairActionRef",
+                ArtifactKind::TaskResultRepair,
+                WriteMode::SingleJson,
+            )
+            .unwrap_or_else(|| {
+                failed(
+                    project_root,
+                    "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
+                    "The active TaskResult correction action is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
+                    "task_result_repair",
+                )
+            })
+        }
         _ => failed(
             project_root,
             "REPAIR_ROUTE_UNSUPPORTED",
@@ -287,17 +318,20 @@ fn materialize_delivery_execution_repair_inner(
     )? {
         return Ok(existing);
     }
-    let task = repair_source_task(&task_plan, &run, &target_task_ids).ok_or_else(|| {
-        let message = if target_task_ids.is_empty() {
-            "No task is available for delivery execution repair.".to_string()
-        } else {
-            format!(
-                "Execution repair target task is not in the current task run: {}.",
-                target_task_ids.join(", ")
-            )
-        };
-        state::store::StateError::StateCorrupted(message)
-    })?;
+    let selection =
+        repair_source_task_selection(&task_plan, &run, &target_task_ids).ok_or_else(|| {
+            let message = if target_task_ids.is_empty() {
+                "No task is available for delivery execution repair.".to_string()
+            } else {
+                format!(
+                    "Execution repair target task is not in the current task run: {}.",
+                    target_task_ids.join(", ")
+                )
+            };
+            state::store::StateError::StateCorrupted(message)
+        })?;
+    let task = selection.task;
+    let request_task = task_with_phase_execution_guidance(root, &locator, task.clone())?;
     let attempt_count = run
         .task_states
         .iter()
@@ -339,7 +373,7 @@ fn materialize_delivery_execution_repair_inner(
         &result_file,
         &task_plan,
         &run,
-        &task,
+        &request_task,
         repair_origin.clone(),
         source_ref.clone(),
         finding_refs.clone(),
@@ -368,12 +402,14 @@ fn materialize_delivery_execution_repair_inner(
         origin,
         source_ref.clone(),
         finding_refs.clone(),
+        &task.task_id,
+        &selection.pending_target_task_ids,
     )?;
     delivery_execution_repair_next(
         project_root,
         stored.request_ref,
         result_file,
-        &task,
+        &request_task,
         repair_origin,
         origin,
         source_ref,
@@ -456,6 +492,11 @@ fn existing_delivery_execution_repair_next_if_current(
     else {
         return Ok(None);
     };
+    if frontend_self_check_applies(task)
+        && !delivery_execution_repair_request_has_frontend_guidance(project_root, request_ref)?
+    {
+        return Ok(None);
+    }
     let attempt_count = run
         .task_states
         .iter()
@@ -495,6 +536,30 @@ fn existing_delivery_execution_repair_next_if_current(
         attempt_count,
     )
     .map(Some)
+}
+
+fn delivery_execution_repair_request_has_frontend_guidance(
+    project_root: &str,
+    request_ref: &str,
+) -> Result<bool, state::store::StateError> {
+    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
+        ],
+    })?
+    .fields;
+    let ui_production_brief = fields
+        .get("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
+        .map(|field| &field.value)
+        .unwrap_or(&Value::Null);
+    let style_asset_plan = fields
+        .get("task.frontendExperienceRequirement.executionGuidance.styleAssetPlan")
+        .map(|field| &field.value)
+        .unwrap_or(&Value::Null);
+    Ok(ui_production_brief.is_object() && style_asset_plan.is_object())
 }
 
 fn delivery_execution_repair_next(
@@ -593,8 +658,25 @@ fn build_repair_execution_request(
     finding_refs: Vec<String>,
     attempt_count: u32,
 ) -> Value {
-    let schema_shape = serde_json::to_value(schema_for!(contracts::TaskResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = task_result_schema_shape(task);
+    let engineering_quality_requirements = task_plan
+        .engineering_quality_requirements
+        .iter()
+        .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let architecture_quality_requirements = task_plan
+        .architecture_quality_requirements
+        .iter()
+        .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let api_contract_requirements = task_plan
+        .api_contract_requirements
+        .iter()
+        .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
     let result_template = task_result_template_with_code_quality(
         &task_plan.task_plan_id,
@@ -694,23 +776,41 @@ fn build_repair_execution_request(
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
             "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
             "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+            "task.frontendExperienceRequirement.uiSurfaceOwnership",
             "executionRules.frontendImplementationOrganizationRules",
             "executionRules.interactiveVerificationProbePolicy",
             "executionRules.controlledRuntimeProbeRules",
         ]);
-    }
-    if frontend_quality_self_check_applies(task) {
-        repair_core_fields.extend([
-            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
-            "task.frontendExperienceRequirement.uiQualityContractRef",
-        ]);
-        repair_core_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if runtime_delivery_evidence_applies(task) {
         repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
         repair_core_fields.extend([
             "executionRules.controlledRuntimeProbeRules",
             "executionRules.runtimeDeliveryExecutionRules",
+        ]);
+    }
+    if !task.engineering_quality_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.engineeringQualityRequirementRefs",
+            "sourceContext.engineeringQualityRequirements",
+            "executionRules.engineeringQualityExecutionRules",
+        ]);
+    }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.architectureQualityRequirementRefs",
+            "sourceContext.architectureQualityRequirements",
+            "executionRules.architectureQualityExecutionRules",
+        ]);
+    }
+    if !task.api_contract_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.apiContractRequirementRefs",
+            "sourceContext.apiContractRequirements",
+            "executionRules.apiContractExecutionRules",
         ]);
     }
     if !task.code_quality_requirement_refs.is_empty() {
@@ -775,6 +875,13 @@ fn build_repair_execution_request(
     }
     if !task.concept_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
+    }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        repair_result_fields
+            .push("outputContract.schemaShape.properties.architectureQualityEvidence");
+    }
+    if !task.api_contract_requirement_refs.is_empty() {
+        repair_result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
     }
     if !task.code_quality_requirement_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
@@ -856,10 +963,33 @@ fn build_repair_execution_request(
             ]
         }
     });
+    let mut source_context = serde_json::Map::new();
+    if !engineering_quality_requirements.is_empty() {
+        source_context.insert(
+            "engineeringQualityRequirements".to_string(),
+            json!(engineering_quality_requirements),
+        );
+    }
+    if !architecture_quality_requirements.is_empty() {
+        source_context.insert(
+            "architectureQualityRequirements".to_string(),
+            json!(architecture_quality_requirements),
+        );
+    }
+    if !api_contract_requirements.is_empty() {
+        source_context.insert(
+            "apiContractRequirements".to_string(),
+            json!(api_contract_requirements),
+        );
+    }
     if !code_quality_requirements.is_empty() {
-        root_value["sourceContext"] = json!({
-            "codeQualityExecutionContext": code_quality_execution_context(&code_quality_requirements)
-        });
+        source_context.insert(
+            "codeQualityExecutionContext".to_string(),
+            code_quality_execution_context(&code_quality_requirements),
+        );
+    }
+    if !source_context.is_empty() {
+        root_value["sourceContext"] = Value::Object(source_context);
     }
     root_value
 }
@@ -998,6 +1128,7 @@ fn materialize_taskplan_repair_action(
         "scopeAndReferenceRules": field_value(&rule_fields, "generationRules.scopeAndReferenceRules")?,
         "writeBoundaryRules": field_value(&rule_fields, "generationRules.writeBoundaryRules")?,
         "verificationEvidenceRules": field_value(&rule_fields, "generationRules.verificationEvidenceRules")?,
+        "detailOwnershipRules": field_value(&rule_fields, "generationRules.detailOwnershipRules")?,
         "conceptGroundingRules": field_value(&rule_fields, "generationRules.conceptGroundingRules")?,
         "frontendExperienceRules": field_value(&rule_fields, "generationRules.frontendExperienceRules")?,
         "workflowClosureRules": field_value(&rule_fields, "generationRules.workflowClosureRules")?,
@@ -1218,6 +1349,7 @@ fn materialize_taskplan_repair_action(
                         "generationRules.scopeAndReferenceRules",
                         "generationRules.writeBoundaryRules",
                         "generationRules.verificationEvidenceRules",
+                        "generationRules.detailOwnershipRules",
                         "generationRules.conceptGroundingRules",
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",
@@ -1547,7 +1679,6 @@ fn materialize_architecture_repair_action(
         phase_id,
         &frontend_experience_source,
         &context_projection,
-        &ui_quality_seed,
         &api_quality_seed,
     )?;
     let candidate_files = section_outputs
@@ -1564,9 +1695,6 @@ fn materialize_architecture_repair_action(
             "architecture repair section outputs are empty".to_string(),
         )
     })?;
-    let candidate_schema =
-        serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
-            .unwrap_or_else(|_| json!({ "type": "object" }));
     let mut repair_context = json!({
         "sourceArchitectureRequestRef": original_request_ref
     });
@@ -1600,7 +1728,8 @@ fn materialize_architecture_repair_action(
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
             "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
-            "uiQuality": ui_quality_enum_refs()
+            "uiQuality": ui_quality_enum_refs(),
+            "uiSurfaceDecision": ui_surface_decision_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -1621,7 +1750,7 @@ fn materialize_architecture_repair_action(
                 "required": true,
                 "description": "Write the replacement foundation Architecture section candidate JSON."
             }],
-            "schemaShape": candidate_schema,
+            "schemaShape": current_output["schemaShape"].clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
                     "schemaVersion",
@@ -2016,6 +2145,7 @@ fn architecture_repair_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.referenceLoadPlan",
+            "uiQualitySeed.qualityRulePreview",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -2071,11 +2201,8 @@ fn build_architecture_repair_section_outputs(
     phase_id: &str,
     frontend_experience_source: &Value,
     context_projection: &Value,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
-    let schema_shape = serde_json::to_value(schema_for!(ArchitectureSectionCandidateAgentWritable))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
     Ok(ARCHITECTURE_SECTION_ORDER
         .iter()
         .map(|section| {
@@ -2084,28 +2211,31 @@ fn build_architecture_repair_section_outputs(
                 .join("agent-writable")
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
+            let result_template = architecture_repair_section_result_template(
+                request_id,
+                delivery_id,
+                phase_id,
+                *section,
+                frontend_experience_source,
+                context_projection,
+                api_quality_seed
+            );
+            let schema_shape =
+                architecture_repair_section_schema_shape(*section, &result_template["content"]);
             let mut output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
-                "schemaRef": format!("rust-contract://ArchitectureSectionCandidateAgentWritable/{}", section_name(*section)),
-                "schemaShape": schema_shape.clone(),
-                "resultTemplate": architecture_repair_section_result_template(
-                    request_id,
-                    delivery_id,
-                    phase_id,
-                    *section,
-                    frontend_experience_source,
-                    context_projection,
-                    ui_quality_seed,
-                    api_quality_seed
-                ),
+                "schemaRef": format!("architecture-section-{}-v1", section_name(*section)),
+                "schemaShape": schema_shape,
+                "resultTemplate": result_template,
                 "enumRefs": {
                     "section": ARCHITECTURE_SECTION_ORDER,
                     "status": ["ready", "blocked"],
                     "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
                     "acceptancePriority": ["must", "should", "could"],
                     "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
-                    "uiQuality": ui_quality_enum_refs()
+                    "uiQuality": ui_quality_enum_refs(),
+                    "uiSurfaceDecision": ui_surface_decision_enum_refs()
                 },
                 "generationRules": [
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
@@ -2114,6 +2244,16 @@ fn build_architecture_repair_section_outputs(
             });
             if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
                 output["enumRefs"]["apiQuality"] = api_quality_enum_refs();
+            }
+            if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+                output["generationRules"] = json!([
+                    "Write only the frontend_experience section candidate for this repair request.",
+                    "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.",
+                    "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.",
+                    "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.",
+                    "Do not write old UI quality contract fields or legacy UI self-check fields. uiSurfaceDecisionContract is MCP-derived from surfaceDecisionCandidate.",
+                    "Do not write the final AAC JSON; Rust assembles it after coverage submit."
+                ]);
             }
             Ok(output)
         })
@@ -2127,7 +2267,6 @@ fn architecture_repair_section_result_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
@@ -2141,11 +2280,31 @@ fn architecture_repair_section_result_template(
             section,
             frontend_experience_source,
             context_projection,
-            ui_quality_seed,
             api_quality_seed
         ),
         "blockedReasons": [],
         "createdAt": "ISO-8601 datetime"
+    })
+}
+
+fn architecture_repair_section_schema_shape(
+    section: ArchitectureSectionGroup,
+    content_shape: &Value,
+) -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "requestId": "string",
+        "deliveryId": "string",
+        "phaseId": "string",
+        "section": section,
+        "status": "ready | blocked",
+        "content": content_shape,
+        "blockedReasons": [{
+            "code": "string",
+            "message": "string",
+            "nextNode": "string"
+        }],
+        "createdAt": "string"
     })
 }
 
@@ -2235,7 +2394,6 @@ fn architecture_repair_section_content_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     match section {
@@ -2337,6 +2495,77 @@ fn architecture_repair_section_content_template(
                         "surfaceId": "surface_1",
                         "surfaceRole": "page",
                         "businessPurpose": "",
+                        "productIntent": {
+                            "userRole": "",
+                            "businessObject": "",
+                            "primaryJob": "",
+                            "successOutcome": ""
+                        },
+                        "compositionModel": {
+                            "requiredRegions": [
+                                "business navigation or local context",
+                                "task-relevant data region",
+                                "task-relevant action region",
+                                "scoped feedback region"
+                            ],
+                            "forbiddenRegions": [
+                                "decorative or explanatory region that displaces the task workflow"
+                            ],
+                            "primaryRegion": "task-relevant data or form region",
+                            "supportingRegions": [
+                                "navigation/context",
+                                "detail/summary",
+                                "feedback"
+                            ]
+                        },
+                        "informationModel": {
+                            "mustShow": [
+                                "business object identity",
+                                "business object status",
+                                "fields required to complete the task"
+                            ],
+                            "scanPriority": [
+                                "identity",
+                                "status",
+                                "decision fields",
+                                "available actions"
+                            ],
+                            "identityFields": [],
+                            "statusFields": [],
+                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
+                        },
+                        "actionModel": {
+                            "primaryActions": ["task-owned primary action"],
+                            "contextualActions": [],
+                            "dangerousActions": [],
+                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
+                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
+                        },
+                        "statePlacementModel": {
+                            "loading": "Near the region or control waiting for data or mutation.",
+                            "empty": "In the data/form region with business next action when applicable.",
+                            "error": "Near the affected region with recovery path.",
+                            "success": "Inline object update plus short confirmation when useful.",
+                            "business_blocking": "Near the blocked field, row, detail, or action.",
+                            "validation": "Near the field and summary for longer forms.",
+                            "disabled": "On or near disabled controls with unlock reason when actionable."
+                        },
+                        "visualModel": {
+                            "layoutBaseline": "custom_product_layout",
+                            "density": "balanced",
+                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
+                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
+                            "antiDemoRules": [
+                                "no runtime commands or delivery notes in product UI",
+                                "no marketing hero for operational surfaces",
+                                "no decorative filler before required workflow content"
+                            ]
+                        },
+                        "responsiveModel": {
+                            "desktop": "Keep primary task surface and action path visible without layout shift.",
+                            "tablet": "Preserve task order while reducing secondary regions.",
+                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
+                        },
                         "requiredComposition": [
                             "business navigation or context",
                             "task-relevant data view",
@@ -2355,7 +2584,7 @@ fn architecture_repair_section_content_template(
                         "interfaceRefs": []
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_template(ui_quality_seed),
+                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
@@ -2363,7 +2592,6 @@ fn architecture_repair_section_content_template(
             "runtimeDelivery": {
                 "status": "modified",
                 "runtimeKind": "",
-                "deploymentShape": "single-service",
                 "basis": {
                     "technicalBaselineRef": ""
                 },
@@ -2574,25 +2802,42 @@ fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<
     }
 }
 
-fn repair_source_task(
+struct RepairTaskSelection {
+    task: TaskDefinition,
+    pending_target_task_ids: Vec<String>,
+}
+
+fn repair_source_task_selection(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     target_task_ids: &[String],
-) -> Option<TaskDefinition> {
+) -> Option<RepairTaskSelection> {
     if !target_task_ids.is_empty() {
-        return target_task_ids.iter().find_map(|target_task_id| {
-            let in_current_run = run
-                .task_states
-                .iter()
-                .any(|state| state.task_id == *target_task_id);
-            if !in_current_run {
-                return None;
-            }
-            task_plan
-                .tasks
-                .iter()
-                .find(|task| task.task_id == *target_task_id)
-                .cloned()
+        let mut targets = target_task_ids
+            .iter()
+            .filter_map(|target_task_id| {
+                let in_current_run = run
+                    .task_states
+                    .iter()
+                    .any(|state| state.task_id == *target_task_id);
+                if !in_current_run {
+                    return None;
+                }
+                task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *target_task_id)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return None;
+        }
+        let task = targets.remove(0);
+        let pending_target_task_ids = targets.into_iter().map(|task| task.task_id).collect();
+        return Some(RepairTaskSelection {
+            task,
+            pending_target_task_ids,
         });
     }
     let preferred = run
@@ -2610,6 +2855,10 @@ fn repair_source_task(
         .iter()
         .find(|task| task.task_id == preferred.task_id)
         .cloned()
+        .map(|task| RepairTaskSelection {
+            task,
+            pending_target_task_ids: vec![],
+        })
 }
 
 fn update_latest_execution_request(
@@ -2621,6 +2870,8 @@ fn update_latest_execution_request(
     origin: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
+    current_target_task_id: &str,
+    pending_target_task_ids: &[String],
 ) -> Result<(), state::store::StateError> {
     let store = FileTransitionStore;
     let mut delivery = store
@@ -2641,13 +2892,20 @@ fn update_latest_execution_request(
         );
         let mut details = json!({
             "resultFile": result_file,
-            "origin": origin
+            "origin": origin,
+            "currentTargetTaskId": current_target_task_id,
+            "targetTaskIds": std::iter::once(current_target_task_id.to_string())
+                .chain(pending_target_task_ids.iter().cloned())
+                .collect::<Vec<_>>()
         });
         if let Some(source_ref) = source_ref {
             details["sourceRef"] = json!(source_ref);
         }
         if !finding_refs.is_empty() {
             details["findingRefs"] = json!(finding_refs);
+        }
+        if !pending_target_task_ids.is_empty() {
+            details["pendingTargetTaskIds"] = json!(pending_target_task_ids);
         }
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ExecutionRepair,

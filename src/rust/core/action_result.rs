@@ -74,19 +74,34 @@ impl LoomMcpAutoRunnableResult {
 fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
     match next {
         LoomMcpNextAction::WriteArtifact(_) => {
-            "Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress. Do not stop at a progress recap."
+            concat!(
+                "Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress. ",
+                "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until Loom returns user_gate, done, blocked, or failed."
+            )
         }
         LoomMcpNextAction::ExecuteTask(_) => {
-            "Continue immediately: inspect requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress. Do not stop at a progress recap."
+            concat!(
+                "Continue immediately: inspect next.requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress. ",
+                "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until the TaskResult submit succeeds or Loom returns user_gate, done, blocked, or failed."
+            )
         }
         LoomMcpNextAction::RunLoomTool(_) => {
-            "Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. Do not stop at a progress recap."
+            concat!(
+                "Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. ",
+                "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until Loom returns user_gate, done, blocked, or failed."
+            )
         }
         LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
-            "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated. Do not stop at a progress recap."
+            concat!(
+                "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated. ",
+                "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue while a semantic next action remains auto-runnable."
+            )
         }
         LoomMcpNextAction::DeployRepairAssets(_) => {
-            "Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress. Do not stop at a progress recap."
+            concat!(
+                "Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress. ",
+                "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until Loom returns user_gate, done, blocked, or failed."
+            )
         }
     }
 }

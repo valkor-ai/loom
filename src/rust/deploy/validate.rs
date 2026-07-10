@@ -6,8 +6,8 @@ use std::{
 };
 
 use contracts::{
-    DeployProvider, DeploymentRoute, DeploymentSourceService, DeploymentSpec, RuntimeKind,
-    SourceServiceRole,
+    DeployProvider, DeploymentRoute, DeploymentSourceService, DeploymentSpec,
+    DeploymentTopologyClass, RuntimeKind, SourceServiceRole,
 };
 use delivery_core::{LoomMcpActionResult, LoomMcpDoneResult, LoomMcpFailure, LoomMcpFailureResult};
 use serde::{Deserialize, Serialize};
@@ -262,10 +262,120 @@ pub fn validate_generated_assets(
             .routes
             .iter()
             .any(|route| matches!(route, DeploymentRoute::HttpProxy { .. }))
+        && topology_requires_api_proxy(spec)
     {
         issues.push("topology has apiPaths but no http-proxy route.".to_string());
     }
+    validate_deployment_facts(&mut issues, spec);
     Ok(issues)
+}
+
+fn validate_deployment_facts(issues: &mut Vec<String>, spec: &DeploymentSpec) {
+    if !spec
+        .source_model
+        .services
+        .iter()
+        .any(|service| service.service_id == spec.topology.public_entry_service_id)
+    {
+        issues.push(format!(
+            "topology publicEntryServiceId {} is not present in sourceModel services.",
+            spec.topology.public_entry_service_id
+        ));
+    }
+    for route in &spec.topology.routes {
+        if let DeploymentRoute::HttpProxy {
+            target_service_id, ..
+        } = route
+        {
+            if !spec
+                .source_model
+                .services
+                .iter()
+                .any(|service| &service.service_id == target_service_id)
+            {
+                issues.push(format!(
+                    "topology http-proxy target service {target_service_id} is not present in sourceModel services."
+                ));
+            }
+        }
+    }
+    match spec.facts.topology_class {
+        DeploymentTopologyClass::FrontendGatewayBackendApi => {
+            if !spec
+                .topology
+                .routes
+                .iter()
+                .any(|route| matches!(route, DeploymentRoute::HttpProxy { .. }))
+            {
+                issues.push(
+                    "deploy facts classify this as frontend_gateway_backend_api but topology has no http-proxy route."
+                        .to_string(),
+                );
+            }
+        }
+        DeploymentTopologyClass::SingleServiceApp
+        | DeploymentTopologyClass::BackendServedFrontendApi
+        | DeploymentTopologyClass::ApiOnlySingleService => {
+            if spec.source_model.services.len() != 1 {
+                issues.push(format!(
+                    "deploy facts classify this as {:?} but sourceModel has {} services.",
+                    spec.facts.topology_class,
+                    spec.source_model.services.len()
+                ));
+            }
+        }
+        DeploymentTopologyClass::StaticSite => {
+            if !spec.topology.validation.api_paths.is_empty() {
+                issues.push(
+                    "deploy facts classify this as static_site but topology still validates API paths."
+                        .to_string(),
+                );
+            }
+        }
+        DeploymentTopologyClass::ExistingCompose
+            if spec.provider != DeployProvider::ComposeExisting =>
+        {
+            issues.push("deploy facts classify this as existing_compose but provider is not compose-existing.".to_string());
+        }
+        DeploymentTopologyClass::ExistingDockerfileWrapper
+            if spec.provider != DeployProvider::DockerfileExisting =>
+        {
+            issues.push("deploy facts classify this as existing_dockerfile_wrapper but provider is not dockerfile-existing.".to_string());
+        }
+        DeploymentTopologyClass::MultiService
+        | DeploymentTopologyClass::ExistingCompose
+        | DeploymentTopologyClass::ExistingDockerfileWrapper
+        | DeploymentTopologyClass::Unknown => {}
+    }
+    let public_ports = spec
+        .runtime
+        .ports
+        .iter()
+        .filter(|port| !port.internal_only)
+        .count() as u32;
+    if public_ports != spec.facts.public_port_count {
+        issues.push(format!(
+            "deploy facts publicPortCount {} does not match runtime public ports {}.",
+            spec.facts.public_port_count, public_ports
+        ));
+    }
+}
+
+fn topology_requires_api_proxy(spec: &DeploymentSpec) -> bool {
+    let public_entry = &spec.topology.public_entry_service_id;
+    let public_service = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| &service.service_id == public_entry);
+    let has_backend_service = spec
+        .source_model
+        .services
+        .iter()
+        .any(|service| service.role == SourceServiceRole::Backend);
+    public_service
+        .map(|service| service.role == SourceServiceRole::Frontend && has_backend_service)
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,11 +426,20 @@ fn validate_service_asset_graph(
     dockerfile: &str,
     spec: &DeploymentSpec,
 ) {
+    if service.root != "." && !normalize_path(context_dir.join(&service.root)).exists() {
+        issues.push(format!(
+            "sourceModel service {} root {} does not exist inside build context.",
+            service.service_id, service.root
+        ));
+    }
     for manifest in &service.manifest_refs {
         if manifest.contains('*') {
             continue;
         }
         if !normalize_path(context_dir.join(manifest)).exists() {
+            if manifest_ref_satisfied_by_alternative(service, context_dir, manifest) {
+                continue;
+            }
             issues.push(format!(
                 "sourceModel service {} manifestRef {} does not exist inside build context.",
                 service.service_id, manifest
@@ -341,8 +460,10 @@ fn validate_service_asset_graph(
     if service.root != "." {
         let workspace_workdir = format!("WORKDIR /workspace/{}", service.root);
         let app_workdir = format!("WORKDIR /app/{}", service.root);
+        let src_workdir = format!("WORKDIR /src/{}", service.root);
         if !dockerfile.contains(&workspace_workdir)
             && !dockerfile.contains(&app_workdir)
+            && !dockerfile.contains(&src_workdir)
             && spec.provider == DeployProvider::Generated
         {
             issues.push(format!(
@@ -354,6 +475,30 @@ fn validate_service_asset_graph(
     validate_install_lockfile_command(issues, service, context_dir, dockerfile);
     validate_artifact_closure(issues, service, dockerfile);
     validate_port_closure(issues, service, dockerfile);
+}
+
+fn manifest_ref_satisfied_by_alternative(
+    service: &DeploymentSourceService,
+    context_dir: &Path,
+    manifest: &str,
+) -> bool {
+    if service.runtime_kind != RuntimeKind::Python {
+        return false;
+    }
+    let root = manifest
+        .rsplit_once('/')
+        .map(|(root, _)| root)
+        .unwrap_or("");
+    ["requirements.txt", "pyproject.toml", "Pipfile"]
+        .iter()
+        .any(|name| {
+            let candidate = if root.is_empty() {
+                (*name).to_string()
+            } else {
+                format!("{root}/{name}")
+            };
+            normalize_path(context_dir.join(candidate)).exists()
+        })
 }
 
 fn validate_install_lockfile_command(
@@ -390,7 +535,10 @@ fn validate_artifact_closure(
     service: &DeploymentSourceService,
     dockerfile: &str,
 ) {
-    if service.role == SourceServiceRole::Frontend && service.start_command.is_none() {
+    if service.role == SourceServiceRole::Frontend
+        && service.start_command.is_none()
+        && service.runtime_kind != RuntimeKind::Static
+    {
         let expected_output = service
             .output_directory
             .as_deref()

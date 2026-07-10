@@ -51,3 +51,40 @@ Use this reference when implementing or repairing loom deploy support for Java-f
 - If a Spring Boot container starts but healthcheck fails, verify `SERVER_PORT`, `server.address`, profile-specific config, and whether the app requires database migrations or secrets.
 - If Gradle builds fail due to daemon or cache issues, disable the daemon or rerun with a clean generated image before changing application code.
 - If Java build context misses a sibling frontend or shared module, fix Compose build context and Dockerfile copy paths together.
+
+## Scanner Signals To Deploy Facts
+
+Translate Java scanner evidence into deploy facts before generating files:
+
+- Maven/Gradle build file path becomes the service root and manifest ref.
+- Wrapper scripts become preferred build command facts only when they are inside the build context.
+- Spring Boot, Quarkus, Micronaut, servlet container, or CLI signals decide whether the service exposes HTTP.
+- Java version properties/toolchains select builder/runtime image majors.
+- `server.port`, profile config, Actuator config, and docs become runtime port and healthcheck candidates.
+- Flyway/Liquibase, datasource config, JDBC URLs, and driver dependencies become persistence/dependency facts.
+- Frontend assets under sibling/root directories become backend-served frontend facts only when the build/package path can include them.
+
+## Generated Asset Expectations
+
+Generated Java assets should show:
+
+- Multi-stage Dockerfile with build and JRE runtime stages.
+- `WORKDIR` aligned to the directory containing `pom.xml` or `build.gradle*`.
+- Build context wide enough for wrapper scripts, build files, sibling modules, and frontend assets when the topology needs them.
+- Runnable jar selection excluding `*-plain.jar`, sources, and javadoc artifacts.
+- Compose env includes `PORT` and framework-specific port variables such as `SERVER_PORT` when Spring Boot is detected.
+- File database URLs point at mounted writable container paths; service databases use Compose DNS names.
+- Migration-aware local defaults avoid blocking startup on schema validation differences when migration tooling owns schema creation.
+
+## Repair Boundary
+
+Repair generated Java deploy assets when:
+
+- Context/workdir cannot see wrapper scripts or build files.
+- Build uses a wrapper path outside the Docker build context.
+- Runtime selects a non-runnable classifier jar.
+- Container port/env does not match the Java runtime port.
+- Dependency URL uses `localhost` inside a container.
+- Generated local file database path is not mounted or writable.
+
+Do not modify application entity mappings, migrations, profiles, or source config during deploy asset repair unless the MCP action routes to execution repair.

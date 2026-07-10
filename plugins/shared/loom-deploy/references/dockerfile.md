@@ -18,7 +18,7 @@ Use this reference when implementing or repairing generated Dockerfiles or Docke
 - Do not copy `.env`, local databases, caches, `node_modules`, virtualenvs, build outputs, or VCS metadata into images unless the project explicitly requires it.
 - When serving a built frontend through a backend image, copy only the built static output into the backend's static resource directory and keep the backend start command as the single runtime process.
 
-## Context And Workdir Checks
+## Source Root, Build Context, Workdir, And COPY Closure
 
 Before changing a Dockerfile, verify the path triangle:
 
@@ -29,6 +29,22 @@ Before changing a Dockerfile, verify the path triangle:
 The Docker build context controls which files can be copied. If a `COPY frontend/package.json` command runs with `build.context: ./service`, it will fail even if the file exists in the repository. Fix the context or the copy path; do not paper over it with broad `COPY . .` unless that is the intended context.
 
 For generated workspace-aware Dockerfiles, copy root lockfiles and workspace manifests first, then service manifests, then source. For app-local generated Dockerfiles, keep paths relative to that app root.
+
+Use this closure matrix:
+
+- App-local service: `build.context` is the service root, Dockerfile path is relative to that root, `WORKDIR` is usually `/app`, and `COPY` sources are service-root relative.
+- Workspace service: `build.context` is the workspace root, Dockerfile path is relative to the workspace root, `WORKDIR` starts at `/workspace` or `/app`, copies root workspace manifests first, then switches to the app subdirectory before build/start.
+- Split frontend/backend: each generated service uses the context needed for its own manifests. A gateway/frontend service must not copy backend files except generated proxy config. A backend service must not copy frontend source unless topology says backend-served frontend.
+- Backend-served frontend: use a common ancestor context that contains both frontend and backend roots. Build frontend assets in a builder stage, then copy the built output into the backend static/resource location before backend packaging or final runtime.
+- Existing Dockerfile wrapper: keep the build context that the user Dockerfile appears to expect. Do not rewrite user Dockerfile assumptions during wrapper generation.
+
+Generated Dockerfiles may use `/app`, `/workspace`, or `/src`, but the choice must be consistent:
+
+- `/app` for app-local single services and most runtime images.
+- `/workspace` when root manifests and sub-app directories must coexist during dependency install.
+- `/src` only when the generated file consistently copies, builds, and publishes from `/src`; do not mix `/src` copy paths with `/app` runtime paths.
+
+Every dependency install command must run in the directory that contains the dependency manifest it consumes. Every build command must run in the directory that owns the app build script/project file.
 
 ## Ignore Files
 
@@ -67,3 +83,4 @@ For generated workspace-aware Dockerfiles, copy root lockfiles and workspace man
 - Start failures usually point to wrong command, missing build artifacts, wrong bind host, or wrong port.
 - For compiled stacks, distinguish build-stage failures from runtime-stage missing binary/files.
 - If the build cannot find project files that exist locally, inspect Compose build context and `.dockerignore` before changing package manager commands.
+- If a generated Dockerfile repeatedly fails on missing files, repair the source-root/context/workdir/COPY closure first. Do not keep adding ad hoc `COPY` statements until the Dockerfile becomes a mirror of the entire repository.

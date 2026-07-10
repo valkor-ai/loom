@@ -35,3 +35,37 @@ Use this reference when implementing or repairing loom deploy support for .NET p
 - If healthcheck fails, verify `ASPNETCORE_URLS`, app `urls` config, and whether HTTPS redirection is forcing an HTTPS-only endpoint.
 - If restore fails for private feeds, ask for NuGet credentials or a project-specific `NuGet.Config` rather than baking secrets into generated files.
 - If the project has only a `.sln` and multiple web projects, a coding agent should inspect the solution and pick the intended startup project before editing generated deployment files.
+
+## Scanner Signals To Deploy Facts
+
+Translate .NET scanner evidence into deploy facts before generating files:
+
+- `*.csproj` path becomes service root and manifest ref. A `.sln` becomes workspace context when multiple projects are involved.
+- `Microsoft.NET.Sdk.Web`, ASP.NET packages, minimal API builder code, controllers, or `UseRouting` decide HTTP/API service facts.
+- `TargetFramework`, `TargetFrameworks`, and `global.json` select SDK/runtime image majors.
+- `launchSettings.json`, `ASPNETCORE_URLS`, `urls`, Kestrel config, and docs become runtime port facts.
+- EF Core packages/migrations, connection strings, Redis/Mongo/RabbitMQ packages, and env examples become dependency service facts.
+- Non-web worker/service projects become command-style deploy facts without fake preview routes.
+
+## Generated Asset Expectations
+
+Generated .NET assets should show:
+
+- SDK build stage and ASP.NET/runtime final stage selected by project type.
+- `dotnet restore` and `dotnet publish` against the selected project file, not a random solution member.
+- Runtime command points to the published assembly name from the selected project.
+- `ASPNETCORE_URLS=http://0.0.0.0:<port>` and `PORT=<port>` for web services.
+- Compose dependencies mapped into connection strings using service DNS names.
+- HTTPS redirection does not make the local HTTP preview unreachable.
+
+## Repair Boundary
+
+Repair generated .NET deploy assets when:
+
+- Restore/publish uses the wrong project path.
+- Runtime command references the wrong DLL.
+- SDK/runtime image major mismatches target framework.
+- `ASPNETCORE_URLS` or port wiring makes healthcheck unreachable.
+- Generated connection strings point at localhost or omit generated dependency credentials.
+
+Do not edit C# source, project files, migrations, or NuGet feeds during deploy asset repair unless the MCP action routes to execution repair or credentials are provided.

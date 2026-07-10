@@ -12,6 +12,7 @@ use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpUserGateResult,
 };
 use serde_json::json;
+use state::paths::from_project_relative;
 
 use crate::{code_evidence::DeploymentCodeProbe, prepare::read_spec, DeployBootstrapInput};
 
@@ -181,9 +182,34 @@ pub fn deploy_bootstrap(input: DeployBootstrapInput) -> LoomMcpActionResult {
         });
     }
 
+    let compose_file = match from_project_relative(project_root, &spec.files.compose_path) {
+        Ok(path) => path,
+        Err(error) => {
+            return LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+                project_root: input.project_root,
+                blockers: vec![format!(
+                    "Deployment bootstrap could not resolve Compose file {}: {error}.",
+                    spec.files.compose_path
+                )],
+                recommended_tool: Some("loom.deployPrepare".to_string()),
+                details: Some(json!({ "composePath": spec.files.compose_path })),
+            });
+        }
+    };
+    let service_id = spec.source_model.primary_service_id.clone();
+    if let Some(blocked) = ensure_compose_service_running(
+        &input.project_root,
+        project_root,
+        &compose_file,
+        &spec.files.compose_path,
+        &service_id,
+    ) {
+        return blocked;
+    }
+
     let mut executed = Vec::new();
     for task in tasks {
-        let output = shell_command(&task.command)
+        let output = compose_exec_command(&compose_file, &service_id, &task.command)
             .current_dir(project_root)
             .output();
         match output {
@@ -191,6 +217,8 @@ pub fn deploy_bootstrap(input: DeployBootstrapInput) -> LoomMcpActionResult {
                 executed.push(json!({
                     "kind": task.kind,
                     "command": task.command,
+                    "composePath": spec.files.compose_path,
+                    "serviceId": service_id,
                     "exitCode": output.status.code(),
                     "status": if output.status.success() { "passed" } else { "failed" },
                     "stdoutTail": tail_lines(&String::from_utf8_lossy(&output.stdout), 40),
@@ -209,6 +237,8 @@ pub fn deploy_bootstrap(input: DeployBootstrapInput) -> LoomMcpActionResult {
                 executed.push(json!({
                     "kind": task.kind,
                     "command": task.command,
+                    "composePath": spec.files.compose_path,
+                    "serviceId": service_id,
                     "status": "failed_to_start",
                     "error": error.to_string()
                 }));
@@ -231,6 +261,83 @@ pub fn deploy_bootstrap(input: DeployBootstrapInput) -> LoomMcpActionResult {
         details: Some(json!({ "executed": executed })),
         warnings: spec.bootstrap.warnings,
     })
+}
+
+fn ensure_compose_service_running(
+    project_root_display: &str,
+    project_root: &Path,
+    compose_file: &Path,
+    compose_path: &str,
+    service_id: &str,
+) -> Option<LoomMcpActionResult> {
+    let output = Command::new("docker")
+        .args(["compose", "-f"])
+        .arg(compose_file)
+        .args(["ps", "--status", "running", "--services"])
+        .arg(service_id)
+        .current_dir(project_root)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let running = stdout.lines().any(|line| line.trim() == service_id);
+            if running {
+                return None;
+            }
+            Some(LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+                project_root: project_root_display.to_string(),
+                blockers: vec![format!(
+                    "Deployment bootstrap requires running Compose service {service_id}."
+                )],
+                recommended_tool: Some("loom.deployUp".to_string()),
+                details: Some(json!({
+                    "composePath": compose_path,
+                    "serviceId": service_id,
+                    "status": "not_running",
+                    "stdoutTail": tail_lines(&stdout, 40),
+                    "stderrTail": tail_lines(&String::from_utf8_lossy(&output.stderr), 40)
+                })),
+            }))
+        }
+        Ok(output) => Some(LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+            project_root: project_root_display.to_string(),
+            blockers: vec![format!(
+                "Deployment bootstrap could not confirm running Compose service {service_id}."
+            )],
+            recommended_tool: Some("loom.deployUp".to_string()),
+            details: Some(json!({
+                "composePath": compose_path,
+                "serviceId": service_id,
+                "exitCode": output.status.code(),
+                "stdoutTail": tail_lines(&String::from_utf8_lossy(&output.stdout), 40),
+                "stderrTail": tail_lines(&String::from_utf8_lossy(&output.stderr), 40)
+            })),
+        })),
+        Err(error) => Some(LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
+            project_root: project_root_display.to_string(),
+            blockers: vec![format!(
+                "Deployment bootstrap could not inspect Compose service {service_id}: {error}."
+            )],
+            recommended_tool: Some("loom.deployUp".to_string()),
+            details: Some(json!({
+                "composePath": compose_path,
+                "serviceId": service_id,
+                "error": error.to_string()
+            })),
+        })),
+    }
+}
+
+fn compose_exec_command(compose_file: &Path, service_id: &str, command: &str) -> Command {
+    let mut process = Command::new("docker");
+    process
+        .args(["compose", "-f"])
+        .arg(compose_file)
+        .args(["exec", "-T"])
+        .arg(service_id)
+        .args(["sh", "-lc"])
+        .arg(command);
+    process
 }
 
 fn find_prisma_root(root: &Path) -> Option<PathBuf> {
@@ -445,21 +552,6 @@ fn liquibase_command(stack: &DeploymentCodeProbe) -> String {
         return "gradle liquibaseUpdate".to_string();
     }
     "liquibase update".to_string()
-}
-
-fn shell_command(command: &str) -> Command {
-    #[cfg(windows)]
-    {
-        let mut process = Command::new("cmd");
-        process.args(["/C", command]);
-        process
-    }
-    #[cfg(not(windows))]
-    {
-        let mut process = Command::new("sh");
-        process.args(["-lc", command]);
-        process
-    }
 }
 
 fn tail_lines(text: &str, limit: usize) -> Vec<String> {

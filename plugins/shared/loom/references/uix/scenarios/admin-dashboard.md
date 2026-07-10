@@ -9,6 +9,19 @@ Use for internal operations, staff consoles, CRM/ERP/CMS back offices, SaaS cont
 - Density is usually `workbench_dense` or `balanced`.
 - Visual style is restrained: quiet surfaces, strong information hierarchy, semantic status colors, and predictable controls.
 
+## Brief Extraction
+
+When this scenario is selected, map scenario rules into the task brief this way:
+
+| Brief area | Admin dashboard extraction |
+| --- | --- |
+| `layoutContract` | Sidebar/topbar/main/detail regions, workbench density, desktop split layout, tablet rail/drawer, mobile list-to-detail fallback. |
+| `informationContract` | Record identity, status, key decision fields, filters/search/sort/pagination, selected-detail summary, update/history context. |
+| `actionContract` | Primary create/submit/approve action near the working region; row/detail contextual actions; destructive actions with confirmation or recovery. |
+| `stateContract` | Results-region loading/empty/error, form validation, action pending/success, and business-blocking near row/detail/action. |
+| `visualContract` | Restrained operational surfaces, tokenized spacing/type/status colors, compact app identity, no hero/marketing/filler sections. |
+| `contentBoundary` | Product copy only: labels, status, validation, filters, actions, and help route. No runtime, delivery, stack, or verification language. |
+
 ## Required Patterns
 
 - Navigation: active section, grouped nav items, stable page title, breadcrumbs when depth is greater than one.
@@ -192,10 +205,18 @@ On mobile, do not simply shrink this table. Use record cards or a drill-down lis
 - App identity stays compact in the sidebar or topbar. Do not add a large brand intro block above the work surface.
 - Header/footer text must be operational: filters, status, user/workspace, primary action, pagination, or help route. Long feature descriptions are not part of a repeat-use console.
 - Mobile fallback must keep the same workflow reachable: list/search first, then detail/action through drawer, card, or route.
-- `frontendQualitySelfCheck.surfacesCovered` should name the admin shell, data/list surface, and mutation/detail surfaces when they were touched.
+- Evidence should name the admin shell, data/list surface, and mutation/detail surfaces when they were touched.
 
 ## Avoid
 
 - Hero sections, marketing footers, feature-explainer cards, decorative metrics, or long implementation notes.
 - Modal-only workflows that make users lose list context.
 - Tables without overflow, pagination, or responsive fallback.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `admin.shell.work_surface` | First viewport contains compact app identity, navigation/current context, a real table/list/form/detail/action region, and primary business action access. | Page opens with hero copy, large intro, footer-like explanation, decorative metrics, or no immediately usable work surface. |
+| `admin.topbar.context_actions` | Topbar/header carries operational context such as current page, search/filter, user/workspace, or relevant command. | Header is filler copy, product explanation, or detached from the active task. |
+| `admin.list.filter_table_detail` | Record screens preserve list context across filters, pagination, selection, detail, and mutation feedback. | Selection or mutation loses context, table lacks state handling, or every action is isolated in generic modals without row/detail readback. |

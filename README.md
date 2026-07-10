@@ -60,7 +60,7 @@ That is where Loom is different from prompt files, one-off workflows, and single
 
 Vibe Coding and AI Coding are making software creation accessible to more builders than ever. More people can now turn an idea into a demo, prototype a product, or build a tool for themselves with the help of coding agents.
 
-But there is still a large gap between a demo that works once and a production-grade application that can be trusted, shipped, repaired, and evolved.
+But there is still a large gap between a demo that works once and reliable application delivery that can be trusted, shipped, repaired, and evolved.
 
 That gap is not only about model capability. Even as models improve, builders still need to clarify requirements, preserve project context, make architectural decisions, prepare backend/runtime state, run checks, inspect failures, repair issues, verify again, preview the result, and collect delivery evidence.
 
@@ -68,21 +68,20 @@ Loom exists to close that gap.
 
 It is an open-source delivery layer for existing coding agents. It helps agents move from one-shot coding to repeatable software delivery: clarify the request, plan the work, split tasks, preserve context, execute checks, repair failures, and report evidence.
 
-The goal is simple: help builders move from vibe-coded demos and personal tools to reliable, production-ready applications with less manual effort and less repeated context gathering.
+The goal is simple: help builders move from vibe-coded demos and personal tools to reliable application delivery with production-grade discipline, less manual effort, and less repeated context gathering.
 
 Capability | What it changes
 --- | ---
-Dynamic workflows | Turn each delivery goal into an adaptive loop for clarification, planning, execution, verification, repair, and handoff.
-Delivery harness | Route work through requirement clarification, planning, building, checking, previewing, reviewing, repairing, and reporting.
-Requirement intelligence | Turns clarification from a chat step into a delivery-quality gate: confirmed scope, business rules, lifecycle coverage, and UI operation paths become structured context that planning, execution, and review must preserve.
-Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and let requirement clarification pull only matching chunks into the right step without making the knowledge base a hidden requirement source.
-Context routing | Persist project summaries, task graphs, backend/runtime state, tests, and deployment results so agents can retrieve targeted context instead of rereading the whole repository every turn.
-Task contracts | Turn broad goals into bounded tasks with source refs, acceptance intent, result files, and continuation rules.
-Executable tools | Give agents MCP tools for context collection, task routing, result recording, deployment checks, and delivery evidence.
-Backend readiness | Track databases, auth, storage, functions, environment variables, services, and runtime requirements as part of the delivery state.
-UIX guidance | Preserve visual direction, interaction flows, responsive states, accessibility expectations, and product-specific interface details as delivery requirements.
-Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
-Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode and other agents.
+Stateful delivery protocol | Turns a one-shot coding session into a resumable delivery loop backed by `.loom/` state, request refs, result files, review records, repair requests, and handoff evidence.
+Requirement intelligence | Converts loose prompts into confirmed scope, business rules, lifecycle coverage, UI operation paths, and acceptance details that planning, execution, and review must preserve.
+Engineering contracts | Carries architecture, API, runtime, code-quality, and task ownership decisions as structured contracts instead of relying on repeated prompt reminders.
+Production UI guidance | Pushes UI quality to the generation side with surface decisions, scenario references, layout density, style asset plans, token expectations, forbidden content rules, and desktop/mobile evidence.
+Targeted context routing | Lets agents read field groups, reference profiles, task contracts, and repair context instead of repeatedly loading broad files or entire artifacts.
+Task-scoped execution | Splits delivery into bounded tasks with source refs, write boundaries, verification intent, result templates, and continuation rules.
+Review and repair loop | Separates implementation from validation through review signals, TaskResult evidence, repair contracts, multi-target repair routing, and re-verification.
+Runtime and deploy readiness | Prepares local Docker Compose previews with topology-aware services, build contexts, environment rules, ports, health checks, logs, and repair boundaries.
+Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and pull only matching chunks into the right clarification step.
+Multi-agent MCP protocol | Runs the same delivery state machine through Codex, Claude Code, OpenCode, and future MCP-capable agents.
 
 ## Context Routing
 
@@ -278,15 +277,17 @@ Agent plugins set the Loom routing environment for you. Use the agent command su
 
 ## How It Works
 
-Loom creates project-local delivery state under `.loom/` and uses it as the source of truth for the agent's next action. The core loop is short:
+Loom runs as a local MCP delivery state machine. The agent does not decide the whole workflow from memory; it asks Loom for the next request, reads only the declared fields, writes the expected artifact, submits it back, and lets Loom validate and route the next step.
 
-1. Capture and confirm the delivery scope.
-2. Build a compact context pack.
-3. Generate planning, architecture, and task contracts.
-4. Execute one bounded task at a time.
-5. Record evidence and run verification.
-6. Review, repair, and re-check.
-7. Report the final delivery state.
+1. Start or resume from `.loom/` state.
+2. Clarify and confirm scope, optionally using registered knowledge sources.
+3. Build the delivery baseline: repository context, technical baseline, planning contract, and architecture artifact.
+4. Convert contracts into task plans with ownership, read groups, write boundaries, verification intent, and result templates.
+5. Execute bounded tasks through the agent, then write a TaskResult with evidence.
+6. Let Loom validate, normalize, persist, and route from the submitted artifact.
+7. Review through structured signals, then route code repair, task-plan repair, architecture repair, or manual review when needed.
+8. Prepare local deployment previews with runtime facts, Compose topology, environment rules, logs, and repair boundaries when `deploy` is requested.
+9. Continue or hand off from saved state; the next session or another agent can resume without rebuilding the delivery context.
 
 ## Learn More
 

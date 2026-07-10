@@ -76,3 +76,9 @@ Use this structure for mobile forms, record details, checkout/review flows, and 
 - Check that error and success feedback remain visible after submit.
 - Check that drawers/sheets close without losing form or selection context.
 - Check 200% zoom or system text scaling when the environment allows it.
+
+## Quality Gate Index
+
+| Gate | Pass signal | Fail signal |
+| --- | --- | --- |
+| `admin.mobile.record_fallback` | Narrow screens keep record workflows usable through cards, drawer/sheet/detail route, or explicitly source-checked responsive fallback. | Desktop table is merely squeezed, primary actions depend on hover, detail context is unreachable, or mobile evidence is absent without environment blocker. |

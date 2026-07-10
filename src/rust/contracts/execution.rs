@@ -691,6 +691,31 @@ pub struct FrontendQualitySurfaceEvidence {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendSurfaceContractEvidence {
+    pub id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendContentBoundaryEvidence {
+    pub checked: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_content_examples: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forbidden_content_violations: Vec<String>,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendDesignTokenEvidence {
     pub strategy_used: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -705,22 +730,45 @@ pub struct FrontendDesignTokenEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendQualityGateResult {
+    pub gate_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surface_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub viewports_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempted_checks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_evidence: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    pub evidence: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendQualitySelfCheck {
     pub status: String,
-    pub scenario_kind: String,
-    pub quality_level: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub reference_groups_checked: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_decision_contract_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reference_files_checked: Vec<String>,
+    pub surface_region_evidence: Vec<FrontendSurfaceContractEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub states_covered: Vec<FrontendQualityStateCoverage>,
+    pub surface_action_evidence: Vec<FrontendSurfaceContractEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub business_ui_rules_checked: Vec<FrontendQualityBusinessRuleCheck>,
-    pub forbidden_content_check: FrontendQualityForbiddenContentCheck,
+    pub surface_state_evidence: Vec<FrontendSurfaceContractEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surfaces_covered: Vec<FrontendQualitySurfaceEvidence>,
+    pub surface_quality_rule_evidence: Vec<FrontendSurfaceContractEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_boundary_evidence: Option<FrontendContentBoundaryEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_plan_files_checked: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

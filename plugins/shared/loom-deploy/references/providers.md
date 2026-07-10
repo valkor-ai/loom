@@ -13,19 +13,19 @@ Provider order:
 3. Generate deterministic Dockerfile/Compose files for known or unknown stacks.
 4. Return a bounded MCP repair action when build, boot, log, or health validation fails.
 
-`loom deploy run` is the preferred high-level command for normal agent use. It composes prepare, build/start, validate, status, and repair action reporting without hiding provider choice or switching builders.
+`loom.deployRun` is the preferred high-level MCP tool for normal agent use. It composes prepare, build/start, validate, status, and repair action reporting without hiding provider choice or switching builders.
 
 `providerCandidates` in `.loom/deployment/specs/local.json` should describe the Compose/Dockerfile providers that were selected, available, or skipped, plus the commands that validate/build them.
 
 ## Provider Policy
 
-Provider policy gives explicit user control over strategy selection:
+Provider policy gives explicit user control over strategy selection through `DeployToolInput.providerPolicy`:
 
-- `--provider compose-existing`: require a root-level Compose file.
-- `--provider dockerfile-existing`: require a root-level Dockerfile and generate only the Compose wrapper.
-- `--provider dockerfile-template`: generate loom Dockerfile/Compose assets even if user assets exist.
-- `--force-generate`: force generated Dockerfile/Compose assets and skip existing user assets.
-- `--reuse-existing false`: disable existing Dockerfile/Compose reuse while keeping normal template generation.
+- `provider: "compose-existing"`: require a root-level Compose file.
+- `provider: "dockerfile-existing"`: require a root-level Dockerfile and generate only the Compose wrapper.
+- `provider: "generated"`: generate Loom Dockerfile/Compose assets instead of selecting an existing provider.
+- `forceGenerate: true`: force generated Dockerfile/Compose assets and skip existing user assets.
+- `reuseExisting: false`: disable existing Dockerfile/Compose reuse while keeping normal template generation.
 
 If an explicitly selected existing provider has no matching file, return `INVALID_ARGUMENT` with a clear reason. Do not silently fall back to another provider.
 
@@ -44,7 +44,7 @@ When the user explicitly selected `compose-existing` or `dockerfile-existing`, f
 
 ## Provider Rules
 
-- Existing Compose is protected and never overwritten during `deploy prepare`.
+- Existing Compose is protected and never overwritten during `loom.deployPrepare`.
 - Existing Dockerfiles are protected and reused with a generated Compose wrapper.
 - Generated files live under `.loom/deployment/specs/generated/`.
 - Unknown projects still receive a deterministic placeholder Dockerfile so a coding agent can inspect, repair, or explain the blocker.

@@ -15,7 +15,6 @@ use delivery_core::{
     OperationContext, RouteAction, RouteActionKind, SubmitAcceptedEvent, TransitionEngine,
     TransitionStore, WriteArtifactNext, WriteMode, WriteTarget,
 };
-use schemars::schema_for;
 use serde_json::{json, Value};
 use state::{
     lifecycle_store::FileTransitionStore,
@@ -27,13 +26,15 @@ use crate::{
     paths::task_result_file,
     task_execution::{
         load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+        task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
         api_contract_evidence_applies, architecture_quality_evidence_applies,
         code_quality_evidence_applies, code_quality_execution_context,
         frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_template_with_code_quality,
+        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
+        task_result_schema_shape, task_result_template_with_code_quality,
         FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
@@ -157,6 +158,12 @@ where
         "task.writeBoundary.artifactRefs",
         "outputContract.blockedReasonOptions",
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
+        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+        "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+        "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+        "task.frontendExperienceRequirement.uiSurfaceOwnership",
     ] {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
@@ -199,7 +206,7 @@ where
     } else {
         json!({})
     };
-    let task: TaskDefinition = serde_json::from_value(json!({
+    let mut task: TaskDefinition = serde_json::from_value(json!({
         "taskId": value_field(&fields, "task.taskId"),
         "groupId": "",
         "title": "",
@@ -225,17 +232,42 @@ where
         "codeQualityRequirementRefs": array_field(&fields, "task.codeQualityRequirementRefs")
     }))
     .map_err(state::store::StateError::Json)?;
-    let required_top_level_fields =
-        string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
-    let code_quality_requirements =
-        code_quality_requirements_field(&fields, "sourceContext.codeQualityExecutionContext")?;
-    let blocked_output = json!({
-        "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
-    });
+    if let Some(stored_task) =
+        private_request_value(&input.project_root, &authorized.request_id, "task")?
+    {
+        task = serde_json::from_value(normalize_task_definition_value(stored_task))
+            .map_err(state::store::StateError::Json)?;
+    }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
+    task = task_with_phase_execution_guidance(root, &locator, task)?;
+    let required_top_level_fields =
+        string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
+    let mut code_quality_requirements =
+        code_quality_requirements_field(&fields, "sourceContext.codeQualityExecutionContext")?;
+    if code_quality_requirements.is_empty() {
+        if let Some(source_context) =
+            private_request_value(&input.project_root, &authorized.request_id, "sourceContext")?
+        {
+            if let Some(value) = source_context
+                .get("codeQualityExecutionContext")
+                .filter(|value| !value.is_null())
+            {
+                code_quality_requirements = serde_json::from_value(value.clone())
+                    .map_err(state::store::StateError::Json)?;
+            }
+        }
+    }
+    hydrate_task_refs_from_required_result_evidence(
+        &mut task,
+        &raw_result,
+        &required_top_level_fields,
+    );
+    let blocked_output = json!({
+        "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
+    });
     let normalized_result = normalize_task_result_machine_fields(
         raw_result.clone(),
         &authorized.request_id,
@@ -387,7 +419,16 @@ where
     run.next_action = next_action_for_run(&run);
     run.updated_at = now;
     save_run(root, &locator, &run)?;
-    let Some(next_action) = route_action_for_task_result(&run, &result, &persisted_ref)? else {
+    let Some(next_action) = route_action_for_task_result(
+        &input.project_root,
+        &delivery_id,
+        &phase_id,
+        &run,
+        &result,
+        &input.request_ref,
+        &persisted_ref,
+    )?
+    else {
         update_delivery_after_result(
             &input.project_root,
             &delivery_id,
@@ -772,6 +813,9 @@ fn normalize_task_result_machine_fields(
     let detail_ids = required_requirement_detail_ids(task);
     normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
 
+    remove_non_applicable_evidence_fields(object, task);
+    normalize_applicable_evidence_array_fields(object, task);
+
     if let Some(concepts) = object
         .get_mut("conceptEvidence")
         .and_then(Value::as_array_mut)
@@ -788,8 +832,223 @@ fn normalize_task_result_machine_fields(
     if let Some(requirement) = &task.frontend_experience_requirement {
         normalize_frontend_experience_self_check(object, requirement);
     }
+    normalize_frontend_quality_self_check_shape(object);
 
     raw_result
+}
+
+fn remove_non_applicable_evidence_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    if !frontend_self_check_applies(task) {
+        object.remove("frontendExperienceSelfCheck");
+    }
+    if !frontend_quality_self_check_applies(task) {
+        object.remove("frontendQualitySelfCheck");
+    }
+    if !runtime_delivery_evidence_applies(task) {
+        object.remove("runtimeDeliveryEvidence");
+    }
+    if task.concept_refs.is_empty() {
+        object.remove("conceptEvidence");
+    }
+    if !architecture_quality_evidence_applies(task) {
+        object.remove("architectureQualityEvidence");
+    }
+    if !api_contract_evidence_applies(task) {
+        object.remove("apiContractEvidence");
+    }
+    if !code_quality_evidence_applies(task) {
+        object.remove("codeQualityEvidence");
+    }
+}
+
+fn hydrate_task_refs_from_required_result_evidence(
+    task: &mut TaskDefinition,
+    raw_result: &Value,
+    required_top_level_fields: &[String],
+) {
+    if required_top_level_fields
+        .iter()
+        .any(|field| field == "architectureQualityEvidence")
+        && task.architecture_quality_requirement_refs.is_empty()
+    {
+        task.architecture_quality_requirement_refs =
+            evidence_requirement_ids(raw_result, "architectureQualityEvidence");
+    }
+    if required_top_level_fields
+        .iter()
+        .any(|field| field == "apiContractEvidence")
+        && task.api_contract_requirement_refs.is_empty()
+    {
+        task.api_contract_requirement_refs =
+            evidence_requirement_ids(raw_result, "apiContractEvidence");
+    }
+    if required_top_level_fields
+        .iter()
+        .any(|field| field == "codeQualityEvidence")
+        && task.code_quality_requirement_refs.is_empty()
+    {
+        task.code_quality_requirement_refs =
+            evidence_requirement_ids(raw_result, "codeQualityEvidence");
+    }
+}
+
+fn evidence_requirement_ids(raw_result: &Value, field: &str) -> Vec<String> {
+    raw_result
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("requirementId").and_then(Value::as_str))
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn normalize_task_definition_value(mut value: Value) -> Value {
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    normalize_nullable_array_fields(
+        object,
+        &[
+            "implementationActions",
+            "dependsOn",
+            "scopeRefs",
+            "acceptanceRefs",
+            "requirementDetailRefs",
+            "verificationIntents",
+            "conceptRefs",
+            "conceptResponsibilities",
+            "conceptVerificationIntents",
+            "engineeringQualityRequirementRefs",
+            "architectureQualityRequirementRefs",
+            "apiContractRequirementRefs",
+            "codeQualityRequirementRefs",
+        ],
+    );
+    if let Some(write_boundary) = object
+        .get_mut("writeBoundary")
+        .and_then(Value::as_object_mut)
+    {
+        normalize_nullable_array_fields(write_boundary, &["forbiddenPaths"]);
+        if let Some(artifact_refs) = write_boundary
+            .get_mut("artifactRefs")
+            .and_then(Value::as_object_mut)
+        {
+            normalize_nullable_array_fields(
+                artifact_refs,
+                &[
+                    "modules",
+                    "entities",
+                    "interfaces",
+                    "userFlows",
+                    "stateMachines",
+                    "decisions",
+                    "nfrs",
+                    "risks",
+                ],
+            );
+        }
+    }
+    value
+}
+
+fn normalize_nullable_array_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]) {
+    for field in fields {
+        if object.get(*field).is_none_or(Value::is_null) {
+            object.insert((*field).to_string(), json!([]));
+        }
+    }
+}
+
+fn normalize_applicable_evidence_array_fields(
+    object: &mut serde_json::Map<String, Value>,
+    task: &TaskDefinition,
+) {
+    for (applies, field) in [
+        (!task.concept_refs.is_empty(), "conceptEvidence"),
+        (
+            architecture_quality_evidence_applies(task),
+            "architectureQualityEvidence",
+        ),
+        (api_contract_evidence_applies(task), "apiContractEvidence"),
+        (code_quality_evidence_applies(task), "codeQualityEvidence"),
+    ] {
+        if applies && !object.get(field).is_some_and(Value::is_array) {
+            object.insert(field.to_string(), json!([]));
+        }
+    }
+}
+
+fn normalize_frontend_quality_self_check_shape(object: &mut serde_json::Map<String, Value>) {
+    let Some(self_check) = object
+        .get_mut("frontendQualitySelfCheck")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    normalize_object_array_field(self_check, "surfaceRegionEvidence");
+    normalize_object_array_field(self_check, "surfaceActionEvidence");
+    normalize_object_array_field(self_check, "surfaceStateEvidence");
+    normalize_object_array_field(self_check, "surfaceQualityRuleEvidence");
+    normalize_string_array_field(self_check, "referencePlanFilesChecked");
+    normalize_string_array_field(self_check, "knownGaps");
+    if !self_check
+        .get("contentBoundaryEvidence")
+        .is_some_and(Value::is_object)
+    {
+        self_check.insert(
+            "contentBoundaryEvidence".to_string(),
+            json!({
+                "checked": true,
+                "allowedContentExamples": [],
+                "forbiddenContentViolations": [],
+                "evidence": ""
+            }),
+        );
+    } else if let Some(content) = self_check
+        .get_mut("contentBoundaryEvidence")
+        .and_then(Value::as_object_mut)
+    {
+        if !content.get("checked").is_some_and(Value::is_boolean) {
+            content.insert("checked".to_string(), json!(true));
+        }
+        normalize_string_array_field(content, "allowedContentExamples");
+        normalize_string_array_field(content, "forbiddenContentViolations");
+    }
+    if self_check
+        .get("designTokenEvidence")
+        .is_some_and(|value| !value.is_null() && !value.is_object())
+    {
+        self_check.remove("designTokenEvidence");
+    }
+}
+
+fn normalize_object_array_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let Some(items) = object.get(field).and_then(Value::as_array).cloned() else {
+        object.insert(field.to_string(), json!([]));
+        return;
+    };
+    object.insert(
+        field.to_string(),
+        Value::Array(items.into_iter().filter(Value::is_object).collect()),
+    );
+}
+
+fn normalize_string_array_field(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let Some(items) = object.get(field).and_then(Value::as_array).cloned() else {
+        object.insert(field.to_string(), json!([]));
+        return;
+    };
+    object.insert(
+        field.to_string(),
+        Value::Array(items.into_iter().filter(Value::is_string).collect()),
+    );
 }
 
 fn is_iso_datetime_string(value: &str) -> bool {
@@ -1359,11 +1618,11 @@ fn validate_architecture_quality_evidence(
             ));
             continue;
         };
-        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+        if evidence.status != "satisfied" {
             issues.push(issue(
                 "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
                 "architectureQualityEvidence[].status",
-                "Completed TaskResult architectureQualityEvidence must be satisfied.",
+                "Completed or completed_with_notes TaskResult architectureQualityEvidence must be satisfied.",
             ));
         }
     }
@@ -1469,18 +1728,18 @@ fn validate_api_contract_evidence(
             ));
             continue;
         };
-        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+        if evidence.status != "satisfied" {
             issues.push(issue(
                 "TASK_RESULT_API_CONTRACT_INVALID",
                 "apiContractEvidence[].status",
-                "Completed TaskResult apiContractEvidence must be satisfied.",
+                "Completed or completed_with_notes TaskResult apiContractEvidence must be satisfied.",
             ));
         }
-        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+        if !evidence.known_gaps.is_empty() {
             issues.push(issue(
                 "TASK_RESULT_API_CONTRACT_INVALID",
                 "apiContractEvidence[].knownGaps",
-                "Completed TaskResult apiContractEvidence cannot contain known gaps.",
+                "Completed or completed_with_notes TaskResult apiContractEvidence cannot contain known gaps.",
             ));
         }
     }
@@ -1594,18 +1853,18 @@ fn validate_code_quality_evidence(
             ));
             continue;
         };
-        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+        if evidence.status != "satisfied" {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].status",
-                "Completed TaskResult codeQualityEvidence must be satisfied.",
+                "Completed or completed_with_notes TaskResult codeQualityEvidence must be satisfied.",
             ));
         }
-        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+        if !evidence.known_gaps.is_empty() {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].knownGaps",
-                "Completed TaskResult codeQualityEvidence cannot contain known gaps.",
+                "Completed or completed_with_notes TaskResult codeQualityEvidence cannot contain known gaps.",
             ));
         }
     }
@@ -1855,11 +2114,7 @@ fn validate_frontend_quality_self_check(
     if !frontend_quality_self_check_applies(task) {
         return;
     }
-    let ui_quality_contract = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiQualityContract"))
-        .unwrap_or(&Value::Null);
+    let frontend_requirement = task.frontend_experience_requirement.as_ref();
     let Some(self_check_model) = &result.frontend_quality_self_check else {
         if matches!(
             result.status,
@@ -1874,161 +2129,321 @@ fn validate_frontend_quality_self_check(
         return;
     };
     let self_check = serde_json::to_value(self_check_model).unwrap_or(Value::Null);
-    if self_check.get("referenceIdsChecked").is_some() {
-        issues.push(issue(
-            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.referenceIdsChecked",
-            "referenceIdsChecked is not allowed; use referenceGroupsChecked instead.",
-        ));
-    }
-    if self_check.get("scenarioKind").and_then(Value::as_str)
-        != ui_quality_contract
-            .pointer("/scenario/kind")
-            .and_then(Value::as_str)
-    {
-        issues.push(issue(
-            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.scenarioKind",
-            "frontendQualitySelfCheck.scenarioKind must match uiQualityContract.scenario.kind.",
-        ));
-    }
-    if self_check.get("qualityLevel").and_then(Value::as_str)
-        != ui_quality_contract
-            .get("qualityLevel")
-            .and_then(Value::as_str)
-    {
-        issues.push(issue(
-            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.qualityLevel",
-            "frontendQualitySelfCheck.qualityLevel must match uiQualityContract.qualityLevel.",
-        ));
-    }
-    let checked_groups = reference_groups_at(&self_check, "referenceGroupsChecked");
-    for (group, item) in reference_groups_at(
-        ui_quality_contract
-            .get("referenceProfile")
-            .unwrap_or(&Value::Null),
-        "groups",
-    ) {
-        if !checked_groups.contains(&(group, item)) {
+    for obsolete_field in [
+        "referenceIdsChecked",
+        "scenarioKind",
+        "qualityLevel",
+        "referenceGroupsChecked",
+        "referenceFilesChecked",
+        "statesCovered",
+        "businessUiRulesChecked",
+        "forbiddenContentCheck",
+        "surfacesCovered",
+        "gateResults",
+    ] {
+        if self_check.get(obsolete_field).is_some() {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.referenceGroupsChecked",
-                "frontendQualitySelfCheck must cover every uiQualityContract reference group item.",
+                &format!("frontendQualitySelfCheck.{obsolete_field}"),
+                "frontendQualitySelfCheck must use the surface decision evidence contract only; legacy UI quality self-check fields are not allowed.",
             ));
-            break;
         }
     }
-    let expected_reference_files = ui_quality_contract
-        .pointer("/referenceProfile/referenceLoadPlan")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("path").and_then(Value::as_str))
-                .collect::<BTreeSet<_>>()
+    let surface_contract = frontend_requirement
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
         })
-        .unwrap_or_default();
-    let checked_reference_files = self_check
-        .get("referenceFilesChecked")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    if !expected_reference_files.is_empty() && checked_reference_files != expected_reference_files {
+        .unwrap_or(&Value::Null);
+    if surface_contract.is_object() {
+        if let Some(requirement) = frontend_requirement {
+            validate_surface_decision_contract_evidence(
+                &self_check,
+                requirement,
+                surface_contract,
+                issues,
+            );
+            validate_design_token_evidence(&self_check, requirement, issues);
+        }
+    } else {
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.referenceFilesChecked",
-            "frontendQualitySelfCheck.referenceFilesChecked must exactly list uiQualityContract.referenceProfile.referenceLoadPlan paths.",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract",
+            "Frontend quality validation requires the task-scoped uiSurfaceDecisionContract in uiProductionBrief.",
         ));
     }
-    let covered_states = self_check
-        .get("statesCovered")
+    let completed = matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    );
+    let self_check_status = self_check.get("status").and_then(Value::as_str);
+    let violations = self_check
+        .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("state").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for state in ui_quality_contract
-        .get("requiredUiStates")
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let gaps = self_check
+        .get("knownGaps")
         .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("state").and_then(Value::as_str))
-    {
-        if !covered_states.iter().any(|item| item == state) {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.statesCovered",
-                "frontendQualitySelfCheck must cover every uiQualityContract required UI state.",
-            ));
-            break;
-        }
+        .map(|items| items.len())
+        .unwrap_or(0);
+    if completed && self_check_status != Some("satisfied") {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.status",
+            "Completed or completed_with_notes frontend quality tasks must submit satisfied frontendQualitySelfCheck; use blocked or failed when quality evidence cannot be completed.",
+        ));
     }
-    let checked_rules = self_check
-        .get("businessUiRulesChecked")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for rule_id in ui_quality_contract
-        .get("businessUiRules")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
-    {
-        if !checked_rules.iter().any(|item| item == rule_id) {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.businessUiRulesChecked",
-                "frontendQualitySelfCheck must cover every uiQualityContract business UI rule.",
-            ));
-            break;
-        }
-    }
-    validate_design_token_evidence(&self_check, ui_quality_contract, issues);
-    if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
-        let violations = self_check
-            .pointer("/forbiddenContentCheck/violations")
-            .and_then(Value::as_array)
-            .map(|items| items.len())
-            .unwrap_or(0);
-        let gaps = self_check
-            .get("knownGaps")
-            .and_then(Value::as_array)
-            .map(|items| items.len())
-            .unwrap_or(0);
+    if self_check_status == Some("satisfied") || completed {
         if violations > 0 || gaps > 0 {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
                 "frontendQualitySelfCheck.status",
-                "Satisfied frontendQualitySelfCheck cannot contain forbidden content violations or known gaps.",
+                "Completed or satisfied frontendQualitySelfCheck cannot contain forbidden content violations or known gaps.",
             ));
         }
     }
 }
 
-fn validate_design_token_evidence(
+fn validate_surface_decision_contract_evidence(
     self_check: &Value,
-    ui_quality_contract: &Value,
+    requirement: &Value,
+    surface_contract: &Value,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let plan = ui_quality_contract
-        .get("designTokenAssetPlan")
+    let expected_ref = requirement
+        .get("uiSurfaceDecisionContractRef")
+        .and_then(Value::as_str)
+        .or_else(|| surface_contract.get("contractRef").and_then(Value::as_str));
+    if let Some(expected_ref) = expected_ref {
+        if self_check
+            .get("surfaceDecisionContractRef")
+            .and_then(Value::as_str)
+            != Some(expected_ref)
+        {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.surfaceDecisionContractRef",
+                "frontendQualitySelfCheck.surfaceDecisionContractRef must match the task uiSurfaceDecisionContractRef.",
+            ));
+        }
+    }
+
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceRegionEvidence",
+        object_array_id_set(surface_contract, "regionsInScope", "regionId"),
+        "region",
+        issues,
+    );
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceActionEvidence",
+        object_array_id_set(surface_contract, "actionsInScope", "actionId"),
+        "action",
+        issues,
+    );
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceStateEvidence",
+        object_array_id_set(surface_contract, "statesInScope", "state"),
+        "state",
+        issues,
+    );
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceQualityRuleEvidence",
+        object_array_id_set(surface_contract, "qualityRulesInScope", "ruleId"),
+        "quality rule",
+        issues,
+    );
+    validate_content_boundary_evidence(self_check, issues);
+    validate_reference_plan_files_checked(self_check, requirement, issues);
+}
+
+fn validate_surface_contract_evidence_array(
+    self_check: &Value,
+    field: &str,
+    expected_ids: BTreeSet<String>,
+    label: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    const VALID_STATUSES: &[&str] = &["satisfied", "partial", "missing", "blocked_by_environment"];
+
+    if expected_ids.is_empty() {
+        return;
+    }
+    let Some(items) = self_check.get(field).and_then(Value::as_array) else {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            &format!("frontendQualitySelfCheck.{field}"),
+            &format!(
+                "frontendQualitySelfCheck.{field} must prove every task-scoped UI surface {label}."
+            ),
+        ));
+        return;
+    };
+    if items.is_empty() {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            &format!("frontendQualitySelfCheck.{field}"),
+            &format!("frontendQualitySelfCheck.{field} must not be empty when the surface contract declares task-scoped {label}s."),
+        ));
+        return;
+    }
+    let overall_satisfied = self_check.get("status").and_then(Value::as_str) == Some("satisfied");
+    let mut seen = BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].id"),
+                &format!("Each frontendQualitySelfCheck.{field} entry must include the task-scoped {label} id."),
+            ));
+            continue;
+        };
+        if !seen.insert(id.to_string()) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].id"),
+                &format!(
+                    "frontendQualitySelfCheck.{field} must not duplicate {label} evidence ids."
+                ),
+            ));
+        }
+        if !expected_ids.contains(id) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].id"),
+                &format!("frontendQualitySelfCheck.{field} cannot invent {label} ids outside the task-scoped uiSurfaceDecisionContract."),
+            ));
+        }
+        let status = item
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !VALID_STATUSES.contains(&status) {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].status"),
+                &format!("frontendQualitySelfCheck.{field}.status must be one of satisfied, partial, missing, or blocked_by_environment."),
+            ));
+        }
+        let evidence_present = item
+            .get("evidence")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|evidence| !evidence.is_empty());
+        if !evidence_present {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].evidence"),
+                &format!("Each frontendQualitySelfCheck.{field} entry must include concrete evidence for the {label}."),
+            ));
+        }
+        if status == "satisfied" && string_array_at(item, "files").is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].files"),
+                &format!("Satisfied frontendQualitySelfCheck.{field} entries must cite concrete UI files."),
+            ));
+        }
+        if matches!(status, "satisfied" | "blocked_by_environment")
+            && value_field_contains_placeholder(item)
+        {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}]"),
+                &format!("Satisfied or environment-blocked frontendQualitySelfCheck.{field} entries must replace template placeholders with concrete evidence."),
+            ));
+        }
+        if overall_satisfied && matches!(status, "partial" | "missing" | "blocked_by_environment") {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].status"),
+                &format!("frontendQualitySelfCheck.status cannot be satisfied while {label} evidence is partial, missing, or environment-blocked."),
+            ));
+        }
+    }
+    if !expected_ids.is_subset(&seen) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            &format!("frontendQualitySelfCheck.{field}"),
+            &format!("frontendQualitySelfCheck.{field} must include every task-scoped uiSurfaceDecisionContract {label} id."),
+        ));
+    }
+}
+
+fn validate_content_boundary_evidence(
+    self_check: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(content) = self_check.get("contentBoundaryEvidence") else {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence",
+            "frontendQualitySelfCheck.contentBoundaryEvidence is required when a uiSurfaceDecisionContract is present.",
+        ));
+        return;
+    };
+    if content.get("checked").and_then(Value::as_bool) != Some(true) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.checked",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.checked must be true after checking the surface content boundary.",
+        ));
+    }
+    let evidence_present = content
+        .get("evidence")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|evidence| !evidence.is_empty());
+    if !evidence_present {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.evidence",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.evidence must explain how user-visible content respected the contract boundary.",
+        ));
+    }
+    let violations = content
+        .get("forbiddenContentViolations")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0);
+    if self_check.get("status").and_then(Value::as_str) == Some("satisfied") && violations > 0 {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.forbiddenContentViolations",
+            "Satisfied frontendQualitySelfCheck cannot contain content boundary violations.",
+        ));
+    }
+}
+
+fn validate_reference_plan_files_checked(
+    self_check: &Value,
+    requirement: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let expected_files = reference_plan_paths(requirement);
+    if expected_files.is_empty() {
+        return;
+    }
+    let checked_files = string_set_from_array(self_check, "referencePlanFilesChecked");
+    if !expected_files.is_subset(&checked_files) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.referencePlanFilesChecked",
+            "frontendQualitySelfCheck.referencePlanFilesChecked must include every task-scoped styleAssetPlan.referencePlan path read for the UI task.",
+        ));
+    }
+}
+
+fn validate_design_token_evidence(
+    self_check: &Value,
+    requirement: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let plan = requirement
+        .pointer("/executionGuidance/styleAssetPlan/designTokenAssetPlan")
         .unwrap_or(&Value::Null);
     let strategy = plan
         .get("strategy")
@@ -2046,7 +2461,7 @@ fn validate_design_token_evidence(
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
             "frontendQualitySelfCheck.designTokenEvidence.strategyUsed",
-            "designTokenEvidence.strategyUsed must match uiQualityContract.designTokenAssetPlan.strategy.",
+            "designTokenEvidence.strategyUsed must match task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan.strategy.",
         ));
     }
     let expected_template = plan.get("templateId").unwrap_or(&Value::Null);
@@ -2055,7 +2470,7 @@ fn validate_design_token_evidence(
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
             "frontendQualitySelfCheck.designTokenEvidence.templateIdUsed",
-            "designTokenEvidence.templateIdUsed must match uiQualityContract.designTokenAssetPlan.templateId.",
+            "designTokenEvidence.templateIdUsed must match task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan.templateId.",
         ));
     }
     let satisfied = self_check.get("status").and_then(Value::as_str) == Some("satisfied");
@@ -2218,24 +2633,6 @@ fn string_array_at(value: &Value, field: &str) -> Vec<String> {
         .collect()
 }
 
-fn reference_groups_at(value: &Value, field: &str) -> std::collections::BTreeSet<(String, String)> {
-    value
-        .get(field)
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .flat_map(|(group, items)| {
-            items
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str())
-                .map(|item| (group.clone(), item.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 fn object_array_string_field(
     value: &Value,
     array_field: &str,
@@ -2296,8 +2693,12 @@ fn next_action_for_run(run: &contracts::TaskPlanRun) -> Option<TaskPlanRunNextAc
 }
 
 fn route_action_for_task_result(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
     run: &contracts::TaskPlanRun,
     result: &TaskResult,
+    request_ref: &str,
     result_ref: &str,
 ) -> Result<Option<RouteAction>, state::store::StateError> {
     match run.status {
@@ -2316,6 +2717,15 @@ fn route_action_for_task_result(
             target_phase_id: None,
         })),
         TaskPlanRunStatus::Completed | TaskPlanRunStatus::CompletedWithNotes => {
+            if let Some(next_repair) = queued_execution_repair_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                &result.task_id,
+                request_ref,
+            )? {
+                return Ok(Some(next_repair));
+            }
             Ok(Some(RouteAction {
                 kind: RouteActionKind::Review,
                 source: "task_result".to_string(),
@@ -2364,6 +2774,86 @@ fn route_action_for_task_result(
         }
         TaskPlanRunStatus::Blocked => route_blocked_task_result(result, result_ref),
     }
+}
+
+fn queued_execution_repair_action(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    completed_task_id: &str,
+    request_ref: &str,
+) -> Result<Option<RouteAction>, state::store::StateError> {
+    let store = FileTransitionStore;
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let Some(phase) = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+    else {
+        return Ok(None);
+    };
+    if phase
+        .latest_refs
+        .get("taskExecutionRequestRef")
+        .map(String::as_str)
+        != Some(request_ref)
+    {
+        return Ok(None);
+    }
+    let Some(action) = phase.next_action.as_ref() else {
+        return Ok(None);
+    };
+    if action.kind != RouteActionKind::ExecutionRepair
+        || action.source != "delivery_execution_repair"
+    {
+        return Ok(None);
+    }
+    let Some(details) = action.details.as_ref() else {
+        return Ok(None);
+    };
+    if details.get("currentTargetTaskId").and_then(Value::as_str) != Some(completed_task_id) {
+        return Ok(None);
+    }
+    let mut pending_target_task_ids = string_array_at(details, "pendingTargetTaskIds");
+    let mut seen = BTreeSet::new();
+    pending_target_task_ids
+        .retain(|task_id| task_id != completed_task_id && seen.insert(task_id.clone()));
+    if pending_target_task_ids.is_empty() {
+        return Ok(None);
+    }
+    let origin = details
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or("review_result")
+        .to_string();
+    let source_ref = details
+        .get("sourceRef")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| action.request_ref.clone());
+    let finding_refs = string_array_at(details, "findingRefs");
+    let mut next_details = json!({
+        "origin": origin,
+        "targetTaskIds": pending_target_task_ids
+    });
+    if let Some(source_ref) = source_ref.as_ref() {
+        next_details["sourceRef"] = json!(source_ref);
+    }
+    if !finding_refs.is_empty() {
+        next_details["findingRefs"] = json!(finding_refs);
+    }
+    Ok(Some(RouteAction {
+        kind: RouteActionKind::ExecutionRepair,
+        source: "delivery_execution_repair_queue".to_string(),
+        reason: format!("{origin}_repair_next_target"),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: source_ref,
+        details: Some(next_details),
+        target_phase_id: None,
+    }))
 }
 
 fn route_blocked_task_result(
@@ -2469,16 +2959,6 @@ fn repair_task_result_or_error(
     let Some(context) = context else {
         return Ok(repairable(input, authorized, target_file, issues));
     };
-    materialize_task_result_repair(input, authorized, target_file, issues, context)
-}
-
-fn materialize_task_result_repair(
-    input: &FileSubmitInput,
-    authorized: &AuthorizedWriteSet,
-    target_file: String,
-    issues: Vec<delivery_core::RepairIssue>,
-    context: RepairContextInput,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
             "TaskResult repair action missing deliveryId".to_string(),
@@ -2489,6 +2969,220 @@ fn materialize_task_result_repair(
             "TaskResult repair action missing phaseId".to_string(),
         )
     })?;
+    materialize_task_result_repair(
+        input,
+        &delivery_id,
+        &phase_id,
+        input.request_ref.clone(),
+        target_file,
+        issues,
+        context,
+    )
+}
+
+pub(crate) fn refresh_stale_task_result_repair_action(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    request_ref: &str,
+) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
+    let request_id = request_id_from_ref(request_ref)?;
+    let Some(stored_task) = private_request_value(project_root, &request_id, "task")? else {
+        return Ok(None);
+    };
+    let task: TaskDefinition = serde_json::from_value(normalize_task_definition_value(stored_task))
+        .map_err(state::store::StateError::Json)?;
+    if !frontend_quality_self_check_applies(&task)
+        || task
+            .frontend_experience_requirement
+            .as_ref()
+            .and_then(|requirement| {
+                requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+            })
+            .is_some_and(Value::is_object)
+    {
+        return Ok(None);
+    }
+
+    let root = Path::new(project_root);
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.to_string(),
+        phase_id: phase_id.to_string(),
+    };
+    let hydrated_task = task_with_phase_execution_guidance(root, &locator, task)?;
+    if hydrated_task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+        })
+        .is_none_or(|value| !value.is_object())
+    {
+        return Ok(None);
+    }
+
+    let source = private_request_value(project_root, &request_id, "source")?.ok_or_else(|| {
+        state::store::StateError::StateCorrupted(
+            "TaskResult repair request is missing source.".to_string(),
+        )
+    })?;
+    let source_task_execution_request_ref = source
+        .get("taskExecutionRequestRef")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing source.taskExecutionRequestRef.".to_string(),
+            )
+        })?;
+    let task_plan_id = source
+        .get("taskPlanId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let task_id = source
+        .get("taskId")
+        .and_then(Value::as_str)
+        .unwrap_or(hydrated_task.task_id.as_str())
+        .to_string();
+    let run_id = source
+        .get("taskPlanRunId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let output_contract = private_request_value(project_root, &request_id, "outputContract")?
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing outputContract.".to_string(),
+            )
+        })?;
+    let target_file = source
+        .get("originalResultFile")
+        .and_then(Value::as_str)
+        .or_else(|| output_contract.get("resultFile").and_then(Value::as_str))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing original result file.".to_string(),
+            )
+        })?;
+    let result_file = output_contract
+        .get("resultFile")
+        .and_then(Value::as_str)
+        .unwrap_or(target_file.as_str())
+        .to_string();
+    let required_top_level_fields = output_contract
+        .get("requiredTopLevelFields")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| {
+            task_result_required_top_level_fields(&hydrated_task)
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        });
+    let blocked_output = json!({
+        "blockedReasons": output_contract
+            .get("blockedReasonOptions")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    let code_quality_requirements =
+        private_request_value(project_root, &request_id, "sourceContext")?
+            .and_then(|source_context| source_context.get("codeQualityExecutionContext").cloned())
+            .filter(|value| !value.is_null())
+            .map(serde_json::from_value::<Vec<CodeQualityRequirement>>)
+            .transpose()
+            .map_err(state::store::StateError::Json)?
+            .unwrap_or_default();
+
+    let raw_result = read_project_json_value(root, &target_file)?;
+    let normalized_result = normalize_task_result_machine_fields(
+        raw_result,
+        &request_id,
+        &task_plan_id,
+        &task_id,
+        &hydrated_task,
+    );
+    let (issues, previous_changed_files) =
+        match serde_json::from_value::<TaskResult>(normalized_result.clone()) {
+            Ok(result) => {
+                let previous_changed_files =
+                    previous_persisted_changed_files(root, &locator, &run_id, &result);
+                (
+                    validate_result(
+                        root,
+                        &normalized_result,
+                        &result,
+                        &hydrated_task,
+                        &code_quality_requirements,
+                        &required_top_level_fields,
+                        &blocked_output,
+                        &task_plan_id,
+                        &task_id,
+                        &result_file,
+                        &target_file,
+                    ),
+                    previous_changed_files,
+                )
+            }
+            Err(error) => (
+                vec![issue(
+                    "TASK_RESULT_SCHEMA_INVALID",
+                    "$",
+                    &format!("TaskResult JSON has an invalid schema: {error}"),
+                )],
+                Vec::new(),
+            ),
+        };
+    if issues.is_empty() {
+        return Ok(None);
+    }
+    let context = RepairContextInput {
+        task_plan_id,
+        task_id,
+        run_id,
+        task: hydrated_task,
+        result_file,
+        required_top_level_fields,
+        blocked_output,
+        submitted_result: normalized_result,
+        previous_changed_files,
+        code_quality_requirements,
+    };
+    let input = FileSubmitInput {
+        project_root: project_root.to_string(),
+        request_ref: source_task_execution_request_ref.clone(),
+        written_target_ids: None,
+    };
+    materialize_task_result_repair(
+        &input,
+        delivery_id,
+        phase_id,
+        source_task_execution_request_ref,
+        target_file,
+        issues,
+        context,
+    )
+    .map(Some)
+}
+
+fn materialize_task_result_repair(
+    input: &FileSubmitInput,
+    delivery_id: &str,
+    phase_id: &str,
+    source_task_execution_request_ref: String,
+    target_file: String,
+    issues: Vec<delivery_core::RepairIssue>,
+    context: RepairContextInput,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
     let root = Path::new(&input.project_root);
     let request_id = format!(
         "task_result_repair_{}_{}",
@@ -2503,8 +3197,7 @@ fn materialize_task_result_repair(
             .join("requests")
             .join(format!("{request_id}.json")),
     )?;
-    let schema_shape = serde_json::to_value(schema_for!(TaskResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = task_result_schema_shape(&context.task);
     let result_template = task_result_repair_template(&context, &issues);
     let mut context_fields = vec![
         "source.taskPlanId",
@@ -2544,10 +3237,11 @@ fn materialize_task_result_repair(
     }
     if frontend_quality_self_check_applies(&context.task) {
         context_fields.extend([
-            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
-            "task.frontendExperienceRequirement.uiQualityContractRef",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+            "task.frontendExperienceRequirement.uiSurfaceOwnership",
         ]);
-        context_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if runtime_delivery_evidence_applies(&context.task) {
         context_fields.extend(runtime_delivery_requirement_read_fields(&context.task));
@@ -2599,9 +3293,9 @@ fn materialize_task_result_repair(
         "requestId": request_id,
         "deliveryId": delivery_id,
         "phaseId": phase_id,
-        "artifactKind": ArtifactKind::TaskResultRepair,
-        "source": {
-            "taskExecutionRequestRef": input.request_ref,
+            "artifactKind": ArtifactKind::TaskResultRepair,
+            "source": {
+            "taskExecutionRequestRef": source_task_execution_request_ref,
             "taskPlanId": context.task_plan_id,
             "taskId": context.task_id,
             "taskPlanRunId": context.run_id,
@@ -2666,8 +3360,8 @@ fn materialize_task_result_repair(
             request_id,
             request_kind: "task_result_repair".to_string(),
             request_file: Some(request_file),
-            delivery_id: Some(delivery_id.clone()),
-            phase_id: Some(phase_id.clone()),
+            delivery_id: Some(delivery_id.to_string()),
+            phase_id: Some(phase_id.to_string()),
             root: root_value,
         },
     )?;
@@ -2795,11 +3489,11 @@ fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) 
 }
 
 fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base: Value) -> Value {
-    let ui_quality_contract = context
-        .task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiQualityContract"))
+    let frontend_requirement = context.task.frontend_experience_requirement.as_ref();
+    let surface_contract = frontend_requirement
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+        })
         .cloned()
         .unwrap_or(Value::Null);
     let self_check = context
@@ -2807,51 +3501,168 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         .get("frontendQualitySelfCheck")
         .cloned()
         .unwrap_or(Value::Null);
+    let expected_region_ids = object_array_id_set(&surface_contract, "regionsInScope", "regionId");
+    let checked_region_ids = object_array_id_set(&self_check, "surfaceRegionEvidence", "id");
+    let expected_action_ids = object_array_id_set(&surface_contract, "actionsInScope", "actionId");
+    let checked_action_ids = object_array_id_set(&self_check, "surfaceActionEvidence", "id");
+    let expected_surface_state_ids =
+        object_array_id_set(&surface_contract, "statesInScope", "state");
+    let checked_surface_state_ids = object_array_id_set(&self_check, "surfaceStateEvidence", "id");
+    let expected_surface_quality_rule_ids =
+        object_array_id_set(&surface_contract, "qualityRulesInScope", "ruleId");
+    let checked_surface_quality_rule_ids =
+        object_array_id_set(&self_check, "surfaceQualityRuleEvidence", "id");
+    let expected_reference_plan_files = frontend_requirement
+        .map(reference_plan_paths)
+        .unwrap_or_default();
+    let checked_reference_plan_files =
+        string_set_from_array(&self_check, "referencePlanFilesChecked");
+    let design_token_plan = frontend_requirement
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/styleAssetPlan/designTokenAssetPlan")
+        })
+        .unwrap_or(&Value::Null);
     base["current"] = json!({
         "status": self_check.get("status").and_then(Value::as_str),
-        "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
-        "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupsChecked": self_check
-            .get("referenceGroupsChecked")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
-        "referenceFilesChecked": self_check
-            .get("referenceFilesChecked")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-        "designTokenEvidence": self_check.get("designTokenEvidence").cloned().unwrap_or(Value::Null),
+        "designTokenEvidence": design_token_evidence_summary(&self_check),
+        "surfaceDecisionContractRef": self_check
+            .get("surfaceDecisionContractRef")
+            .and_then(Value::as_str),
+        "surfaceRegionIdsCovered": checked_region_ids,
+        "surfaceActionIdsCovered": checked_action_ids,
+        "surfaceStateIdsCovered": checked_surface_state_ids,
+        "surfaceQualityRuleIdsCovered": checked_surface_quality_rule_ids,
+        "referencePlanFilesCheckedCount": checked_reference_plan_files.len(),
+        "contentBoundaryEvidence": {
+            "checked": self_check
+                .pointer("/contentBoundaryEvidence/checked")
+                .and_then(Value::as_bool),
+            "violationCount": self_check
+                .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "evidencePresent": self_check
+                .pointer("/contentBoundaryEvidence/evidence")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|evidence| !evidence.is_empty())
+        },
         "knownGapsCount": self_check
             .get("knownGaps")
             .and_then(Value::as_array)
             .map(|items| items.len())
     });
     base["expected"] = json!({
-        "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
-        "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroups": ui_quality_contract
-            .pointer("/referenceProfile/groups")
-            .cloned()
-            .unwrap_or_else(|| json!({})),
-        "referenceLoadPlan": ui_quality_contract
-            .pointer("/referenceProfile/referenceLoadPlan")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
-        "requiredUiStates": ui_quality_contract.get("requiredUiStates").cloned().unwrap_or_else(|| json!([])),
-        "businessUiRules": ui_quality_contract.get("businessUiRules").cloned().unwrap_or_else(|| json!([])),
-        "designTokenAssetPlan": ui_quality_contract
-            .get("designTokenAssetPlan")
-            .cloned()
-            .unwrap_or(Value::Null),
-        "forbiddenUserVisibleContent": ui_quality_contract
-            .get("forbiddenUserVisibleContent")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "surfaceDecisionContractRef": frontend_requirement
+            .and_then(|requirement| requirement.get("uiSurfaceDecisionContractRef"))
+            .and_then(Value::as_str)
+            .or_else(|| surface_contract.get("contractRef").and_then(Value::as_str)),
+        "surfaceRegionIdsInScope": expected_region_ids,
+        "missingSurfaceRegionIds": string_set_difference(&expected_region_ids, &checked_region_ids),
+        "surfaceActionIdsInScope": expected_action_ids,
+        "missingSurfaceActionIds": string_set_difference(&expected_action_ids, &checked_action_ids),
+        "surfaceStateIdsInScope": expected_surface_state_ids,
+        "missingSurfaceStateIds": string_set_difference(&expected_surface_state_ids, &checked_surface_state_ids),
+        "surfaceQualityRuleIdsInScope": expected_surface_quality_rule_ids,
+        "missingSurfaceQualityRuleIds": string_set_difference(
+            &expected_surface_quality_rule_ids,
+            &checked_surface_quality_rule_ids
+        ),
+        "referencePlanFileCount": expected_reference_plan_files.len(),
+        "missingReferencePlanFiles": string_set_difference(
+            &expected_reference_plan_files,
+            &checked_reference_plan_files
+        ),
+        "designTokenAssetPlan": design_token_plan_summary(design_token_plan),
+        "forbiddenUserVisibleContentCount": surface_contract
+            .pointer("/contentBoundary/forbiddenUserVisibleContent")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0)
     });
     base["validRepairChoices"] = json!([
-        "If the implemented UI satisfies the contract, repair frontendQualitySelfCheck to match task.frontendExperienceRequirement.uiQualityContract and cite evidence.",
-        "If the UI still has quality gaps, keep status below satisfied and record the specific gaps without claiming completion."
+        "When task.frontendExperienceRequirement.uiSurfaceDecisionContractRef is present, make frontendQualitySelfCheck prove surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, and referencePlanFilesChecked from the task-scoped uiProductionBrief.",
+        "For satisfied surface evidence, cite concrete UI files and non-empty evidence; do not leave replace_with_* placeholders.",
+        "If any task-scoped surface contract item remains partial, missing, or blocked_by_environment, keep frontendQualitySelfCheck.status below satisfied and record the specific gap.",
+        "Use frontendQualitySelfCheck.designTokenEvidence to prove the task styleAssetPlan.designTokenAssetPlan without creating a parallel token system."
     ]);
     base
+}
+
+fn reference_plan_paths(requirement: &Value) -> BTreeSet<String> {
+    requirement
+        .pointer("/executionGuidance/styleAssetPlan/referencePlan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn string_set_from_array(value: &Value, field: &str) -> BTreeSet<String> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn string_set_difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> Vec<String> {
+    left.difference(right).cloned().collect()
+}
+
+fn value_field_contains_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains("replace_with_"),
+        Value::Array(items) => items.iter().any(value_field_contains_placeholder),
+        Value::Object(object) => object.values().any(value_field_contains_placeholder),
+        _ => false,
+    }
+}
+
+fn object_array_id_set(value: &Value, array_field: &str, id_field: &str) -> BTreeSet<String> {
+    value
+        .get(array_field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(id_field).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn design_token_evidence_summary(self_check: &Value) -> Value {
+    let evidence = self_check
+        .get("designTokenEvidence")
+        .unwrap_or(&Value::Null);
+    json!({
+        "present": !evidence.is_null(),
+        "strategyUsed": evidence.get("strategyUsed").and_then(Value::as_str),
+        "templateIdUsed": evidence.get("templateIdUsed").cloned().unwrap_or(Value::Null),
+        "tokenAssetFileCount": evidence.get("tokenAssetFiles").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "tokenConsumerFileCount": evidence.get("tokenConsumerFiles").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
+        "existingTokenSystemReused": evidence.get("existingTokenSystemReused").and_then(Value::as_bool),
+        "parallelTokenSystemCreated": evidence.get("parallelTokenSystemCreated").and_then(Value::as_bool),
+        "mergeSummaryPresent": evidence.get("mergeSummary").and_then(Value::as_str).map(str::trim).is_some_and(|summary| !summary.is_empty())
+    })
+}
+
+fn design_token_plan_summary(design_token_plan: &Value) -> Value {
+    let plan = design_token_plan
+        .get("designTokenAssetPlan")
+        .unwrap_or(&Value::Null);
+    json!({
+        "strategy": plan.get("strategy").and_then(Value::as_str),
+        "templateId": plan.get("templateId").cloned().unwrap_or(Value::Null),
+        "targetFiles": plan.get("targetFiles").cloned().unwrap_or_else(|| json!([])),
+        "mergePolicy": plan.get("mergePolicy").and_then(Value::as_str),
+        "duplicationPolicy": plan.get("duplicationPolicy").and_then(Value::as_str)
+    })
 }
 
 fn task_result_runtime_conflict(context: &RepairContextInput, mut base: Value) -> Value {
@@ -2973,9 +3784,9 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
         .iter()
         .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
     {
-        rules.push("frontendQualitySelfCheck must match the task uiQualityContract scenario, quality level, references, required states, and business UI rules.");
-        rules.push("frontendQualitySelfCheck.referenceFilesChecked must exactly list uiQualityContract.referenceProfile.referenceLoadPlan paths.");
-        rules.push("frontendQualitySelfCheck.status=satisfied is valid only when forbidden content violations and knownGaps are empty.");
+        rules.push("When uiSurfaceDecisionContractRef is present, frontendQualitySelfCheck must prove the task-scoped surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, and referencePlanFilesChecked from uiProductionBrief.");
+        rules.push("frontendQualitySelfCheck must not include removed legacy UI quality self-check fields such as scenarioKind, referenceFilesChecked, statesCovered, surfacesCovered, or gateResults.");
+        rules.push("frontendQualitySelfCheck.status=satisfied is valid only when contentBoundaryEvidence has no forbidden content violations and knownGaps is empty.");
     }
     if issues
         .iter()
@@ -3089,6 +3900,7 @@ fn update_latest_task_result_repair_action(
     request_ref: &str,
 ) -> Result<(), state::store::StateError> {
     let store = FileTransitionStore;
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
@@ -3112,9 +3924,14 @@ fn update_latest_task_result_repair_action(
             target_phase_id: None,
         });
     }
+    delivery.status = DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
     store
         .save_delivery_index(project_root, &delivery)
+        .map_err(to_state_error)?;
+    apply_delivery_index(&mut status, &delivery);
+    store
+        .save_status(project_root, &status)
         .map_err(to_state_error)
 }
 
@@ -3142,10 +3959,19 @@ fn update_delivery_after_result(
         phase.latest_refs.remove("activeTaskResultRepairActionRef");
         phase.next_action = next_action.cloned();
     }
-    delivery.status = if matches!(
-        run.status,
-        TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted
-    ) {
+    let next_is_execution = next_action
+        .map(|action| {
+            matches!(
+                action.kind,
+                RouteActionKind::ContinueExecution | RouteActionKind::ExecutionRepair
+            )
+        })
+        .unwrap_or(false);
+    delivery.status = if next_is_execution
+        || matches!(
+            run.status,
+            TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted
+        ) {
         DeliveryLifecycleStatus::Executing
     } else {
         DeliveryLifecycleStatus::Reviewing
@@ -3357,6 +4183,17 @@ fn safe_id(value: &str) -> String {
         .collect()
 }
 
+fn request_id_from_ref(request_ref: &str) -> Result<String, state::store::StateError> {
+    request_ref
+        .split("/requests/")
+        .nth(1)
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(format!("invalid requestRef: {request_ref}"))
+        })
+}
+
 fn string_field(
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
     name: &str,
@@ -3465,9 +4302,14 @@ fn frontend_experience_requirement_from_fields(
     let has_closure = fields.contains_key(
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
     );
-    let has_ui_quality =
-        fields.contains_key("task.frontendExperienceRequirement.uiQualityContract.scenario");
-    if !has_closure && !has_ui_quality {
+    let has_surface_contract = fields
+        .contains_key("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef")
+        || fields.contains_key("task.frontendExperienceRequirement.uiSurfaceOwnership")
+        || fields.contains_key("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
+        || fields.contains_key(
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
+        );
+    if !has_closure && !has_surface_contract {
         return Value::Null;
     }
     let mut requirement = json!({
@@ -3479,53 +4321,136 @@ fn frontend_experience_requirement_from_fields(
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
         );
     }
-    let ui_quality_guidance = value_field(
+    let surfaces_in_scope = array_field(
         fields,
-        "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+        "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
     );
-    if !ui_quality_guidance.is_null() {
-        requirement["executionGuidance"]["uiQuality"] = ui_quality_guidance;
+    if surfaces_in_scope
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        requirement["executionGuidance"]["surfacesInScope"] = surfaces_in_scope;
     }
-    let ui_quality_ref = value_field(
+    let actions_in_scope = array_field(
         fields,
-        "task.frontendExperienceRequirement.uiQualityContractRef",
+        "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
     );
-    if !ui_quality_ref.is_null() {
-        requirement["uiQualityContractRef"] = ui_quality_ref;
+    if actions_in_scope
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        requirement["executionGuidance"]["actionsInScope"] = actions_in_scope;
     }
-    if has_ui_quality {
-        requirement["uiQualityContract"] = json!({
-            "scenario": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.scenario"),
-            "qualityLevel": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.qualityLevel"),
-            "surfacePolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy"),
-            "layoutBaseline": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline"),
-            "density": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.density"),
-            "semanticTokenPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy"),
-            "referenceProfile": {
-                "loadMode": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode"),
-                "groups": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"),
-                "referenceLoadPlan": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan")
-            },
-            "designTokenAssetPlan": {
-                "strategy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy"),
-                "templateId": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"),
-                "targetFiles": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles"),
-                "existingStyleEvidence": {
-                    "tailwindConfigRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tailwindConfigRefs"),
-                    "tokenFileRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tokenFileRefs"),
-                    "globalStyleRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.globalStyleRefs"),
-                    "componentThemeRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.componentThemeRefs"),
-                    "summary": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary")
-                },
-                "mergePolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.mergePolicy"),
-                "duplicationPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.duplicationPolicy")
-            },
-            "requiredUiStates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates"),
-            "businessUiRules": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.businessUiRules"),
-            "forbiddenUserVisibleContent": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent")
-        });
+    let surface_contract_ref = value_field(
+        fields,
+        "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+    );
+    if !surface_contract_ref.is_null() {
+        requirement["uiSurfaceDecisionContractRef"] = surface_contract_ref;
+    }
+    let surface_ownership = value_field(
+        fields,
+        "task.frontendExperienceRequirement.uiSurfaceOwnership",
+    );
+    if !surface_ownership.is_null() {
+        requirement["uiSurfaceOwnership"] = surface_ownership;
+    }
+    let ui_production_brief = value_field(
+        fields,
+        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+    );
+    if ui_production_brief.is_object() {
+        requirement["executionGuidance"]["uiProductionBrief"] = ui_production_brief;
+    } else {
+        let surface_decision_contract = surface_decision_contract_from_fields(fields);
+        if !surface_decision_contract.is_null() {
+            requirement["executionGuidance"]["uiProductionBrief"]["surfaceDecisionContract"] =
+                surface_decision_contract;
+        }
+    }
+    let style_asset_plan = value_field(
+        fields,
+        "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+    );
+    if style_asset_plan.is_object() {
+        requirement["executionGuidance"]["styleAssetPlan"] = style_asset_plan;
+    } else {
+        let reference_plan = array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan",
+        );
+        if reference_plan
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        {
+            requirement["executionGuidance"]["styleAssetPlan"]["referencePlan"] = reference_plan;
+        }
     }
     requirement
+}
+
+fn surface_decision_contract_from_fields(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    if !fields.contains_key(
+        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
+    ) {
+        return Value::Null;
+    }
+    json!({
+        "contractRef": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef"
+        ),
+        "selectionMode": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.selectionMode"
+        ),
+        "patternDecision": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.patternDecision"
+        ),
+        "regionsInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope"
+        ),
+        "actionsInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope"
+        ),
+        "statesInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope"
+        ),
+        "contentBoundary": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contentBoundary"
+        ),
+        "qualityRulesInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope"
+        )
+    })
+}
+
+fn private_request_value(
+    project_root: &str,
+    request_id: &str,
+    key: &str,
+) -> Result<Option<Value>, state::store::StateError> {
+    let root = Path::new(project_root);
+    let manifest_file = state::paths::request_storage_manifest_file(root, request_id);
+    if state::store::path_exists(&manifest_file) {
+        if let Some(relative) = state::request_manifest::request_storage_ref(root, request_id, key)?
+        {
+            return read_project_json_value(root, &relative).map(Some);
+        }
+    }
+
+    let entry = state::request_index::get_request_index_entry(project_root, request_id)?;
+    let request_path = from_project_relative(root, &entry.request_file)?;
+    let request_root: Value = state::store::read_json(&request_path)?;
+    Ok(request_root.get(key).cloned())
 }
 
 fn read_project_json_value(
@@ -3538,4 +4463,119 @@ fn read_project_json_value(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn surface_requirement() -> Value {
+        json!({
+            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "executionGuidance": {
+                "styleAssetPlan": {
+                    "referencePlan": [{
+                        "path": "plugins/shared/loom/references/uix/core.md"
+                    }]
+                }
+            }
+        })
+    }
+
+    fn surface_contract() -> Value {
+        json!({
+            "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "regionsInScope": [{
+                "regionId": "region-main"
+            }],
+            "actionsInScope": [{
+                "actionId": "action-submit"
+            }],
+            "statesInScope": [{
+                "state": "empty"
+            }],
+            "qualityRulesInScope": [{
+                "ruleId": "rule-density"
+            }]
+        })
+    }
+
+    fn complete_surface_self_check() -> Value {
+        json!({
+            "status": "satisfied",
+            "surfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "surfaceRegionEvidence": [{
+                "id": "region-main",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": ["action-submit"],
+                "evidence": "Main region implements the scoped workbench area."
+            }],
+            "surfaceActionEvidence": [{
+                "id": "action-submit",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": ["action-submit"],
+                "evidence": "Submit action is available in the task-owned form."
+            }],
+            "surfaceStateEvidence": [{
+                "id": "empty",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": [],
+                "evidence": "Empty state is rendered before records exist."
+            }],
+            "surfaceQualityRuleEvidence": [{
+                "id": "rule-density",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": [],
+                "evidence": "Layout uses compact internal-product density."
+            }],
+            "contentBoundaryEvidence": {
+                "checked": true,
+                "allowedContentExamples": ["business labels only"],
+                "forbiddenContentViolations": [],
+                "evidence": "No runtime commands or delivery notes are visible."
+            },
+            "referencePlanFilesChecked": ["plugins/shared/loom/references/uix/core.md"]
+        })
+    }
+
+    #[test]
+    fn frontend_surface_contract_evidence_accepts_complete_task_scope() {
+        let mut issues = Vec::new();
+        validate_surface_decision_contract_evidence(
+            &complete_surface_self_check(),
+            &surface_requirement(),
+            &surface_contract(),
+            &mut issues,
+        );
+
+        assert!(issues.is_empty(), "{issues:#?}");
+    }
+
+    #[test]
+    fn frontend_surface_contract_evidence_rejects_missing_quality_rule() {
+        let mut self_check = complete_surface_self_check();
+        self_check["surfaceQualityRuleEvidence"] = json!([]);
+        let mut issues = Vec::new();
+
+        validate_surface_decision_contract_evidence(
+            &self_check,
+            &surface_requirement(),
+            &surface_contract(),
+            &mut issues,
+        );
+
+        assert!(
+            issues.iter().any(|issue| issue.field_path.as_deref()
+                == Some("frontendQualitySelfCheck.surfaceQualityRuleEvidence")),
+            "{issues:#?}"
+        );
+    }
 }

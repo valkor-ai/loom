@@ -1,4 +1,9 @@
 /** @type {import('tailwindcss').Config} */
+// UIX gate: token.semantic_roles.coverage
+// Pass when this template is adapted into the project Tailwind/theme layer and
+// covers semantic surface, text, border, primary, status, focus, control,
+// shell, table/list, and detail/action roles consumed by the UI.
+// Fail when copied as an unused parallel config or page-local style substitute.
 module.exports = {
   content: ['./src/**/*.{html,js,jsx,ts,tsx,vue,svelte}', './app/**/*.{js,jsx,ts,tsx}'],
   darkMode: ['class', '[data-theme="dark"]'],

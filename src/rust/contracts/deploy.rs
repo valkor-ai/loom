@@ -269,6 +269,53 @@ pub struct DeploymentTopology {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentTopologyClass {
+    SingleServiceApp,
+    ApiOnlySingleService,
+    StaticSite,
+    BackendServedFrontendApi,
+    FrontendGatewayBackendApi,
+    MultiService,
+    ExistingCompose,
+    ExistingDockerfileWrapper,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentLayoutKind {
+    RootApp,
+    SplitFrontendBackend,
+    WorkspaceApp,
+    SameRootFullstack,
+    ExistingAssets,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentFacts {
+    pub schema_version: u32,
+    pub topology_class: DeploymentTopologyClass,
+    pub layout_kind: DeploymentLayoutKind,
+    pub public_entry_service_id: String,
+    pub primary_service_id: String,
+    pub service_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stack_kinds: Vec<RuntimeKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_roots: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependency_kinds: Vec<DependencyServiceKind>,
+    pub public_port_count: u32,
+    pub internal_port_count: u32,
+    pub generated_asset_policy: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum DeployProvider {
     ComposeExisting,
@@ -461,9 +508,11 @@ pub struct DeploymentSpec {
     pub source_model_ref: String,
     pub topology_ref: String,
     pub code_evidence_ref: String,
+    pub facts_ref: String,
     pub runtime_contract: DeploymentRuntimeContract,
     pub source_model: DeploymentSourceModel,
     pub topology: DeploymentTopology,
+    pub facts: DeploymentFacts,
     pub environment: DeploymentEnvDiagnostics,
     pub bootstrap: DeploymentBootstrapDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]

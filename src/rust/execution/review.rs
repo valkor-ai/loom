@@ -98,6 +98,7 @@ fn materialize_review_request_inner(
                 "phase {phase_id} does not exist in delivery {delivery_id}"
             ))
         })?;
+    let task_results = load_task_results(root, &locator, &task_plan, &run);
     if let Some(existing_request_ref) = phase.latest_refs.get("reviewRequestRef").cloned() {
         if state::inspect_request(delivery_core::InspectRequestInput {
             project_root: project_root.to_string(),
@@ -105,6 +106,11 @@ fn materialize_review_request_inner(
         })
         .map(|request| request.request_kind == "review_request")
         .unwrap_or(false)
+            && review_request_matches_current_task_results(
+                project_root,
+                &existing_request_ref,
+                &task_results,
+            )
         {
             return write_review_result(project_root, &existing_request_ref);
         }
@@ -113,7 +119,6 @@ fn materialize_review_request_inner(
     let review_id = format!("review_{}", state::store::now_millis());
     let result_file = to_project_relative(root, &review_result_candidate_file(root, &review_id))?;
     let request_file = to_project_relative(root, &review_request_file(root, &locator, &review_id))?;
-    let task_results = load_task_results(root, &locator, &task_plan, &run);
     let architecture_contract = phase
         .latest_refs
         .get("architectureArtifact")
@@ -178,6 +183,30 @@ fn materialize_review_request_inner(
     write_review_result(project_root, &stored.request_ref)
 }
 
+fn review_request_matches_current_task_results(
+    project_root: &str,
+    request_ref: &str,
+    task_results: &[TaskResult],
+) -> bool {
+    if task_results.is_empty() {
+        return false;
+    }
+    let expected = Value::Array(compact_task_result_summaries(task_results));
+    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["reviewPacket.taskResultSummaries".to_string()],
+    });
+    let Ok(fields) = fields else {
+        return false;
+    };
+    fields
+        .fields
+        .get("reviewPacket.taskResultSummaries")
+        .map(|field| field.value.clone())
+        .is_some_and(|actual| actual == expected)
+}
+
 fn build_review_request(
     project_root: &Path,
     review_id: &str,
@@ -190,8 +219,7 @@ fn build_review_request(
     architecture_contract: Option<&ArchitectureArtifactContract>,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Result<Value, state::store::StateError> {
-    let schema_shape = serde_json::to_value(schema_for!(ReviewResult))
-        .unwrap_or_else(|_| json!({ "type": "object" }));
+    let schema_shape = review_result_schema_shape();
     let review_signals = build_review_signals(task_plan, run, task_results, architecture_contract);
     let next_phase_preview = review_next_phase_preview(next_phase_handoff);
     let (change_set, change_context) =
@@ -211,7 +239,7 @@ fn build_review_request(
     let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
     let code_quality_review_matrix = build_code_quality_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
-        build_frontend_quality_review_matrix(task_plan, task_results);
+        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract);
     let review_matrix_summary = compact_review_matrix_summary(
         &concept_review_matrix,
         &detail_review_matrix,
@@ -529,6 +557,104 @@ fn review_quality_profile() -> Value {
                 "reason": "Actionable ReviewFinding severity, category, evidence, and repair route guidance."
             }
         ]
+    })
+}
+
+fn review_result_schema_shape() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "schemaVersion",
+            "reviewId",
+            "source",
+            "decision",
+            "findings",
+            "coverageAssessment",
+            "limitations",
+            "pendingActions",
+            "nextAction",
+            "createdAt",
+            "updatedAt"
+        ],
+        "properties": {
+            "schemaVersion": "1.0",
+            "reviewId": "outputContract.resultTemplate.reviewId",
+            "source": {
+                "requestId": "active review request id",
+                "phaseId": "source.phaseId",
+                "taskPlanId": "source.taskPlanId",
+                "taskPlanRunId": "source.taskPlanRunId"
+            },
+            "decision": "approved | approved_with_notes | changes_requested | blocked | needs_user_decision",
+            "findings": [{
+                "findingId": "string",
+                "findingType": "defect | note | limitation | contract_gap",
+                "severity": "critical | major | minor | note",
+                "severityClass": "blocking | warning | info",
+                "evidenceKind": "code | test | runtime | manual | contract | review_limitation",
+                "failureClass": "product_defect | environment_blocker | review_limitation | contract_gap",
+                "category": "enumRefs.findingCategory item",
+                "summary": "string",
+                "evidence": "string",
+                "readRefs": [{
+                    "type": "enumRefs.readRefType item",
+                    "ref": "allowed review read ref",
+                    "reason": "string"
+                }],
+                "evidenceRefs": [{
+                    "type": "enumRefs.evidenceRefType item",
+                    "ref": "allowed task result, verification, diff, changed file, or manual ref",
+                    "reason": "string"
+                }],
+                "groupRefs": ["allowed group id"],
+                "taskRefs": ["allowed task id"],
+                "acceptanceRefs": ["allowed acceptance ref"],
+                "artifactRefs": {},
+                "location": {},
+                "taskRelevance": "direct | indirect | not_applicable",
+                "scopeRelation": "within_task_changed_files | current_phase | outside_current_change_set",
+                "introducedByCurrentTask": "yes | no | unknown",
+                "recommendedNextAction": "enumRefs.nextAction item"
+            }],
+            "coverageAssessment": {
+                "mustAcceptance": [{
+                    "acceptanceRef": "reviewScope.acceptanceRefs item",
+                    "status": "satisfied | insufficient_evidence | not_satisfied | not_reviewed",
+                    "supportingTaskResults": ["outputContract.allowedRefs.taskResultIds item"],
+                    "evidenceStatus": "sufficient | insufficient | missing",
+                    "notes": ["string"]
+                }],
+                "summary": {
+                    "totalMust": 0,
+                    "satisfied": 0,
+                    "insufficientEvidence": 0,
+                    "notSatisfied": 0,
+                    "notReviewed": 0
+                }
+            },
+            "limitations": [{
+                "code": "string",
+                "summary": "string",
+                "impact": "string"
+            }],
+            "pendingActions": [{
+                "type": "enumRefs.nextAction item other than top-level nextAction.type",
+                "findingRefs": ["findings[].findingId"],
+                "reason": "string"
+            }],
+            "nextAction": {
+                "type": "enumRefs.nextAction item",
+                "reason": "string",
+                "targetNode": "string or null",
+                "targetPhaseId": "string or null",
+                "targetTaskIds": ["task id"],
+                "findingRefs": ["findings[].findingId"],
+                "userVisibleState": "string or null"
+            },
+            "createdAt": "ISO-8601 datetime",
+            "updatedAt": "ISO-8601 datetime"
+        },
+        "additionalProperties": false
     })
 }
 
@@ -990,7 +1116,8 @@ where
     }
     let root = Path::new(&input.project_root);
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let mut result: ReviewResult = match serde_json::from_value(raw) {
+    let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id);
+    let mut result: ReviewResult = match serde_json::from_value(normalized) {
         Ok(result) => result,
         Err(error) => {
             return repairable_or_fallback_manual_review(
@@ -1035,6 +1162,7 @@ where
         result.next_action.target_phase_id = Some(handoff.phase_id);
         result.next_action.reason = handoff.reason;
     }
+    normalize_review_signal_targets(&mut result, &fields);
     let issues = validate_review_result(&result, &authorized.request_id, &fields);
     if !issues.is_empty() {
         return repairable_or_fallback_manual_review(
@@ -1076,6 +1204,127 @@ where
         result_ref,
         dispatcher,
     )
+}
+
+fn normalize_review_result_machine_fields(mut raw: Value, request_id: &str) -> Value {
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    if let Some(source) = object.get_mut("source").and_then(Value::as_object_mut) {
+        source.insert("requestId".to_string(), json!(request_id));
+    }
+    let now = state::store::now_string();
+    if !object
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("createdAt".to_string(), json!(now.clone()));
+    }
+    if !object
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .is_some_and(is_iso_datetime_string)
+    {
+        object.insert("updatedAt".to_string(), json!(now));
+    }
+    normalize_review_pending_actions(object);
+    raw
+}
+
+fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>) {
+    let next_action_type = object
+        .get("nextAction")
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let Some(raw_items) = object
+        .get("pendingActions")
+        .and_then(Value::as_array)
+        .cloned()
+    else {
+        object.insert("pendingActions".to_string(), json!([]));
+        return;
+    };
+    let mut duplicate_finding_refs = BTreeSet::new();
+    let actions = raw_items
+        .into_iter()
+        .filter_map(|item| {
+            let mut action = item.as_object()?.clone();
+            let action_type = action
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())?
+                .to_string();
+            if next_action_type.as_deref() == Some(action_type.as_str()) {
+                duplicate_finding_refs
+                    .extend(value_string_array(&Value::Object(action), "findingRefs"));
+                return None;
+            }
+            action.insert("type".to_string(), json!(action_type));
+            if !action.get("findingRefs").is_some_and(Value::is_array) {
+                action.insert("findingRefs".to_string(), json!([]));
+            }
+            if !action
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                action.insert(
+                    "reason".to_string(),
+                    json!("Pending action was normalized from ReviewResult draft."),
+                );
+            }
+            Some(Value::Object(action))
+        })
+        .collect::<Vec<_>>();
+    object.insert("pendingActions".to_string(), Value::Array(actions));
+    if !duplicate_finding_refs.is_empty() {
+        let Some(next_action) = object.get_mut("nextAction").and_then(Value::as_object_mut) else {
+            return;
+        };
+        let mut refs = next_action
+            .get("findingRefs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        refs.extend(duplicate_finding_refs);
+        next_action.insert(
+            "findingRefs".to_string(),
+            Value::Array(refs.into_iter().map(Value::String).collect()),
+        );
+    }
+}
+
+fn normalize_review_signal_targets(
+    result: &mut ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    if result.next_action.r#type != "execution_repair" {
+        return;
+    }
+    let signals = array_field(fields, "outputContract.reviewSignals.items");
+    let mut target_task_ids = result.next_action.target_task_ids.clone();
+    for signal in signals.as_array().into_iter().flatten() {
+        if signal.get("recommendedNextAction").and_then(Value::as_str) != Some("execution_repair") {
+            continue;
+        }
+        target_task_ids.extend(value_string_array(signal, "taskRefs"));
+    }
+    result.next_action.target_task_ids = dedupe_non_empty(target_task_ids);
+}
+
+fn is_iso_datetime_string(value: &str) -> bool {
+    value.contains('T')
+        && (value.ends_with('Z') || value.contains('+') || value.rsplit_once('-').is_some())
+        && !value.contains("ISO-8601")
 }
 
 fn validate_review_result(
@@ -1553,6 +1802,7 @@ fn validate_review_signals(
             "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, architecture quality, or API contract.",
         ));
     }
+    validate_execution_repair_signal_targets(result, &signals, issues);
     if missing_workflow_task_assignment || missing_architecture_quality_task_assignment {
         let has_higher_priority_blocker = result.findings.iter().any(|finding| {
             is_blocking_finding(finding)
@@ -1580,6 +1830,42 @@ fn validate_review_signals(
                 "Missing workflow closure or architecture quality task assignment requires a blocking taskplan_repair finding.",
             ));
         }
+    }
+}
+
+fn validate_execution_repair_signal_targets(
+    result: &ReviewResult,
+    signals: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if result.next_action.r#type != "execution_repair" {
+        return;
+    }
+    let expected_task_ids = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|signal| {
+            signal.get("recommendedNextAction").and_then(Value::as_str) == Some("execution_repair")
+        })
+        .flat_map(|signal| value_string_array(signal, "taskRefs"))
+        .collect::<BTreeSet<_>>();
+    if expected_task_ids.is_empty() {
+        return;
+    }
+    let routed_task_ids = review_execution_repair_target_task_ids(result)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let missing_task_ids = expected_task_ids
+        .difference(&routed_task_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_task_ids.is_empty() {
+        issues.push(issue(
+            "REVIEW_RESULT_STATUS_INCONSISTENT",
+            "nextAction.targetTaskIds",
+            "ReviewResult execution_repair must target every task referenced by outputContract.reviewSignals execution_repair items.",
+        ));
     }
 }
 
@@ -2776,15 +3062,18 @@ fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
 fn build_frontend_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
+    architecture_contract: Option<&ArchitectureArtifactContract>,
 ) -> Vec<Value> {
     task_plan
         .tasks
         .iter()
         .filter_map(|task| {
-            let ui_quality_contract = task
-                .frontend_experience_requirement
-                .as_ref()
-                .and_then(|requirement| requirement.get("uiQualityContract"))?;
+            let requirement = task.frontend_experience_requirement.as_ref()?;
+            let surface_contract =
+                task_scoped_surface_contract_for_review(requirement, architecture_contract);
+            if !surface_contract.is_object() {
+                return None;
+            }
             let result = task_results
                 .iter()
                 .find(|result| result.task_id == task.task_id);
@@ -2793,40 +3082,17 @@ fn build_frontend_quality_review_matrix(
                 .map(serde_json::to_value)
                 .and_then(Result::ok)
                 .unwrap_or(Value::Null);
-            let expected_refs = reference_groups(
-                ui_quality_contract
-                    .get("referenceProfile")
-                    .unwrap_or(&Value::Null),
-                "groups",
-            );
-            let checked_refs = reference_groups(&self_check, "referenceGroupsChecked");
-            let expected_reference_files = reference_load_plan_paths(
-                ui_quality_contract
-                    .get("referenceProfile")
-                    .unwrap_or(&Value::Null),
-            );
-            let checked_reference_files = string_array_field(&self_check, "referenceFilesChecked");
-            let expected_states =
-                object_array_string_field(ui_quality_contract, "requiredUiStates", "state");
-            let covered_states = object_array_string_field(&self_check, "statesCovered", "state");
-            let expected_rules =
-                object_array_string_field(ui_quality_contract, "businessUiRules", "ruleId");
-            let checked_rules =
-                object_array_string_field(&self_check, "businessUiRulesChecked", "ruleId");
-            let missing_reference_groups = missing_reference_groups(&expected_refs, &checked_refs);
-            let missing_reference_files =
-                missing_strings(&expected_reference_files, &checked_reference_files);
-            let missing_ui_states = missing_strings(&expected_states, &covered_states);
-            let missing_business_ui_rule_ids = missing_strings(&expected_rules, &checked_rules);
+            let surface_review =
+                frontend_surface_contract_review(requirement, &surface_contract, &self_check);
             let forbidden_violation_count = self_check
-                .pointer("/forbiddenContentCheck/violations")
+                .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
-            let token_plan = ui_quality_contract
-                .get("designTokenAssetPlan")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let token_plan = requirement
+                .pointer("/executionGuidance/styleAssetPlan/designTokenAssetPlan")
+                .or_else(|| surface_contract.get("designTokenAssetPlan"))
+                .unwrap_or(&Value::Null);
             let token_evidence = self_check
                 .get("designTokenEvidence")
                 .cloned()
@@ -2871,40 +3137,23 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
-            let scenario_matches = self_check.get("scenarioKind").and_then(Value::as_str)
-                == ui_quality_contract
-                    .pointer("/scenario/kind")
-                    .and_then(Value::as_str);
-            let quality_level_matches = self_check.get("qualityLevel").and_then(Value::as_str)
-                == ui_quality_contract
-                    .get("qualityLevel")
-                    .and_then(Value::as_str);
+            let surface_contract_satisfied = surface_review
+                .get("satisfied")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let quality_satisfied = self_check.get("status").and_then(Value::as_str)
                 == Some("satisfied")
-                && scenario_matches
-                && quality_level_matches
-                && missing_reference_groups.is_empty()
-                && missing_reference_files.is_empty()
-                && missing_ui_states.is_empty()
-                && missing_business_ui_rule_ids.is_empty()
+                && surface_contract_satisfied
                 && token_asset_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
                 "taskId": task.task_id,
                 "taskResultId": result.map(|result| result.task_result_id.clone()),
-                "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
-                "actualScenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
-                "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
-                "actualQualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
+                "surfaceDecisionContractRef": requirement.get("uiSurfaceDecisionContractRef").cloned().unwrap_or(Value::Null),
                 "actualStatus": self_check.get("status").and_then(Value::as_str),
                 "qualitySatisfied": quality_satisfied,
-                "missingReferenceGroups": missing_reference_groups,
-                "referenceFiles": expected_reference_files,
-                "referenceFilesChecked": checked_reference_files,
-                "missingReferenceFiles": missing_reference_files,
-                "missingUiStates": missing_ui_states,
-                "missingBusinessUiRuleIds": missing_business_ui_rule_ids,
+                "surfaceContractCoverage": surface_review,
                 "designTokenAsset": {
                     "strategy": token_strategy,
                     "templateId": token_plan.get("templateId").cloned().unwrap_or(Value::Null),
@@ -2922,6 +3171,253 @@ fn build_frontend_quality_review_matrix(
             }))
         })
         .collect()
+}
+
+fn task_scoped_surface_contract_for_review(
+    requirement: &Value,
+    architecture_contract: Option<&ArchitectureArtifactContract>,
+) -> Value {
+    if let Some(contract) = requirement
+        .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+        .filter(|value| value.is_object())
+    {
+        return contract.clone();
+    }
+
+    let full_contract = architecture_contract
+        .and_then(|contract| contract.frontend_experience.as_ref())
+        .and_then(|frontend| frontend.get("uiSurfaceDecisionContract"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    if !full_contract.is_object() {
+        return Value::Null;
+    }
+
+    let ownership = requirement
+        .get("uiSurfaceOwnership")
+        .unwrap_or(&Value::Null);
+    let region_ids = string_array_field(ownership, "regionIdsInScope");
+    let action_ids = string_array_field(ownership, "actionIdsInScope");
+    let state_ids = string_array_field(ownership, "stateKindsInScope");
+    let quality_rule_ids = string_array_field(ownership, "qualityRuleIdsInScope");
+    json!({
+        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+        "selectionMode": if region_ids.is_empty()
+            && action_ids.is_empty()
+            && state_ids.is_empty()
+            && quality_rule_ids.is_empty()
+        {
+            "all_when_task_scope_empty"
+        } else {
+            "task_scope"
+        },
+        "patternDecision": full_contract.get("patternDecision").cloned().unwrap_or(Value::Null),
+        "semanticFacts": full_contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
+        "layoutModel": full_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
+        "regionsInScope": selected_surface_contract_values(&full_contract, "regionModel", "regionId", &region_ids),
+        "informationModel": full_contract.get("informationModel").cloned().unwrap_or(Value::Null),
+        "actionsInScope": selected_surface_contract_values(&full_contract, "actionModel", "actionId", &action_ids),
+        "statesInScope": selected_surface_contract_values(&full_contract, "stateModel", "state", &state_ids),
+        "compositionConstraints": full_contract.get("compositionConstraints").cloned().unwrap_or(Value::Null),
+        "contentBoundary": full_contract.get("contentBoundary").cloned().unwrap_or(Value::Null),
+        "qualityRulesInScope": selected_surface_contract_values(&full_contract, "qualityRules", "ruleId", &quality_rule_ids),
+        "designTokenAssetPlan": full_contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
+        "referencePlan": full_contract.get("referencePlan").cloned().unwrap_or_else(|| json!([]))
+    })
+}
+
+fn selected_surface_contract_values(
+    contract: &Value,
+    array_key: &str,
+    id_key: &str,
+    ids: &[String],
+) -> Vec<Value> {
+    let values = contract
+        .get(array_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        return values.into_iter().cloned().collect();
+    }
+    let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
+    values
+        .into_iter()
+        .filter(|value| {
+            value
+                .get(id_key)
+                .and_then(Value::as_str)
+                .is_some_and(|id| selected.contains(id))
+        })
+        .cloned()
+        .collect()
+}
+
+fn frontend_surface_contract_review(
+    requirement: &Value,
+    surface_contract: &Value,
+    self_check: &Value,
+) -> Value {
+    if !surface_contract.is_object() {
+        return json!({
+            "present": false,
+            "satisfied": true
+        });
+    }
+
+    let expected_ref = requirement
+        .get("uiSurfaceDecisionContractRef")
+        .and_then(Value::as_str)
+        .or_else(|| surface_contract.get("contractRef").and_then(Value::as_str));
+    let actual_ref = self_check
+        .get("surfaceDecisionContractRef")
+        .and_then(Value::as_str);
+    let ref_matches = expected_ref
+        .map(|expected| actual_ref == Some(expected))
+        .unwrap_or(true);
+    let region_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "regionsInScope", "regionId"),
+        self_check,
+        "surfaceRegionEvidence",
+    );
+    let action_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "actionsInScope", "actionId"),
+        self_check,
+        "surfaceActionEvidence",
+    );
+    let state_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "statesInScope", "state"),
+        self_check,
+        "surfaceStateEvidence",
+    );
+    let quality_rule_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "qualityRulesInScope", "ruleId"),
+        self_check,
+        "surfaceQualityRuleEvidence",
+    );
+    let expected_reference_plan_files = reference_plan_paths(requirement, surface_contract);
+    let checked_reference_plan_files = string_array_field(self_check, "referencePlanFilesChecked");
+    let missing_reference_plan_files = missing_strings(
+        &expected_reference_plan_files,
+        &checked_reference_plan_files,
+    );
+    let content_checked = self_check
+        .pointer("/contentBoundaryEvidence/checked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let content_evidence_present = self_check
+        .pointer("/contentBoundaryEvidence/evidence")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|evidence| !evidence.is_empty());
+    let content_violation_count = self_check
+        .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let content_boundary_satisfied =
+        content_checked && content_evidence_present && content_violation_count == 0;
+    let satisfied = ref_matches
+        && review_satisfied(&region_review)
+        && review_satisfied(&action_review)
+        && review_satisfied(&state_review)
+        && review_satisfied(&quality_rule_review)
+        && missing_reference_plan_files.is_empty()
+        && content_boundary_satisfied;
+
+    json!({
+        "present": true,
+        "contractRefExpected": expected_ref,
+        "contractRefActual": actual_ref,
+        "contractRefMatches": ref_matches,
+        "regions": region_review,
+        "actions": action_review,
+        "states": state_review,
+        "qualityRules": quality_rule_review,
+        "referencePlanFileCount": expected_reference_plan_files.len(),
+        "referencePlanFilesCheckedCount": checked_reference_plan_files.len(),
+        "missingReferencePlanFiles": missing_reference_plan_files,
+        "contentBoundary": {
+            "checked": content_checked,
+            "evidencePresent": content_evidence_present,
+            "violationCount": content_violation_count,
+            "satisfied": content_boundary_satisfied
+        },
+        "satisfied": satisfied
+    })
+}
+
+fn surface_evidence_review(
+    expected_ids: &[String],
+    self_check: &Value,
+    evidence_field: &str,
+) -> Value {
+    let evidence = self_check
+        .get(evidence_field)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let expected_set = expected_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    let mut checked_ids = Vec::new();
+    let mut invented_ids = Vec::new();
+    let mut duplicate_ids = Vec::new();
+    let mut non_satisfied_ids = Vec::new();
+    let mut missing_file_ids = Vec::new();
+    let mut empty_evidence_ids = Vec::new();
+    for item in &evidence {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            empty_evidence_ids.push("missing_id".to_string());
+            continue;
+        };
+        checked_ids.push(id.to_string());
+        if !seen.insert(id.to_string()) {
+            duplicate_ids.push(id.to_string());
+        }
+        if !expected_set.contains(id) {
+            invented_ids.push(id.to_string());
+        }
+        if item.get("status").and_then(Value::as_str) != Some("satisfied") {
+            non_satisfied_ids.push(id.to_string());
+        }
+        if string_array_field(item, "files").is_empty() {
+            missing_file_ids.push(id.to_string());
+        }
+        if item
+            .get("evidence")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        {
+            empty_evidence_ids.push(id.to_string());
+        }
+    }
+    let missing_ids = missing_strings(expected_ids, &checked_ids);
+    let satisfied = missing_ids.is_empty()
+        && invented_ids.is_empty()
+        && duplicate_ids.is_empty()
+        && non_satisfied_ids.is_empty()
+        && missing_file_ids.is_empty()
+        && empty_evidence_ids.is_empty();
+    json!({
+        "expectedIds": expected_ids,
+        "checkedIds": checked_ids,
+        "missingIds": missing_ids,
+        "inventedIds": invented_ids,
+        "duplicateIds": duplicate_ids,
+        "nonSatisfiedIds": non_satisfied_ids,
+        "missingFileIds": missing_file_ids,
+        "emptyEvidenceIds": empty_evidence_ids,
+        "satisfied": satisfied
+    })
+}
+
+fn review_satisfied(review: &Value) -> bool {
+    review
+        .get("satisfied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn compact_review_matrix_summary(
@@ -3003,22 +3499,32 @@ fn compact_review_matrix_summary(
                 "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
                 "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
                 "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
-                "scenarioKind": item.get("scenarioKind").cloned().unwrap_or(Value::Null),
-                "actualScenarioKind": item.get("actualScenarioKind").cloned().unwrap_or(Value::Null),
-                "qualityLevel": item.get("qualityLevel").cloned().unwrap_or(Value::Null),
-                "actualQualityLevel": item.get("actualQualityLevel").cloned().unwrap_or(Value::Null),
-                "missingReferenceCount": item
-                    .get("missingReferenceIds")
+                "surfaceContractSatisfied": item
+                    .pointer("/surfaceContractCoverage/satisfied")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "missingSurfaceRegionCount": item
+                    .pointer("/surfaceContractCoverage/regions/missingIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
-                "missingUiStateCount": item
-                    .get("missingUiStates")
+                "missingSurfaceActionCount": item
+                    .pointer("/surfaceContractCoverage/actions/missingIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
-                "missingBusinessUiRuleCount": item
-                    .get("missingBusinessUiRuleIds")
+                "missingSurfaceStateCount": item
+                    .pointer("/surfaceContractCoverage/states/missingIds")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "missingSurfaceQualityRuleCount": item
+                    .pointer("/surfaceContractCoverage/qualityRules/missingIds")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "missingReferencePlanFileCount": item
+                    .pointer("/surfaceContractCoverage/missingReferencePlanFiles")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
@@ -3069,7 +3575,9 @@ fn build_review_signals(
             }
         }));
     }
-    for quality in build_frontend_quality_review_matrix(task_plan, task_results) {
+    for quality in
+        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract)
+    {
         let task_id = quality
             .get("taskId")
             .and_then(Value::as_str)
@@ -3085,16 +3593,15 @@ fn build_review_signals(
             "taskResultId": quality.get("taskResultId").cloned().unwrap_or(Value::Null),
             "uiQualitySatisfied": quality_satisfied,
             "actualStatus": quality.get("actualStatus").cloned().unwrap_or(Value::Null),
-            "missingReferenceIds": quality.get("missingReferenceIds").cloned().unwrap_or_else(|| json!([])),
-            "missingUiStates": quality.get("missingUiStates").cloned().unwrap_or_else(|| json!([])),
-            "missingBusinessUiRuleIds": quality.get("missingBusinessUiRuleIds").cloned().unwrap_or_else(|| json!([])),
+            "surfaceContractCoverage": quality.get("surfaceContractCoverage").cloned().unwrap_or_else(|| json!({})),
+            "designTokenAsset": quality.get("designTokenAsset").cloned().unwrap_or_else(|| json!({})),
             "forbiddenViolationCount": quality.get("forbiddenViolationCount").cloned().unwrap_or_else(|| json!(0)),
             "knownGapCount": quality.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
             "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
             "reason": if quality_satisfied {
-                "TaskResult frontend quality self-check satisfies the UI quality contract."
+                "TaskResult frontend quality self-check satisfies the task UI surface contract."
             } else {
-                "TaskResult frontend quality self-check does not satisfy the UI quality contract."
+                "TaskResult frontend quality self-check does not satisfy the task UI surface contract."
             }
         }));
     }
@@ -3407,24 +3914,6 @@ fn value_string_array(value: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn reference_groups(value: &Value, key: &str) -> Vec<(String, String)> {
-    value
-        .get(key)
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .flat_map(|(group, items)| {
-            items
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str())
-                .map(|item| (group.clone(), item.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 fn reference_group_entry_count(value: &Value) -> usize {
     value
         .as_object()
@@ -3459,9 +3948,19 @@ fn string_array_field(value: &Value, array_key: &str) -> Vec<String> {
         .collect()
 }
 
-fn reference_load_plan_paths(value: &Value) -> Vec<String> {
-    value
-        .get("referenceLoadPlan")
+fn reference_plan_paths(requirement: &Value, surface_contract: &Value) -> Vec<String> {
+    let execution_paths = requirement
+        .pointer("/executionGuidance/styleAssetPlan/referencePlan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_string))
+        .collect::<Vec<_>>();
+    if !execution_paths.is_empty() {
+        return execution_paths;
+    }
+    surface_contract
+        .get("referencePlan")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -3475,23 +3974,6 @@ fn missing_strings(expected: &[String], actual: &[String]) -> Vec<String> {
         .iter()
         .filter(|item| !actual.contains(item))
         .cloned()
-        .collect()
-}
-
-fn missing_reference_groups(
-    expected: &[(String, String)],
-    actual: &[(String, String)],
-) -> Vec<Value> {
-    let actual = actual.iter().collect::<BTreeSet<_>>();
-    expected
-        .iter()
-        .filter(|item| !actual.contains(item))
-        .map(|(group, item)| {
-            json!({
-                "group": group,
-                "item": item
-            })
-        })
         .collect()
 }
 
@@ -3679,24 +4161,44 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
     json!({
         "present": true,
         "status": self_check.get("status").and_then(Value::as_str),
-        "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
-        "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupCheckCount": reference_groups(&self_check, "referenceGroupsChecked").len(),
-        "statesCoveredCount": self_check
-            .get("statesCovered")
+        "surfaceDecisionContractRef": self_check
+            .get("surfaceDecisionContractRef")
+            .and_then(Value::as_str),
+        "surfaceRegionEvidenceCount": self_check
+            .get("surfaceRegionEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "businessUiRuleCheckCount": self_check
-            .get("businessUiRulesChecked")
+        "surfaceActionEvidenceCount": self_check
+            .get("surfaceActionEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "surfacesCoveredCount": self_check
-            .get("surfacesCovered")
+        "surfaceStateEvidenceCount": self_check
+            .get("surfaceStateEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
+        "surfaceQualityRuleEvidenceCount": self_check
+            .get("surfaceQualityRuleEvidence")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "referencePlanFilesCheckedCount": self_check
+            .get("referencePlanFilesChecked")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "contentBoundaryEvidence": {
+            "checked": self_check
+                .pointer("/contentBoundaryEvidence/checked")
+                .and_then(Value::as_bool),
+                "violationCount": self_check
+                    .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0)
+        },
         "designTokenEvidence": self_check
             .get("designTokenEvidence")
             .map(|evidence| json!({
@@ -3724,7 +4226,7 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             }))
             .unwrap_or(Value::Null),
         "forbiddenViolationCount": self_check
-            .pointer("/forbiddenContentCheck/violations")
+            .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
@@ -4127,4 +4629,97 @@ fn safe_id(value: &str) -> String {
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn requirement() -> Value {
+        json!({
+            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "executionGuidance": {
+                "styleAssetPlan": {
+                    "referencePlan": [{
+                        "path": "plugins/shared/loom/references/uix/core.md"
+                    }]
+                }
+            }
+        })
+    }
+
+    fn surface_contract() -> Value {
+        json!({
+            "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "regionsInScope": [{"regionId": "region-main"}],
+            "actionsInScope": [{"actionId": "action-submit"}],
+            "statesInScope": [{"state": "empty"}],
+            "qualityRulesInScope": [{"ruleId": "rule-density"}]
+        })
+    }
+
+    fn self_check() -> Value {
+        json!({
+            "status": "satisfied",
+            "surfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "surfaceRegionEvidence": [{
+                "id": "region-main",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "Region implemented."
+            }],
+            "surfaceActionEvidence": [{
+                "id": "action-submit",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "Action implemented."
+            }],
+            "surfaceStateEvidence": [{
+                "id": "empty",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "State implemented."
+            }],
+            "surfaceQualityRuleEvidence": [{
+                "id": "rule-density",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "Density rule applied."
+            }],
+            "contentBoundaryEvidence": {
+                "checked": true,
+                "forbiddenContentViolations": [],
+                "evidence": "Only business UI copy is visible."
+            },
+            "referencePlanFilesChecked": ["plugins/shared/loom/references/uix/core.md"]
+        })
+    }
+
+    #[test]
+    fn frontend_surface_review_accepts_complete_coverage() {
+        let review =
+            frontend_surface_contract_review(&requirement(), &surface_contract(), &self_check());
+
+        assert_eq!(review.get("satisfied").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn frontend_surface_review_rejects_missing_action_evidence() {
+        let mut self_check = self_check();
+        self_check["surfaceActionEvidence"] = json!([]);
+        let review =
+            frontend_surface_contract_review(&requirement(), &surface_contract(), &self_check);
+
+        assert_eq!(
+            review.get("satisfied").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            review
+                .pointer("/actions/missingIds")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
 }

@@ -33,6 +33,19 @@ Generated Compose may include:
 
 Generated placeholders are not production secrets. They exist only to make local deployment diagnosable and runnable.
 
+## Environment Fact Flow
+
+Scanner evidence becomes deploy facts before assets are generated:
+
+- Env example names become `environment.expectedNames`.
+- Source-code env references become `environment.referencedNames`.
+- Known safe local defaults become generated Compose values.
+- Real secret names remain diagnostics and must not be filled from local files.
+- Dependency facts decide connection URL shapes and service names.
+- File database facts decide writable container paths and volume mounts.
+
+Generated Compose should only include values supported by those facts. If a variable is absent from facts and not required by the selected runtime template, do not invent it.
+
 ## File Databases And Local State
 
 For local file databases, container paths must be inside a mounted writable directory, for example `/app/data`. Compose should create a named volume or project-local generated volume for that directory. Do not point a container at a host-only relative path that existed only on the developer machine.
@@ -40,6 +53,39 @@ For local file databases, container paths must be inside a mounted writable dire
 For Spring Boot plus JPA/Flyway/Liquibase style stacks, do not assume Hibernate schema validation is authoritative for all local file databases. If generated deployment is supplying a containerized file database URL and migration tooling owns schema creation, prefer a safe local override that prevents schema validation from failing on SQLite/H2 type affinity before the app can boot.
 
 When dependency services are generated, application URLs must use Compose service names such as `postgres`, `mysql`, or `redis`, not `localhost`. Browser-facing frontend env may use public proxy paths; container-to-container env must use service DNS names.
+
+File database handling is not SQLite-specific:
+
+- SQLite examples commonly use `jdbc:sqlite:/app/data/app.db`, `sqlite:////app/data/app.db`, or framework-specific file paths.
+- H2 file, HSQLDB file, Derby, LiteFS-backed SQLite, and similar local file stores still need writable mounted paths.
+- If the app config names a host path such as `./data/app.db`, translate it into a container path and mount a volume at the parent directory.
+- If migrations are present, let migration tooling initialize schema for local deployment unless repository config explicitly disables it.
+
+## Service Dependency URLs
+
+Generate dependency URLs from service facts:
+
+- Postgres: host `postgres`, port `5432`, generated local user/password/database.
+- MySQL/MariaDB: host `mysql` or `mariadb`, port `3306`, generated local user/password/database.
+- Redis: host `redis`, port `6379`.
+- MongoDB: host `mongo` or `mongodb`, port `27017`.
+- RabbitMQ: host `rabbitmq`, ports stay internal unless explicitly public.
+- MinIO/S3-compatible: endpoint uses the Compose service DNS name and internal port.
+
+Framework-specific variable names can wrap the same service URL. Use the framework's expected config names when detected, but keep the underlying host/port consistent with Compose.
+
+## Framework Local Safety Defaults
+
+Safe local defaults can unblock local preview without pretending to be production configuration:
+
+- Spring Boot: `SERVER_PORT`, local datasource URL/driver when generated, and migration/JPA flags needed for containerized local boot.
+- Django: `SECRET_KEY`, `DEBUG=1`, allowed hosts for local container access, and database URL when generated.
+- Rails: `SECRET_KEY_BASE`, local database URL, and writable storage/log paths.
+- Laravel: `APP_KEY`, `APP_ENV=local`, `APP_DEBUG=true`, storage/cache paths, and generated DB/Redis URLs.
+- ASP.NET Core: `ASPNETCORE_URLS`, `ASPNETCORE_ENVIRONMENT=Development`, and connection strings from generated dependencies.
+- NextAuth/Auth.js: local `NEXTAUTH_SECRET` or equivalent only when the app requires it to boot.
+
+Do not add framework defaults for a framework that was not detected.
 
 ## Repair Guidance
 

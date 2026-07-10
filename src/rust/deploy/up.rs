@@ -459,10 +459,12 @@ struct OperationHeartbeat {
 
 impl OperationHeartbeat {
     fn new(project_root: &Path) -> Self {
+        let interval = operation_heartbeat_interval();
+        let now = Instant::now();
         Self {
             project_root: project_root.to_path_buf(),
-            interval: operation_heartbeat_interval(),
-            last_touch: Arc::new(Mutex::new(Instant::now())),
+            interval,
+            last_touch: Arc::new(Mutex::new(now.checked_sub(interval).unwrap_or(now))),
         }
     }
 

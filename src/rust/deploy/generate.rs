@@ -91,6 +91,9 @@ pub fn generate_deployment_files(spec: &DeploymentSpec) -> GeneratedDeploymentTe
 }
 
 fn generate_dockerfile(service: &DeploymentSourceService, spec: &DeploymentSpec) -> String {
+    if service.runtime_kind == RuntimeKind::Static {
+        return generate_static_site_dockerfile(service);
+    }
     if service.role == SourceServiceRole::Frontend && service.start_command.is_none() {
         return generate_static_frontend_dockerfile(service, spec);
     }
@@ -100,6 +103,8 @@ fn generate_dockerfile(service: &DeploymentSourceService, spec: &DeploymentSpec)
         RuntimeKind::Python => generate_python_dockerfile(service),
         RuntimeKind::Go => generate_go_dockerfile(service),
         RuntimeKind::Dotnet => generate_dotnet_dockerfile(service),
+        RuntimeKind::Php => generate_php_dockerfile(service),
+        RuntimeKind::Ruby => generate_ruby_dockerfile(service),
         _ => [
             "FROM alpine:3.20",
             "WORKDIR /app",
@@ -215,8 +220,11 @@ fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
         format!("COPY {}/ ./", service.root)
     };
     let mut lines = vec![
-        "FROM node:22-alpine AS runner".to_string(),
+        "FROM node:22-slim AS runner".to_string(),
         format!("WORKDIR {workdir}"),
+        "RUN apt-get update \\".to_string(),
+        "    && apt-get install -y --no-install-recommends curl \\".to_string(),
+        "    && rm -rf /var/lib/apt/lists/*".to_string(),
         "ENV NODE_ENV=production".to_string(),
         format!("ENV PORT={}", service.port),
         format!("COPY {} ./", node_manifest_copy_sources(service).join(" ")),
@@ -335,12 +343,22 @@ fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSource
         .output_directory
         .clone()
         .unwrap_or_else(|| format!("{frontend_root}/dist"));
+    let frontend_workdir = if frontend_root == "." {
+        "/workspace".to_string()
+    } else {
+        format!("/workspace/{frontend_root}")
+    };
+    let frontend_copy = if frontend_root == "." {
+        "COPY . .".to_string()
+    } else {
+        format!("COPY {frontend_root}/ ./")
+    };
     let build_command = java_build_command(service);
     let builder_image = java_builder_image(service);
     [
         "FROM node:22-bookworm-slim AS web-builder".to_string(),
-        format!("WORKDIR /workspace/{frontend_root}"),
-        format!("COPY {frontend_root}/ ./"),
+        format!("WORKDIR {frontend_workdir}"),
+        frontend_copy,
         format!("RUN {}", install_command(PackageManager::Npm, service.has_lockfile)),
         format!("RUN {}", package_manager_run(PackageManager::Npm, "build")),
         "".to_string(),
@@ -378,7 +396,13 @@ fn frontend_root_from_package_refs(service: &DeploymentSourceService) -> Option<
     service
         .workspace_package_json_paths
         .first()
-        .and_then(|path| path.rsplit_once('/').map(|(root, _)| root.to_string()))
+        .and_then(|path| {
+            if path == "package.json" {
+                Some(".".to_string())
+            } else {
+                path.rsplit_once('/').map(|(root, _)| root.to_string())
+            }
+        })
         .filter(|root| !root.is_empty())
 }
 
@@ -403,15 +427,17 @@ fn generate_python_dockerfile(service: &DeploymentSourceService) -> String {
         "echo 'No Python start command declared in RuntimeDeliveryContract.' && exit 64".to_string()
     });
     [
-        "FROM python:3.13-slim AS runner".to_string(),
+        "FROM python:3.12-slim AS runner".to_string(),
         "WORKDIR /app".to_string(),
+        "RUN apt-get update \\".to_string(),
+        "    && apt-get install -y --no-install-recommends curl \\".to_string(),
+        "    && rm -rf /var/lib/apt/lists/*".to_string(),
         "ENV PYTHONDONTWRITEBYTECODE=1".to_string(),
         "ENV PYTHONUNBUFFERED=1".to_string(),
         format!("ENV PORT={}", service.port),
         "COPY . .".to_string(),
         service_root_workdir(service),
-        "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi"
-            .to_string(),
+        "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; elif [ -f pyproject.toml ]; then pip install --no-cache-dir .; fi".to_string(),
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
         "".to_string(),
@@ -425,17 +451,19 @@ fn generate_go_dockerfile(service: &DeploymentSourceService) -> String {
         .clone()
         .unwrap_or_else(|| "/app/server".to_string());
     [
-        "FROM golang:1.23-alpine AS builder",
-        "WORKDIR /src",
-        "COPY . .",
-        "RUN go build -o /out/server .",
-        "",
-        "FROM alpine:3.20 AS runner",
-        "WORKDIR /app",
-        "COPY --from=builder /out/server /app/server",
-        &format!("EXPOSE {}", service.port),
-        &format!("CMD {}", json_shell_cmd(&start_command)),
-        "",
+        "FROM golang:1.23-alpine AS builder".to_string(),
+        "WORKDIR /src".to_string(),
+        "COPY . .".to_string(),
+        service_root_workdir_under(service, "/src"),
+        "RUN go build -o /out/server .".to_string(),
+        "".to_string(),
+        "FROM alpine:3.20 AS runner".to_string(),
+        "WORKDIR /app".to_string(),
+        "RUN apk add --no-cache curl".to_string(),
+        "COPY --from=builder /out/server /app/server".to_string(),
+        format!("EXPOSE {}", service.port),
+        format!("CMD {}", json_shell_cmd(&start_command)),
+        "".to_string(),
     ]
     .join("\n")
 }
@@ -444,19 +472,94 @@ fn generate_dotnet_dockerfile(service: &DeploymentSourceService) -> String {
     let start_command = service
         .start_command
         .clone()
-        .unwrap_or_else(|| "dotnet /app/app.dll".to_string());
+        .unwrap_or_else(|| "dotnet \"$(find /app -maxdepth 1 -name '*.dll' ! -name '*.Views.dll' | sort | head -n 1)\"".to_string());
+    let sdk_major = service.runtime_version.as_deref().unwrap_or("8");
     [
-        "FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build".to_string(),
+        format!("FROM mcr.microsoft.com/dotnet/sdk:{sdk_major}.0 AS build"),
         "WORKDIR /src".to_string(),
         "COPY . .".to_string(),
+        service_root_workdir_under(service, "/src"),
         "RUN dotnet restore".to_string(),
         "RUN dotnet publish -c Release -o /app/publish --no-restore".to_string(),
-        "FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runner".to_string(),
+        format!("FROM mcr.microsoft.com/dotnet/aspnet:{sdk_major}.0 AS runner"),
         "WORKDIR /app".to_string(),
+        "RUN apt-get update \\".to_string(),
+        "    && apt-get install -y --no-install-recommends curl \\".to_string(),
+        "    && rm -rf /var/lib/apt/lists/*".to_string(),
         format!("ENV ASPNETCORE_URLS=http://0.0.0.0:{}", service.port),
+        format!("ENV PORT={}", service.port),
         "COPY --from=build /app/publish .".to_string(),
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
+        "".to_string(),
+    ]
+    .join("\n")
+}
+
+fn generate_php_dockerfile(service: &DeploymentSourceService) -> String {
+    let start_command = service
+        .start_command
+        .clone()
+        .unwrap_or_else(|| format!("php -S 0.0.0.0:${{PORT:-{}}} -t public", service.port));
+    [
+        "FROM composer:2 AS vendor".to_string(),
+        "WORKDIR /app".to_string(),
+        "COPY . .".to_string(),
+        service_root_workdir(service),
+        "RUN if [ -f composer.json ]; then composer install --no-dev --prefer-dist --no-interaction --no-progress; fi".to_string(),
+        "".to_string(),
+        "FROM php:8.3-cli-bookworm AS runner".to_string(),
+        "WORKDIR /app".to_string(),
+        "RUN apt-get update \\".to_string(),
+        "    && apt-get install -y --no-install-recommends curl \\".to_string(),
+        "    && rm -rf /var/lib/apt/lists/*".to_string(),
+        format!("ENV PORT={}", service.port),
+        "COPY --from=vendor /app /app".to_string(),
+        service_root_workdir(service),
+        format!("EXPOSE {}", service.port),
+        format!("CMD {}", json_shell_cmd(&start_command)),
+        "".to_string(),
+    ]
+    .join("\n")
+}
+
+fn generate_ruby_dockerfile(service: &DeploymentSourceService) -> String {
+    let start_command = service.start_command.clone().unwrap_or_else(|| {
+        format!(
+            "bundle exec rackup -o 0.0.0.0 -p ${{PORT:-{}}}",
+            service.port
+        )
+    });
+    let ruby_version = service.runtime_version.as_deref().unwrap_or("3.3");
+    [
+        format!("FROM ruby:{ruby_version}-slim AS runner"),
+        "WORKDIR /app".to_string(),
+        "RUN apt-get update \\".to_string(),
+        "    && apt-get install -y --no-install-recommends build-essential git libpq-dev pkg-config curl \\".to_string(),
+        "    && rm -rf /var/lib/apt/lists/*".to_string(),
+        format!("ENV PORT={}", service.port),
+        "COPY . .".to_string(),
+        service_root_workdir(service),
+        "RUN if [ -f Gemfile ]; then bundle install; fi".to_string(),
+        "RUN mkdir -p tmp/pids tmp/cache log storage".to_string(),
+        format!("EXPOSE {}", service.port),
+        format!("CMD {}", json_shell_cmd(&start_command)),
+        "".to_string(),
+    ]
+    .join("\n")
+}
+
+fn generate_static_site_dockerfile(service: &DeploymentSourceService) -> String {
+    let output = service.output_directory.as_deref().unwrap_or(".");
+    let copy_source = if output == "." {
+        ".".to_string()
+    } else {
+        output.to_string()
+    };
+    [
+        "FROM nginx:1.27-alpine AS runner".to_string(),
+        format!("COPY {copy_source} /usr/share/nginx/html"),
+        "EXPOSE 80".to_string(),
         "".to_string(),
     ]
     .join("\n")
@@ -596,18 +699,10 @@ fn service_has_healthcheck(service: &DeploymentSourceService) -> bool {
 
 fn healthcheck_test(service: &DeploymentSourceService) -> String {
     let path = service.healthcheck_path.as_deref().unwrap_or("/");
-    let command = match service.runtime_kind {
-        RuntimeKind::Java => {
-            format!(
-                "curl -fsS http://127.0.0.1:{}{} || exit 1",
-                service.port, path
-            )
-        }
-        _ => format!(
-            "wget -qO- http://127.0.0.1:{}{} >/dev/null 2>&1 || exit 1",
-            service.port, path
-        ),
-    };
+    let command = format!(
+        "curl -fsS http://127.0.0.1:{}{} || exit 1",
+        service.port, path
+    );
     format!("[\"CMD-SHELL\", {}]", yaml_string(&command))
 }
 
@@ -836,10 +931,14 @@ fn package_manager_run(package_manager: PackageManager, script: &str) -> String 
 }
 
 fn service_root_workdir(service: &DeploymentSourceService) -> String {
+    service_root_workdir_under(service, "/app")
+}
+
+fn service_root_workdir_under(service: &DeploymentSourceService, base: &str) -> String {
     if service.root == "." {
         String::new()
     } else {
-        format!("WORKDIR /workspace/{}", service.root)
+        format!("WORKDIR {}/{}", base.trim_end_matches('/'), service.root)
     }
 }
 

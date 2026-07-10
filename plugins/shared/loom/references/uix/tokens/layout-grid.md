@@ -107,7 +107,7 @@ Stable dimensions prevent hover, loading text, validation text, and long labels 
 
 ## Self-Check
 
-- The selected layout baseline matches `uiQualityContract.layoutBaseline`.
+- The selected layout baseline matches the product scenario and density.
 - Content does not overlap navigation, sticky bars, side panels, or mobile safe areas.
 - Wide desktop does not stretch text or forms into unreadable lines.
 - The implemented page contains the actual task surface in the first visible viewport for its scenario.
