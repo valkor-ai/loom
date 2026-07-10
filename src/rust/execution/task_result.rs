@@ -3591,6 +3591,7 @@ fn update_latest_task_result_repair_action(
     request_ref: &str,
 ) -> Result<(), state::store::StateError> {
     let store = FileTransitionStore;
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
     let mut delivery = store
         .load_delivery_index(project_root, delivery_id)
         .map_err(to_state_error)?;
@@ -3614,9 +3615,14 @@ fn update_latest_task_result_repair_action(
             target_phase_id: None,
         });
     }
+    delivery.status = DeliveryLifecycleStatus::Executing;
     delivery.updated_at = state::store::now_string();
     store
         .save_delivery_index(project_root, &delivery)
+        .map_err(to_state_error)?;
+    apply_delivery_index(&mut status, &delivery);
+    store
+        .save_status(project_root, &status)
         .map_err(to_state_error)
 }
 

@@ -4190,6 +4190,15 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         .as_str()
         .expect("task result repair action requestRef")
         .to_string();
+    let status_after_repair_route: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(".loom/status.json")).expect("read status"),
+    )
+    .expect("parse status");
+    assert_eq!(
+        status_after_repair_route["deliveries"][0]["status"],
+        json!("executing"),
+        "TaskResult repair routing must keep project status aligned with delivery index"
+    );
     let resumed_task_result_repair = continue_delivery(fixture.root_str());
     assert_eq!(
         resumed_task_result_repair["state"], "auto_runnable",
