@@ -65,11 +65,12 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     let root_gradle = project_root.join("build.gradle");
 
     let backend = find_java_backend_root(project_root);
-    let frontend_root = find_frontend_root(project_root);
+    let frontend_root = detected_frontend_root(project_root);
+    let frontend_support = frontend_probe_evidence(project_root, frontend_root.as_deref());
     let has_root_gradle = root_gradle.exists() || project_root.join("gradlew").exists();
     let has_root_maven = root_pom.exists() || project_root.join("mvnw").exists();
     let has_root_node = root_package.exists();
-    let has_root_frontend = root_frontend_detected(project_root);
+    let has_frontend = frontend_root.is_some();
     let env_defaults = collect_env_defaults(project_root);
     let spring_ddl_auto_validate = spring_ddl_auto_validate(project_root);
     let flyway_detected = flyway_detected(project_root);
@@ -77,14 +78,6 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
 
     if let Some(backend) = backend {
         let package_manager = Some(backend.package_manager);
-        let frontend_package_refs = frontend_root
-            .as_ref()
-            .map(|root| vec![format!("{root}/package.json")])
-            .unwrap_or_default();
-        let has_lockfile = frontend_root
-            .as_ref()
-            .map(|root| has_node_lockfile(project_root.join(root).as_path()))
-            .unwrap_or(false);
         let port = read_server_port(
             &project_root
                 .join(&backend.root)
@@ -93,20 +86,43 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
         .unwrap_or(8080);
         let framework = Some("spring-boot".to_string());
         let build_command = Some(backend_build_command(&backend));
+        let mut files = vec![
+            file_fact(
+                project_root,
+                &format!("{}/build.gradle", backend.root),
+                "backend_build_file",
+            ),
+            file_fact(
+                project_root,
+                &format!("{}/gradlew", backend.root),
+                "backend_build_wrapper",
+            ),
+            file_fact(
+                project_root,
+                &format!("{}/pom.xml", backend.root),
+                "backend_build_file",
+            ),
+            file_fact(
+                project_root,
+                &format!("{}/mvnw", backend.root),
+                "backend_build_wrapper",
+            ),
+        ];
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Java,
             package_manager,
-            has_lockfile,
+            has_lockfile: frontend_support.has_lockfile,
             framework,
             runtime_version: None,
             runtime_version_source: None,
             build_command,
             start_command: None,
-            output_directory: frontend_root.as_ref().map(|root| format!("{root}/dist")),
+            output_directory: frontend_support.output_directory.clone(),
             port,
             healthcheck_path: Some("/".to_string()),
             working_directory: None,
-            workspace_package_json_paths: frontend_package_refs.clone(),
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
@@ -117,69 +133,8 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
                 RuntimeKind::Java,
                 package_manager,
                 port,
-                vec![
-                    file_fact(
-                        project_root,
-                        &format!("{}/build.gradle", backend.root),
-                        "backend_build_file",
-                    ),
-                    file_fact(
-                        project_root,
-                        &format!("{}/gradlew", backend.root),
-                        "backend_build_wrapper",
-                    ),
-                    file_fact(
-                        project_root,
-                        &format!("{}/pom.xml", backend.root),
-                        "backend_build_file",
-                    ),
-                    file_fact(
-                        project_root,
-                        &format!("{}/mvnw", backend.root),
-                        "backend_build_wrapper",
-                    ),
-                    frontend_root
-                        .as_ref()
-                        .map(|root| {
-                            file_fact(
-                                project_root,
-                                &format!("{root}/package.json"),
-                                "frontend_package_file",
-                            )
-                        })
-                        .unwrap_or(Value::Null),
-                    frontend_root
-                        .as_ref()
-                        .map(|root| {
-                            file_fact(
-                                project_root,
-                                &format!("{root}/package-lock.json"),
-                                "frontend_lockfile",
-                            )
-                        })
-                        .unwrap_or(Value::Null),
-                    frontend_root
-                        .as_ref()
-                        .map(|root| {
-                            file_fact(
-                                project_root,
-                                &format!("{root}/vite.config.ts"),
-                                "frontend_config",
-                            )
-                        })
-                        .unwrap_or(Value::Null),
-                    frontend_root
-                        .as_ref()
-                        .map(|root| {
-                            file_fact(
-                                project_root,
-                                &format!("{root}/vite.config.js"),
-                                "frontend_config",
-                            )
-                        })
-                        .unwrap_or(Value::Null),
-                ],
-                frontend_package_refs,
+                files,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -190,35 +145,17 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
         } else {
             Some(PackageManager::Maven)
         };
-        let root_frontend_package_refs = has_root_frontend
-            .then(|| vec!["package.json".to_string()])
-            .unwrap_or_default();
-        let root_frontend_files = if has_root_frontend {
-            vec![
-                file_fact(project_root, "package.json", "frontend_package_file"),
-                file_fact(project_root, "package-lock.json", "frontend_lockfile"),
-                file_fact(project_root, "pnpm-lock.yaml", "frontend_lockfile"),
-                file_fact(project_root, "yarn.lock", "frontend_lockfile"),
-                file_fact(project_root, "bun.lockb", "frontend_lockfile"),
-                file_fact(project_root, "vite.config.ts", "frontend_config"),
-                file_fact(project_root, "vite.config.js", "frontend_config"),
-                file_fact(project_root, "next.config.js", "frontend_config"),
-                file_fact(project_root, "next.config.mjs", "frontend_config"),
-            ]
-        } else {
-            vec![]
-        };
         let mut files = vec![
             file_fact(project_root, "build.gradle", "backend_build_file"),
             file_fact(project_root, "gradlew", "backend_build_wrapper"),
             file_fact(project_root, "pom.xml", "backend_build_file"),
             file_fact(project_root, "mvnw", "backend_build_wrapper"),
         ];
-        files.extend(root_frontend_files);
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Java,
             package_manager,
-            has_lockfile: has_root_frontend && has_node_lockfile(project_root),
+            has_lockfile: frontend_support.has_lockfile,
             framework: Some(java_framework(project_root, ".").to_string()),
             runtime_version: None,
             runtime_version_source: None,
@@ -232,18 +169,18 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
                 "mvn -DskipTests package".to_string()
             }),
             start_command: None,
-            output_directory: has_root_frontend.then(|| "dist".to_string()),
+            output_directory: frontend_support.output_directory.clone(),
             port: 8080,
             healthcheck_path: Some("/".to_string()),
             working_directory: None,
-            workspace_package_json_paths: root_frontend_package_refs.clone(),
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
-                if has_root_frontend {
+                if has_frontend {
                     "multi_application"
                 } else {
                     "single_service"
@@ -252,7 +189,7 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
                 package_manager,
                 8080,
                 files,
-                root_frontend_package_refs,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -275,6 +212,22 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
         let package_manager = python_package_manager(&package_root);
         let framework = python_framework(&package_root);
         let port = python_default_port(framework.as_deref());
+        let mut files = stack_file_facts(
+            project_root,
+            &root,
+            &[
+                "requirements.txt",
+                "pyproject.toml",
+                "uv.lock",
+                "poetry.lock",
+                "manage.py",
+                "main.py",
+                "app.py",
+                "server.py",
+            ],
+            "python_runtime_file",
+        );
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Python,
             package_manager,
@@ -284,37 +237,27 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             runtime_version_source: None,
             build_command: None,
             start_command: Some(python_start_command(&package_root, port)),
-            output_directory: None,
+            output_directory: frontend_support.output_directory.clone(),
             port,
             healthcheck_path: Some("/".to_string()),
             working_directory: (root != ".").then_some(root.clone()),
-            workspace_package_json_paths: vec![],
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
-                "single_service",
+                if has_frontend {
+                    "multi_application"
+                } else {
+                    "single_service"
+                },
                 RuntimeKind::Python,
                 package_manager,
                 port,
-                stack_file_facts(
-                    project_root,
-                    &root,
-                    &[
-                        "requirements.txt",
-                        "pyproject.toml",
-                        "uv.lock",
-                        "poetry.lock",
-                        "manage.py",
-                        "main.py",
-                        "app.py",
-                        "server.py",
-                    ],
-                    "python_runtime_file",
-                ),
-                vec![],
+                files,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -322,6 +265,13 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     if let Some(root) = find_stack_root(project_root, &["go.mod", "main.go"]) {
         let package_root = project_root.join(&root);
         let port = go_default_port(&package_root);
+        let mut files = stack_file_facts(
+            project_root,
+            &root,
+            &["go.mod", "go.sum", "main.go"],
+            "go_runtime_file",
+        );
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Go,
             package_manager: Some(PackageManager::Go),
@@ -331,28 +281,27 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             runtime_version_source: None,
             build_command: Some("go build -o /out/server .".to_string()),
             start_command: Some("/app/server".to_string()),
-            output_directory: None,
+            output_directory: frontend_support.output_directory.clone(),
             port,
             healthcheck_path: Some("/".to_string()),
             working_directory: (root != ".").then_some(root.clone()),
-            workspace_package_json_paths: vec![],
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
-                "single_service",
+                if has_frontend {
+                    "multi_application"
+                } else {
+                    "single_service"
+                },
                 RuntimeKind::Go,
                 Some(PackageManager::Go),
                 port,
-                stack_file_facts(
-                    project_root,
-                    &root,
-                    &["go.mod", "go.sum", "main.go"],
-                    "go_runtime_file",
-                ),
-                vec![],
+                files,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -360,6 +309,8 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     if let Some(root) = find_dotnet_root(project_root) {
         let package_root = project_root.join(&root);
         let port = dotnet_default_port(&package_root);
+        let mut files = dotnet_file_facts(project_root, &root);
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Dotnet,
             package_manager: Some(PackageManager::Dotnet),
@@ -369,23 +320,27 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             runtime_version_source: None,
             build_command: Some("dotnet publish -c Release -o /app/publish".to_string()),
             start_command: Some("dotnet \"$(find /app -maxdepth 1 -name '*.dll' ! -name '*.Views.dll' | sort | head -n 1)\"".to_string()),
-            output_directory: None,
+            output_directory: frontend_support.output_directory.clone(),
             port,
             healthcheck_path: Some("/".to_string()),
             working_directory: (root != ".").then_some(root.clone()),
-            workspace_package_json_paths: vec![],
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
-                "single_service",
+                if has_frontend {
+                    "multi_application"
+                } else {
+                    "single_service"
+                },
                 RuntimeKind::Dotnet,
                 Some(PackageManager::Dotnet),
                 port,
-                dotnet_file_facts(project_root, &root),
-                vec![],
+                files,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -396,6 +351,18 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     ) {
         let package_root = project_root.join(&root);
         let port = 8000;
+        let mut files = stack_file_facts(
+            project_root,
+            &root,
+            &[
+                "composer.json",
+                "composer.lock",
+                "artisan",
+                "public/index.php",
+            ],
+            "php_runtime_file",
+        );
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Php,
             package_manager: Some(PackageManager::Composer),
@@ -405,33 +372,27 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             runtime_version_source: None,
             build_command: None,
             start_command: Some(php_start_command(&package_root, port)),
-            output_directory: None,
+            output_directory: frontend_support.output_directory.clone(),
             port,
             healthcheck_path: Some("/".to_string()),
             working_directory: (root != ".").then_some(root.clone()),
-            workspace_package_json_paths: vec![],
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
-                "single_service",
+                if has_frontend {
+                    "multi_application"
+                } else {
+                    "single_service"
+                },
                 RuntimeKind::Php,
                 Some(PackageManager::Composer),
                 port,
-                stack_file_facts(
-                    project_root,
-                    &root,
-                    &[
-                        "composer.json",
-                        "composer.lock",
-                        "artisan",
-                        "public/index.php",
-                    ],
-                    "php_runtime_file",
-                ),
-                vec![],
+                files,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -442,6 +403,18 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
     ) {
         let package_root = project_root.join(&root);
         let port = 3000;
+        let mut files = stack_file_facts(
+            project_root,
+            &root,
+            &[
+                "Gemfile",
+                "Gemfile.lock",
+                "config.ru",
+                "config/application.rb",
+            ],
+            "ruby_runtime_file",
+        );
+        files.extend(frontend_support.files.clone());
         return Ok(DeploymentCodeProbe {
             kind: RuntimeKind::Ruby,
             package_manager: Some(PackageManager::Bundler),
@@ -451,33 +424,27 @@ pub fn build_deployment_code_probe(project_root: &Path) -> StateResult<Deploymen
             runtime_version_source: None,
             build_command: None,
             start_command: Some(ruby_start_command(&package_root, port)),
-            output_directory: None,
+            output_directory: frontend_support.output_directory.clone(),
             port,
             healthcheck_path: Some("/".to_string()),
             working_directory: (root != ".").then_some(root.clone()),
-            workspace_package_json_paths: vec![],
+            workspace_package_json_paths: frontend_support.package_refs.clone(),
             services: services.clone(),
             env_defaults,
             spring_ddl_auto_validate,
             flyway_detected,
             evidence: evidence_value(
                 project_root,
-                "single_service",
+                if has_frontend {
+                    "multi_application"
+                } else {
+                    "single_service"
+                },
                 RuntimeKind::Ruby,
                 Some(PackageManager::Bundler),
                 port,
-                stack_file_facts(
-                    project_root,
-                    &root,
-                    &[
-                        "Gemfile",
-                        "Gemfile.lock",
-                        "config.ru",
-                        "config/application.rb",
-                    ],
-                    "ruby_runtime_file",
-                ),
-                vec![],
+                files,
+                frontend_support.package_refs,
             )?,
         });
     }
@@ -597,6 +564,76 @@ struct JavaBackendRoot {
     root: String,
     package_manager: PackageManager,
     has_wrapper: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FrontendProbeEvidence {
+    package_refs: Vec<String>,
+    files: Vec<Value>,
+    has_lockfile: bool,
+    output_directory: Option<String>,
+}
+
+fn detected_frontend_root(project_root: &Path) -> Option<String> {
+    if root_frontend_detected(project_root) {
+        Some(".".to_string())
+    } else {
+        find_frontend_root(project_root)
+    }
+}
+
+fn frontend_probe_evidence(project_root: &Path, root: Option<&str>) -> FrontendProbeEvidence {
+    let Some(root) = root else {
+        return FrontendProbeEvidence {
+            package_refs: vec![],
+            files: vec![],
+            has_lockfile: false,
+            output_directory: None,
+        };
+    };
+    let package_refs = vec![join_frontend_root(root, "package.json")];
+    let frontend_path = root_path(project_root, root);
+    let files = [
+        ("package.json", "frontend_package_file"),
+        ("package-lock.json", "frontend_lockfile"),
+        ("pnpm-lock.yaml", "frontend_lockfile"),
+        ("yarn.lock", "frontend_lockfile"),
+        ("bun.lockb", "frontend_lockfile"),
+        ("vite.config.ts", "frontend_config"),
+        ("vite.config.js", "frontend_config"),
+        ("next.config.js", "frontend_config"),
+        ("next.config.mjs", "frontend_config"),
+        ("angular.json", "frontend_config"),
+        ("src/main.tsx", "frontend_entry"),
+        ("src/main.ts", "frontend_entry"),
+        ("src/App.tsx", "frontend_entry"),
+        ("src/App.vue", "frontend_entry"),
+    ]
+    .into_iter()
+    .map(|(relative, kind)| file_fact(project_root, &join_frontend_root(root, relative), kind))
+    .collect::<Vec<_>>();
+    FrontendProbeEvidence {
+        package_refs,
+        files,
+        has_lockfile: has_node_lockfile(&frontend_path),
+        output_directory: Some(join_frontend_root(root, "dist")),
+    }
+}
+
+fn root_path(project_root: &Path, root: &str) -> std::path::PathBuf {
+    if root == "." {
+        project_root.to_path_buf()
+    } else {
+        project_root.join(root)
+    }
+}
+
+fn join_frontend_root(root: &str, relative: &str) -> String {
+    if root == "." || root.is_empty() {
+        relative.to_string()
+    } else {
+        format!("{}/{}", root.trim_matches('/'), relative)
+    }
 }
 
 fn find_java_backend_root(project_root: &Path) -> Option<JavaBackendRoot> {

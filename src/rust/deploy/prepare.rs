@@ -4,13 +4,15 @@ use std::{
 };
 
 use contracts::{
-    DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentGeneratedFiles,
-    DeploymentProviderPolicy, DeploymentRuntimeContract, DeploymentSourceModel, DeploymentSpec,
+    DeployProvider, DeploymentEnvDiagnostics, DeploymentEnvVariable, DeploymentFacts,
+    DeploymentGeneratedFiles, DeploymentProviderPolicy, DeploymentRuntimeContract,
+    DeploymentSourceModel, DeploymentSpec, DeploymentTopology,
 };
 use delivery_core::{
     LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpDoneResult, LoomMcpFailure,
     LoomMcpFailureResult,
 };
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use state::{
     lifecycle_store::init_project_state,
@@ -260,7 +262,46 @@ pub fn deploy_prepare_inner(
 }
 
 pub fn read_spec(project_root: &Path) -> StateResult<DeploymentSpec> {
-    state::store::read_json(&deployment_paths(project_root).spec_file)
+    let paths = deployment_paths(project_root);
+    let mut spec: DeploymentSpec = state::store::read_json(&paths.spec_file)?;
+    overlay_generated_sidecars(&paths, &mut spec)?;
+    Ok(spec)
+}
+
+fn overlay_generated_sidecars(
+    paths: &DeploymentPaths,
+    spec: &mut DeploymentSpec,
+) -> StateResult<()> {
+    if let Some(source_model) = read_generated_sidecar::<DeploymentSourceModel>(
+        &paths.generated_dir.join("source-model.json"),
+        "source-model.json",
+    )? {
+        spec.source_model = source_model;
+    }
+    if let Some(topology) = read_generated_sidecar::<DeploymentTopology>(
+        &paths.generated_dir.join("topology.json"),
+        "topology.json",
+    )? {
+        spec.topology = topology;
+    }
+    if let Some(facts) = read_generated_sidecar::<DeploymentFacts>(
+        &paths.generated_dir.join("facts.json"),
+        "facts.json",
+    )? {
+        spec.facts = facts;
+    }
+    Ok(())
+}
+
+fn read_generated_sidecar<T: DeserializeOwned>(path: &Path, label: &str) -> StateResult<Option<T>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    state::store::read_json(path).map(Some).map_err(|error| {
+        StateError::StateCorrupted(format!(
+            "generated deployment sidecar {label} is invalid: {error}"
+        ))
+    })
 }
 
 fn apply_healthcheck_override(source_model: &mut DeploymentSourceModel, path: &str) {
@@ -718,10 +759,24 @@ pub(crate) fn deployment_generated_file_refs(spec: &DeploymentSpec) -> Vec<Strin
         .reused
         .iter()
         .collect::<std::collections::BTreeSet<_>>();
-    deployment_file_refs(spec)
-        .into_iter()
+    let mut refs = deployment_file_refs(spec);
+    refs.extend(deployment_generated_sidecar_refs(spec));
+    refs.sort();
+    refs.dedup();
+    refs.into_iter()
         .filter(|item| !item.is_empty() && !reused.contains(item))
         .collect()
+}
+
+fn deployment_generated_sidecar_refs(spec: &DeploymentSpec) -> Vec<String> {
+    [
+        spec.source_model_ref.clone(),
+        spec.topology_ref.clone(),
+        spec.facts_ref.clone(),
+    ]
+    .into_iter()
+    .filter(|item| !item.is_empty())
+    .collect()
 }
 
 fn runtime_contract_blocked(project_root: &Path, error: StateError) -> LoomMcpActionResult {

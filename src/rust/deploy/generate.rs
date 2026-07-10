@@ -343,12 +343,22 @@ fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSource
         .output_directory
         .clone()
         .unwrap_or_else(|| format!("{frontend_root}/dist"));
+    let frontend_workdir = if frontend_root == "." {
+        "/workspace".to_string()
+    } else {
+        format!("/workspace/{frontend_root}")
+    };
+    let frontend_copy = if frontend_root == "." {
+        "COPY . .".to_string()
+    } else {
+        format!("COPY {frontend_root}/ ./")
+    };
     let build_command = java_build_command(service);
     let builder_image = java_builder_image(service);
     [
         "FROM node:22-bookworm-slim AS web-builder".to_string(),
-        format!("WORKDIR /workspace/{frontend_root}"),
-        format!("COPY {frontend_root}/ ./"),
+        format!("WORKDIR {frontend_workdir}"),
+        frontend_copy,
         format!("RUN {}", install_command(PackageManager::Npm, service.has_lockfile)),
         format!("RUN {}", package_manager_run(PackageManager::Npm, "build")),
         "".to_string(),
@@ -386,7 +396,13 @@ fn frontend_root_from_package_refs(service: &DeploymentSourceService) -> Option<
     service
         .workspace_package_json_paths
         .first()
-        .and_then(|path| path.rsplit_once('/').map(|(root, _)| root.to_string()))
+        .and_then(|path| {
+            if path == "package.json" {
+                Some(".".to_string())
+            } else {
+                path.rsplit_once('/').map(|(root, _)| root.to_string())
+            }
+        })
         .filter(|root| !root.is_empty())
 }
 
@@ -421,8 +437,7 @@ fn generate_python_dockerfile(service: &DeploymentSourceService) -> String {
         format!("ENV PORT={}", service.port),
         "COPY . .".to_string(),
         service_root_workdir(service),
-        "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi"
-            .to_string(),
+        "RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; elif [ -f pyproject.toml ]; then pip install --no-cache-dir .; fi".to_string(),
         format!("EXPOSE {}", service.port),
         format!("CMD {}", json_shell_cmd(&start_command)),
         "".to_string(),

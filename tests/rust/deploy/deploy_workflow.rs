@@ -172,6 +172,396 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
 }
 
 #[test]
+fn prepare_uses_root_frontend_and_python_backend_source_model() {
+    let fixture = Fixture::new("deploy-root-vite-fastapi");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "web_frontend_plus_api_service",
+        "deploymentShape": "frontend-and-backend",
+        "build": {
+            "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000"
+        },
+        "start": {
+            "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000",
+            "port": 8000
+        },
+        "httpProbes": {
+            "previewPath": "/",
+            "apiPaths": ["/api/tickets", "/api/tickets/{ticketId}"]
+        }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","dev":"vite --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-vue":"latest","vite":"latest","vue":"latest"}}"#,
+    );
+    fixture.write_text("vite.config.js", "export default {}\n");
+    fixture.write_text("src/main.ts", "import './style.css'\n");
+    fixture.write_text(
+        "pyproject.toml",
+        r#"[project]
+name = "loom-fastapi-fixture"
+version = "0.1.0"
+dependencies = ["fastapi", "uvicorn"]
+"#,
+    );
+    fixture.write_text(
+        "app/main.py",
+        "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/api/tickets')\ndef tickets():\n    return []\n",
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    let frontend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    assert_eq!(frontend.root, ".");
+    assert_eq!(frontend.manifest_refs, vec!["package.json"]);
+    assert_eq!(frontend.output_directory.as_deref(), Some("dist"));
+    assert_eq!(frontend.artifact_refs, vec!["dist"]);
+    assert_eq!(frontend.runtime_kind, RuntimeKind::Node);
+
+    let backend = spec
+        .source_model
+        .services
+        .iter()
+        .find(|service| service.service_id == "backend")
+        .expect("backend service");
+    assert_eq!(backend.root, ".");
+    assert_eq!(backend.runtime_kind, RuntimeKind::Python);
+    assert!(backend
+        .manifest_refs
+        .iter()
+        .any(|item| item == "pyproject.toml"));
+    assert!(backend
+        .start_command
+        .as_deref()
+        .is_some_and(|command| command.contains("uvicorn app.main:app")));
+
+    let frontend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(
+        frontend_dockerfile.contains("COPY package.json ./"),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        frontend_dockerfile.contains("COPY . ."),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        frontend_dockerfile.contains("COPY --from=builder /workspace/dist /usr/share/nginx/html"),
+        "{frontend_dockerfile}"
+    );
+    assert!(
+        !frontend_dockerfile.contains("frontend/package.json"),
+        "{frontend_dockerfile}"
+    );
+
+    let backend_dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.backend"),
+    )
+    .expect("backend dockerfile");
+    assert!(
+        backend_dockerfile.contains("pip install --no-cache-dir ."),
+        "{backend_dockerfile}"
+    );
+    assert!(
+        !backend_dockerfile.contains("FROM node:"),
+        "{backend_dockerfile}"
+    );
+
+    let validate = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let validate_value = serde_json::to_value(validate).expect("validate json");
+    assert_eq!(
+        validate_value["details"]["assetIssues"],
+        json!([]),
+        "{validate_value:#}"
+    );
+}
+
+#[test]
+fn deploy_validate_uses_generated_source_model_sidecar_over_local_snapshot() {
+    let fixture = Fixture::new("deploy-source-model-sidecar-overlay");
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "web_frontend_plus_api_service",
+        "deploymentShape": "frontend-and-backend",
+        "build": {
+            "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000"
+        },
+        "start": {
+            "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000",
+            "port": 8000
+        },
+        "httpProbes": {
+            "previewPath": "/",
+            "apiPaths": ["/api/tickets"]
+        }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","dev":"vite --host 0.0.0.0"},"dependencies":{"vite":"latest","vue":"latest"}}"#,
+    );
+    fixture.write_text("vite.config.js", "export default {}\n");
+    fixture.write_text("src/main.ts", "console.log('fixture')\n");
+    fixture.write_text(
+        "pyproject.toml",
+        r#"[project]
+name = "loom-fastapi-fixture"
+version = "0.1.0"
+dependencies = ["fastapi", "uvicorn"]
+"#,
+    );
+    fixture.write_text(
+        "app/main.py",
+        "from fastapi import FastAPI\napp = FastAPI()\n",
+    );
+
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    let mut source_model = fixture.read_spec().source_model;
+    let correct_source_model = source_model.clone();
+    let frontend = source_model
+        .services
+        .iter_mut()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    frontend.root = "frontend".to_string();
+    frontend.manifest_refs = vec!["frontend/package.json".to_string()];
+    frontend.output_directory = Some("frontend/dist".to_string());
+    frontend.artifact_refs = vec!["frontend/dist".to_string()];
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/source-model.json"),
+        &source_model,
+    )
+    .expect("write bad source model sidecar");
+
+    let bad_validate = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let bad_value = serde_json::to_value(bad_validate).expect("bad validate json");
+    let bad_issues = bad_value["details"]["assetIssues"]
+        .as_array()
+        .expect("bad asset issues")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(
+        bad_issues.iter().any(
+            |issue| issue.contains("sourceModel service frontend root frontend does not exist")
+        ),
+        "{bad_value:#}"
+    );
+
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/source-model.json"),
+        &correct_source_model,
+    )
+    .expect("write corrected source model sidecar");
+    let good_validate = deploy_validate(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let good_value = serde_json::to_value(good_validate).expect("good validate json");
+    assert_eq!(
+        good_value["details"]["assetIssues"],
+        json!([]),
+        "{good_value:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn deploy_up_asset_repair_exposes_generated_sidecars_as_editable() {
+    let fixture = Fixture::new("deploy-sidecar-editable-repair");
+    write_root_vite_fastapi_delivery(&fixture);
+    let prepare = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+    assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+    let mut source_model = fixture.read_spec().source_model;
+    let frontend = source_model
+        .services
+        .iter_mut()
+        .find(|service| service.service_id == "frontend")
+        .expect("frontend service");
+    frontend.root = "frontend".to_string();
+    frontend.manifest_refs = vec!["frontend/package.json".to_string()];
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/source-model.json"),
+        &source_model,
+    )
+    .expect("write bad source model sidecar");
+    fixture.write_mock_docker(
+        r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
+exit 0
+"#,
+    );
+    let _path_guard = fixture.prepend_mock_bin_to_path();
+
+    let result = deploy_up(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("deploy up json");
+    assert_eq!(value["state"], "auto_runnable", "{value:#}");
+    assert_eq!(value["next"]["kind"], "deploy_repair_assets", "{value:#}");
+    let editable = value["next"]["editableFiles"]
+        .as_array()
+        .expect("editable files")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    for expected in ["source-model.json", "topology.json", "facts.json"] {
+        assert!(
+            editable.iter().any(|item| item.ends_with(expected)),
+            "deploy asset repair must allow generated sidecar {expected}: {value:#}"
+        );
+    }
+}
+
+#[test]
+fn source_model_matrix_handles_root_frontend_with_backend_stack_roots() {
+    for case in backend_source_model_matrix_cases() {
+        let fixture = Fixture::new(&format!("deploy-source-model-matrix-{}", case.name));
+        fixture.write_runtime_delivery(json!({
+            "status": "modified",
+            "runtimeKind": "web_frontend_plus_api_service",
+            "deploymentShape": "frontend-and-backend",
+            "build": { "command": format!("frontend: npm run build; backend: {}", case.build_command) },
+            "start": { "command": format!("frontend: npm run dev; backend: {}", case.start_command), "port": 8000 },
+            "httpProbes": {
+                "previewPath": "/",
+                "apiPaths": ["/api/health"]
+            },
+            "api": {
+                "required": true,
+                "kind": case.api_kind,
+                "entry": case.api_entry,
+                "buildCommand": case.build_command,
+                "basePath": "/api",
+                "probePaths": ["/api/health"]
+            }
+        }));
+        write_root_frontend_fixture(&fixture);
+        for (relative, text) in &case.files {
+            fixture.write_text(relative, text);
+        }
+
+        let prepare = deploy_prepare(DeployToolInput {
+            project_root: fixture.root_str(),
+            app_path: None,
+            healthcheck: None,
+            provider_policy: None,
+        });
+        let prepare_value = serde_json::to_value(prepare).expect("prepare json");
+        assert_eq!(prepare_value["state"], "done", "{prepare_value:#}");
+
+        let spec = fixture.read_spec();
+        let frontend = spec
+            .source_model
+            .services
+            .iter()
+            .find(|service| service.service_id == "frontend")
+            .expect("frontend service");
+        assert_eq!(frontend.root, ".", "{case:?}");
+        assert_eq!(frontend.manifest_refs, vec!["package.json"], "{case:?}");
+        assert_eq!(
+            frontend.output_directory.as_deref(),
+            Some("dist"),
+            "{case:?}"
+        );
+
+        let backend = spec
+            .source_model
+            .services
+            .iter()
+            .find(|service| service.service_id == "backend")
+            .expect("backend service");
+        assert_eq!(backend.root, case.expected_root, "{case:?}");
+        assert_eq!(backend.runtime_kind, case.expected_kind, "{case:?}");
+        assert!(
+            backend
+                .manifest_refs
+                .iter()
+                .any(|item| item == case.expected_manifest
+                    || item == &format!("{}/{}", case.expected_root, case.expected_manifest)),
+            "backend manifest refs should include {} for {case:?}: {:?}",
+            case.expected_manifest,
+            backend.manifest_refs
+        );
+        assert_eq!(
+            backend.build_command.as_deref(),
+            Some(case.expected_build_command),
+            "{case:?}"
+        );
+        assert_eq!(
+            backend.start_command.as_deref(),
+            Some(case.expected_start_command),
+            "{case:?}"
+        );
+
+        let validate = deploy_validate(DeployToolInput {
+            project_root: fixture.root_str(),
+            app_path: None,
+            healthcheck: None,
+            provider_policy: None,
+        });
+        let validate_value = serde_json::to_value(validate).expect("validate json");
+        assert_eq!(
+            validate_value["details"]["assetIssues"],
+            json!([]),
+            "asset validation failed for {case:?}: {validate_value:#}"
+        );
+    }
+}
+
+#[test]
 fn deploy_prepare_applies_healthcheck_input_to_single_service_spec_and_compose() {
     let fixture = Fixture::new("deploy-healthcheck-input-single");
     fixture.write_runtime_delivery(json!({
@@ -2145,6 +2535,12 @@ fn deploy_repair_assets_next_exposes_refs_and_no_retry_argv() {
         .iter()
         .filter_map(Value::as_str)
         .collect::<std::collections::BTreeSet<_>>();
+    for expected in ["source-model.json", "topology.json", "facts.json"] {
+        assert!(
+            unique_refs.iter().any(|item| item.ends_with(expected)),
+            "deploy repair generated refs must expose generated sidecar {expected}: {value:#}"
+        );
+    }
     assert_eq!(
         generated_refs.len(),
         unique_refs.len(),
@@ -3218,6 +3614,214 @@ fn plugin_style_dual_service_runtime_delivery() -> Value {
             "optional": ["SPRING_PROFILES_ACTIVE"]
         }
     })
+}
+
+fn write_root_vite_fastapi_delivery(fixture: &Fixture) {
+    fixture.write_runtime_delivery(json!({
+        "status": "modified",
+        "runtimeKind": "web_frontend_plus_api_service",
+        "deploymentShape": "frontend-and-backend",
+        "build": {
+            "command": "frontend: npm run build; backend: uvicorn app.main:app --host 0.0.0.0 --port 8000"
+        },
+        "start": {
+            "command": "frontend: npm run dev; backend: uvicorn app.main:app --reload --port 8000",
+            "port": 8000
+        },
+        "httpProbes": {
+            "previewPath": "/",
+            "apiPaths": ["/api/tickets"]
+        }
+    }));
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","dev":"vite --host 0.0.0.0"},"dependencies":{"vite":"latest","vue":"latest"}}"#,
+    );
+    fixture.write_text("vite.config.js", "export default {}\n");
+    fixture.write_text("src/main.ts", "console.log('fixture')\n");
+    fixture.write_text(
+        "pyproject.toml",
+        r#"[project]
+name = "loom-fastapi-fixture"
+version = "0.1.0"
+dependencies = ["fastapi", "uvicorn"]
+"#,
+    );
+    fixture.write_text(
+        "app/main.py",
+        "from fastapi import FastAPI\napp = FastAPI()\n",
+    );
+}
+
+#[derive(Debug)]
+struct BackendSourceModelCase {
+    name: &'static str,
+    api_kind: &'static str,
+    api_entry: &'static str,
+    build_command: &'static str,
+    start_command: &'static str,
+    expected_root: &'static str,
+    expected_kind: RuntimeKind,
+    expected_manifest: &'static str,
+    expected_build_command: &'static str,
+    expected_start_command: &'static str,
+    files: Vec<(&'static str, &'static str)>,
+}
+
+fn backend_source_model_matrix_cases() -> Vec<BackendSourceModelCase> {
+    vec![
+        BackendSourceModelCase {
+            name: "java",
+            api_kind: "spring-boot",
+            api_entry: "server/pom.xml",
+            build_command: "mvn -f server/pom.xml package",
+            start_command: "java -jar target/app.jar",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Java,
+            expected_manifest: "pom.xml",
+            expected_build_command: "mvn -f pom.xml package",
+            expected_start_command: "java -jar target/app.jar",
+            files: vec![
+                (
+                    "server/pom.xml",
+                    r#"<project><modelVersion>4.0.0</modelVersion><artifactId>server</artifactId><dependencies><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency></dependencies></project>"#,
+                ),
+                (
+                    "server/src/main/java/com/acme/App.java",
+                    "package com.acme; public class App {}\n",
+                ),
+            ],
+        },
+        BackendSourceModelCase {
+            name: "python",
+            api_kind: "fastapi",
+            api_entry: "server/pyproject.toml",
+            build_command: "cd server && python -m compileall app",
+            start_command: "cd server && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Python,
+            expected_manifest: "pyproject.toml",
+            expected_build_command: "python -m compileall app",
+            expected_start_command: "python -m uvicorn app.main:app --host 0.0.0.0 --port 8000",
+            files: vec![
+                (
+                    "server/pyproject.toml",
+                    r#"[project]
+name = "server"
+version = "0.1.0"
+dependencies = ["fastapi", "uvicorn"]
+"#,
+                ),
+                (
+                    "server/app/main.py",
+                    "from fastapi import FastAPI\napp = FastAPI()\n",
+                ),
+            ],
+        },
+        BackendSourceModelCase {
+            name: "go",
+            api_kind: "go",
+            api_entry: "server/go.mod",
+            build_command: "cd server && go build -o /out/server .",
+            start_command: "/app/server",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Go,
+            expected_manifest: "go.mod",
+            expected_build_command: "go build -o /out/server .",
+            expected_start_command: "/app/server",
+            files: vec![
+                ("server/go.mod", "module example.com/server\n\ngo 1.23\n"),
+                ("server/main.go", "package main\nfunc main() {}\n"),
+            ],
+        },
+        BackendSourceModelCase {
+            name: "dotnet",
+            api_kind: "aspnet",
+            api_entry: "server/Server.csproj",
+            build_command: "dotnet publish server/Server.csproj -c Release -o /app/publish",
+            start_command: "dotnet Server.dll",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Dotnet,
+            expected_manifest: "*.csproj",
+            expected_build_command: "dotnet publish Server.csproj -c Release -o /app/publish",
+            expected_start_command: "dotnet Server.dll",
+            files: vec![(
+                "server/Server.csproj",
+                r#"<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>"#,
+            )],
+        },
+        BackendSourceModelCase {
+            name: "node",
+            api_kind: "express",
+            api_entry: "server/package.json",
+            build_command: "npm --prefix server run build",
+            start_command: "npm --prefix server run start",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Node,
+            expected_manifest: "package.json",
+            expected_build_command: "npm run build",
+            expected_start_command: "npm run start",
+            files: vec![
+                (
+                    "server/package.json",
+                    r#"{"scripts":{"build":"node build.js","start":"node index.js"},"dependencies":{"express":"latest"}}"#,
+                ),
+                (
+                    "server/index.js",
+                    "require('express')().listen(process.env.PORT || 8000)\n",
+                ),
+                ("server/build.js", "console.log('build')\n"),
+            ],
+        },
+        BackendSourceModelCase {
+            name: "php",
+            api_kind: "laravel",
+            api_entry: "server/composer.json",
+            build_command: "cd server && composer install --no-dev",
+            start_command: "cd server && php -S 0.0.0.0:8000 -t public",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Php,
+            expected_manifest: "composer.json",
+            expected_build_command: "composer install --no-dev",
+            expected_start_command: "php -S 0.0.0.0:8000 -t public",
+            files: vec![
+                (
+                    "server/composer.json",
+                    r#"{"require":{"php":"^8.3","laravel/framework":"^11.0"}}"#,
+                ),
+                ("server/public/index.php", "<?php echo 'ok';\n"),
+            ],
+        },
+        BackendSourceModelCase {
+            name: "ruby",
+            api_kind: "rails",
+            api_entry: "server/Gemfile",
+            build_command: "cd server && bundle install",
+            start_command: "cd server && bundle exec rails server -b 0.0.0.0 -p 8000",
+            expected_root: "server",
+            expected_kind: RuntimeKind::Ruby,
+            expected_manifest: "Gemfile",
+            expected_build_command: "bundle install",
+            expected_start_command: "bundle exec rails server -b 0.0.0.0 -p 8000",
+            files: vec![
+                (
+                    "server/Gemfile",
+                    "source 'https://rubygems.org'\ngem 'rails'\n",
+                ),
+                ("server/config.ru", "run ->(_env) { [200, {}, ['ok']] }\n"),
+            ],
+        },
+    ]
+}
+
+fn write_root_frontend_fixture(fixture: &Fixture) {
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build","dev":"vite --host 0.0.0.0"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("package-lock.json", "{}\n");
+    fixture.write_text("vite.config.js", "export default {}\n");
+    fixture.write_text("src/main.tsx", "console.log('frontend')\n");
 }
 
 fn assert_forbidden_cli_fields_absent(value: &Value) {
