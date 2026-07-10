@@ -594,6 +594,24 @@ fn build_repair_execution_request(
     attempt_count: u32,
 ) -> Value {
     let schema_shape = task_result_schema_shape(task);
+    let engineering_quality_requirements = task_plan
+        .engineering_quality_requirements
+        .iter()
+        .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let architecture_quality_requirements = task_plan
+        .architecture_quality_requirements
+        .iter()
+        .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let api_contract_requirements = task_plan
+        .api_contract_requirements
+        .iter()
+        .filter(|requirement| requirement.applies_to_task_ids.contains(&task.task_id))
+        .cloned()
+        .collect::<Vec<_>>();
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
     let result_template = task_result_template_with_code_quality(
         &task_plan.task_plan_id,
@@ -709,6 +727,27 @@ fn build_repair_execution_request(
             "executionRules.runtimeDeliveryExecutionRules",
         ]);
     }
+    if !task.engineering_quality_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.engineeringQualityRequirementRefs",
+            "sourceContext.engineeringQualityRequirements",
+            "executionRules.engineeringQualityExecutionRules",
+        ]);
+    }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.architectureQualityRequirementRefs",
+            "sourceContext.architectureQualityRequirements",
+            "executionRules.architectureQualityExecutionRules",
+        ]);
+    }
+    if !task.api_contract_requirement_refs.is_empty() {
+        repair_core_fields.extend([
+            "task.apiContractRequirementRefs",
+            "sourceContext.apiContractRequirements",
+            "executionRules.apiContractExecutionRules",
+        ]);
+    }
     if !task.code_quality_requirement_refs.is_empty() {
         repair_core_fields.extend([
             "task.codeQualityRequirementRefs",
@@ -771,6 +810,13 @@ fn build_repair_execution_request(
     }
     if !task.concept_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
+    }
+    if !task.architecture_quality_requirement_refs.is_empty() {
+        repair_result_fields
+            .push("outputContract.schemaShape.properties.architectureQualityEvidence");
+    }
+    if !task.api_contract_requirement_refs.is_empty() {
+        repair_result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
     }
     if !task.code_quality_requirement_refs.is_empty() {
         repair_result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
@@ -852,10 +898,33 @@ fn build_repair_execution_request(
             ]
         }
     });
+    let mut source_context = serde_json::Map::new();
+    if !engineering_quality_requirements.is_empty() {
+        source_context.insert(
+            "engineeringQualityRequirements".to_string(),
+            json!(engineering_quality_requirements),
+        );
+    }
+    if !architecture_quality_requirements.is_empty() {
+        source_context.insert(
+            "architectureQualityRequirements".to_string(),
+            json!(architecture_quality_requirements),
+        );
+    }
+    if !api_contract_requirements.is_empty() {
+        source_context.insert(
+            "apiContractRequirements".to_string(),
+            json!(api_contract_requirements),
+        );
+    }
     if !code_quality_requirements.is_empty() {
-        root_value["sourceContext"] = json!({
-            "codeQualityExecutionContext": code_quality_execution_context(&code_quality_requirements)
-        });
+        source_context.insert(
+            "codeQualityExecutionContext".to_string(),
+            code_quality_execution_context(&code_quality_requirements),
+        );
+    }
+    if !source_context.is_empty() {
+        root_value["sourceContext"] = Value::Object(source_context);
     }
     root_value
 }
@@ -994,6 +1063,7 @@ fn materialize_taskplan_repair_action(
         "scopeAndReferenceRules": field_value(&rule_fields, "generationRules.scopeAndReferenceRules")?,
         "writeBoundaryRules": field_value(&rule_fields, "generationRules.writeBoundaryRules")?,
         "verificationEvidenceRules": field_value(&rule_fields, "generationRules.verificationEvidenceRules")?,
+        "detailOwnershipRules": field_value(&rule_fields, "generationRules.detailOwnershipRules")?,
         "conceptGroundingRules": field_value(&rule_fields, "generationRules.conceptGroundingRules")?,
         "frontendExperienceRules": field_value(&rule_fields, "generationRules.frontendExperienceRules")?,
         "workflowClosureRules": field_value(&rule_fields, "generationRules.workflowClosureRules")?,
@@ -1214,6 +1284,7 @@ fn materialize_taskplan_repair_action(
                         "generationRules.scopeAndReferenceRules",
                         "generationRules.writeBoundaryRules",
                         "generationRules.verificationEvidenceRules",
+                        "generationRules.detailOwnershipRules",
                         "generationRules.conceptGroundingRules",
                         "generationRules.frontendExperienceRules",
                         "generationRules.workflowClosureRules",

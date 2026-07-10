@@ -230,17 +230,34 @@ where
         "codeQualityRequirementRefs": array_field(&fields, "task.codeQualityRequirementRefs")
     }))
     .map_err(state::store::StateError::Json)?;
-    if repair_submit {
-        if let Some(stored_task) =
-            private_request_value(&input.project_root, &authorized.request_id, "task")?
-        {
-            task = serde_json::from_value(stored_task).map_err(state::store::StateError::Json)?;
-        }
+    if let Some(stored_task) =
+        private_request_value(&input.project_root, &authorized.request_id, "task")?
+    {
+        task = serde_json::from_value(normalize_task_definition_value(stored_task))
+            .map_err(state::store::StateError::Json)?;
     }
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
-    let code_quality_requirements =
+    let mut code_quality_requirements =
         code_quality_requirements_field(&fields, "sourceContext.codeQualityExecutionContext")?;
+    if code_quality_requirements.is_empty() {
+        if let Some(source_context) =
+            private_request_value(&input.project_root, &authorized.request_id, "sourceContext")?
+        {
+            if let Some(value) = source_context
+                .get("codeQualityExecutionContext")
+                .filter(|value| !value.is_null())
+            {
+                code_quality_requirements = serde_json::from_value(value.clone())
+                    .map_err(state::store::StateError::Json)?;
+            }
+        }
+    }
+    hydrate_task_refs_from_required_result_evidence(
+        &mut task,
+        &raw_result,
+        &required_top_level_fields,
+    );
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
@@ -832,6 +849,108 @@ fn remove_non_applicable_evidence_fields(
     }
     if !code_quality_evidence_applies(task) {
         object.remove("codeQualityEvidence");
+    }
+}
+
+fn hydrate_task_refs_from_required_result_evidence(
+    task: &mut TaskDefinition,
+    raw_result: &Value,
+    required_top_level_fields: &[String],
+) {
+    if required_top_level_fields
+        .iter()
+        .any(|field| field == "architectureQualityEvidence")
+        && task.architecture_quality_requirement_refs.is_empty()
+    {
+        task.architecture_quality_requirement_refs =
+            evidence_requirement_ids(raw_result, "architectureQualityEvidence");
+    }
+    if required_top_level_fields
+        .iter()
+        .any(|field| field == "apiContractEvidence")
+        && task.api_contract_requirement_refs.is_empty()
+    {
+        task.api_contract_requirement_refs =
+            evidence_requirement_ids(raw_result, "apiContractEvidence");
+    }
+    if required_top_level_fields
+        .iter()
+        .any(|field| field == "codeQualityEvidence")
+        && task.code_quality_requirement_refs.is_empty()
+    {
+        task.code_quality_requirement_refs =
+            evidence_requirement_ids(raw_result, "codeQualityEvidence");
+    }
+}
+
+fn evidence_requirement_ids(raw_result: &Value, field: &str) -> Vec<String> {
+    raw_result
+        .get(field)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("requirementId").and_then(Value::as_str))
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn normalize_task_definition_value(mut value: Value) -> Value {
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    normalize_nullable_array_fields(
+        object,
+        &[
+            "implementationActions",
+            "dependsOn",
+            "scopeRefs",
+            "acceptanceRefs",
+            "requirementDetailRefs",
+            "verificationIntents",
+            "conceptRefs",
+            "conceptResponsibilities",
+            "conceptVerificationIntents",
+            "engineeringQualityRequirementRefs",
+            "architectureQualityRequirementRefs",
+            "apiContractRequirementRefs",
+            "codeQualityRequirementRefs",
+        ],
+    );
+    if let Some(write_boundary) = object
+        .get_mut("writeBoundary")
+        .and_then(Value::as_object_mut)
+    {
+        normalize_nullable_array_fields(write_boundary, &["forbiddenPaths"]);
+        if let Some(artifact_refs) = write_boundary
+            .get_mut("artifactRefs")
+            .and_then(Value::as_object_mut)
+        {
+            normalize_nullable_array_fields(
+                artifact_refs,
+                &[
+                    "modules",
+                    "entities",
+                    "interfaces",
+                    "userFlows",
+                    "stateMachines",
+                    "decisions",
+                    "nfrs",
+                    "risks",
+                ],
+            );
+        }
+    }
+    value
+}
+
+fn normalize_nullable_array_fields(object: &mut serde_json::Map<String, Value>, fields: &[&str]) {
+    for field in fields {
+        if object.get(*field).is_none_or(Value::is_null) {
+            object.insert((*field).to_string(), json!([]));
+        }
     }
 }
 
@@ -1487,11 +1606,11 @@ fn validate_architecture_quality_evidence(
             ));
             continue;
         };
-        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+        if evidence.status != "satisfied" {
             issues.push(issue(
                 "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
                 "architectureQualityEvidence[].status",
-                "Completed TaskResult architectureQualityEvidence must be satisfied.",
+                "Completed or completed_with_notes TaskResult architectureQualityEvidence must be satisfied.",
             ));
         }
     }
@@ -1597,18 +1716,18 @@ fn validate_api_contract_evidence(
             ));
             continue;
         };
-        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+        if evidence.status != "satisfied" {
             issues.push(issue(
                 "TASK_RESULT_API_CONTRACT_INVALID",
                 "apiContractEvidence[].status",
-                "Completed TaskResult apiContractEvidence must be satisfied.",
+                "Completed or completed_with_notes TaskResult apiContractEvidence must be satisfied.",
             ));
         }
-        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+        if !evidence.known_gaps.is_empty() {
             issues.push(issue(
                 "TASK_RESULT_API_CONTRACT_INVALID",
                 "apiContractEvidence[].knownGaps",
-                "Completed TaskResult apiContractEvidence cannot contain known gaps.",
+                "Completed or completed_with_notes TaskResult apiContractEvidence cannot contain known gaps.",
             ));
         }
     }
@@ -1722,18 +1841,18 @@ fn validate_code_quality_evidence(
             ));
             continue;
         };
-        if matches!(result.status, TaskResultStatus::Completed) && evidence.status != "satisfied" {
+        if evidence.status != "satisfied" {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].status",
-                "Completed TaskResult codeQualityEvidence must be satisfied.",
+                "Completed or completed_with_notes TaskResult codeQualityEvidence must be satisfied.",
             ));
         }
-        if matches!(result.status, TaskResultStatus::Completed) && !evidence.known_gaps.is_empty() {
+        if !evidence.known_gaps.is_empty() {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
                 "codeQualityEvidence[].knownGaps",
-                "Completed TaskResult codeQualityEvidence cannot contain known gaps.",
+                "Completed or completed_with_notes TaskResult codeQualityEvidence cannot contain known gaps.",
             ));
         }
     }
@@ -2040,22 +2159,34 @@ fn validate_frontend_quality_self_check(
             "Frontend quality validation requires the task-scoped uiSurfaceDecisionContract in uiProductionBrief.",
         ));
     }
-    if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
-        let violations = self_check
-            .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
-            .and_then(Value::as_array)
-            .map(|items| items.len())
-            .unwrap_or(0);
-        let gaps = self_check
-            .get("knownGaps")
-            .and_then(Value::as_array)
-            .map(|items| items.len())
-            .unwrap_or(0);
+    let completed = matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    );
+    let self_check_status = self_check.get("status").and_then(Value::as_str);
+    let violations = self_check
+        .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let gaps = self_check
+        .get("knownGaps")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0);
+    if completed && self_check_status != Some("satisfied") {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.status",
+            "Completed or completed_with_notes frontend quality tasks must submit satisfied frontendQualitySelfCheck; use blocked or failed when quality evidence cannot be completed.",
+        ));
+    }
+    if self_check_status == Some("satisfied") || completed {
         if violations > 0 || gaps > 0 {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
                 "frontendQualitySelfCheck.status",
-                "Satisfied frontendQualitySelfCheck cannot contain forbidden content violations or known gaps.",
+                "Completed or satisfied frontendQualitySelfCheck cannot contain forbidden content violations or known gaps.",
             ));
         }
     }

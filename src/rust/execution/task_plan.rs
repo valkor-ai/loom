@@ -4,8 +4,9 @@ use std::{
 };
 
 use contracts::{
-    build_code_quality_seed, code_quality_enum_refs, code_reference_load_plan,
-    code_reference_selection_for_task, package_naming_policy_for_reference_groups,
+    architecture::ArchitectureDetailCoverageEntry, build_code_quality_seed, code_quality_enum_refs,
+    code_reference_load_plan, code_reference_selection_for_task, execution::TaskArtifactRefs,
+    package_naming_policy_for_reference_groups, planning::RequirementDetailItem,
     ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
     ArchitectureArtifactContract, ArchitectureQualityRequirement, CodeQualityRequirement,
     CoverageStatus, EngineeringQualityRequirement, ImplementationAction, TaskDefinition,
@@ -467,6 +468,7 @@ fn taskplan_read_groups(
                 "generationRules.scopeAndReferenceRules",
                 "generationRules.writeBoundaryRules",
                 "generationRules.verificationEvidenceRules",
+                "generationRules.detailOwnershipRules",
                 "generationRules.conceptGroundingRules",
                 "generationRules.frontendExperienceRules",
                 "generationRules.workflowClosureRules",
@@ -1469,6 +1471,7 @@ fn normalize_taskplan_candidate_relationships(
 ) {
     normalize_frontend_experience_requirements(tasks, aac);
     normalize_verification_detail_parent_refs(tasks);
+    normalize_missing_requirement_detail_task_refs(tasks, pgc, aac);
     normalize_task_verification_detail_refs(tasks, pgc, aac);
     normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
 }
@@ -1646,6 +1649,186 @@ fn normalize_verification_detail_parent_refs(tasks: &mut [TaskDefinition]) {
             push_unique(&mut task.requirement_detail_refs, detail_ref);
         }
     }
+}
+
+fn normalize_missing_requirement_detail_task_refs(
+    tasks: &mut [TaskDefinition],
+    pgc: &contracts::PlanningGenerationContract,
+    aac: &ArchitectureArtifactContract,
+) {
+    let coverage_by_detail = aac
+        .detail_coverage
+        .iter()
+        .filter(|entry| matches!(entry.coverage_status, CoverageStatus::Covered))
+        .map(|entry| (entry.detail_id.as_str(), entry))
+        .collect::<BTreeMap<_, _>>();
+    if coverage_by_detail.is_empty() {
+        return;
+    }
+    let mut assigned_detail_ids = tasks
+        .iter()
+        .flat_map(|task| task.requirement_detail_refs.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    for detail in pgc
+        .requirement_details
+        .items
+        .iter()
+        .filter(|detail| detail.required_for_current_phase)
+    {
+        if assigned_detail_ids.contains(&detail.detail_id) {
+            continue;
+        }
+        let Some(coverage) = coverage_by_detail.get(detail.detail_id.as_str()) else {
+            continue;
+        };
+        if let Some(task_index) = infer_requirement_detail_owner_task(tasks, detail, coverage) {
+            push_unique(
+                &mut tasks[task_index].requirement_detail_refs,
+                detail.detail_id.clone(),
+            );
+            assigned_detail_ids.insert(detail.detail_id.clone());
+        }
+    }
+}
+
+fn infer_requirement_detail_owner_task(
+    tasks: &[TaskDefinition],
+    detail: &RequirementDetailItem,
+    coverage: &ArchitectureDetailCoverageEntry,
+) -> Option<usize> {
+    let scored = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| task_can_own_requirement_detail(task))
+        .filter_map(|(index, task)| {
+            let score = requirement_detail_owner_score(task, detail, coverage);
+            (score > 0).then_some((index, score))
+        })
+        .collect::<Vec<_>>();
+    let max_score = scored.iter().map(|(_, score)| *score).max()?;
+    let winners = scored
+        .into_iter()
+        .filter(|(_, score)| *score == max_score)
+        .collect::<Vec<_>>();
+    if winners.len() == 1 {
+        Some(winners[0].0)
+    } else {
+        None
+    }
+}
+
+fn task_can_own_requirement_detail(task: &TaskDefinition) -> bool {
+    !matches!(
+        task.task_kind,
+        TaskKind::VerificationIncrement | TaskKind::RuntimeDeliveryClosure
+    )
+}
+
+fn requirement_detail_owner_score(
+    task: &TaskDefinition,
+    detail: &RequirementDetailItem,
+    coverage: &ArchitectureDetailCoverageEntry,
+) -> u32 {
+    let artifact_score = artifact_ref_owner_score(&task.write_boundary.artifact_refs, coverage);
+    let acceptance_score =
+        intersection_count(&task.acceptance_refs, &detail.acceptance_refs) as u32 * 2;
+    let concept_score = intersection_count(&task.concept_refs, &detail.concept_refs) as u32 * 3;
+    if artifact_score == 0 && acceptance_score == 0 && concept_score == 0 {
+        return 0;
+    }
+    artifact_score
+        + acceptance_score
+        + concept_score
+        + semantic_detail_owner_score(task, detail, coverage)
+}
+
+fn artifact_ref_owner_score(
+    task_refs: &TaskArtifactRefs,
+    coverage: &ArchitectureDetailCoverageEntry,
+) -> u32 {
+    let refs = &coverage.artifact_refs;
+    let mut score = 0;
+    score += intersection_count(&task_refs.interfaces, &refs.interfaces) as u32 * 7;
+    score += intersection_count(&task_refs.user_flows, &refs.user_flows) as u32 * 6;
+    score += intersection_count(&task_refs.state_machines, &refs.state_machines) as u32 * 6;
+    score += intersection_count(&task_refs.state_machines, &refs.constraints) as u32 * 5;
+    score += intersection_count(&task_refs.entities, &refs.entities) as u32 * 5;
+    score += intersection_count(&task_refs.modules, &refs.modules) as u32 * 3;
+    score
+}
+
+fn semantic_detail_owner_score(
+    task: &TaskDefinition,
+    detail: &RequirementDetailItem,
+    coverage: &ArchitectureDetailCoverageEntry,
+) -> u32 {
+    let mut score = 0;
+    if (detail.impact_tags.iter().any(|tag| tag == "data_model")
+        || detail.lifecycle_stage == "create")
+        && task_directly_owns_persistence_mapping(task)
+    {
+        score += 4;
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "business_flow")
+        && task_owns_business_flow_behavior(task)
+    {
+        score += 4;
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "frontend") && task_is_frontend_task(task) {
+        score += 4;
+    }
+    if detail.impact_tags.iter().any(|tag| tag == "interface") && task_owns_interface_behavior(task)
+    {
+        score += 4;
+    }
+    if !coverage.artifact_refs.state_machines.is_empty()
+        && task
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::CreateOrUpdateStateMachine))
+    {
+        score += 3;
+    }
+    if !coverage.artifact_refs.user_flows.is_empty() && task_owns_business_flow_behavior(task) {
+        score += 3;
+    }
+    score
+}
+
+fn task_owns_business_flow_behavior(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::FeatureIncrement | TaskKind::InterfaceIncrement | TaskKind::UiFlowIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateUiFlow
+                | ImplementationAction::WireReferenceInApiOrUi
+        )
+    })
+}
+
+fn task_owns_interface_behavior(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::FeatureIncrement | TaskKind::InterfaceIncrement | TaskKind::IntegrationIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::WireReferenceInApiOrUi
+        )
+    })
+}
+
+fn intersection_count(left: &[String], right: &[String]) -> usize {
+    if left.is_empty() || right.is_empty() {
+        return 0;
+    }
+    let right = right.iter().collect::<BTreeSet<_>>();
+    left.iter().filter(|item| right.contains(item)).count()
 }
 
 fn normalize_task_verification_detail_refs(
@@ -3222,6 +3405,13 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
             "Avoid broad snapshots or weak no-op checks as the primary verification evidence."
         ],
+        "detailOwnershipRules": {
+            "source": "contextProjection.requirementDetailTransfer.requirementDetailAssignment.items",
+            "assignmentRule": "For every covered current-phase detail row, choose the task that owns the matching artifactRefHints through task.writeBoundary.artifactRefs. Use kind, impactTags, and lifecycleStage to break ties between implementation tasks.",
+            "ownerTaskBoundary": "Assign business requirement details to implementation owner tasks, not broad verification, runtime closure, or handoff tasks.",
+            "verificationRule": "After assigning a detail to a task, include the same detailId in that task's verificationIntents[].requirementDetailRefs.",
+            "acceptNormalization": "loom.taskPlanAcceptFile deterministically fills a missing detail owner only when exactly one owner task can be inferred; ambiguous ownership remains repairable."
+        },
         "conceptGroundingRules": {
             "phaseConceptGroundingRef": "sourceRefs.phaseConceptGroundingRef",
             "rule": "Bind high-risk business concepts when the current task owns their rule, state, field, or operation meaning."

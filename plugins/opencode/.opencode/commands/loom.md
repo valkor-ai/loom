@@ -17,11 +17,11 @@ Call the matching Loom MCP tool for the current project directory before doing a
 - `plan <request>` -> `loom.plan` with `<request>`
 - Any other request text -> `loom.plan` with the full request text
 
-After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; do not report progress or stop while `stopAllowed=false`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking; repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
+After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; do not report progress, mark a local plan complete, send a final answer, or stop while `stopAllowed=false`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking; repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
 
 ## Result Discipline
 
-Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
+Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
 
 For `active_operation`, call only the observation tools named by the result. For `repairable_error`, repair only the returned file or target ids, then call the returned resubmit tool.
 
@@ -37,7 +37,7 @@ Write artifacts only to returned `writeTargets`. Submit only through the returne
 
 For `GenerateKnowledgeSemanticsNext`, read chunk bodies only through `loom.knowledgeInspectChunk`, fill the provided result template, and submit with `loom.knowledgeSemanticSubmitFile`. Continue pack by pack until the result is published, blocked, or user-gated.
 
-For `ExecuteTaskNext`, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
+For `ExecuteTaskNext`, inspect `next.requestRef`, read the declared groups, implement only the returned task request, respect edit boundaries, write the TaskResult, and submit it before reporting progress as complete.
 
 For `RunLoomToolNext`, inspect the requestRef, read only the returned readGroups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress.
 
@@ -55,7 +55,7 @@ Protocol:
 - In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
-- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to `../references/loom/`.
+- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. In OpenCode, resolve `path` as `../references/loom/<path>` from this command/plugin location, not relative to the project workspace.
 - Load exactly the listed paths for the current action. Do not derive paths from group names, scan reference directories, or load external language/API/architecture/UI skills.
 - Treat token template paths as merge baselines for project files, not as text to copy into Loom artifacts.
 

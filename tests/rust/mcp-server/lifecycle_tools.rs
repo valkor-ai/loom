@@ -51,6 +51,8 @@ fn status_requires_init_and_then_returns_structured_summary() {
     let after_value = structured(after);
     assert_eq!(after_value["state"], "done");
     assert_eq!(after_value["details"]["initialized"], true);
+    assert_eq!(after_value["details"]["workflowState"], "idle");
+    assert_eq!(after_value["details"]["hasActiveWorkflow"], false);
     assert_eq!(after_value["details"]["activeDeliveryId"], Value::Null);
 }
 

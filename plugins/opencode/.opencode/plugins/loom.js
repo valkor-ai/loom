@@ -103,7 +103,7 @@ export const LoomPlugin = async ({ client, directory }) => {
         query: { directory: pending.projectRoot || directory },
         body: {
           agent: "build",
-          system: "Continue the active Loom MCP workflow. Do not summarize or ask whether to continue while the latest result is auto-runnable or active.",
+          system: "Continue the active Loom MCP workflow. Do not summarize, mark a local plan complete, send a final answer, or ask whether to continue while the latest result is auto-runnable or active.",
           parts: [
             {
               type: "text",
@@ -185,6 +185,6 @@ function idlePrompt(pending) {
     "The latest Loom MCP result is auto_runnable.",
     `Execute next.kind=${pending.nextKind || "unknown"} now.`,
     pending.requestRef ? `Use requestRef=${pending.requestRef}.` : null,
-    "Read declared request groups through Loom MCP read tools, write only returned targets, and submit through the returned MCP submit tool.",
+    "Read declared request groups through Loom MCP read tools, write only returned targets, and submit through the returned MCP submit tool before reporting completion.",
   ].filter(Boolean).join(" ");
 }

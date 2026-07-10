@@ -142,6 +142,10 @@ fn execute_task_auto_runnable_instruction_forbids_progress_only_stop() {
     assert!(instruction.contains("write resultFile"));
     assert!(instruction.contains("submit with submitTool"));
     assert!(instruction.contains("Do not stop at a progress recap"));
+    assert!(instruction.contains("Do not mark the workflow complete"));
+    assert!(instruction.contains("send a final answer"));
+    assert!(instruction.contains("ask the user whether to continue"));
+    assert!(instruction.contains("TaskResult submit succeeds"));
     assert_eq!(value["next"]["kind"], "execute_task");
 }
 

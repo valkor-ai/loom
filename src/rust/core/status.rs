@@ -105,6 +105,9 @@ pub fn status_details(
 ) -> Value {
     let active_phase_id = active_delivery.map(|delivery| delivery.active_phase_id.clone());
     let delivery_status = active_delivery.map(|delivery| delivery.status.clone());
+    let workflow_state = active_delivery
+        .map(|delivery| json!(delivery.status.clone()))
+        .unwrap_or_else(|| json!("idle"));
     let next_action = active_delivery
         .and_then(|delivery| current_phase(delivery))
         .and_then(|phase| phase.next_action.as_ref())
@@ -112,6 +115,8 @@ pub fn status_details(
     let active_operation = active_operation.map(operation_summary);
     json!({
         "initialized": true,
+        "workflowState": workflow_state,
+        "hasActiveWorkflow": active_delivery.is_some(),
         "activeDeliveryId": status.active_delivery_id,
         "lastCompletedDeliveryId": status.last_completed_delivery_id,
         "activePhaseId": active_phase_id,

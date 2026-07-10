@@ -1162,6 +1162,7 @@ where
         result.next_action.target_phase_id = Some(handoff.phase_id);
         result.next_action.reason = handoff.reason;
     }
+    normalize_review_signal_targets(&mut result, &fields);
     let issues = validate_review_result(&result, &authorized.request_id, &fields);
     if !issues.is_empty() {
         return repairable_or_fallback_manual_review(
@@ -1233,6 +1234,13 @@ fn normalize_review_result_machine_fields(mut raw: Value, request_id: &str) -> V
 }
 
 fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>) {
+    let next_action_type = object
+        .get("nextAction")
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let Some(raw_items) = object
         .get("pendingActions")
         .and_then(Value::as_array)
@@ -1241,6 +1249,7 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
         object.insert("pendingActions".to_string(), json!([]));
         return;
     };
+    let mut duplicate_finding_refs = BTreeSet::new();
     let actions = raw_items
         .into_iter()
         .filter_map(|item| {
@@ -1251,6 +1260,11 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())?
                 .to_string();
+            if next_action_type.as_deref() == Some(action_type.as_str()) {
+                duplicate_finding_refs
+                    .extend(value_string_array(&Value::Object(action), "findingRefs"));
+                return None;
+            }
             action.insert("type".to_string(), json!(action_type));
             if !action.get("findingRefs").is_some_and(Value::is_array) {
                 action.insert("findingRefs".to_string(), json!([]));
@@ -1269,6 +1283,42 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
         })
         .collect::<Vec<_>>();
     object.insert("pendingActions".to_string(), Value::Array(actions));
+    if !duplicate_finding_refs.is_empty() {
+        let Some(next_action) = object.get_mut("nextAction").and_then(Value::as_object_mut) else {
+            return;
+        };
+        let mut refs = next_action
+            .get("findingRefs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        refs.extend(duplicate_finding_refs);
+        next_action.insert(
+            "findingRefs".to_string(),
+            Value::Array(refs.into_iter().map(Value::String).collect()),
+        );
+    }
+}
+
+fn normalize_review_signal_targets(
+    result: &mut ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    if result.next_action.r#type != "execution_repair" {
+        return;
+    }
+    let signals = array_field(fields, "outputContract.reviewSignals.items");
+    let mut target_task_ids = result.next_action.target_task_ids.clone();
+    for signal in signals.as_array().into_iter().flatten() {
+        if signal.get("recommendedNextAction").and_then(Value::as_str) != Some("execution_repair") {
+            continue;
+        }
+        target_task_ids.extend(value_string_array(signal, "taskRefs"));
+    }
+    result.next_action.target_task_ids = dedupe_non_empty(target_task_ids);
 }
 
 fn is_iso_datetime_string(value: &str) -> bool {
@@ -1752,6 +1802,7 @@ fn validate_review_signals(
             "ReviewResult cannot approve when outputContract.reviewSignals contain unsatisfied requirement detail, frontend workflow closure, frontend UI quality, architecture quality, or API contract.",
         ));
     }
+    validate_execution_repair_signal_targets(result, &signals, issues);
     if missing_workflow_task_assignment || missing_architecture_quality_task_assignment {
         let has_higher_priority_blocker = result.findings.iter().any(|finding| {
             is_blocking_finding(finding)
@@ -1779,6 +1830,42 @@ fn validate_review_signals(
                 "Missing workflow closure or architecture quality task assignment requires a blocking taskplan_repair finding.",
             ));
         }
+    }
+}
+
+fn validate_execution_repair_signal_targets(
+    result: &ReviewResult,
+    signals: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if result.next_action.r#type != "execution_repair" {
+        return;
+    }
+    let expected_task_ids = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|signal| {
+            signal.get("recommendedNextAction").and_then(Value::as_str) == Some("execution_repair")
+        })
+        .flat_map(|signal| value_string_array(signal, "taskRefs"))
+        .collect::<BTreeSet<_>>();
+    if expected_task_ids.is_empty() {
+        return;
+    }
+    let routed_task_ids = review_execution_repair_target_task_ids(result)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let missing_task_ids = expected_task_ids
+        .difference(&routed_task_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_task_ids.is_empty() {
+        issues.push(issue(
+            "REVIEW_RESULT_STATUS_INCONSISTENT",
+            "nextAction.targetTaskIds",
+            "ReviewResult execution_repair must target every task referenced by outputContract.reviewSignals execution_repair items.",
+        ));
     }
 }
 

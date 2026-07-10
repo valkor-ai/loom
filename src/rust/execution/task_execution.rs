@@ -603,6 +603,7 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
     if !task.code_quality_requirement_refs.is_empty() {
         rules.push("For referenced codeQualityExecutionContext entries, include codeQualityEvidence with the exact requirementId values assigned to this task.".to_string());
         rules.push("codeQualityEvidence.referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan; verificationIds must reference task.verificationIntents and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
+        rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
     }
     json!(rules)
 }
@@ -670,12 +671,19 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
         "appliesToRequirementRefs": task.code_quality_requirement_refs,
         "requirementSource": "sourceContext.codeQualityExecutionContext",
         "scopeRule": "Apply only listed code quality requirements whose appliesToTaskIds include this task; do not create new language or framework requirements inside TaskResult.",
-        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityExecutionContext[].referenceLoadPlan. Do not derive paths from referenceGroups, scan the tech/code or tech/backend trees, or load external language/framework skills.",
+        "referenceLoadRule": "Load only files listed in sourceContext.codeQualityExecutionContext[].referenceLoadPlan. These paths are relative to the installed Loom skill references root, not the project workspace. Do not derive paths from referenceGroups, scan the tech/code or tech/backend trees, or load external language/framework skills.",
+        "referencePathResolution": {
+            "pathMeaning": "Loom installed reference path",
+            "projectWorkspacePath": false,
+            "codexAndClaudeHint": "Resolve as references/<path> next to the active Loom SKILL.md.",
+            "opencodeHint": "Resolve as ../references/loom/<path> from the active OpenCode loom command/plugin files."
+        },
         "implementationRules": [
             "Before editing, compare selected language/framework references with existing repository patterns and prefer the existing project convention when both are valid.",
             "Keep API, UI, architecture, runtime, and persistence obligations in their dedicated contracts; use code quality requirements for language/framework implementation discipline only.",
             "When a code quality requirement contains packageNamingPolicy, production source package declarations must follow that policy; placeholder package roots are not acceptable deliverable code.",
-            "When a selected language or framework reference is not applicable to the changed file, record the reason in codeQualityEvidence.knownGaps or summary instead of inventing work."
+            "When a selected language or framework reference is not applicable to a changed file but the requirement is still satisfied, explain the non-applicability in the summary without adding knownGaps.",
+            "If a selected Loom reference cannot be loaded from the installed reference root, do not mark codeQualityEvidence satisfied; report the unresolved reference as a blocking contract problem instead of treating the project workspace as missing source files."
         ],
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
