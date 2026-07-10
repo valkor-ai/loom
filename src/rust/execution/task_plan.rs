@@ -6,13 +6,14 @@ use std::{
 use contracts::{
     build_code_quality_seed, code_quality_enum_refs, code_reference_load_plan,
     code_reference_selection_for_task, package_naming_policy_for_reference_groups,
-    ui_quality_enum_refs, AcceptancePriority, ApiContractRequirement, ArchitectureArtifactContract,
-    ArchitectureQualityRequirement, CodeQualityRequirement, CoverageStatus,
-    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskGroupRunState,
-    TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff,
-    TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction,
-    TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary, TaskPlanScopeSnapshot,
-    TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus, VerificationEvidence,
+    ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
+    ArchitectureArtifactContract, ArchitectureQualityRequirement, CodeQualityRequirement,
+    CoverageStatus, EngineeringQualityRequirement, ImplementationAction, TaskDefinition,
+    TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
+    TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary,
+    TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus,
+    VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -1483,7 +1484,7 @@ fn normalize_frontend_experience_requirements(
     if template.is_null() {
         return;
     }
-    let expected_ui_quality = frontend_ui_quality_contract(aac).cloned();
+    let expected_surface_contract = frontend_ui_surface_decision_contract(aac).cloned();
     for task in tasks {
         if !task_is_frontend_task(task) {
             continue;
@@ -1507,14 +1508,6 @@ fn normalize_frontend_experience_requirements(
         requirement["frontendExperienceRef"] =
             json!("sourceRefs.architectureArtifactContractRef#/frontendExperience");
         requirement["mustSatisfy"] = json!(true);
-        if let Some(ui_quality_contract) = expected_ui_quality.as_ref() {
-            requirement["uiQualityContractRef"] = json!(
-                "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
-            );
-            requirement["uiQualityContract"] = ui_quality_contract.clone();
-            requirement["uiTaskQualityGates"] =
-                ui_task_quality_gates_for_requirement(requirement, ui_quality_contract);
-        }
         if requirement.get("uiTaskScope").is_none() {
             requirement["uiTaskScope"] = template
                 .get("uiTaskScope")
@@ -1522,9 +1515,16 @@ fn normalize_frontend_experience_requirements(
                 .unwrap_or_else(|| json!({}));
         }
         normalize_ui_task_scope(requirement, &template, &task_kind, &implementation_actions);
-        if let Some(ui_quality_contract) = expected_ui_quality.as_ref() {
-            requirement["uiTaskQualityGates"] =
-                ui_task_quality_gates_for_requirement(requirement, ui_quality_contract);
+        if let Some(surface_contract) = expected_surface_contract.as_ref() {
+            requirement["uiSurfaceDecisionContractRef"] = json!(
+                "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
+            );
+            normalize_ui_surface_ownership(requirement, surface_contract);
+            if let Some(object) = requirement.as_object_mut() {
+                object.remove("uiQualityContractRef");
+                object.remove("uiQualityContract");
+                object.remove("uiTaskQualityGates");
+            }
         }
     }
 }
@@ -1987,7 +1987,7 @@ fn validate_frontend_quality_requirements(
     if !frontend_experience_required(aac) {
         return Vec::new();
     }
-    let expected_ui_quality = frontend_ui_quality_contract(aac);
+    let expected_surface_contract = frontend_ui_surface_decision_contract(aac);
     let mut issues = Vec::new();
     for task in tasks {
         let owns_frontend = matches!(
@@ -2018,31 +2018,23 @@ fn validate_frontend_quality_requirements(
                 Some(&task.task_id),
             ));
         }
-        if expected_ui_quality.is_some()
+        if expected_surface_contract.is_some()
             && requirement
-                .get("uiQualityContractRef")
+                .get("uiSurfaceDecisionContractRef")
                 .and_then(Value::as_str)
                 != Some(
-                    "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract",
+                    "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
                 )
         {
             issues.push(issue(
-                "FRONTEND_UI_QUALITY_REF_REQUIRED",
-                "tasks[].frontendExperienceRequirement.uiQualityContractRef",
-                "frontendExperienceRequirement must carry the AAC uiQualityContract ref.",
+                "FRONTEND_UI_SURFACE_DECISION_REF_REQUIRED",
+                "tasks[].frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+                "frontendExperienceRequirement must carry the AAC uiSurfaceDecisionContract ref.",
                 Some(&task.task_id),
             ));
         }
-        if let Some(expected) = expected_ui_quality {
-            if requirement.get("uiQualityContract") != Some(expected) {
-                issues.push(issue(
-                    "FRONTEND_UI_QUALITY_CONTRACT_REQUIRED",
-                    "tasks[].frontendExperienceRequirement.uiQualityContract",
-                    "frontendExperienceRequirement must copy the AAC uiQualityContract exactly instead of redefining UI quality.",
-                    Some(&task.task_id),
-                ));
-            }
-            validate_ui_task_quality_gates(task, requirement, expected, &mut issues);
+        if let Some(surface_contract) = expected_surface_contract {
+            validate_ui_surface_ownership(task, requirement, surface_contract, &mut issues);
         }
         validate_ui_ownership_dimensions(task, requirement, &mut issues);
     }
@@ -2732,10 +2724,10 @@ fn frontend_experience_required(aac: &ArchitectureArtifactContract) -> bool {
         == Some(true)
 }
 
-fn frontend_ui_quality_contract(aac: &ArchitectureArtifactContract) -> Option<&Value> {
+fn frontend_ui_surface_decision_contract(aac: &ArchitectureArtifactContract) -> Option<&Value> {
     aac.frontend_experience
         .as_ref()
-        .and_then(|frontend| frontend.get("uiQualityContract"))
+        .and_then(|frontend| frontend.get("uiSurfaceDecisionContract"))
 }
 
 fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
@@ -2771,166 +2763,166 @@ fn frontend_experience_requirement_template(aac: &ArchitectureArtifactContract) 
             "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceRegistry"
         );
     }
-    if let Some(ui_quality_contract) = frontend.get("uiQualityContract") {
-        requirement["uiQualityContractRef"] = json!(
-            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiQualityContract"
+    if let Some(surface_contract) = frontend.get("uiSurfaceDecisionContract") {
+        requirement["uiSurfaceDecisionContractRef"] = json!(
+            "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract"
         );
-        requirement["uiQualityContract"] = ui_quality_contract.clone();
-        requirement["uiTaskQualityGates"] =
-            ui_task_quality_gates_for_requirement(&requirement, ui_quality_contract);
+        requirement["uiSurfaceOwnership"] = ui_surface_ownership_template(surface_contract);
     }
     requirement
 }
 
-fn ui_task_quality_gates_for_requirement(
-    requirement: &Value,
-    ui_quality_contract: &Value,
-) -> Value {
-    let surface_roles = requirement
-        .pointer("/uiTaskScope/surfacesInScope")
-        .and_then(Value::as_array)
-        .map(|surfaces| {
-            surfaces
-                .iter()
-                .filter_map(|surface| {
-                    surface
-                        .get("surfaceRole")
-                        .or_else(|| surface.get("role"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let surface_ids_by_role = requirement
-        .pointer("/uiTaskScope/surfacesInScope")
-        .and_then(Value::as_array)
-        .map(|surfaces| {
-            let mut by_role = BTreeMap::<String, Vec<String>>::new();
-            for surface in surfaces {
-                let Some(surface_id) = surface.get("surfaceId").and_then(Value::as_str) else {
-                    continue;
-                };
-                let role = surface
-                    .get("surfaceRole")
-                    .or_else(|| surface.get("role"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("page");
-                by_role
-                    .entry(role.to_string())
-                    .or_default()
-                    .push(surface_id.to_string());
-            }
-            by_role
-        })
-        .unwrap_or_default();
-    let gates = ui_quality_contract
-        .get("qualityGates")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Value::Array(
-        gates
-            .into_iter()
-            .filter_map(|gate| {
-                let gate_roles = gate
-                    .get("appliesToSurfaceRoles")
-                    .and_then(Value::as_array)
-                    .map(|roles| {
-                        roles
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_string)
-                            .collect::<BTreeSet<_>>()
-                    })
-                    .unwrap_or_default();
-                if !surface_roles.is_empty()
-                    && !gate_roles.is_empty()
-                    && surface_roles.is_disjoint(&gate_roles)
-                {
-                    return None;
-                }
-                let surface_ids = if surface_ids_by_role.is_empty() || gate_roles.is_empty() {
-                    Vec::new()
-                } else {
-                    gate_roles
-                        .iter()
-                        .filter_map(|role| surface_ids_by_role.get(role))
-                        .flatten()
-                        .cloned()
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                };
-                Some(json!({
-                    "gateId": gate.get("gateId").cloned().unwrap_or(Value::Null),
-                    "sourceRefId": gate.get("sourceRefId").cloned().unwrap_or(Value::Null),
-                    "severity": gate.get("severity").cloned().unwrap_or(Value::Null),
-                    "surfaceIds": surface_ids,
-                    "requiredEvidence": gate.get("evidenceRequired").cloned().unwrap_or_else(|| json!([])),
-                    "expectation": gate.get("expectation").cloned().unwrap_or(Value::Null)
-                }))
-            })
-            .collect(),
-    )
+fn ui_surface_ownership_template(surface_contract: &Value) -> Value {
+    json!({
+        "source": "AAC frontendExperience.uiSurfaceDecisionContract",
+        "selectionRule": "Select only the UI contract regions, actions, states, and quality rules this task owns. Do not copy unrelated regions or rules into the task.",
+        "patternDecision": {
+            "mode": surface_contract.pointer("/patternDecision/mode").cloned().unwrap_or(Value::Null),
+            "knownPattern": surface_contract.pointer("/patternDecision/knownPattern").cloned().unwrap_or(Value::Null),
+            "primaryKnownPattern": surface_contract.pointer("/patternDecision/primaryKnownPattern").cloned().unwrap_or(Value::Null),
+            "customPattern": surface_contract.pointer("/patternDecision/customPattern").cloned().unwrap_or(Value::Null)
+        },
+        "availableRegionIds": contract_string_ids(surface_contract, "/regionModel", "regionId").into_iter().collect::<Vec<_>>(),
+        "availableActionIds": contract_string_ids(surface_contract, "/actionModel", "actionId").into_iter().collect::<Vec<_>>(),
+        "availableStateKinds": contract_string_ids(surface_contract, "/stateModel", "state").into_iter().collect::<Vec<_>>(),
+        "availableQualityRuleIds": contract_string_ids(surface_contract, "/qualityRules", "ruleId").into_iter().collect::<Vec<_>>(),
+        "regionIdsInScope": [],
+        "actionIdsInScope": [],
+        "stateKindsInScope": [],
+        "qualityRuleIdsInScope": [],
+        "contentBoundaryApplies": true,
+        "responsiveCoverageRequired": true
+    })
 }
 
-fn validate_ui_task_quality_gates(
+fn normalize_ui_surface_ownership(requirement: &mut Value, surface_contract: &Value) {
+    if !requirement
+        .get("uiSurfaceOwnership")
+        .is_some_and(|scope| scope.is_object())
+    {
+        requirement["uiSurfaceOwnership"] = ui_surface_ownership_template(surface_contract);
+    }
+}
+
+fn validate_ui_surface_ownership(
     task: &TaskDefinition,
     requirement: &Value,
-    ui_quality_contract: &Value,
+    surface_contract: &Value,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let expected_ids = ui_quality_contract
-        .get("qualityGates")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
-        .collect::<BTreeSet<_>>();
-    if expected_ids.is_empty() {
-        return;
-    }
-    let Some(gates) = requirement
-        .get("uiTaskQualityGates")
-        .and_then(Value::as_array)
+    let Some(ownership) = requirement
+        .get("uiSurfaceOwnership")
+        .filter(|value| value.is_object())
     else {
         issues.push(issue(
-            "FRONTEND_UI_TASK_QUALITY_GATES_REQUIRED",
-            "tasks[].frontendExperienceRequirement.uiTaskQualityGates",
-            "Frontend tasks must carry task-scoped UI quality gates derived from the AAC uiQualityContract.",
+            "FRONTEND_UI_SURFACE_OWNERSHIP_REQUIRED",
+            "tasks[].frontendExperienceRequirement.uiSurfaceOwnership",
+            "Frontend tasks must declare the task-owned uiSurfaceDecisionContract regions, actions, states, and quality rules.",
             Some(&task.task_id),
         ));
         return;
     };
-    if gates.is_empty() {
+    validate_surface_scope_ids(
+        task,
+        ownership,
+        "regionIdsInScope",
+        surface_contract,
+        "/regionModel",
+        "regionId",
+        "FRONTEND_UI_SURFACE_REGION_SCOPE_INVALID",
+        issues,
+    );
+    validate_surface_scope_ids(
+        task,
+        ownership,
+        "actionIdsInScope",
+        surface_contract,
+        "/actionModel",
+        "actionId",
+        "FRONTEND_UI_SURFACE_ACTION_SCOPE_INVALID",
+        issues,
+    );
+    validate_surface_scope_ids(
+        task,
+        ownership,
+        "stateKindsInScope",
+        surface_contract,
+        "/stateModel",
+        "state",
+        "FRONTEND_UI_SURFACE_STATE_SCOPE_INVALID",
+        issues,
+    );
+    validate_surface_scope_ids(
+        task,
+        ownership,
+        "qualityRuleIdsInScope",
+        surface_contract,
+        "/qualityRules",
+        "ruleId",
+        "FRONTEND_UI_SURFACE_RULE_SCOPE_INVALID",
+        issues,
+    );
+}
+
+fn validate_surface_scope_ids(
+    task: &TaskDefinition,
+    ownership: &Value,
+    ownership_key: &str,
+    surface_contract: &Value,
+    contract_pointer: &str,
+    contract_id_key: &str,
+    issue_code: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(items) = ownership.get(ownership_key).and_then(Value::as_array) else {
         issues.push(issue(
-            "FRONTEND_UI_TASK_QUALITY_GATES_REQUIRED",
-            "tasks[].frontendExperienceRequirement.uiTaskQualityGates",
-            "Frontend tasks must not receive an empty UI quality gate list.",
+            issue_code,
+            &format!("tasks[].frontendExperienceRequirement.uiSurfaceOwnership.{ownership_key}"),
+            "uiSurfaceOwnership scope fields must be arrays.",
             Some(&task.task_id),
         ));
         return;
-    }
-    for gate in gates {
-        let Some(gate_id) = gate.get("gateId").and_then(Value::as_str) else {
+    };
+    let allowed = contract_string_ids(surface_contract, contract_pointer, contract_id_key);
+    for item in items {
+        let Some(value) = item.as_str() else {
             issues.push(issue(
-                "FRONTEND_UI_TASK_QUALITY_GATE_INVALID",
-                "tasks[].frontendExperienceRequirement.uiTaskQualityGates[].gateId",
-                "Task UI quality gate entries must include gateId.",
+                issue_code,
+                &format!(
+                    "tasks[].frontendExperienceRequirement.uiSurfaceOwnership.{ownership_key}"
+                ),
+                "uiSurfaceOwnership scope entries must be strings.",
                 Some(&task.task_id),
             ));
-            continue;
+            return;
         };
-        if !expected_ids.contains(gate_id) {
+        if !allowed.is_empty() && !allowed.contains(value) {
             issues.push(issue(
-                "FRONTEND_UI_TASK_QUALITY_GATE_INVALID",
-                "tasks[].frontendExperienceRequirement.uiTaskQualityGates[].gateId",
-                "Task UI quality gates must be derived from AAC uiQualityContract.qualityGates.",
+                issue_code,
+                &format!(
+                    "tasks[].frontendExperienceRequirement.uiSurfaceOwnership.{ownership_key}"
+                ),
+                "uiSurfaceOwnership scope entries must reference ids declared by AAC uiSurfaceDecisionContract.",
                 Some(&task.task_id),
             ));
+            return;
         }
     }
+}
+
+fn contract_string_ids(
+    surface_contract: &Value,
+    contract_pointer: &str,
+    contract_id_key: &str,
+) -> BTreeSet<String> {
+    surface_contract
+        .pointer(contract_pointer)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(contract_id_key).and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
 }
 
 fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value {
@@ -2945,6 +2937,7 @@ fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value 
         "actions": frontend.get("actions").cloned().unwrap_or(Value::Array(vec![])),
         "operationPaths": frontend.get("operationPaths").cloned().unwrap_or(Value::Array(vec![])),
         "uiSurfaceRegistry": frontend.get("uiSurfaceRegistry").cloned().unwrap_or(Value::Null),
+        "uiSurfaceDecisionContract": frontend.get("uiSurfaceDecisionContract").cloned().unwrap_or(Value::Null),
         "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null)
     })
 }
@@ -3236,12 +3229,11 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "frontendExperienceRules": {
             "required": aac.frontend_experience.as_ref().and_then(|value| value.get("required")).and_then(Value::as_bool).unwrap_or(false),
             "requirementTemplate": "outputContract.frontendExperienceRequirementTemplate",
-            "uiQualityContractSource": "outputContract.frontendExperienceRequirementTemplate.uiQualityContract",
-            "uiSurfaceRegistrySource": "contextProjection.requirementDetailTransfer.frontendExperienceDetails.uiSurfaceRegistry",
+            "uiSurfaceDecisionContractSource": "outputContract.frontendExperienceRequirementTemplate.uiSurfaceDecisionContractRef",
+            "uiSurfaceOwnershipSource": "outputContract.frontendExperienceRequirementTemplate.uiSurfaceOwnership",
             "rule": "When frontendExperience is required, UI responsibilities must be visible in task objective, verification intents, and frontendExperienceRequirement.",
-            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, data views, actions, layout, visual system, or content boundary must fill frontendExperienceRequirement.uiTaskScope from the AAC uiSurfaceRegistry and related frontend arrays. Select only the current task's surfaces, data views, actions, operation paths, states, bindings, and ownershipDimensions.",
-            "ownershipDimensionRule": "ownershipDimensions describe what this business task owns; they are not a task-splitting strategy. Use surface, data_view, action, state, layout, visual_system, content_boundary, and integration_feedback only when the task changes that concern.",
-            "uiQualityRule": "Tasks that own UI surfaces, workflows, states, bindings, or operation paths must copy outputContract.frontendExperienceRequirementTemplate.uiQualityContract into frontendExperienceRequirement; do not reinterpret scenario, qualityLevel, referenceProfile, or forbidden user-visible content."
+            "taskScopeRule": "Tasks that own UI surfaces, workflows, states, bindings, data views, actions, layout, visual system, or content boundary must fill frontendExperienceRequirement.uiSurfaceOwnership from AAC uiSurfaceDecisionContract and uiTaskScope from related frontend arrays. Select only the current task's regions, actions, states, quality rules, surfaces, data views, operation paths, bindings, and ownershipDimensions.",
+            "ownershipDimensionRule": "ownershipDimensions describe what this business task owns; they are not a task-splitting strategy. Use surface, data_view, action, state, layout, visual_system, content_boundary, and integration_feedback only when the task changes that concern."
         },
         "workflowClosureRules": {
             "derivationAuthority": "AAC frontendExperience + userFlows + executable interfaces",
@@ -4027,7 +4019,7 @@ fn enum_refs() -> Value {
         "taskKind": TASK_KIND_VALUES,
         "implementationAction": IMPLEMENTATION_ACTION_VALUES,
         "verificationEvidence": VERIFICATION_EVIDENCE_VALUES,
-        "uiQuality": ui_quality_enum_refs(),
+        "uiSurfaceDecision": ui_surface_decision_enum_refs(),
         "codeQuality": code_quality_enum_refs()
     })
 }
@@ -4278,4 +4270,69 @@ pub(crate) fn execute_task_next_from_request(
             }),
         ),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_surface_ownership_template_keeps_task_scope_compact() {
+        let surface_contract = json!({
+            "patternDecision": {
+                "mode": "known",
+                "knownPattern": "collection_workbench",
+                "primaryKnownPattern": null,
+                "customPattern": null
+            },
+            "regionModel": [{
+                "regionId": "region_primary"
+            }],
+            "actionModel": [{
+                "actionId": "action_create"
+            }],
+            "stateModel": [{
+                "state": "loading"
+            }],
+            "qualityRules": [{
+                "ruleId": "rule_primary"
+            }],
+            "referencePlan": [{
+                "path": "uix/core.md"
+            }]
+        });
+
+        let ownership = ui_surface_ownership_template(&surface_contract);
+
+        assert_eq!(
+            ownership
+                .pointer("/patternDecision/mode")
+                .and_then(Value::as_str),
+            Some("known")
+        );
+        assert!(
+            ownership.get("referencePlan").is_none(),
+            "TaskPlan ownership must not copy the full UI reference plan"
+        );
+        assert!(
+            ownership.get("qualityRules").is_none(),
+            "TaskPlan ownership must not copy the full UI rule list"
+        );
+        assert!(
+            ownership
+                .get("availableRegionIds")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items
+                    .iter()
+                    .any(|item| item.as_str() == Some("region_primary"))),
+            "TaskPlan ownership must expose available region ids"
+        );
+        assert!(
+            ownership
+                .get("regionIdsInScope")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.is_empty()),
+            "TaskPlan ownership scope starts empty so the agent selects task-owned ids"
+        );
+    }
 }

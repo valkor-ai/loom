@@ -4,11 +4,11 @@ use std::{
 };
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
-    ui_quality_contract_agent_template, ui_quality_enum_refs, ArchitectureSectionGroup,
-    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
-    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
-    COVERAGE_ARTIFACT_TYPES,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
+    ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
+    ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
+    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
+    TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
@@ -43,7 +43,7 @@ use crate::{
         runtime_delivery_evidence_applies, runtime_delivery_requirement_template,
         task_result_required_top_level_fields, task_result_schema_shape,
         task_result_template_with_code_quality, taskplan_group_result_template,
-        taskplan_outline_result_template, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        taskplan_outline_result_template,
     },
 };
 
@@ -693,17 +693,14 @@ fn build_repair_execution_request(
             "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
             "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
             "task.frontendExperienceRequirement.executionGuidance.guidanceWarnings",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+            "task.frontendExperienceRequirement.uiSurfaceOwnership",
             "executionRules.frontendImplementationOrganizationRules",
             "executionRules.interactiveVerificationProbePolicy",
             "executionRules.controlledRuntimeProbeRules",
         ]);
-    }
-    if frontend_quality_self_check_applies(task) {
-        repair_core_fields.extend([
-            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
-            "task.frontendExperienceRequirement.uiQualityContractRef",
-        ]);
-        repair_core_fields.extend(FRONTEND_QUALITY_CONTRACT_READ_FIELDS);
     }
     if runtime_delivery_evidence_applies(task) {
         repair_core_fields.extend(runtime_delivery_requirement_read_fields(task));
@@ -1546,7 +1543,6 @@ fn materialize_architecture_repair_action(
         phase_id,
         &frontend_experience_source,
         &context_projection,
-        &ui_quality_seed,
         &api_quality_seed,
     )?;
     let candidate_files = section_outputs
@@ -1596,7 +1592,8 @@ fn materialize_architecture_repair_action(
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
             "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
-            "uiQuality": ui_quality_enum_refs()
+            "uiQuality": ui_quality_enum_refs(),
+            "uiSurfaceDecision": ui_surface_decision_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -2012,7 +2009,7 @@ fn architecture_repair_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.referenceLoadPlan",
-            "uiQualitySeed.qualityGatePreview",
+            "uiQualitySeed.qualityRulePreview",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -2068,7 +2065,6 @@ fn build_architecture_repair_section_outputs(
     phase_id: &str,
     frontend_experience_source: &Value,
     context_projection: &Value,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     Ok(ARCHITECTURE_SECTION_ORDER
@@ -2086,7 +2082,6 @@ fn build_architecture_repair_section_outputs(
                 *section,
                 frontend_experience_source,
                 context_projection,
-                ui_quality_seed,
                 api_quality_seed
             );
             let schema_shape =
@@ -2103,7 +2098,8 @@ fn build_architecture_repair_section_outputs(
                     "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
                     "acceptancePriority": ["must", "should", "could"],
                     "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
-                    "uiQuality": ui_quality_enum_refs()
+                    "uiQuality": ui_quality_enum_refs(),
+                    "uiSurfaceDecision": ui_surface_decision_enum_refs()
                 },
                 "generationRules": [
                     format!("Write only the {} section candidate for this request.", section_name(*section)),
@@ -2112,6 +2108,16 @@ fn build_architecture_repair_section_outputs(
             });
             if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
                 output["enumRefs"]["apiQuality"] = api_quality_enum_refs();
+            }
+            if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
+                output["generationRules"] = json!([
+                    "Write only the frontend_experience section candidate for this repair request.",
+                    "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.",
+                    "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.",
+                    "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.",
+                    "Do not write old UI quality contract fields or legacy UI self-check fields. uiSurfaceDecisionContract is MCP-derived from surfaceDecisionCandidate.",
+                    "Do not write the final AAC JSON; Rust assembles it after coverage submit."
+                ]);
             }
             Ok(output)
         })
@@ -2125,7 +2131,6 @@ fn architecture_repair_section_result_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
@@ -2139,7 +2144,6 @@ fn architecture_repair_section_result_template(
             section,
             frontend_experience_source,
             context_projection,
-            ui_quality_seed,
             api_quality_seed
         ),
         "blockedReasons": [],
@@ -2254,7 +2258,6 @@ fn architecture_repair_section_content_template(
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     match section {
@@ -2445,7 +2448,7 @@ fn architecture_repair_section_content_template(
                         "interfaceRefs": []
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_agent_template(ui_quality_seed),
+                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),

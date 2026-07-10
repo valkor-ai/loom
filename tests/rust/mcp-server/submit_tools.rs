@@ -1407,7 +1407,7 @@ fn architecture_read_groups_follow_current_section() {
         "uiQualitySeed.requiredReferenceGroups",
         "uiQualitySeed.designTokenAssetPlan",
         "uiQualitySeed.requiredUiStates",
-        "uiQualitySeed.qualityGatePreview",
+        "uiQualitySeed.qualityRulePreview",
         "uiQualitySeed.selectionRule",
     ] {
         assert!(
@@ -1430,46 +1430,29 @@ fn architecture_read_groups_follow_current_section() {
     );
     assert!(
         architecture_output_contract["schemaShape"]
-            .pointer("/content/frontendExperience/uiQualityContract/referenceProfile")
+            .pointer("/content/frontendExperience/uiQualityContract")
             .is_none(),
-        "architecture outputContract schemaShape must not expose MCP-owned uiQuality referenceProfile"
+        "architecture outputContract schemaShape must not expose legacy uiQualityContract"
     );
-    let ui_quality_contract = frontend_template["resultTemplate"]["content"]["frontendExperience"]
-        ["uiQualityContract"]
+    let frontend_result_template =
+        &frontend_template["resultTemplate"]["content"]["frontendExperience"];
+    let surface_decision_candidate = frontend_result_template["surfaceDecisionCandidate"]
         .as_object()
-        .expect("uiQualityContract template");
-    assert_eq!(
-        ui_quality_contract["designTokenAssetPlan"]["strategy"],
-        json!("create_css_tokens")
-    );
-    assert_eq!(
-        ui_quality_contract["designTokenAssetPlan"]["templateId"],
-        json!("tokens-css")
-    );
-    assert_eq!(
-        ui_quality_contract["designTokenAssetPlan"]["duplicationPolicy"],
-        json!("do_not_create_parallel_token_system")
+        .expect("surfaceDecisionCandidate template");
+    assert!(
+        frontend_result_template.get("uiQualityContract").is_none(),
+        "frontend template must not ask agents to write legacy uiQualityContract"
     );
     assert!(
-        ui_quality_contract.get("semanticTokenPolicy").is_none(),
-        "semanticTokenPolicy is MCP-owned and should not be agent-writable"
+        surface_decision_candidate.get("selectedPattern").is_some(),
+        "frontend template must expose the semantic surface decision candidate"
     );
     assert!(
-        ui_quality_contract.get("referenceProfile").is_none(),
-        "referenceProfile is MCP-owned and should not be agent-writable"
-    );
-    assert!(
-        ui_quality_contract.get("qualityGates").is_none(),
-        "qualityGates are MCP-owned and should not be agent-writable"
-    );
-    assert!(
-        ui_quality_contract
-            .get("forbiddenUserVisibleContent")
-            .is_none(),
-        "forbiddenUserVisibleContent is MCP-owned and should not be agent-writable"
+        surface_decision_candidate.get("referencePlan").is_none(),
+        "referencePlan is MCP-owned and should not be agent-writable"
     );
     assert!(frontend_template["enumRefs"]
-        .pointer("/uiQuality/scenarioKind")
+        .pointer("/uiSurfaceDecision/patternMode")
         .and_then(Value::as_array)
         .is_some());
 
@@ -1864,7 +1847,7 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
     assert!(
         frontend_template["resultTemplate"]["content"]["frontendExperience"]
             .get("uiQualityContract")
-            .is_some()
+            .is_none()
     );
 
     write_candidate_target(
@@ -1904,7 +1887,7 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
 }
 
 #[test]
-fn architecture_frontend_submit_repairs_missing_ui_quality_contract() {
+fn architecture_frontend_submit_accepts_candidate_without_legacy_ui_quality_contract() {
     let fixture = Fixture::new("architecture-frontend-ui-quality-required");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
@@ -1921,16 +1904,11 @@ fn architecture_frontend_submit_repairs_missing_ui_quality_contract() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"]
-        .as_array()
-        .expect("issues")
-        .iter()
-        .any(|issue| issue["code"] == json!("UI_QUALITY_CONTRACT_REQUIRED")));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
 }
 
 #[test]
-fn architecture_frontend_submit_derives_machine_owned_ui_quality_fields() {
+fn architecture_frontend_submit_ignores_legacy_ui_quality_contract_fields() {
     let fixture = Fixture::new("architecture-frontend-ui-quality-machine-owned");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     advance_architecture_to_section(&fixture, &architecture_request_ref, "frontend_experience");
@@ -1944,48 +1922,29 @@ fn architecture_frontend_submit_derives_machine_owned_ui_quality_fields() {
         .expect("candidate target path")
         .to_string();
     let mut candidate = architecture_section_candidate_json(&fixture, &architecture_request_ref);
-    let ui_quality_contract = candidate["content"]["frontendExperience"]["uiQualityContract"]
-        .as_object_mut()
-        .expect("uiQualityContract");
-    ui_quality_contract.insert("semanticTokenPolicy".to_string(), json!("wrong_policy"));
-    ui_quality_contract.insert(
-        "forbiddenUserVisibleContent".to_string(),
-        json!(["agent_invented_forbidden_item"]),
-    );
-    ui_quality_contract.insert(
-        "referenceProfile".to_string(),
-        json!({
+    candidate["content"]["frontendExperience"]["uiQualityContract"] = json!({
+        "scenario": {
+            "kind": "marketing_site",
+            "reference": {"group": "wrong", "item": "wrong"}
+        },
+        "semanticTokenPolicy": "wrong_policy",
+        "forbiddenUserVisibleContent": ["agent_invented_forbidden_item"],
+        "referenceProfile": {
             "loadMode": "manual",
             "groups": {
                 "focus": ["unknown-reference"]
             },
             "referenceLoadPlan": []
-        }),
-    );
-    ui_quality_contract.insert(
-        "qualityGates".to_string(),
-        json!([{
+        },
+        "qualityGates": [{
             "gateId": "invented.agent.gate",
             "sourceRefId": "uix.fake",
             "severity": "must",
             "appliesToSurfaceRoles": ["page"],
             "evidenceRequired": ["source_check"],
-            "expectation": "This agent-authored gate must be replaced."
-        }]),
-    );
-    ui_quality_contract
-        .get_mut("scenario")
-        .and_then(Value::as_object_mut)
-        .expect("scenario")
-        .insert("kind".to_string(), json!("admin_dashboard"));
-    ui_quality_contract
-        .get_mut("scenario")
-        .and_then(Value::as_object_mut)
-        .expect("scenario")
-        .insert(
-            "reference".to_string(),
-            json!({"group": "wrong", "item": "wrong"}),
-        );
+            "expectation": "This agent-authored gate must be ignored."
+        }]
+    });
     write_candidate_target(&fixture, &architecture_request_ref, &candidate);
 
     let result = call_submit(
@@ -1997,45 +1956,46 @@ fn architecture_frontend_submit_derives_machine_owned_ui_quality_fields() {
     assert_eq!(result["state"], "auto_runnable", "{result:#}");
     let persisted = state::store::read_json_value(&fixture.root.join(target_path))
         .expect("read normalized frontend candidate");
-    let persisted_contract = &persisted["content"]["frontendExperience"]["uiQualityContract"];
+    let persisted_frontend = &persisted["content"]["frontendExperience"];
+    assert!(
+        persisted_frontend.get("uiQualityContract").is_none(),
+        "submit must drop legacy uiQualityContract instead of repairing it"
+    );
+    let persisted_contract = &persisted_frontend["uiSurfaceDecisionContract"];
     assert_eq!(
         persisted_contract["semanticTokenPolicy"],
         json!("semantic_tokens_required")
     );
-    assert!(persisted_contract["forbiddenUserVisibleContent"]
-        .as_array()
-        .expect("forbidden user-visible content")
-        .contains(&json!("runtime_commands")));
-    assert!(!persisted_contract["forbiddenUserVisibleContent"]
-        .as_array()
-        .expect("forbidden user-visible content")
-        .contains(&json!("agent_invented_forbidden_item")));
-    assert_eq!(
-        persisted_contract["scenario"]["reference"],
-        json!({"group": "scenarios", "item": "admin-dashboard"})
+    assert!(
+        persisted_contract["contentBoundary"]["forbiddenUserVisibleContent"]
+            .as_array()
+            .expect("forbidden user-visible content")
+            .contains(&json!("runtime_commands"))
+    );
+    assert!(
+        !persisted_contract["contentBoundary"]["forbiddenUserVisibleContent"]
+            .as_array()
+            .expect("forbidden user-visible content")
+            .contains(&json!("agent_invented_forbidden_item"))
     );
     assert_eq!(
-        persisted_contract["referenceProfile"]["loadMode"],
-        json!("mcp_reference_load_plan")
+        persisted_contract["patternDecision"]["knownPattern"],
+        json!("collection_workbench")
     );
-    assert!(persisted_contract["referenceProfile"]["groups"]["focus"]
+    assert!(persisted_contract["referencePlan"]
         .as_array()
-        .expect("focus references")
-        .contains(&json!("web-implementation")));
-    assert!(persisted_contract["referenceProfile"]["referenceLoadPlan"]
-        .as_array()
-        .expect("referenceLoadPlan")
+        .expect("referencePlan")
         .iter()
         .any(|item| item["path"] == json!("uix/web-implementation.md")));
-    let gate_ids = persisted_contract["qualityGates"]
+    let rule_ids = persisted_contract["qualityRules"]
         .as_array()
-        .expect("qualityGates")
+        .expect("qualityRules")
         .iter()
-        .filter_map(|gate| gate["gateId"].as_str())
+        .filter_map(|rule| rule["ruleId"].as_str())
         .collect::<BTreeSet<_>>();
-    assert!(gate_ids.contains("web.semantic_accessibility"));
-    assert!(gate_ids.contains("web.runtime_layout_safety"));
-    assert!(!gate_ids.contains("invented.agent.gate"));
+    assert!(rule_ids.contains("web.semantic_accessibility"));
+    assert!(rule_ids.contains("web.runtime_layout_safety"));
+    assert!(!rule_ids.contains("invented.agent.gate"));
 }
 
 #[test]
@@ -2684,18 +2644,27 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     let frontend_requirement_template =
         &taskplan_contract_fields["outputContract.frontendExperienceRequirementTemplate"].value;
     assert_eq!(
-        frontend_requirement_template["uiQualityContract"]["semanticTokenPolicy"],
-        json!("semantic_tokens_required")
-    );
-    assert_eq!(
-        frontend_requirement_template["uiQualityContract"]["designTokenAssetPlan"]["templateId"],
-        json!("tokens-css")
+        frontend_requirement_template["uiSurfaceDecisionContractRef"],
+        json!("sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract")
     );
     assert!(
-        frontend_requirement_template["uiQualityContract"]["referenceProfile"]["groups"]["tokens"]
+        frontend_requirement_template
+            .get("uiQualityContract")
+            .is_none(),
+        "TaskPlan template must not copy legacy uiQualityContract"
+    );
+    assert!(
+        frontend_requirement_template
+            .get("uiTaskQualityGates")
+            .is_none(),
+        "TaskPlan template must not copy legacy uiTaskQualityGates"
+    );
+    assert!(
+        frontend_requirement_template["uiSurfaceOwnership"]["availableQualityRuleIds"]
             .as_array()
-            .expect("ui quality token refs")
-            .contains(&json!("spacing"))
+            .expect("available surface quality rule ids")
+            .iter()
+            .any(Value::is_string)
     );
     assert!(
         frontend_requirement_template["uiTaskScope"]["ownershipDimensions"]
@@ -2989,30 +2958,30 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs".to_string()
     ));
-    assert!(frontend_fields
-        .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
     assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string()
     ));
     assert!(frontend_fields.contains(
         &"task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string()
     ));
-    assert!(frontend_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
-    ));
-    assert!(frontend_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-            .to_string()
-    ));
-    assert!(frontend_fields.contains(
-        &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-            .to_string()
-    ));
+    assert!(frontend_fields
+        .contains(&"task.frontendExperienceRequirement.uiSurfaceDecisionContractRef".to_string()));
+    assert!(frontend_fields
+        .contains(&"task.frontendExperienceRequirement.uiSurfaceOwnership".to_string()));
+    assert!(!frontend_fields
+        .contains(&"task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string()));
     assert!(!frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile".to_string()
     ));
     assert!(!frontend_fields.contains(
         &"task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan".to_string()
+    ));
+    assert!(!frontend_fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups".to_string()
+    ));
+    assert!(!frontend_fields.contains(
+        &"task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
+            .to_string()
     ));
     assert!(frontend_fields
         .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
@@ -3050,14 +3019,8 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             "task.frontendExperienceRequirement.executionGuidance.actionsInScope".to_string(),
             "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
             "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
-            "task.frontendExperienceRequirement.executionGuidance.uiQuality".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.scenario".to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"
-                .to_string(),
-            "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"
-                .to_string(),
+            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef".to_string(),
+            "task.frontendExperienceRequirement.uiSurfaceOwnership".to_string(),
             "sourceContext.architectureArtifactProjection.interfaces".to_string(),
             "executionRules.frontendImplementationOrganizationRules".to_string(),
             "executionRules.interactiveVerificationProbePolicy".to_string(),
@@ -3109,20 +3072,14 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         ui_production_brief["layoutContract"]["layoutBaseline"],
         json!("sidebar_topbar_table_detail")
     );
-    assert!(ui_production_brief["informationContract"]["mustShow"]
+    assert!(!ui_production_brief["informationContract"]["mustShow"]
         .as_array()
         .expect("must show")
-        .iter()
-        .any(|item| item
-            .as_str()
-            .is_some_and(|value| value.contains("证券账户"))));
-    assert!(ui_production_brief["actionContract"]["primaryActions"]
+        .is_empty());
+    assert!(!ui_production_brief["actionContract"]["primaryActions"]
         .as_array()
         .expect("primary actions")
-        .iter()
-        .any(|item| item
-            .as_str()
-            .is_some_and(|value| value.contains("新建证券账户"))));
+        .is_empty());
     assert!(ui_production_brief["stateContract"]["business_blocking"].is_string());
     assert!(
         ui_production_brief["contentBoundary"]["forbiddenUserVisibleContent"]
@@ -3136,14 +3093,19 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     );
     assert!(
         ui_production_brief.get("gateImplementationPlan").is_none(),
-        "uiProductionBrief must not duplicate frontend quality gates"
+        "uiProductionBrief must not duplicate frontend quality rules"
+    );
+    assert_eq!(
+        ui_production_brief["surfaceDecisionContract"]["contractRef"],
+        fields["task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"].value
     );
     assert!(
         fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"].value
-            ["referenceGroups"]["tokens"]
+            ["referencePlan"]
             .as_array()
-            .expect("style token reference items")
-            .contains(&json!("spacing"))
+            .expect("style reference plan")
+            .iter()
+            .any(|item| item["path"] == json!("uix/tokens/spacing.md"))
     );
     let interfaces = &fields["sourceContext.architectureArtifactProjection.interfaces"].value;
     assert_eq!(interfaces.as_array().expect("interfaces").len(), 1);
@@ -3168,92 +3130,50 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
             ["closureRequirementIds"],
         json!(["closure:flow.account-lifecycle:step.submit-open-account"])
     );
-    assert_eq!(
-        fields["task.frontendExperienceRequirement.executionGuidance.uiQuality"].value
-            ["selfCheckField"],
-        json!("frontendQualitySelfCheck")
+    let frontend_quality_template =
+        &fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
+    assert!(
+        frontend_quality_template.get("scenarioKind").is_none(),
+        "frontend quality template must not emit legacy scenarioKind"
     );
     assert!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"]
-            .value["tokens"]
-            .as_array()
-            .expect("ui quality token reference items")
-            .contains(&json!("spacing"))
-    );
-    assert!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan"]
-            .value
-            .as_array()
-            .expect("ui reference load plan")
-            .iter()
-            .any(|item| item["path"] == json!("uix/tokens/spacing.md"))
+        frontend_quality_template.get("qualityLevel").is_none(),
+        "frontend quality template must not emit legacy qualityLevel"
     );
     assert_eq!(
-        fields["task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"]
-            .value,
-        json!("tokens-css")
+        frontend_quality_template["surfaceDecisionContractRef"],
+        fields["task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"].value
     );
+    assert!(frontend_quality_template["referencePlanFilesChecked"]
+        .as_array()
+        .expect("reference plan files checked")
+        .contains(&json!("uix/tokens/spacing.md")));
+    assert!(frontend_quality_template["surfaceStateEvidence"][0].is_object());
+    assert!(frontend_quality_template["surfaceQualityRuleEvidence"][0].is_object());
     assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["scenarioKind"],
-        fields["task.frontendExperienceRequirement.uiQualityContract.scenario"].value["kind"]
-    );
-    assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["qualityLevel"],
-        json!("production_internal_product")
+        frontend_quality_template["surfaceRegionEvidence"][0]["id"],
+        json!("region_account_results")
     );
     assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["referenceGroupsChecked"]["tokens"]
+        frontend_quality_template["surfaceRegionEvidence"][0]["files"]
             .as_array()
-            .expect("reference group items checked")
-            .contains(&json!("spacing"))
+            .expect("region files")
+            .contains(&json!("replace_with_ui_file_path_for_this_region"))
     );
     assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["referenceFilesChecked"]
+        frontend_quality_template["surfaceRegionEvidence"][0]["states"]
             .as_array()
-            .expect("reference files checked")
-            .contains(&json!("uix/tokens/spacing.md"))
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]["statesCovered"]
-            [0]
-        .is_object()
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["businessUiRulesChecked"][0]
-            .is_object()
-    );
-    assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["surfaceId"],
-        json!("surface_account_admin")
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["files"]
-            .as_array()
-            .expect("surface files")
-            .contains(&json!("replace_with_ui_file_path_for_this_surface"))
-    );
-    assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["states"]
-            .as_array()
-            .expect("surface states")
+            .expect("region states")
             .contains(&json!("business_blocking"))
     );
     assert!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["surfacesCovered"][0]["businessActions"]
+        frontend_quality_template["surfaceActionEvidence"][0]["actions"]
             .as_array()
             .expect("surface actions")
             .contains(&json!("action_open_account"))
     );
     assert_eq!(
-        fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"]
-            ["designTokenEvidence"]["templateIdUsed"],
+        frontend_quality_template["designTokenEvidence"]["templateIdUsed"],
         json!("tokens-css")
     );
     assert!(fields["outputContract.resultRules"]
@@ -3374,9 +3294,15 @@ fn task_result_repair_carries_compact_frontend_quality_context() {
         .iter()
         .flat_map(read_group_fields_from_json)
         .collect::<BTreeSet<_>>();
-    assert!(repair_read_fields
+    assert!(!repair_read_fields
         .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
-    assert!(repair_read_fields.contains("task.frontendExperienceRequirement.uiQualityContractRef"));
+    assert!(!repair_read_fields.contains("task.frontendExperienceRequirement.uiQualityContractRef"));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"));
+    assert!(repair_read_fields
+        .contains("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"));
     assert!(!repair_read_fields.iter().any(|field| field
         .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile")));
     assert!(!repair_read_fields.iter().any(|field| field
@@ -3405,14 +3331,22 @@ fn task_result_repair_carries_compact_frontend_quality_context() {
         .iter()
         .find(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
         .expect("frontend quality issue");
-    assert!(frontend_issue["current"]["gateResults"].is_null());
-    assert!(frontend_issue["current"]["gateResultsCount"].is_number());
-    assert!(frontend_issue["expected"]["referenceLoadPlan"].is_null());
-    assert!(frontend_issue["expected"]["expectedGateIds"]
+    assert!(frontend_issue["current"].get("gateResults").is_none());
+    assert!(frontend_issue["current"].get("gateResultsCount").is_none());
+    assert!(frontend_issue["expected"]
+        .get("referenceLoadPlan")
+        .is_none());
+    assert!(frontend_issue["expected"]["surfaceDecisionContractRef"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(!frontend_issue["expected"]["surfaceRegionIdsInScope"]
         .as_array()
-        .expect("expected gate ids")
-        .iter()
-        .any(|gate_id| gate_id == "verify.rendered_viewports"));
+        .expect("expected surface region ids")
+        .is_empty());
+    assert!(!frontend_issue["expected"]["surfaceQualityRuleIdsInScope"]
+        .as_array()
+        .expect("expected surface quality rule ids")
+        .is_empty());
     assert!(
         serde_json::to_vec(frontend_issue)
             .expect("serialize compact frontend issue")
@@ -3707,7 +3641,7 @@ fn task_result_submit_routes_invalid_frontend_surface_shape_to_quality_repair() 
     result["taskResultId"] = json!("result-invalid-surface-shape");
     result["changedFiles"] = json!(["src/App.tsx"]);
     complete_frontend_quality_token_evidence_for_test(&mut result);
-    result["frontendQualitySelfCheck"]["surfacesCovered"] = json!(["surface_account_admin"]);
+    result["frontendQualitySelfCheck"]["surfaceRegionEvidence"] = json!(["region_summary"]);
     write_json_atomic(&fixture.root.join(result_file), &result)
         .expect("write task result with invalid surface shape");
 
@@ -3735,7 +3669,9 @@ fn task_result_submit_routes_invalid_frontend_surface_shape_to_quality_repair() 
         .iter()
         .any(
             |issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"
-                && issue["fieldPath"] == "frontendQualitySelfCheck.surfacesCovered"
+                && issue["fieldPath"]
+                    .as_str()
+                    .is_some_and(|path| path.contains("surfaceRegionEvidence"))
         ));
 }
 
@@ -3978,20 +3914,17 @@ fn task_result_rejects_placeholder_jvm_production_package() {
 }
 
 #[test]
-fn task_result_rejects_satisfied_render_gate_without_mobile_viewport() {
-    let fixture = Fixture::new("task-result-render-gate-viewports");
+fn task_result_rejects_satisfied_surface_quality_rule_without_evidence() {
+    let fixture = Fixture::new("task-result-surface-rule-evidence");
     let execution_request_ref = start_planned_task_execution(&fixture);
     write_task_result_candidate(&fixture, &execution_request_ref);
     mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
-        let gates = result["frontendQualitySelfCheck"]["gateResults"]
+        let rules = result["frontendQualitySelfCheck"]["surfaceQualityRuleEvidence"]
             .as_array_mut()
-            .expect("gate results");
-        let render_gate = gates
-            .iter_mut()
-            .find(|gate| gate["gateId"] == json!("verify.rendered_viewports"))
-            .expect("render gate");
-        render_gate["status"] = json!("satisfied");
-        render_gate["viewportsChecked"] = json!(["desktop 1280x800"]);
+            .expect("surface quality rule evidence");
+        let rule = rules.first_mut().expect("surface quality rule");
+        rule["status"] = json!("satisfied");
+        rule["evidence"] = json!("");
     });
 
     let result = call_submit(
@@ -4019,9 +3952,9 @@ fn task_result_rejects_satisfied_render_gate_without_mobile_viewport() {
         .iter()
         .any(|issue| {
             issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID"
-                && issue["fieldPath"]
-                    .as_str()
-                    .is_some_and(|path| path.ends_with(".viewportsChecked"))
+                && issue["fieldPath"].as_str().is_some_and(|path| {
+                    path.contains("surfaceQualityRuleEvidence") && path.ends_with(".evidence")
+                })
         }));
 }
 
@@ -6788,11 +6721,10 @@ fn review_flags_frontend_quality_self_check_gaps() {
         .expect("frontend quality matrix summary");
     assert_eq!(quality_matrix[0]["qualitySatisfied"], json!(false));
     assert_eq!(quality_matrix[0]["knownGapCount"], json!(1));
-    assert_eq!(quality_matrix[0]["missingQualityGateCount"], json!(0));
-    assert_eq!(
-        quality_matrix[0]["mustQualityGateUnsatisfiedCount"],
-        json!(0)
-    );
+    assert!(quality_matrix[0].get("missingQualityGateCount").is_none());
+    assert!(quality_matrix[0]
+        .get("mustQualityGateUnsatisfiedCount")
+        .is_none());
     assert_eq!(
         quality_matrix[0]["recommendedNextAction"],
         json!("execution_repair")
@@ -7405,10 +7337,12 @@ fn taskplan_submit_normalizes_frontend_ui_quality_contract_on_ui_tasks() {
     let mut group_value: Value =
         serde_json::from_str(&std::fs::read_to_string(&group_path).expect("read group file"))
             .expect("parse group file");
-    group_value["tasks"][0]["frontendExperienceRequirement"]
-        .as_object_mut()
-        .expect("frontend requirement object")
-        .remove("uiQualityContract");
+    group_value["tasks"][0]["frontendExperienceRequirement"]["uiQualityContract"] = json!({
+        "scenario": {"kind": "legacy_should_not_persist"},
+        "qualityGates": [{"gateId": "legacy.gate"}]
+    });
+    group_value["tasks"][0]["frontendExperienceRequirement"]["uiTaskQualityGates"] =
+        json!([{"gateId": "legacy.task.gate"}]);
     write_json_atomic(&group_path, &group_value)
         .expect("write frontend requirement without ui quality");
 
@@ -7424,11 +7358,17 @@ fn taskplan_submit_normalizes_frontend_ui_quality_contract_on_ui_tasks() {
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(fixture.root.join(taskplan_ref)).unwrap())
             .expect("parse persisted taskplan");
-    let expected =
-        frontend_requirement_template_from_taskplan_request(&fixture, &taskplan_request_ref);
-    assert_eq!(
-        persisted["tasks"][0]["frontendExperienceRequirement"]["uiQualityContract"],
-        expected["uiQualityContract"]
+    assert!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]
+            .get("uiQualityContract")
+            .is_none(),
+        "TaskPlan persistence must drop legacy uiQualityContract"
+    );
+    assert!(
+        persisted["tasks"][0]["frontendExperienceRequirement"]
+            .get("uiTaskQualityGates")
+            .is_none(),
+        "TaskPlan persistence must drop legacy uiTaskQualityGates"
     );
     assert!(
         persisted["tasks"][0]["frontendExperienceRequirement"]["uiTaskScope"]
@@ -7920,7 +7860,7 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         .is_some());
     assert!(frontend_group
         .fields
-        .get("uiQualitySeed.qualityGatePreview")
+        .get("uiQualitySeed.qualityRulePreview")
         .is_some());
     assert!(frontend_group
         .fields
@@ -8036,31 +7976,23 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         frontend_template_refs["brainstormFrontendExperienceRef"],
         json!(frontend_authority_ref)
     );
-    let repair_frontend_quality_contract = &frontend_section_contract["resultTemplate"]["content"]
-        ["frontendExperience"]["uiQualityContract"];
+    let repair_frontend_template =
+        &frontend_section_contract["resultTemplate"]["content"]["frontendExperience"];
     assert!(
-        repair_frontend_quality_contract
-            .get("semanticTokenPolicy")
-            .is_none(),
-        "repair frontend template must not ask agents to write MCP-owned semanticTokenPolicy"
+        repair_frontend_template.get("uiQualityContract").is_none(),
+        "repair frontend template must not ask agents to write legacy uiQualityContract"
     );
     assert!(
-        repair_frontend_quality_contract
-            .get("referenceProfile")
-            .is_none(),
-        "repair frontend template must not ask agents to write MCP-owned referenceProfile"
+        repair_frontend_template["surfaceDecisionCandidate"]
+            .get("selectedPattern")
+            .is_some(),
+        "repair frontend template must ask agents for the semantic surface decision candidate"
     );
     assert!(
-        repair_frontend_quality_contract
-            .get("qualityGates")
+        repair_frontend_template["surfaceDecisionCandidate"]
+            .get("referencePlan")
             .is_none(),
-        "repair frontend template must not ask agents to write MCP-owned qualityGates"
-    );
-    assert!(
-        repair_frontend_quality_contract
-            .get("forbiddenUserVisibleContent")
-            .is_none(),
-        "repair frontend template must not ask agents to write MCP-owned forbiddenUserVisibleContent"
+        "repair frontend template must not ask agents to write MCP-owned referencePlan"
     );
     let repair_root = read_request_root_value(fixture.root_str(), &repair_action_ref);
     assert!(
@@ -8080,9 +8012,9 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
     );
     assert!(
         repair_output_contract["schemaShape"]
-            .pointer("/content/frontendExperience/uiQualityContract/referenceProfile")
+            .pointer("/content/frontendExperience/uiQualityContract")
             .is_none(),
-        "architecture repair outputContract schemaShape must not expose MCP-owned uiQuality referenceProfile"
+        "architecture repair outputContract schemaShape must not expose legacy uiQualityContract"
     );
     let result = complete_architecture_sections(&fixture, &repair_action_ref);
 
@@ -9525,39 +9457,7 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
     {
         self_check.insert("status".to_string(), json!("satisfied"));
         self_check.insert("knownGaps".to_string(), json!([]));
-        if let Some(forbidden) = self_check
-            .get_mut("forbiddenContentCheck")
-            .and_then(Value::as_object_mut)
-        {
-            forbidden.insert("violations".to_string(), json!([]));
-        }
-        if let Some(gates) = self_check
-            .get_mut("gateResults")
-            .and_then(Value::as_array_mut)
-        {
-            for gate in gates {
-                let gate_id = gate
-                    .get("gateId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                gate["status"] = json!("satisfied");
-                gate["files"] = json!(["src/App.tsx"]);
-                gate["sourceChecks"] = json!(["src/App.tsx"]);
-                gate["attemptedChecks"] = json!([]);
-                gate["fallbackEvidence"] = json!([]);
-                gate["blockedReason"] = Value::Null;
-                if gate_id.contains("render")
-                    || gate_id.contains("viewport")
-                    || gate_id.contains("mobile")
-                {
-                    gate["viewportsChecked"] = json!(["desktop 1280x800", "mobile 390x844"]);
-                }
-                gate["evidence"] = json!(format!(
-                    "Test candidate satisfies UI quality gate {gate_id} through src/App.tsx."
-                ));
-            }
-        }
+        complete_frontend_quality_surface_evidence_for_test(self_check);
     }
     let Some(evidence) = result
         .pointer_mut("/frontendQualitySelfCheck/designTokenEvidence")
@@ -9583,6 +9483,51 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
         );
     }
     evidence.insert("parallelTokenSystemCreated".to_string(), json!(false));
+}
+
+fn complete_frontend_quality_surface_evidence_for_test(
+    self_check: &mut serde_json::Map<String, Value>,
+) {
+    for field in [
+        "surfaceRegionEvidence",
+        "surfaceActionEvidence",
+        "surfaceStateEvidence",
+        "surfaceQualityRuleEvidence",
+    ] {
+        if let Some(items) = self_check.get_mut(field).and_then(Value::as_array_mut) {
+            for item in items {
+                let id = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("surface-contract-item")
+                    .to_string();
+                item["status"] = json!("satisfied");
+                item["files"] = json!(["src/App.tsx"]);
+                item["evidence"] = json!(format!(
+                    "src/App.tsx implements and verifies the task-scoped UI contract item {id}."
+                ));
+            }
+        }
+    }
+    if let Some(content_boundary) = self_check
+        .get_mut("contentBoundaryEvidence")
+        .and_then(Value::as_object_mut)
+    {
+        content_boundary.insert("checked".to_string(), json!(true));
+        content_boundary.insert("forbiddenContentViolations".to_string(), json!([]));
+        content_boundary.insert(
+            "allowedContentExamples".to_string(),
+            json!(["Business-facing account workflow labels"]),
+        );
+        content_boundary.insert(
+            "evidence".to_string(),
+            json!("src/App.tsx was checked to keep user-visible content inside the business UI boundary."),
+        );
+    }
+    self_check.insert(
+        "summary".to_string(),
+        json!("Frontend quality evidence is complete for the task-scoped surface contract."),
+    );
 }
 
 fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
@@ -10607,11 +10552,6 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .map(|field| &field.value)
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let frontend_ui_quality_contract =
-        architecture_section_contract(fixture, request_ref, "frontend_experience")
-            ["resultTemplate"]["content"]["frontendExperience"]["uiQualityContract"]
-            .clone();
-
     let content = match section {
         "foundation" => json!({
             "source": {
@@ -10660,7 +10600,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                 "dataViews": [],
                 "actions": [],
                 "operationPaths": [],
-                "uiQualityContract": frontend_ui_quality_contract,
+                "surfaceDecisionCandidate": frontend_surface_decision_candidate_json(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": frontend_authority_ref
                 }
@@ -10861,6 +10801,97 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
     })
 }
 
+fn frontend_surface_decision_candidate_json() -> Value {
+    json!({
+        "patternRankings": [{
+            "kind": "collection_workbench",
+            "score": 0.9,
+            "matchedSignals": ["staff console", "record list", "business action"],
+            "missingSignals": [],
+            "mismatchSignals": [],
+            "evidenceRefs": ["surface_account_admin", "view_account_list", "action_open_account"]
+        }],
+        "selectedPattern": {
+            "mode": "known",
+            "knownPattern": "collection_workbench",
+            "primaryKnownPattern": null,
+            "secondaryKnownPatterns": [],
+            "customPattern": null,
+            "nearestKnownPatterns": [],
+            "confidence": "high",
+            "rationale": "The fixture frontend is a staff-facing record workbench with list, detail, and create action.",
+            "evidenceRefs": ["surface_account_admin", "view_account_list", "action_open_account"]
+        },
+        "semanticFacts": {
+            "userJobs": ["browse", "search", "create"],
+            "informationShapes": ["record_collection", "record_detail", "form_fields"],
+            "operationModels": ["filter_sort_paginate", "create_update"],
+            "riskFactors": ["business_blocking"],
+            "navigationModel": "module_shell",
+            "devicePosture": "responsive_web",
+            "productMode": "internal_business_product"
+        },
+        "layoutModel": {
+            "density": "workbench_dense",
+            "shell": "sidebar_topbar_content_detail",
+            "primaryWorkRegionId": "region_account_results",
+            "responsiveModel": "desktop_split_mobile_list_detail"
+        },
+        "regionModel": [{
+            "regionId": "region_account_results",
+            "role": "record_results",
+            "purpose": "Show account records and current status.",
+            "presentation": "table",
+            "stateRefs": ["loading", "empty", "error", "success"],
+            "actionRefs": ["action_open_account"]
+        }],
+        "informationModel": {
+            "primaryObjects": ["account"],
+            "fields": ["account id", "status", "investor name", "updated time"],
+            "scanOrder": ["identity", "status", "primary action", "detail"]
+        },
+        "actionModel": [{
+            "actionId": "action_open_account",
+            "kind": "primary",
+            "label": "新建证券账户",
+            "placement": "page_actions",
+            "risk": "business_blocking",
+            "feedbackStates": ["loading", "success", "error", "business_blocking"]
+        }],
+        "stateModel": [{
+            "state": "loading",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Scoped loading appears in the account results region."
+        }, {
+            "state": "empty",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Empty state explains the account list has no records and keeps the create action available."
+        }, {
+            "state": "error",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Recoverable error appears near the affected account region."
+        }, {
+            "state": "business_blocking",
+            "regionRefs": ["region_account_results"],
+            "expectation": "Business block explains why an account action cannot continue."
+        }],
+        "compositionConstraints": {
+            "requiredComposition": ["navigation", "primary_work_region", "feedback_area"],
+            "forbiddenComposition": ["no_marketing_hero", "no_feature_explainer_wall"],
+            "antiDemoRules": ["no_internal_process_copy", "no_decorative_filler_before_workflow"]
+        },
+        "contentBoundary": {
+            "forbiddenUserVisibleContent": [
+                "runtime_commands",
+                "technical_stack_explanation",
+                "delivery_progress_notes",
+                "verification_instructions"
+            ],
+            "copyRule": "Use staff-facing account workflow language only."
+        }
+    })
+}
+
 fn architecture_section_candidate_with_workflow_closure_json(
     fixture: &Fixture,
     request_ref: &str,
@@ -10955,8 +10986,6 @@ fn architecture_section_candidate_with_workflow_closure_json(
         }
         "frontend_experience" => {
             let refs = candidate["content"]["frontendExperience"]["sourceRefs"].clone();
-            let ui_quality_contract =
-                candidate["content"]["frontendExperience"]["uiQualityContract"].clone();
             candidate["content"]["frontendExperience"] = json!({
                 "required": true,
                 "kind": "staff_console",
@@ -10983,7 +11012,7 @@ fn architecture_section_candidate_with_workflow_closure_json(
                     "dataViewRefs": ["view_account_list"],
                     "actionRefs": ["action_open_account"]
                 }],
-                "uiQualityContract": ui_quality_contract,
+                "surfaceDecisionCandidate": frontend_surface_decision_candidate_json(),
                 "sourceRefs": refs
             });
         }

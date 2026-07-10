@@ -47,6 +47,7 @@ The brief is compiled from product surface facts and task ownership, so keep imp
 
 | Brief area | What to decide in code |
 | --- | --- |
+| `surfaceDecisionContract` | Pattern mode, nearest known patterns, task-owned regions, actions, states, quality rules, and evidence targets. |
 | `productIntent` | User role, business object, primary job, and the visible success outcome. |
 | `layoutContract` | Regions, density, responsive behavior, primary region, and forbidden filler. |
 | `informationContract` | Fields that must be visible, scan order, identity/status handling, and long-content behavior. |
@@ -56,6 +57,8 @@ The brief is compiled from product surface facts and task ownership, so keep imp
 | `contentBoundary` | Product-language copy and internal-process terms that must not appear in the UI. |
 
 Ownership dimensions scope the work. A task may own only action wiring, state feedback, layout, data views, visual system, content boundary, or integration feedback. Do not expand a task into unrelated surfaces just because the reference file contains a larger pattern.
+
+When `surfaceDecisionContract` is present, use `surface-decision.md` as the bridge between the selected pattern and the implementation. Scenario files explain product anatomy; token files explain visual primitives; surface decision explains how the task-owned regions/actions/states become evidence.
 
 ## Implementation
 

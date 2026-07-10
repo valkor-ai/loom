@@ -65,9 +65,9 @@ pub const UI_DESIGN_TOKEN_MERGE_POLICIES: [&str; 1] = ["preserve_existing_projec
 
 pub const UI_DESIGN_TOKEN_DUPLICATION_POLICIES: [&str; 1] = ["do_not_create_parallel_token_system"];
 
-pub const UI_QUALITY_GATE_SEVERITIES: [&str; 2] = ["must", "should"];
+pub const UI_QUALITY_RULE_SEVERITIES: [&str; 2] = ["must", "should"];
 
-pub const UI_QUALITY_GATE_STATUSES: [&str; 5] = [
+pub const UI_QUALITY_RULE_STATUSES: [&str; 5] = [
     "satisfied",
     "partial",
     "missing",
@@ -95,8 +95,9 @@ pub const UI_REFERENCE_GROUP_KEYS: [&str; 6] = [
     "templates",
 ];
 
-pub const UI_CORE_REFERENCE_ITEMS: [&str; 6] = [
+pub const UI_CORE_REFERENCE_ITEMS: [&str; 7] = [
     "core",
+    "surface-decision",
     "anti-patterns",
     "system",
     "interaction",
@@ -141,6 +142,151 @@ pub const UI_STACK_REFERENCE_ITEMS: [&str; 7] = [
     "uniapp",
 ];
 
+pub const UI_SURFACE_PATTERN_MODES: [&str; 3] = ["known", "hybrid", "custom"];
+
+pub const UI_KNOWN_SURFACE_PATTERNS: [&str; 12] = [
+    "collection_workbench",
+    "decision_queue",
+    "form_flow",
+    "settings_console",
+    "analytics_monitor",
+    "editor_workspace",
+    "support_inbox",
+    "developer_console",
+    "content_page",
+    "marketing_surface",
+    "immersive_workspace",
+    "mobile_task_flow",
+];
+
+pub const UI_SURFACE_CONFIDENCE_LEVELS: [&str; 3] = ["high", "medium", "low"];
+
+pub const UI_USER_JOB_KINDS: [&str; 11] = [
+    "browse",
+    "search",
+    "compare",
+    "create",
+    "edit",
+    "review",
+    "decide",
+    "monitor",
+    "configure",
+    "communicate",
+    "consume_content",
+];
+
+pub const UI_INFORMATION_SHAPES: [&str; 12] = [
+    "single_object",
+    "record_collection",
+    "record_detail",
+    "form_fields",
+    "hierarchy_tree",
+    "timeline",
+    "metric_series",
+    "chart_set",
+    "document_content",
+    "conversation",
+    "canvas_scene",
+    "media_grid",
+];
+
+pub const UI_OPERATION_MODELS: [&str; 11] = [
+    "read_only",
+    "filter_sort_paginate",
+    "create_update",
+    "approve_reject",
+    "batch_action",
+    "wizard_step_flow",
+    "configuration_save",
+    "search_analysis",
+    "alert_triage",
+    "content_authoring",
+    "runtime_operation",
+];
+
+pub const UI_RISK_FACTORS: [&str; 8] = [
+    "none",
+    "destructive",
+    "irreversible",
+    "financial",
+    "privacy",
+    "compliance",
+    "audit_relevant",
+    "business_blocking",
+];
+
+pub const UI_NAVIGATION_MODELS: [&str; 7] = [
+    "single_surface",
+    "module_shell",
+    "tabs",
+    "master_detail",
+    "stepper",
+    "drill_down",
+    "canvas_panels",
+];
+
+pub const UI_DEVICE_POSTURES: [&str; 5] = [
+    "desktop_primary",
+    "mobile_primary",
+    "responsive_web",
+    "native_mobile",
+    "immersive_canvas",
+];
+
+pub const UI_PRODUCT_MODES: [&str; 6] = [
+    "internal_business_product",
+    "developer_tool",
+    "consumer_product",
+    "content_product",
+    "marketing_or_brand",
+    "immersive_product",
+];
+
+pub const UI_REGION_ROLES: [&str; 14] = [
+    "app_shell",
+    "navigation",
+    "topbar",
+    "primary_work_region",
+    "record_results",
+    "record_detail",
+    "form",
+    "action_panel",
+    "feedback_area",
+    "inspector",
+    "editor",
+    "preview",
+    "metrics",
+    "content_body",
+];
+
+pub const UI_PRESENTATION_KINDS: [&str; 13] = [
+    "table",
+    "dense_grid",
+    "record_cards",
+    "form_sections",
+    "detail_panel",
+    "drawer",
+    "route_detail",
+    "chart_panel",
+    "timeline",
+    "tree",
+    "canvas",
+    "document",
+    "conversation_thread",
+];
+
+pub const UI_COMPOSITION_CONSTRAINT_KINDS: [&str; 9] = [
+    "no_marketing_hero",
+    "no_feature_explainer_wall",
+    "no_large_intro_panel",
+    "no_decorative_filler_before_workflow",
+    "no_card_only_desktop_record_list_when_comparison_required",
+    "no_unwired_static_workflow",
+    "no_global_only_feedback",
+    "no_internal_process_copy",
+    "no_inaccessible_primary_action",
+];
+
 pub fn ui_quality_enum_refs() -> Value {
     json!({
         "scenarioKind": UI_SCENARIO_KINDS,
@@ -153,38 +299,221 @@ pub fn ui_quality_enum_refs() -> Value {
         "designTokenTemplateId": UI_DESIGN_TOKEN_TEMPLATE_IDS,
         "designTokenMergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES,
         "designTokenDuplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES,
-        "qualityGateSeverity": UI_QUALITY_GATE_SEVERITIES,
-        "qualityGateStatus": UI_QUALITY_GATE_STATUSES,
+        "qualityRuleSeverity": UI_QUALITY_RULE_SEVERITIES,
+        "qualityRuleStatus": UI_QUALITY_RULE_STATUSES,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiState": UI_REQUIRED_STATES,
         "knownReferenceGroups": known_ui_reference_groups()
     })
 }
 
-pub fn ui_quality_contract_shape() -> Value {
+pub fn ui_surface_decision_enum_refs() -> Value {
     json!({
-        "scenario": {
-            "kind": UI_SCENARIO_KINDS.join(" | "),
-            "reference": {
-                "group": "known UIX reference group",
-                "item": "known UIX reference item"
-            },
-            "reason": "string"
+        "patternMode": UI_SURFACE_PATTERN_MODES,
+        "knownPattern": UI_KNOWN_SURFACE_PATTERNS,
+        "confidence": UI_SURFACE_CONFIDENCE_LEVELS,
+        "userJob": UI_USER_JOB_KINDS,
+        "informationShape": UI_INFORMATION_SHAPES,
+        "operationModel": UI_OPERATION_MODELS,
+        "riskFactor": UI_RISK_FACTORS,
+        "navigationModel": UI_NAVIGATION_MODELS,
+        "devicePosture": UI_DEVICE_POSTURES,
+        "productMode": UI_PRODUCT_MODES,
+        "regionRole": UI_REGION_ROLES,
+        "presentationKind": UI_PRESENTATION_KINDS,
+        "compositionConstraint": UI_COMPOSITION_CONSTRAINT_KINDS,
+        "requiredUiState": UI_REQUIRED_STATES
+    })
+}
+
+pub fn ui_surface_decision_candidate_shape() -> Value {
+    json!({
+        "patternRankings": [{
+            "kind": UI_KNOWN_SURFACE_PATTERNS.join(" | "),
+            "score": "0.0-1.0",
+            "matchedSignals": ["string"],
+            "missingSignals": ["string"],
+            "mismatchSignals": ["string"],
+            "evidenceRefs": ["frontend dataView/action/workflow/interface/detail refs"]
+        }],
+        "selectedPattern": {
+            "mode": UI_SURFACE_PATTERN_MODES.join(" | "),
+            "knownPattern": "known pattern when mode=known, otherwise null",
+            "primaryKnownPattern": "known pattern when mode=hybrid, otherwise null",
+            "secondaryKnownPatterns": ["known patterns when mode=hybrid"],
+            "customPattern": "agent-defined short pattern name when mode=custom, otherwise null",
+            "nearestKnownPatterns": ["required when mode=custom"],
+            "confidence": UI_SURFACE_CONFIDENCE_LEVELS.join(" | "),
+            "rationale": "string",
+            "evidenceRefs": ["refs proving the selected pattern"]
         },
-        "qualityLevel": UI_QUALITY_LEVELS.join(" | "),
-        "surfacePolicy": UI_SURFACE_POLICIES.join(" | "),
-        "layoutBaseline": UI_LAYOUT_BASELINES.join(" | "),
-        "density": UI_DENSITIES.join(" | "),
-        "semanticTokenPolicy": UI_SEMANTIC_TOKEN_POLICIES.join(" | "),
-        "referenceProfile": {
-            "loadMode": "mcp_reference_load_plan",
-            "groups": known_ui_reference_groups(),
-            "referenceLoadPlan": [{
-                "refId": "uix.core.core",
-                "path": "uix/core.md",
-                "reason": "Selected UIX reference file."
+        "semanticFacts": ui_surface_semantic_facts_shape(),
+        "layoutModel": ui_surface_layout_model_shape(),
+        "regionModel": ui_surface_region_model_shape(),
+        "informationModel": ui_surface_information_model_shape(),
+        "actionModel": ui_surface_action_model_shape(),
+        "stateModel": ui_surface_state_model_shape(),
+        "compositionConstraints": ui_surface_composition_constraints_shape(),
+        "contentBoundary": ui_surface_content_boundary_shape()
+    })
+}
+
+pub fn ui_surface_decision_candidate_template() -> Value {
+    json!({
+        "patternRankings": [{
+            "kind": "collection_workbench",
+            "score": 0.0,
+            "matchedSignals": [],
+            "missingSignals": [],
+            "mismatchSignals": [],
+            "evidenceRefs": []
+        }],
+        "selectedPattern": {
+            "mode": "known",
+            "knownPattern": "collection_workbench",
+            "primaryKnownPattern": null,
+            "secondaryKnownPatterns": [],
+            "customPattern": null,
+            "nearestKnownPatterns": [],
+            "confidence": "medium",
+            "rationale": "",
+            "evidenceRefs": []
+        },
+        "semanticFacts": {
+            "userJobs": [],
+            "informationShapes": [],
+            "operationModels": [],
+            "riskFactors": [],
+            "navigationModel": "single_surface",
+            "devicePosture": "responsive_web",
+            "productMode": "internal_business_product",
+            "customExtensions": {
+                "userJobs": [],
+                "informationShapes": [],
+                "operationModels": [],
+                "riskFactors": [],
+                "navigationModel": "",
+                "devicePosture": "",
+                "productMode": ""
+            },
+            "evidenceRefs": []
+        },
+        "layoutModel": {
+            "layoutBaseline": "custom_product_layout",
+            "density": "balanced",
+            "primaryWorkRegionId": "region_primary",
+            "desktop": {
+                "layoutIntent": "",
+                "allowedPresentations": [],
+                "forbiddenPresentations": []
+            },
+            "tablet": {
+                "layoutIntent": "",
+                "allowedPresentations": []
+            },
+            "mobile": {
+                "layoutIntent": "",
+                "allowedPresentations": []
+            },
+            "customLayoutIntent": ""
+        },
+        "regionModel": [{
+            "regionId": "region_primary",
+            "role": "primary_work_region",
+            "purpose": "",
+            "desktopPlacement": "",
+            "mobilePlacement": "",
+            "requiredContent": [],
+            "forbiddenContent": [],
+            "dataViewRefs": ["view_1"],
+            "actionRefs": ["action_1"],
+            "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
+            "evidenceRefs": []
+        }],
+        "informationModel": {
+            "primaryObjects": [],
+            "fields": [],
+            "identityFields": [],
+            "statusFields": [],
+            "scanOrder": [],
+            "comparisonNeed": "none",
+            "detailNeed": "none",
+            "longContentPolicy": ""
+        },
+        "actionModel": [{
+            "actionId": "action_1",
+            "kind": "create_update",
+            "label": "",
+            "riskFactors": [],
+            "placementRegionId": "region_primary",
+            "pendingFeedback": "",
+            "successFeedback": "",
+            "errorFeedback": "",
+            "businessBlockingFeedback": "",
+            "postSuccessUpdate": "",
+            "evidenceRefs": []
+        }],
+        "stateModel": [{
+            "state": "loading",
+            "placementRegionId": "region_primary",
+            "placementRule": "",
+            "recoveryPath": "",
+            "evidenceRefs": []
+        }],
+        "compositionConstraints": {
+            "requiredComposition": [],
+            "forbiddenComposition": [],
+            "antiDemoRules": [],
+            "customRules": []
+        },
+        "contentBoundary": {
+            "allowedUserVisibleContent": [
+                "labels",
+                "filters",
+                "status",
+                "actions",
+                "validation",
+                "business_feedback"
+            ],
+            "forbiddenUserVisibleContent": [],
+            "customForbiddenContent": [],
+            "copyRule": "Use product language for the user task; do not show delivery, runtime, stack, validator, or generated artifact language unless the product mode requires it."
+        }
+    })
+}
+
+pub fn ui_surface_decision_contract_shape() -> Value {
+    json!({
+        "schemaVersion": "1.0",
+        "contractKind": "ui_surface_decision_contract",
+        "patternDecision": {
+            "mode": UI_SURFACE_PATTERN_MODES.join(" | "),
+            "knownPattern": "known pattern when mode=known, otherwise null",
+            "primaryKnownPattern": "known pattern when mode=hybrid, otherwise null",
+            "secondaryKnownPatterns": ["known pattern"],
+            "customPattern": "custom pattern name when mode=custom, otherwise null",
+            "nearestKnownPatterns": ["known pattern"],
+            "confidence": UI_SURFACE_CONFIDENCE_LEVELS.join(" | "),
+            "rationale": "string",
+            "evidenceRefs": ["refs proving the selected pattern"],
+            "rankings": [{
+                "kind": UI_KNOWN_SURFACE_PATTERNS.join(" | "),
+                "score": "0.0-1.0",
+                "matchedSignals": ["string"],
+                "missingSignals": ["string"],
+                "mismatchSignals": ["string"],
+                "evidenceRefs": ["string"]
             }]
         },
+        "semanticFacts": ui_surface_semantic_facts_shape(),
+        "layoutModel": ui_surface_layout_model_shape(),
+        "regionModel": ui_surface_region_model_shape(),
+        "informationModel": ui_surface_information_model_shape(),
+        "actionModel": ui_surface_action_model_shape(),
+        "stateModel": ui_surface_state_model_shape(),
+        "compositionConstraints": ui_surface_composition_constraints_shape(),
+        "contentBoundary": ui_surface_content_boundary_shape(),
+        "semanticTokenPolicy": UI_SEMANTIC_TOKEN_POLICIES.join(" | "),
         "designTokenAssetPlan": {
             "strategy": UI_DESIGN_TOKEN_STRATEGIES.join(" | "),
             "templateId": "known design token template item or null",
@@ -199,58 +528,145 @@ pub fn ui_quality_contract_shape() -> Value {
             "mergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES.join(" | "),
             "duplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES.join(" | ")
         },
-        "forbiddenUserVisibleContent": [UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | ")],
-        "requiredUiStates": [{
-            "state": UI_REQUIRED_STATES.join(" | "),
-            "expectation": "string"
+        "referencePlan": [{
+            "refId": "uix.core.core",
+            "path": "uix/core.md",
+            "reason": "MCP-selected UIX reference for this decision contract."
         }],
-        "businessUiRules": [{
+        "qualityRules": [{
             "ruleId": "string",
-            "expectation": "string"
-        }],
-        "qualityGates": [{
-            "gateId": "known UI gate id",
-            "sourceRefId": "uix reference id such as uix.scenarios.admin-dashboard",
-            "severity": UI_QUALITY_GATE_SEVERITIES.join(" | "),
-            "appliesToSurfaceRoles": ["app_shell | page | record_list | record_detail | form | action_panel | navigation"],
-            "expectation": "short executable UI quality expectation",
-            "evidenceRequired": ["changed_files", "state_coverage", "source_check", "render_or_environment_reason"]
+            "severity": UI_QUALITY_RULE_SEVERITIES.join(" | "),
+            "appliesToRegionIds": ["region id"],
+            "appliesToActionIds": ["action id"],
+            "appliesToStateKinds": [UI_REQUIRED_STATES.join(" | ")],
+            "expectation": "executable quality expectation",
+            "evidenceRequired": ["region_evidence | action_evidence | state_evidence | responsive_evidence | composition_evidence | rendered_evidence | source_evidence"]
         }]
     })
 }
 
-pub fn ui_quality_contract_agent_shape() -> Value {
+fn ui_surface_semantic_facts_shape() -> Value {
     json!({
-        "scenario": {
-            "kind": UI_SCENARIO_KINDS.join(" | "),
-            "reason": "string"
+        "userJobs": [UI_USER_JOB_KINDS.join(" | ")],
+        "informationShapes": [UI_INFORMATION_SHAPES.join(" | ")],
+        "operationModels": [UI_OPERATION_MODELS.join(" | ")],
+        "riskFactors": [UI_RISK_FACTORS.join(" | ")],
+        "navigationModel": UI_NAVIGATION_MODELS.join(" | "),
+        "devicePosture": UI_DEVICE_POSTURES.join(" | "),
+        "productMode": UI_PRODUCT_MODES.join(" | "),
+        "customExtensions": {
+            "userJobs": ["required when user job exceeds enum"],
+            "informationShapes": ["required when information shape exceeds enum"],
+            "operationModels": ["required when operation model exceeds enum"],
+            "riskFactors": ["required when risk factor exceeds enum"],
+            "navigationModel": "custom navigation model when enum does not fit",
+            "devicePosture": "custom device posture when enum does not fit",
+            "productMode": "custom product mode when enum does not fit"
         },
-        "qualityLevel": UI_QUALITY_LEVELS.join(" | "),
-        "surfacePolicy": UI_SURFACE_POLICIES.join(" | "),
+        "evidenceRefs": ["refs supporting semantic facts"]
+    })
+}
+
+fn ui_surface_layout_model_shape() -> Value {
+    json!({
         "layoutBaseline": UI_LAYOUT_BASELINES.join(" | "),
         "density": UI_DENSITIES.join(" | "),
-        "designTokenAssetPlan": {
-            "strategy": UI_DESIGN_TOKEN_STRATEGIES.join(" | "),
-            "templateId": "known design token template item or null",
-            "targetFiles": ["project-relative path"],
-            "existingStyleEvidence": {
-                "tailwindConfigRefs": ["project-relative path"],
-                "tokenFileRefs": ["project-relative path"],
-                "globalStyleRefs": ["project-relative path"],
-                "componentThemeRefs": ["project-relative path"],
-                "summary": "string"
-            },
-            "mergePolicy": UI_DESIGN_TOKEN_MERGE_POLICIES.join(" | "),
-            "duplicationPolicy": UI_DESIGN_TOKEN_DUPLICATION_POLICIES.join(" | ")
+        "primaryWorkRegionId": "region id",
+        "desktop": {
+            "layoutIntent": "string",
+            "allowedPresentations": [UI_PRESENTATION_KINDS.join(" | ")],
+            "forbiddenPresentations": [UI_PRESENTATION_KINDS.join(" | composition constraint")]
         },
-        "requiredUiStates": [{
-            "state": UI_REQUIRED_STATES.join(" | "),
-            "expectation": "business-specific UI state expectation"
-        }],
-        "businessUiRules": [{
-            "ruleId": "string",
-            "expectation": "business-specific UI quality rule"
-        }]
+        "tablet": {
+            "layoutIntent": "string",
+            "allowedPresentations": [UI_PRESENTATION_KINDS.join(" | ")]
+        },
+        "mobile": {
+            "layoutIntent": "string",
+            "allowedPresentations": [UI_PRESENTATION_KINDS.join(" | ")]
+        },
+        "customLayoutIntent": "required when known presentation kinds do not fit"
+    })
+}
+
+fn ui_surface_region_model_shape() -> Value {
+    json!([{
+        "regionId": "string",
+        "role": UI_REGION_ROLES.join(" | "),
+        "purpose": "string",
+        "desktopPlacement": "string",
+        "mobilePlacement": "string",
+        "requiredContent": ["string"],
+        "forbiddenContent": ["string"],
+        "dataViewRefs": ["string"],
+        "actionRefs": ["string"],
+        "stateRefs": [UI_REQUIRED_STATES.join(" | ")],
+        "evidenceRefs": ["string"]
+    }])
+}
+
+fn ui_surface_information_model_shape() -> Value {
+    json!({
+        "primaryObjects": ["business object name"],
+        "fields": ["business field or display field"],
+        "identityFields": ["field"],
+        "statusFields": ["field"],
+        "scanOrder": ["identity | status | decision field | action | custom item"],
+        "comparisonNeed": "none | row_comparison | side_by_side | trend_comparison | custom",
+        "detailNeed": "none | side_panel | drawer | route | inline_expansion | custom",
+        "longContentPolicy": "string"
+    })
+}
+
+fn ui_surface_action_model_shape() -> Value {
+    json!([{
+        "actionId": "string",
+        "kind": UI_OPERATION_MODELS.join(" | "),
+        "label": "business action label",
+        "riskFactors": [UI_RISK_FACTORS.join(" | ")],
+        "placementRegionId": "region id",
+        "pendingFeedback": "string",
+        "successFeedback": "string",
+        "errorFeedback": "string",
+        "businessBlockingFeedback": "string",
+        "postSuccessUpdate": "string",
+        "evidenceRefs": ["string"]
+    }])
+}
+
+fn ui_surface_state_model_shape() -> Value {
+    json!([{
+        "state": UI_REQUIRED_STATES.join(" | validation | disabled | stale"),
+        "placementRegionId": "region id",
+        "placementRule": "string",
+        "recoveryPath": "string",
+        "evidenceRefs": ["string"]
+    }])
+}
+
+fn ui_surface_composition_constraints_shape() -> Value {
+    json!({
+        "requiredComposition": ["string"],
+        "forbiddenComposition": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | custom composition constraint")],
+        "antiDemoRules": [UI_COMPOSITION_CONSTRAINT_KINDS.join(" | custom anti-demo rule")],
+        "customRules": ["required when known constraints do not cover the product surface"]
+    })
+}
+
+fn ui_surface_content_boundary_shape() -> Value {
+    json!({
+        "allowedUserVisibleContent": [
+            "labels",
+            "filters",
+            "status",
+            "actions",
+            "validation",
+            "business_feedback",
+            "help_entry"
+        ],
+        "forbiddenUserVisibleContent": [UI_FORBIDDEN_USER_VISIBLE_CONTENT.join(" | feature_explanation | custom forbidden copy class")],
+        "customForbiddenContent": ["required when product-specific content must be blocked"],
+        "copyRule": "Use product language for the user task; do not show delivery, runtime, stack, validator, or generated artifact language unless the product mode requires it."
     })
 }
 
@@ -265,7 +681,7 @@ pub fn build_ui_quality_seed(
     let required_reference_groups =
         required_reference_groups(primary_scenario, &stack_items, &design_token_seed);
     let reference_load_plan = ui_reference_load_plan(&required_reference_groups);
-    let quality_gate_preview = ui_quality_gates_for_contract(
+    let quality_rule_preview = ui_quality_rule_preview(
         primary_scenario,
         &required_reference_groups,
         &design_token_seed,
@@ -280,185 +696,16 @@ pub fn build_ui_quality_seed(
         "semanticTokenPolicy": "semantic_tokens_required",
         "requiredReferenceGroups": required_reference_groups,
         "referenceLoadPlan": reference_load_plan,
-        "qualityGatePreview": quality_gate_preview,
+        "qualityRulePreview": quality_rule_preview,
         "stackReferenceCandidates": stack_items,
         "designTokenAssetPlan": design_token_seed,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": UI_REQUIRED_STATES,
-        "selectionRule": "Pick one scenarioKind from scenarioCandidates and write only agent-owned uiQualityContract decisions. referenceLoadPlan and qualityGatePreview describe required references and gates to honor, but MCP derives referenceProfile and qualityGates during submit."
+        "selectionRule": "Use these candidates only as hints while writing surfaceDecisionCandidate. Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside the candidate; MCP derives uiSurfaceDecisionContract.qualityRules during submit."
     })
 }
 
-pub fn ui_quality_contract_template(ui_quality_seed: &Value) -> Value {
-    let scenario = ui_quality_seed
-        .pointer("/scenarioCandidates/0/kind")
-        .and_then(Value::as_str)
-        .unwrap_or("custom_product_ui");
-    let scenario_reference = ui_quality_seed
-        .pointer("/scenarioCandidates/0/reference")
-        .cloned()
-        .unwrap_or_else(|| scenario_reference_value("custom_product_ui"));
-    let quality_level = ui_quality_seed
-        .get("qualityLevel")
-        .and_then(Value::as_str)
-        .unwrap_or("production_internal_product");
-    let surface_policy = ui_quality_seed
-        .pointer("/surfacePolicyCandidates/0")
-        .and_then(Value::as_str)
-        .unwrap_or("business_ui_only");
-    let layout_baseline = ui_quality_seed
-        .pointer("/layoutBaselineCandidates/0")
-        .and_then(Value::as_str)
-        .unwrap_or("custom_product_layout");
-    let density = ui_quality_seed
-        .pointer("/densityCandidates/0")
-        .and_then(Value::as_str)
-        .unwrap_or("balanced");
-    let semantic_token_policy = ui_quality_seed
-        .get("semanticTokenPolicy")
-        .and_then(Value::as_str)
-        .unwrap_or("semantic_tokens_required");
-    let reference_groups = ui_quality_seed
-        .get("requiredReferenceGroups")
-        .cloned()
-        .filter(|groups| groups.as_object().is_some_and(|object| !object.is_empty()))
-        .unwrap_or_else(|| {
-            let design_token_asset_plan = ui_quality_seed
-                .get("designTokenAssetPlan")
-                .cloned()
-                .unwrap_or_else(default_design_token_asset_plan);
-            required_reference_groups(scenario, &[], &design_token_asset_plan)
-        });
-    let reference_load_plan = ui_quality_seed
-        .get("referenceLoadPlan")
-        .cloned()
-        .filter(|plan| plan.as_array().is_some_and(|items| !items.is_empty()))
-        .unwrap_or_else(|| ui_reference_load_plan(&reference_groups));
-    let design_token_asset_plan = ui_quality_seed
-        .get("designTokenAssetPlan")
-        .cloned()
-        .unwrap_or_else(default_design_token_asset_plan);
-    let quality_gates =
-        ui_quality_gates_for_contract(scenario, &reference_groups, &design_token_asset_plan);
-
-    json!({
-        "scenario": {
-            "kind": scenario,
-            "reference": scenario_reference,
-            "reason": "Selected from uiQualitySeed.scenarioCandidates for the confirmed frontend surfaces and product context."
-        },
-        "qualityLevel": quality_level,
-        "surfacePolicy": surface_policy,
-        "layoutBaseline": layout_baseline,
-        "density": density,
-        "semanticTokenPolicy": semantic_token_policy,
-        "referenceProfile": {
-            "loadMode": "mcp_reference_load_plan",
-            "groups": reference_groups,
-            "referenceLoadPlan": reference_load_plan
-        },
-        "designTokenAssetPlan": design_token_asset_plan,
-        "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
-        "requiredUiStates": [
-            {
-                "state": "loading",
-                "expectation": "Primary data surfaces provide stable loading treatment without layout jumps."
-            },
-            {
-                "state": "success",
-                "expectation": "Completed actions give business-language confirmation and refresh affected data."
-            },
-            {
-                "state": "error",
-                "expectation": "System errors are visible, recoverable, and do not expose implementation details."
-            },
-            {
-                "state": "empty",
-                "expectation": "Empty data views explain the business state and keep next actions available."
-            },
-            {
-                "state": "business_blocking",
-                "expectation": "Business-rule blocks are clearly separated from technical failures."
-            }
-        ],
-        "businessUiRules": [
-            {
-                "ruleId": "current_business_surface_complete",
-                "expectation": "The task-owned user-visible surface completes the current-phase business workflow with its required data, actions, and feedback."
-            }
-        ],
-        "qualityGates": quality_gates
-    })
-}
-
-pub fn ui_quality_contract_agent_template(ui_quality_seed: &Value) -> Value {
-    let scenario = ui_quality_seed
-        .pointer("/scenarioCandidates/0/kind")
-        .and_then(Value::as_str)
-        .unwrap_or("custom_product_ui");
-    let quality_level = ui_quality_seed
-        .get("qualityLevel")
-        .and_then(Value::as_str)
-        .unwrap_or("production_internal_product");
-    let surface_policy = ui_quality_seed
-        .pointer("/surfacePolicyCandidates/0")
-        .and_then(Value::as_str)
-        .unwrap_or("business_ui_only");
-    let layout_baseline = ui_quality_seed
-        .pointer("/layoutBaselineCandidates/0")
-        .and_then(Value::as_str)
-        .unwrap_or("custom_product_layout");
-    let density = ui_quality_seed
-        .pointer("/densityCandidates/0")
-        .and_then(Value::as_str)
-        .unwrap_or("balanced");
-    let design_token_asset_plan = ui_quality_seed
-        .get("designTokenAssetPlan")
-        .cloned()
-        .unwrap_or_else(default_design_token_asset_plan);
-
-    json!({
-        "scenario": {
-            "kind": scenario,
-            "reason": "Selected from uiQualitySeed.scenarioCandidates for the confirmed frontend surfaces and product context."
-        },
-        "qualityLevel": quality_level,
-        "surfacePolicy": surface_policy,
-        "layoutBaseline": layout_baseline,
-        "density": density,
-        "designTokenAssetPlan": design_token_asset_plan,
-        "requiredUiStates": [
-            {
-                "state": "loading",
-                "expectation": "Primary data surfaces provide stable loading treatment without layout jumps."
-            },
-            {
-                "state": "success",
-                "expectation": "Completed actions give business-language confirmation and refresh affected data."
-            },
-            {
-                "state": "error",
-                "expectation": "System errors are visible, recoverable, and do not expose implementation details."
-            },
-            {
-                "state": "empty",
-                "expectation": "Empty data views explain the business state and keep next actions available."
-            },
-            {
-                "state": "business_blocking",
-                "expectation": "Business-rule blocks are clearly separated from technical failures."
-            }
-        ],
-        "businessUiRules": [
-            {
-                "ruleId": "current_business_surface_complete",
-                "expectation": "The task-owned user-visible surface completes the current-phase business workflow with its required data, actions, and feedback."
-            }
-        ]
-    })
-}
-
-pub fn normalize_ui_quality_contract_for_persist(
+pub fn normalize_ui_surface_decision_contract_for_persist(
     frontend_experience: &mut Value,
     ui_quality_seed: &Value,
 ) -> bool {
@@ -469,76 +716,25 @@ pub fn normalize_ui_quality_contract_for_persist(
     if !required {
         return false;
     }
-    let Some(contract) = frontend_experience
-        .get_mut("uiQualityContract")
-        .and_then(Value::as_object_mut)
+    let Some(candidate) = frontend_experience
+        .get("surfaceDecisionCandidate")
+        .cloned()
+        .filter(Value::is_object)
     else {
         return false;
     };
 
-    let mut changed = false;
-    let scenario = contract
-        .get("scenario")
-        .and_then(Value::as_object)
-        .and_then(|scenario| scenario.get("kind"))
-        .and_then(Value::as_str)
-        .or_else(|| {
-            ui_quality_seed
-                .pointer("/scenarioCandidates/0/kind")
-                .and_then(Value::as_str)
-        })
-        .unwrap_or("custom_product_ui")
-        .to_string();
-
-    let scenario_object = contract
-        .entry("scenario".to_string())
-        .or_insert_with(|| json!({}));
-    if let Some(scenario_object) = scenario_object.as_object_mut() {
-        set_value_if_changed(
-            scenario_object,
-            "reference",
-            scenario_reference_value(&scenario),
-            &mut changed,
-        );
-    }
-
+    let design_token_plan = frontend_experience
+        .pointer("/surfaceDecisionCandidate/designTokenAssetPlan")
+        .cloned()
+        .or_else(|| ui_quality_seed.get("designTokenAssetPlan").cloned())
+        .unwrap_or_else(default_design_token_asset_plan);
     let semantic_token_policy = ui_quality_seed
         .get("semanticTokenPolicy")
-        .and_then(Value::as_str)
-        .unwrap_or("semantic_tokens_required");
-    set_value_if_changed(
-        contract,
-        "semanticTokenPolicy",
-        json!(semantic_token_policy),
-        &mut changed,
-    );
-
-    set_value_if_changed(
-        contract,
-        "forbiddenUserVisibleContent",
-        json!(UI_FORBIDDEN_USER_VISIBLE_CONTENT),
-        &mut changed,
-    );
-
-    if !contract
-        .get("designTokenAssetPlan")
-        .is_some_and(Value::is_object)
-    {
-        let design_token_asset_plan = ui_quality_seed
-            .get("designTokenAssetPlan")
-            .cloned()
-            .unwrap_or_else(default_design_token_asset_plan);
-        set_value_if_changed(
-            contract,
-            "designTokenAssetPlan",
-            design_token_asset_plan,
-            &mut changed,
-        );
-    }
-    let design_token_plan = contract
-        .get("designTokenAssetPlan")
         .cloned()
-        .unwrap_or_else(default_design_token_asset_plan);
+        .unwrap_or_else(|| json!("semantic_tokens_required"));
+    let pattern_decision = normalized_surface_pattern_decision(&candidate);
+    let scenario = ui_scenario_for_surface_decision(&pattern_decision, ui_quality_seed);
     let stack_items = ui_quality_seed
         .get("stackReferenceCandidates")
         .and_then(Value::as_array)
@@ -548,22 +744,285 @@ pub fn normalize_ui_quality_contract_for_persist(
         .map(str::to_string)
         .collect::<Vec<_>>();
     let reference_groups = required_reference_groups(&scenario, &stack_items, &design_token_plan);
-    let reference_load_plan = ui_reference_load_plan(&reference_groups);
-    let quality_gates =
-        ui_quality_gates_for_contract(&scenario, &reference_groups, &design_token_plan);
-    set_value_if_changed(
-        contract,
-        "referenceProfile",
-        json!({
-            "loadMode": "mcp_reference_load_plan",
-            "groups": reference_groups,
-            "referenceLoadPlan": reference_load_plan
-        }),
-        &mut changed,
+    let reference_plan = ui_reference_load_plan(&reference_groups);
+    let region_model = candidate_model_or_template(&candidate, "regionModel");
+    let action_model = candidate_model_or_template(&candidate, "actionModel");
+    let quality_rules = ui_quality_rules_for_contract(
+        &scenario,
+        &reference_groups,
+        &design_token_plan,
+        &region_model,
+        &action_model,
     );
-    set_value_if_changed(contract, "qualityGates", quality_gates, &mut changed);
+    let layout_model = normalized_surface_layout_model(&candidate, &scenario);
+    let contract = json!({
+        "schemaVersion": "1.0",
+        "contractKind": "ui_surface_decision_contract",
+        "patternDecision": pattern_decision,
+        "semanticFacts": candidate_model_or_template(&candidate, "semanticFacts"),
+        "layoutModel": layout_model,
+        "regionModel": region_model,
+        "informationModel": candidate_model_or_template(&candidate, "informationModel"),
+        "actionModel": action_model,
+        "stateModel": candidate_model_or_template(&candidate, "stateModel"),
+        "compositionConstraints": normalized_surface_composition_constraints(&candidate),
+        "contentBoundary": normalized_surface_content_boundary(&candidate),
+        "semanticTokenPolicy": semantic_token_policy,
+        "designTokenAssetPlan": design_token_plan,
+        "referencePlan": reference_plan,
+        "qualityRules": quality_rules
+    });
 
+    let Some(object) = frontend_experience.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    set_value_if_changed(object, "uiSurfaceDecisionContract", contract, &mut changed);
     changed
+}
+
+fn normalized_surface_pattern_decision(candidate: &Value) -> Value {
+    let template = ui_surface_decision_candidate_template();
+    let selected = candidate
+        .get("selectedPattern")
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| {
+            template
+                .get("selectedPattern")
+                .expect("template selectedPattern")
+        });
+    json!({
+        "mode": selected.get("mode").cloned().unwrap_or_else(|| json!("custom")),
+        "knownPattern": selected.get("knownPattern").cloned().unwrap_or(Value::Null),
+        "primaryKnownPattern": selected.get("primaryKnownPattern").cloned().unwrap_or(Value::Null),
+        "secondaryKnownPatterns": selected.get("secondaryKnownPatterns").cloned().unwrap_or_else(|| json!([])),
+        "customPattern": selected.get("customPattern").cloned().unwrap_or(Value::Null),
+        "nearestKnownPatterns": selected.get("nearestKnownPatterns").cloned().unwrap_or_else(|| json!([])),
+        "confidence": selected.get("confidence").cloned().unwrap_or_else(|| json!("low")),
+        "rationale": selected.get("rationale").cloned().unwrap_or_else(|| json!("")),
+        "evidenceRefs": selected.get("evidenceRefs").cloned().unwrap_or_else(|| json!([])),
+        "rankings": candidate.get("patternRankings").cloned().unwrap_or_else(|| json!([]))
+    })
+}
+
+fn candidate_model_or_template(candidate: &Value, key: &str) -> Value {
+    candidate
+        .get(key)
+        .cloned()
+        .filter(|value| value.is_object() || value.is_array())
+        .or_else(|| ui_surface_decision_candidate_template().get(key).cloned())
+        .unwrap_or(Value::Null)
+}
+
+fn normalized_surface_layout_model(candidate: &Value, scenario: &str) -> Value {
+    let mut value = candidate_model_or_template(candidate, "layoutModel");
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    if object
+        .get("layoutBaseline")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        object.insert(
+            "layoutBaseline".to_string(),
+            json!(derive_layout_baseline(candidate, scenario)),
+        );
+    }
+    if object
+        .get("density")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        object.insert("density".to_string(), json!("balanced"));
+    }
+    value
+}
+
+fn derive_layout_baseline(candidate: &Value, scenario: &str) -> &'static str {
+    let shell = candidate
+        .pointer("/layoutModel/shell")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            candidate
+                .pointer("/layoutModel/desktop/layoutIntent")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if shell.contains("sidebar") && shell.contains("topbar") {
+        return "sidebar_topbar_table_detail";
+    }
+    if shell.contains("console") {
+        return "data_console";
+    }
+    if shell.contains("mobile") {
+        return "mobile_task_flow";
+    }
+    layout_baseline_candidates(scenario)
+        .into_iter()
+        .next()
+        .unwrap_or("custom_product_layout")
+}
+
+fn normalized_surface_composition_constraints(candidate: &Value) -> Value {
+    let mut value = candidate_model_or_template(candidate, "compositionConstraints");
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    append_unique_strings(
+        object,
+        "antiDemoRules",
+        &[
+            "no_internal_process_copy",
+            "no_feature_explainer_wall",
+            "no_decorative_filler_before_workflow",
+            "no_unwired_static_workflow",
+            "no_global_only_feedback",
+        ],
+    );
+    append_unique_strings(
+        object,
+        "forbiddenComposition",
+        &[
+            "no_large_intro_panel",
+            "no_decorative_filler_before_workflow",
+            "no_inaccessible_primary_action",
+        ],
+    );
+    value
+}
+
+fn normalized_surface_content_boundary(candidate: &Value) -> Value {
+    let mut value = candidate_model_or_template(candidate, "contentBoundary");
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    append_unique_strings(
+        object,
+        "forbiddenUserVisibleContent",
+        &UI_FORBIDDEN_USER_VISIBLE_CONTENT,
+    );
+    if object
+        .get("copyRule")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        object.insert(
+            "copyRule".to_string(),
+            json!("Use product language for the user task; do not show delivery, runtime, stack, validator, or generated artifact language unless the product mode requires it."),
+        );
+    }
+    value
+}
+
+fn append_unique_strings(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    additions: &[&str],
+) {
+    let mut items = object
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    for addition in additions {
+        items.insert((*addition).to_string());
+    }
+    object.insert(
+        key.to_string(),
+        Value::Array(items.into_iter().map(Value::String).collect()),
+    );
+}
+
+fn ui_scenario_for_surface_decision(pattern_decision: &Value, ui_quality_seed: &Value) -> String {
+    let mode = pattern_decision
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("custom");
+    let pattern = match mode {
+        "known" => pattern_decision.get("knownPattern").and_then(Value::as_str),
+        "hybrid" => pattern_decision
+            .get("primaryKnownPattern")
+            .and_then(Value::as_str),
+        "custom" => pattern_decision
+            .get("nearestKnownPatterns")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(Value::as_str),
+        _ => None,
+    };
+    let scenario = pattern
+        .and_then(ui_scenario_for_surface_pattern)
+        .or_else(|| {
+            ui_quality_seed
+                .pointer("/scenarioCandidates/0/kind")
+                .and_then(Value::as_str)
+        });
+    scenario.unwrap_or("custom_product_ui").to_string()
+}
+
+fn ui_scenario_for_surface_pattern(pattern: &str) -> Option<&'static str> {
+    match pattern {
+        "collection_workbench"
+        | "decision_queue"
+        | "form_flow"
+        | "settings_console"
+        | "support_inbox" => Some("admin_dashboard"),
+        "analytics_monitor" => Some("data_console"),
+        "developer_console" => Some("developer_tool"),
+        "content_page" => Some("docs_site"),
+        "marketing_surface" => Some("marketing_site"),
+        "immersive_workspace" => Some("immersive_3d"),
+        "mobile_task_flow" => Some("mobile_responsive"),
+        "editor_workspace" => Some("custom_product_ui"),
+        _ => None,
+    }
+}
+
+fn ui_quality_rules_for_contract(
+    scenario: &str,
+    reference_groups: &Value,
+    design_token_plan: &Value,
+    region_model: &Value,
+    action_model: &Value,
+) -> Value {
+    let region_ids = model_string_ids(region_model, "regionId");
+    let action_ids = model_string_ids(action_model, "actionId");
+    Value::Array(
+        ui_quality_rule_specs(scenario, reference_groups, design_token_plan)
+            .into_iter()
+            .filter_map(|rule| {
+                let rule_id = rule.get("ruleId").and_then(Value::as_str)?;
+                Some(json!({
+                    "ruleId": rule_id,
+                    "sourceRefId": rule.get("sourceRefId").cloned().unwrap_or(Value::Null),
+                    "severity": rule.get("severity").cloned().unwrap_or_else(|| json!("must")),
+                    "appliesToRegionIds": region_ids.clone(),
+                    "appliesToActionIds": action_ids.clone(),
+                    "appliesToStateKinds": UI_REQUIRED_STATES,
+                    "expectation": rule.get("expectation").cloned().unwrap_or_else(|| json!("")),
+                    "evidenceRequired": rule.get("evidenceRequired").cloned().unwrap_or_else(|| json!([]))
+                }))
+            })
+            .collect(),
+    )
+}
+
+fn model_string_ids(model: &Value, key: &str) -> Vec<String> {
+    model
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(key).and_then(Value::as_str))
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn set_value_if_changed(
@@ -578,7 +1037,7 @@ fn set_value_if_changed(
     }
 }
 
-pub fn validate_ui_quality_contract(frontend_experience: &Value) -> Vec<RepairIssue> {
+pub fn validate_ui_surface_decision_contract(frontend_experience: &Value) -> Vec<RepairIssue> {
     let mut issues = Vec::new();
     let required = frontend_experience
         .get("required")
@@ -587,120 +1046,473 @@ pub fn validate_ui_quality_contract(frontend_experience: &Value) -> Vec<RepairIs
     if !required {
         return issues;
     }
-    let Some(contract) = frontend_experience.get("uiQualityContract") else {
+    if !frontend_experience
+        .get("surfaceDecisionCandidate")
+        .is_some_and(Value::is_object)
+    {
         issues.push(issue(
-            "UI_QUALITY_CONTRACT_REQUIRED",
-            "content.frontendExperience.uiQualityContract",
-            "frontendExperience.required=true requires uiQualityContract so UI quality is planned at generation time.",
+            "UI_SURFACE_DECISION_CANDIDATE_REQUIRED",
+            "content.frontendExperience.surfaceDecisionCandidate",
+            "frontendExperience.required=true requires a structured surfaceDecisionCandidate so MCP can derive the authoritative UI surface contract.",
+        ));
+        return issues;
+    }
+    let Some(contract) = frontend_experience
+        .get("uiSurfaceDecisionContract")
+        .filter(|value| value.is_object())
+    else {
+        issues.push(issue(
+            "UI_SURFACE_DECISION_CONTRACT_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract",
+            "MCP must derive uiSurfaceDecisionContract from surfaceDecisionCandidate before accepting frontend_experience.",
         ));
         return issues;
     };
-    if !contract.is_object() {
-        issues.push(issue(
-            "UI_QUALITY_CONTRACT_INVALID",
-            "content.frontendExperience.uiQualityContract",
-            "uiQualityContract must be an object.",
-        ));
-        return issues;
-    }
     require_string_in(
         contract,
-        "/scenario/kind",
-        "content.frontendExperience.uiQualityContract.scenario.kind",
-        &UI_SCENARIO_KINDS,
-        "UI_QUALITY_SCENARIO_INVALID",
+        "/patternDecision/mode",
+        "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.mode",
+        &UI_SURFACE_PATTERN_MODES,
+        "UI_SURFACE_PATTERN_MODE_INVALID",
         &mut issues,
     );
-    require_string_in(
-        contract,
-        "/qualityLevel",
-        "content.frontendExperience.uiQualityContract.qualityLevel",
-        &UI_QUALITY_LEVELS,
-        "UI_QUALITY_LEVEL_INVALID",
-        &mut issues,
-    );
-    require_string_in(
-        contract,
-        "/surfacePolicy",
-        "content.frontendExperience.uiQualityContract.surfacePolicy",
-        &UI_SURFACE_POLICIES,
-        "UI_QUALITY_SURFACE_POLICY_INVALID",
-        &mut issues,
-    );
-    require_string_in(
-        contract,
-        "/layoutBaseline",
-        "content.frontendExperience.uiQualityContract.layoutBaseline",
-        &UI_LAYOUT_BASELINES,
-        "UI_QUALITY_LAYOUT_BASELINE_INVALID",
-        &mut issues,
-    );
-    require_string_in(
-        contract,
-        "/density",
-        "content.frontendExperience.uiQualityContract.density",
-        &UI_DENSITIES,
-        "UI_QUALITY_DENSITY_INVALID",
-        &mut issues,
-    );
+    validate_surface_pattern_decision(contract, &mut issues);
+    validate_surface_semantic_facts(contract, &mut issues);
+    validate_surface_regions_actions_states(contract, &mut issues);
+    validate_surface_content_boundary(contract, &mut issues);
     require_string_in(
         contract,
         "/semanticTokenPolicy",
-        "content.frontendExperience.uiQualityContract.semanticTokenPolicy",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticTokenPolicy",
         &UI_SEMANTIC_TOKEN_POLICIES,
-        "UI_QUALITY_TOKEN_POLICY_INVALID",
+        "UI_SURFACE_SEMANTIC_TOKEN_POLICY_INVALID",
         &mut issues,
     );
-    require_non_empty_string(
-        contract,
-        "/scenario/reason",
-        "content.frontendExperience.uiQualityContract.scenario.reason",
-        "UI_QUALITY_SCENARIO_REASON_REQUIRED",
-        &mut issues,
-    );
-    let scenario_kind = contract
-        .pointer("/scenario/kind")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if contract.pointer("/scenario/referenceId").is_some() {
-        issues.push(issue(
-            "UI_QUALITY_LEGACY_REFERENCE_FIELD_NOT_ALLOWED",
-            "content.frontendExperience.uiQualityContract.scenario.referenceId",
-            "scenario.referenceId is not allowed; use scenario.reference group/item instead.",
-        ));
-    }
-    let expected_scenario_ref = scenario_reference_value(scenario_kind);
-    if contract.pointer("/scenario/reference") != Some(&expected_scenario_ref) {
-        issues.push(issue(
-            "UI_QUALITY_SCENARIO_REFERENCE_INVALID",
-            "content.frontendExperience.uiQualityContract.scenario.reference",
-            "scenario.reference must match the selected scenario kind as a group/item reference.",
-        ));
-    }
-    validate_reference_groups(contract, &mut issues);
-    validate_required_string_array(
-        contract,
-        "/forbiddenUserVisibleContent",
-        "content.frontendExperience.uiQualityContract.forbiddenUserVisibleContent",
-        &UI_FORBIDDEN_USER_VISIBLE_CONTENT,
-        "UI_QUALITY_FORBIDDEN_CONTENT_INVALID",
-        &mut issues,
-    );
-    validate_design_token_asset_plan(contract, &mut issues);
-    validate_required_ui_states(contract, &mut issues);
-    validate_business_rules(contract, &mut issues);
-    validate_quality_gates(contract, &mut issues);
+    validate_surface_reference_plan(contract, &mut issues);
+    validate_surface_quality_rules(contract, &mut issues);
     issues
 }
 
-pub fn ui_quality_gates_for_contract(
+fn validate_surface_pattern_decision(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(pattern) = contract.get("patternDecision") else {
+        issues.push(issue(
+            "UI_SURFACE_PATTERN_DECISION_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.patternDecision",
+            "uiSurfaceDecisionContract requires patternDecision.",
+        ));
+        return;
+    };
+    require_string_in(
+        pattern,
+        "/confidence",
+        "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.confidence",
+        &UI_SURFACE_CONFIDENCE_LEVELS,
+        "UI_SURFACE_CONFIDENCE_INVALID",
+        issues,
+    );
+    require_non_empty_string(
+        pattern,
+        "/rationale",
+        "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.rationale",
+        "UI_SURFACE_PATTERN_RATIONALE_REQUIRED",
+        issues,
+    );
+    match pattern
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "known" => require_string_in(
+            pattern,
+            "/knownPattern",
+            "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.knownPattern",
+            &UI_KNOWN_SURFACE_PATTERNS,
+            "UI_SURFACE_KNOWN_PATTERN_INVALID",
+            issues,
+        ),
+        "hybrid" => {
+            require_string_in(
+                pattern,
+                "/primaryKnownPattern",
+                "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.primaryKnownPattern",
+                &UI_KNOWN_SURFACE_PATTERNS,
+                "UI_SURFACE_PRIMARY_PATTERN_INVALID",
+                issues,
+            );
+            validate_known_pattern_array(
+                pattern,
+                "/secondaryKnownPatterns",
+                "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.secondaryKnownPatterns",
+                "UI_SURFACE_SECONDARY_PATTERNS_INVALID",
+                issues,
+            );
+        }
+        "custom" => {
+            require_non_empty_string(
+                pattern,
+                "/customPattern",
+                "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.customPattern",
+                "UI_SURFACE_CUSTOM_PATTERN_REQUIRED",
+                issues,
+            );
+            validate_known_pattern_array(
+                pattern,
+                "/nearestKnownPatterns",
+                "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.nearestKnownPatterns",
+                "UI_SURFACE_NEAREST_PATTERNS_INVALID",
+                issues,
+            );
+        }
+        _ => {}
+    }
+    if !pattern
+        .get("rankings")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+    {
+        issues.push(issue(
+            "UI_SURFACE_PATTERN_RANKINGS_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.patternDecision.rankings",
+            "patternDecision.rankings must record at least one considered known pattern with evidence.",
+        ));
+    }
+}
+
+fn validate_known_pattern_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    code: &str,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let Some(items) = root.pointer(pointer).and_then(Value::as_array) else {
+        issues.push(issue(code, field_path, "field must be an array."));
+        return;
+    };
+    if items.is_empty() {
+        issues.push(issue(
+            code,
+            field_path,
+            "field must include at least one known pattern.",
+        ));
+        return;
+    }
+    for item in items {
+        if !item
+            .as_str()
+            .is_some_and(|value| UI_KNOWN_SURFACE_PATTERNS.contains(&value))
+        {
+            issues.push(issue(
+                code,
+                field_path,
+                "field must contain only known UI surface patterns.",
+            ));
+            return;
+        }
+    }
+}
+
+fn validate_surface_semantic_facts(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(facts) = contract.get("semanticFacts") else {
+        issues.push(issue(
+            "UI_SURFACE_SEMANTIC_FACTS_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts",
+            "uiSurfaceDecisionContract requires semanticFacts.",
+        ));
+        return;
+    };
+    validate_enum_array(
+        facts,
+        "/userJobs",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.userJobs",
+        &UI_USER_JOB_KINDS,
+        "UI_SURFACE_USER_JOBS_INVALID",
+        issues,
+    );
+    validate_enum_array(
+        facts,
+        "/informationShapes",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.informationShapes",
+        &UI_INFORMATION_SHAPES,
+        "UI_SURFACE_INFORMATION_SHAPES_INVALID",
+        issues,
+    );
+    validate_enum_array(
+        facts,
+        "/operationModels",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.operationModels",
+        &UI_OPERATION_MODELS,
+        "UI_SURFACE_OPERATION_MODELS_INVALID",
+        issues,
+    );
+    validate_enum_array(
+        facts,
+        "/riskFactors",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.riskFactors",
+        &UI_RISK_FACTORS,
+        "UI_SURFACE_RISK_FACTORS_INVALID",
+        issues,
+    );
+    require_string_in(
+        facts,
+        "/navigationModel",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.navigationModel",
+        &UI_NAVIGATION_MODELS,
+        "UI_SURFACE_NAVIGATION_MODEL_INVALID",
+        issues,
+    );
+    require_string_in(
+        facts,
+        "/devicePosture",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.devicePosture",
+        &UI_DEVICE_POSTURES,
+        "UI_SURFACE_DEVICE_POSTURE_INVALID",
+        issues,
+    );
+    require_string_in(
+        facts,
+        "/productMode",
+        "content.frontendExperience.uiSurfaceDecisionContract.semanticFacts.productMode",
+        &UI_PRODUCT_MODES,
+        "UI_SURFACE_PRODUCT_MODE_INVALID",
+        issues,
+    );
+}
+
+fn validate_enum_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    allowed: &[&str],
+    code: &str,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let Some(items) = root.pointer(pointer).and_then(Value::as_array) else {
+        issues.push(issue(code, field_path, "field must be an array."));
+        return;
+    };
+    if items.is_empty() {
+        issues.push(issue(code, field_path, "field must not be empty."));
+        return;
+    }
+    for item in items {
+        if !item.as_str().is_some_and(|value| allowed.contains(&value)) {
+            issues.push(issue(
+                code,
+                field_path,
+                "field uses an unsupported enum value.",
+            ));
+            return;
+        }
+    }
+}
+
+fn validate_surface_regions_actions_states(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    validate_required_object_array(
+        contract,
+        "/regionModel",
+        "content.frontendExperience.uiSurfaceDecisionContract.regionModel",
+        "regionId",
+        "UI_SURFACE_REGIONS_REQUIRED",
+        issues,
+    );
+    validate_required_object_array(
+        contract,
+        "/actionModel",
+        "content.frontendExperience.uiSurfaceDecisionContract.actionModel",
+        "actionId",
+        "UI_SURFACE_ACTIONS_REQUIRED",
+        issues,
+    );
+    validate_required_object_array(
+        contract,
+        "/stateModel",
+        "content.frontendExperience.uiSurfaceDecisionContract.stateModel",
+        "state",
+        "UI_SURFACE_STATES_REQUIRED",
+        issues,
+    );
+}
+
+fn validate_required_object_array(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    identity_key: &str,
+    code: &str,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let Some(items) = root.pointer(pointer).and_then(Value::as_array) else {
+        issues.push(issue(code, field_path, "field must be an array."));
+        return;
+    };
+    if items.is_empty() {
+        issues.push(issue(code, field_path, "field must not be empty."));
+        return;
+    }
+    for item in items {
+        if item
+            .get(identity_key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            issues.push(issue(
+                code,
+                field_path,
+                "each item must include a non-empty identity field.",
+            ));
+            return;
+        }
+    }
+}
+
+fn validate_surface_content_boundary(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    validate_required_string_array(
+        contract,
+        "/contentBoundary/forbiddenUserVisibleContent",
+        "content.frontendExperience.uiSurfaceDecisionContract.contentBoundary.forbiddenUserVisibleContent",
+        &UI_FORBIDDEN_USER_VISIBLE_CONTENT,
+        "UI_SURFACE_FORBIDDEN_CONTENT_INVALID",
+        issues,
+    );
+    require_non_empty_string(
+        contract,
+        "/contentBoundary/copyRule",
+        "content.frontendExperience.uiSurfaceDecisionContract.contentBoundary.copyRule",
+        "UI_SURFACE_COPY_RULE_REQUIRED",
+        issues,
+    );
+}
+
+fn validate_surface_reference_plan(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(plan) = contract.get("referencePlan").and_then(Value::as_array) else {
+        issues.push(issue(
+            "UI_SURFACE_REFERENCE_PLAN_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.referencePlan",
+            "uiSurfaceDecisionContract.referencePlan must be MCP-derived and non-empty.",
+        ));
+        return;
+    };
+    if plan.is_empty() {
+        issues.push(issue(
+            "UI_SURFACE_REFERENCE_PLAN_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.referencePlan",
+            "uiSurfaceDecisionContract.referencePlan must not be empty.",
+        ));
+    }
+    for (index, item) in plan.iter().enumerate() {
+        for key in ["refId", "path", "reason"] {
+            if item
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                issues.push(issue(
+                    "UI_SURFACE_REFERENCE_PLAN_INVALID",
+                    &format!(
+                        "content.frontendExperience.uiSurfaceDecisionContract.referencePlan[{index}].{key}"
+                    ),
+                    "referencePlan entries must include refId, path, and reason.",
+                ));
+            }
+        }
+    }
+}
+
+fn validate_surface_quality_rules(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(rules) = contract.get("qualityRules").and_then(Value::as_array) else {
+        issues.push(issue(
+            "UI_SURFACE_QUALITY_RULES_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.qualityRules",
+            "uiSurfaceDecisionContract.qualityRules must be MCP-derived and non-empty.",
+        ));
+        return;
+    };
+    if rules.is_empty() {
+        issues.push(issue(
+            "UI_SURFACE_QUALITY_RULES_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.qualityRules",
+            "uiSurfaceDecisionContract.qualityRules must not be empty.",
+        ));
+    }
+    for (index, item) in rules.iter().enumerate() {
+        for key in ["ruleId", "expectation"] {
+            if item
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+            {
+                issues.push(issue(
+                    "UI_SURFACE_QUALITY_RULE_INVALID",
+                    &format!(
+                        "content.frontendExperience.uiSurfaceDecisionContract.qualityRules[{index}].{key}"
+                    ),
+                    "qualityRules entries must include ruleId and expectation.",
+                ));
+            }
+        }
+        require_string_in(
+            item,
+            "/severity",
+            &format!(
+                "content.frontendExperience.uiSurfaceDecisionContract.qualityRules[{index}].severity"
+            ),
+            &UI_QUALITY_RULE_SEVERITIES,
+            "UI_SURFACE_QUALITY_RULE_SEVERITY_INVALID",
+            issues,
+        );
+    }
+}
+
+fn ui_quality_rule_preview(
     scenario: &str,
     reference_groups: &Value,
     design_token_plan: &Value,
 ) -> Value {
-    let mut gates = Vec::new();
-    push_gate(
-        &mut gates,
+    Value::Array(ui_quality_rule_specs(
+        scenario,
+        reference_groups,
+        design_token_plan,
+    ))
+}
+
+fn ui_quality_rule_specs(
+    scenario: &str,
+    reference_groups: &Value,
+    design_token_plan: &Value,
+) -> Vec<Value> {
+    let mut rules = Vec::new();
+    push_rule(
+        &mut rules,
+        "surface.contract.evidence_coverage",
+        "uix.core.surface-decision",
+        "must",
+        &[
+            "app_shell",
+            "page",
+            "navigation",
+            "record_list",
+            "record_detail",
+            "form",
+            "action_panel",
+        ],
+        "Task-owned UI regions, actions, states, quality rules, and content boundary must be implemented and proven through frontendQualitySelfCheck surface evidence.",
+        &[
+            "surface_region_evidence",
+            "surface_action_evidence",
+            "surface_state_evidence",
+            "surface_quality_rule_evidence",
+            "content_boundary_evidence",
+        ],
+    );
+    push_rule(
+        &mut rules,
         "anti.product_boundary.no_internal_process",
         "uix.core.anti-patterns",
         "must",
@@ -708,8 +1520,8 @@ pub fn ui_quality_gates_for_contract(
         "User-visible UI must not expose Loom/MCP terms, delivery progress, runtime commands, verification instructions, stack explanations, request ids, or future-phase planning language.",
         &["changed_files", "source_check", "forbidden_content_check"],
     );
-    push_gate(
-        &mut gates,
+    push_rule(
+        &mut rules,
         "verify.rendered_viewports",
         "uix.core.verification",
         "must",
@@ -719,33 +1531,33 @@ pub fn ui_quality_gates_for_contract(
     );
     match scenario {
         "admin_dashboard" | "fintech_workstation" => {
-            push_admin_gates(&mut gates);
+            push_admin_rules(&mut rules);
         }
         "data_console" | "developer_tool" => {
-            push_data_gates(&mut gates);
+            push_data_rules(&mut rules);
         }
         "mobile_responsive" | "consumer_app" | "fintech_consumer_app" => {
-            push_mobile_gates(&mut gates);
+            push_mobile_rules(&mut rules);
         }
         _ => {}
     }
     if reference_group_contains(reference_groups, "scenarios", "admin-dashboard") {
-        push_admin_gates(&mut gates);
+        push_admin_rules(&mut rules);
     }
     if reference_group_contains(reference_groups, "focus", "data")
         || reference_group_contains(reference_groups, "scenarios", "data-console")
     {
-        push_data_gates(&mut gates);
+        push_data_rules(&mut rules);
     }
     if reference_group_contains(reference_groups, "focus", "mobile")
         || reference_group_contains(reference_groups, "scenarios", "mobile-responsive")
         || reference_group_contains(reference_groups, "scenarios", "mobile-native")
     {
-        push_mobile_gates(&mut gates);
+        push_mobile_rules(&mut rules);
     }
     if reference_group_contains(reference_groups, "focus", "frameworks") {
-        push_gate(
-            &mut gates,
+        push_rule(
+            &mut rules,
             "framework.component_structure",
             "uix.focus.frameworks",
             "must",
@@ -755,11 +1567,11 @@ pub fn ui_quality_gates_for_contract(
         );
     }
     if reference_group_contains(reference_groups, "focus", "web-implementation") {
-        push_web_implementation_gates(&mut gates);
+        push_web_implementation_rules(&mut rules);
     }
     if reference_group_contains(reference_groups, "stacks", "react") {
-        push_gate(
-            &mut gates,
+        push_rule(
+            &mut rules,
             "react.split.workflow_regions",
             "uix.stacks.react",
             "must",
@@ -773,14 +1585,14 @@ pub fn ui_quality_gates_for_contract(
         .and_then(Value::as_str)
         .is_some_and(|strategy| strategy != "not_applicable")
     {
-        push_token_gates(&mut gates, design_token_plan);
+        push_token_rules(&mut rules, design_token_plan);
     }
-    dedupe_gates(gates)
+    dedupe_rule_specs(rules)
 }
 
-fn push_admin_gates(gates: &mut Vec<Value>) {
-    push_gate(
-        gates,
+fn push_admin_rules(rules: &mut Vec<Value>) {
+    push_rule(
+        rules,
         "admin.shell.work_surface",
         "uix.scenarios.admin-dashboard",
         "must",
@@ -788,8 +1600,8 @@ fn push_admin_gates(gates: &mut Vec<Value>) {
         "The first viewport must be the working business console with navigation, current page context, a real work region, and primary business action access.",
         &["changed_files", "surface_evidence", "source_check"],
     );
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "admin.topbar.context_actions",
         "uix.scenarios.admin-dashboard",
         "should",
@@ -797,8 +1609,8 @@ fn push_admin_gates(gates: &mut Vec<Value>) {
         "Topbar/header content must provide operational context and relevant actions such as search, filters, user/workspace context, or primary action; it must not be filler description.",
         &["changed_files", "surface_evidence"],
     );
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "admin.list.filter_table_detail",
         "uix.scenarios.admin-dashboard",
         "must",
@@ -808,9 +1620,9 @@ fn push_admin_gates(gates: &mut Vec<Value>) {
     );
 }
 
-fn push_data_gates(gates: &mut Vec<Value>) {
-    push_gate(
-        gates,
+fn push_data_rules(rules: &mut Vec<Value>) {
+    push_rule(
+        rules,
         "data.surface.scan_action_path",
         "uix.focus.data",
         "must",
@@ -818,8 +1630,8 @@ fn push_data_gates(gates: &mut Vec<Value>) {
         "Data surfaces must show object identity, status, key fields, and available action in the same scan path, with loading, empty, error, and business-blocking states placed near the affected region.",
         &["changed_files", "state_coverage", "surface_evidence"],
     );
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "admin.state.scoped_feedback",
         "uix.core.interaction",
         "must",
@@ -829,9 +1641,9 @@ fn push_data_gates(gates: &mut Vec<Value>) {
     );
 }
 
-fn push_mobile_gates(gates: &mut Vec<Value>) {
-    push_gate(
-        gates,
+fn push_mobile_rules(rules: &mut Vec<Value>) {
+    push_rule(
+        rules,
         "admin.mobile.record_fallback",
         "uix.focus.mobile",
         "must",
@@ -841,9 +1653,9 @@ fn push_mobile_gates(gates: &mut Vec<Value>) {
     );
 }
 
-fn push_web_implementation_gates(gates: &mut Vec<Value>) {
-    push_gate(
-        gates,
+fn push_web_implementation_rules(rules: &mut Vec<Value>) {
+    push_rule(
+        rules,
         "web.semantic_accessibility",
         "uix.focus.web-implementation",
         "must",
@@ -859,8 +1671,8 @@ fn push_web_implementation_gates(gates: &mut Vec<Value>) {
         "Web UI must use native semantics before ARIA, provide accessible names for icon-only controls and form fields, preserve visible focus, and announce scoped async feedback when it changes user state.",
         &["changed_files", "source_check", "accessibility_source_evidence"],
     );
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "web.form_and_state_resilience",
         "uix.focus.web-implementation",
         "must",
@@ -868,8 +1680,8 @@ fn push_web_implementation_gates(gates: &mut Vec<Value>) {
         "Web forms and business actions must include meaningful field metadata, keep input recoverable on failure, show inline errors near affected fields or controls, and avoid blocking paste or double submission.",
         &["changed_files", "source_check", "state_coverage", "form_resilience_evidence"],
     );
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "web.runtime_layout_safety",
         "uix.focus.web-implementation",
         "must",
@@ -886,13 +1698,13 @@ fn push_web_implementation_gates(gates: &mut Vec<Value>) {
     );
 }
 
-fn push_token_gates(gates: &mut Vec<Value>, design_token_plan: &Value) {
+fn push_token_rules(rules: &mut Vec<Value>, design_token_plan: &Value) {
     let template_ref = match design_token_plan.get("templateId").and_then(Value::as_str) {
         Some("tokens-tailwind") => "uix.templates.tokens-tailwind",
         _ => "uix.templates.tokens-css",
     };
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "token.semantic_roles.coverage",
         template_ref,
         "must",
@@ -900,8 +1712,8 @@ fn push_token_gates(gates: &mut Vec<Value>, design_token_plan: &Value) {
         "Token assets must cover semantic surface, text, border, primary, status, focus, control, shell, table/list, and detail/action roles needed by the implemented UI.",
         &["token_asset_files", "token_consumer_files", "source_check"],
     );
-    push_gate(
-        gates,
+    push_rule(
+        rules,
         "token.single_source_consumed",
         "uix.core.system",
         "must",
@@ -911,17 +1723,17 @@ fn push_token_gates(gates: &mut Vec<Value>, design_token_plan: &Value) {
     );
 }
 
-fn push_gate(
-    gates: &mut Vec<Value>,
-    gate_id: &str,
+fn push_rule(
+    rules: &mut Vec<Value>,
+    rule_id: &str,
     source_ref_id: &str,
     severity: &str,
     surface_roles: &[&str],
     expectation: &str,
     evidence_required: &[&str],
 ) {
-    gates.push(json!({
-        "gateId": gate_id,
+    rules.push(json!({
+        "ruleId": rule_id,
         "sourceRefId": source_ref_id,
         "severity": severity,
         "appliesToSurfaceRoles": surface_roles,
@@ -930,18 +1742,18 @@ fn push_gate(
     }));
 }
 
-fn dedupe_gates(gates: Vec<Value>) -> Value {
+fn dedupe_rule_specs(rules: Vec<Value>) -> Vec<Value> {
     let mut seen = BTreeSet::new();
     let mut deduped = Vec::new();
-    for gate in gates {
-        let Some(gate_id) = gate.get("gateId").and_then(Value::as_str) else {
+    for rule in rules {
+        let Some(rule_id) = rule.get("ruleId").and_then(Value::as_str) else {
             continue;
         };
-        if seen.insert(gate_id.to_string()) {
-            deduped.push(gate);
+        if seen.insert(rule_id.to_string()) {
+            deduped.push(rule);
         }
     }
-    Value::Array(deduped)
+    deduped
 }
 
 pub fn known_ui_reference_groups() -> Value {
@@ -1483,139 +2295,6 @@ fn reference_group_contains(reference_groups: &Value, group: &str, item: &str) -
         .is_some_and(|items| items.iter().any(|value| value.as_str() == Some(item)))
 }
 
-fn validate_reference_groups(contract: &Value, issues: &mut Vec<RepairIssue>) {
-    if contract.pointer("/referenceProfile/referenceIds").is_some() {
-        issues.push(issue(
-            "UI_QUALITY_LEGACY_REFERENCE_FIELD_NOT_ALLOWED",
-            "content.frontendExperience.uiQualityContract.referenceProfile.referenceIds",
-            "referenceProfile.referenceIds is not allowed; use referenceProfile.referenceLoadPlan and groups instead.",
-        ));
-    }
-    let Some(groups) = contract
-        .pointer("/referenceProfile/groups")
-        .and_then(Value::as_object)
-    else {
-        issues.push(issue(
-            "UI_QUALITY_REFERENCE_PROFILE_REQUIRED",
-            "content.frontendExperience.uiQualityContract.referenceProfile.groups",
-            "referenceProfile.groups must list UIX references as group/item arrays.",
-        ));
-        return;
-    };
-    if groups.is_empty() {
-        issues.push(issue(
-            "UI_QUALITY_REFERENCE_PROFILE_REQUIRED",
-            "content.frontendExperience.uiQualityContract.referenceProfile.groups",
-            "referenceProfile.groups must not be empty.",
-        ));
-        return;
-    }
-    let known = known_reference_group_sets();
-    let mut actual = BTreeMap::<String, BTreeSet<String>>::new();
-    for (group, value) in groups {
-        if !UI_REFERENCE_GROUP_KEYS.contains(&group.as_str()) {
-            issues.push(issue(
-                "UI_QUALITY_REFERENCE_GROUP_INVALID",
-                "content.frontendExperience.uiQualityContract.referenceProfile.groups",
-                "referenceProfile.groups contains an unsupported group key.",
-            ));
-            continue;
-        }
-        let Some(items) = value.as_array() else {
-            issues.push(issue(
-                "UI_QUALITY_REFERENCE_GROUP_INVALID",
-                &format!(
-                    "content.frontendExperience.uiQualityContract.referenceProfile.groups.{group}"
-                ),
-                "referenceProfile group values must be arrays.",
-            ));
-            continue;
-        };
-        for (index, item) in items.iter().enumerate() {
-            let Some(item) = item.as_str() else {
-                issues.push(issue(
-                    "UI_QUALITY_REFERENCE_ITEM_INVALID",
-                    &format!("content.frontendExperience.uiQualityContract.referenceProfile.groups.{group}[{index}]"),
-                    "referenceProfile group items must be strings.",
-                ));
-                continue;
-            };
-            if !known
-                .get(group.as_str())
-                .is_some_and(|allowed| allowed.contains(item))
-            {
-                issues.push(issue(
-                    "UI_QUALITY_REFERENCE_ITEM_INVALID",
-                    &format!("content.frontendExperience.uiQualityContract.referenceProfile.groups.{group}[{index}]"),
-                    "referenceProfile group item must be one of enumRefs.uiQuality.knownReferenceGroups for that group.",
-                ));
-            }
-            actual
-                .entry(group.clone())
-                .or_default()
-                .insert(item.to_string());
-        }
-    }
-    let scenario_kind = contract
-        .pointer("/scenario/kind")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let design_token_plan = contract.get("designTokenAssetPlan").unwrap_or(&Value::Null);
-    let expected_stack_items = actual
-        .get("stacks")
-        .map(|items| items.iter().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let required_groups =
-        required_reference_groups(scenario_kind, &expected_stack_items, design_token_plan);
-    let Some(required_object) = required_groups.as_object() else {
-        return;
-    };
-    for (group, required_items) in required_object {
-        let actual_items = actual.get(group).cloned().unwrap_or_default();
-        for required in required_items.as_array().into_iter().flatten() {
-            let Some(required) = required.as_str() else {
-                continue;
-            };
-            if !actual_items.contains(required) {
-                issues.push(issue(
-                    "UI_QUALITY_REFERENCE_ITEM_REQUIRED",
-                    "content.frontendExperience.uiQualityContract.referenceProfile.groups",
-                    "referenceProfile.groups must include core, token, selected scenario, companion, stack, and token template UIX reference items required by this contract.",
-                ));
-                return;
-            }
-        }
-    }
-    let load_mode = contract
-        .pointer("/referenceProfile/loadMode")
-        .and_then(Value::as_str);
-    if load_mode != Some("mcp_reference_load_plan") {
-        issues.push(issue(
-            "UI_QUALITY_REFERENCE_LOAD_MODE_INVALID",
-            "content.frontendExperience.uiQualityContract.referenceProfile.loadMode",
-            "referenceProfile.loadMode must be mcp_reference_load_plan.",
-        ));
-    }
-    validate_reference_load_plan(contract, &actual, issues);
-}
-
-fn known_reference_group_sets() -> BTreeMap<&'static str, BTreeSet<&'static str>> {
-    let mut groups = BTreeMap::new();
-    groups.insert("core", UI_CORE_REFERENCE_ITEMS.into_iter().collect());
-    groups.insert("focus", UI_FOCUS_REFERENCE_ITEMS.into_iter().collect());
-    groups.insert("tokens", UI_TOKEN_REFERENCE_ITEMS.into_iter().collect());
-    groups.insert(
-        "scenarios",
-        UI_SCENARIO_REFERENCE_ITEMS.into_iter().collect(),
-    );
-    groups.insert("stacks", UI_STACK_REFERENCE_ITEMS.into_iter().collect());
-    groups.insert(
-        "templates",
-        UI_DESIGN_TOKEN_TEMPLATE_IDS.into_iter().collect(),
-    );
-    groups
-}
-
 pub fn ui_reference_load_plan(reference_groups: &Value) -> Value {
     let Some(groups) = reference_groups.as_object() else {
         return Value::Array(vec![]);
@@ -1653,59 +2332,6 @@ fn ui_reference_path(group: &str, item: &str) -> Option<String> {
     }
 }
 
-fn validate_reference_load_plan(
-    contract: &Value,
-    actual_groups: &BTreeMap<String, BTreeSet<String>>,
-    issues: &mut Vec<RepairIssue>,
-) {
-    let expected = ui_reference_load_plan(&json!(actual_groups));
-    let expected_paths = expected
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("path").and_then(Value::as_str))
-        .collect::<BTreeSet<_>>();
-    let Some(plan) = contract
-        .pointer("/referenceProfile/referenceLoadPlan")
-        .and_then(Value::as_array)
-    else {
-        issues.push(issue(
-            "UI_QUALITY_REFERENCE_LOAD_PLAN_REQUIRED",
-            "content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan",
-            "referenceProfile.referenceLoadPlan must list exact UIX files selected by referenceProfile.groups.",
-        ));
-        return;
-    };
-    let mut actual_paths = BTreeSet::new();
-    for (index, item) in plan.iter().enumerate() {
-        let Some(path) = item.get("path").and_then(Value::as_str) else {
-            issues.push(issue(
-                "UI_QUALITY_REFERENCE_LOAD_PLAN_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan[{index}].path"),
-                "referenceLoadPlan entries must include a path.",
-            ));
-            continue;
-        };
-        if item.get("refId").and_then(Value::as_str).is_none()
-            || item.get("reason").and_then(Value::as_str).is_none()
-        {
-            issues.push(issue(
-                "UI_QUALITY_REFERENCE_LOAD_PLAN_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan[{index}]"),
-                "referenceLoadPlan entries must include refId, path, and reason.",
-            ));
-        }
-        actual_paths.insert(path);
-    }
-    if actual_paths != expected_paths {
-        issues.push(issue(
-            "UI_QUALITY_REFERENCE_LOAD_PLAN_INVALID",
-            "content.frontendExperience.uiQualityContract.referenceProfile.referenceLoadPlan",
-            "referenceLoadPlan must exactly match the UIX files implied by referenceProfile.groups.",
-        ));
-    }
-}
-
 fn validate_required_string_array(
     root: &Value,
     pointer: &str,
@@ -1730,379 +2356,6 @@ fn validate_required_string_array(
                 "field must include all required enum values from the UI quality contract.",
             ));
             return;
-        }
-    }
-}
-
-fn validate_design_token_asset_plan(contract: &Value, issues: &mut Vec<RepairIssue>) {
-    let Some(plan) = contract.get("designTokenAssetPlan") else {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_ASSET_PLAN_REQUIRED",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan",
-            "uiQualityContract requires designTokenAssetPlan so semantic tokens are planned as concrete assets instead of page-local styles.",
-        ));
-        return;
-    };
-    if !plan.is_object() {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_ASSET_PLAN_INVALID",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan",
-            "designTokenAssetPlan must be an object.",
-        ));
-        return;
-    }
-    require_string_in(
-        plan,
-        "/strategy",
-        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.strategy",
-        &UI_DESIGN_TOKEN_STRATEGIES,
-        "UI_QUALITY_TOKEN_ASSET_STRATEGY_INVALID",
-        issues,
-    );
-    require_string_in(
-        plan,
-        "/mergePolicy",
-        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.mergePolicy",
-        &UI_DESIGN_TOKEN_MERGE_POLICIES,
-        "UI_QUALITY_TOKEN_ASSET_MERGE_POLICY_INVALID",
-        issues,
-    );
-    require_string_in(
-        plan,
-        "/duplicationPolicy",
-        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.duplicationPolicy",
-        &UI_DESIGN_TOKEN_DUPLICATION_POLICIES,
-        "UI_QUALITY_TOKEN_ASSET_DUPLICATION_POLICY_INVALID",
-        issues,
-    );
-    validate_design_token_template_id(plan, issues);
-    validate_design_token_target_files(plan, issues);
-    validate_design_token_style_evidence(plan, issues);
-}
-
-fn validate_design_token_template_id(plan: &Value, issues: &mut Vec<RepairIssue>) {
-    let strategy = plan
-        .get("strategy")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let template = plan.get("templateId").unwrap_or(&Value::Null);
-    match strategy {
-        "create_css_tokens" => {
-            if template.as_str() != Some("tokens-css") {
-                issues.push(issue(
-                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
-                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
-                    "create_css_tokens requires templateId=tokens-css.",
-                ));
-            }
-        }
-        "create_tailwind_tokens" => {
-            if template.as_str() != Some("tokens-tailwind") {
-                issues.push(issue(
-                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
-                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
-                    "create_tailwind_tokens requires templateId=tokens-tailwind.",
-                ));
-            }
-        }
-        "reuse_existing" | "not_applicable" => {
-            if !template.is_null() {
-                issues.push(issue(
-                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
-                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
-                    "reuse_existing and not_applicable require templateId=null.",
-                ));
-            }
-        }
-        "extend_existing" => {
-            if !(template.is_null()
-                || template.as_str().is_some_and(|id| {
-                    UI_DESIGN_TOKEN_TEMPLATE_IDS
-                        .iter()
-                        .any(|known| known == &id)
-                }))
-            {
-                issues.push(issue(
-                    "UI_QUALITY_TOKEN_TEMPLATE_INVALID",
-                    "content.frontendExperience.uiQualityContract.designTokenAssetPlan.templateId",
-                    "extend_existing templateId must be null or a known UIX token template item.",
-                ));
-            }
-        }
-        _ => {}
-    }
-}
-
-fn validate_design_token_target_files(plan: &Value, issues: &mut Vec<RepairIssue>) {
-    let strategy = plan
-        .get("strategy")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let Some(items) = plan.get("targetFiles").and_then(Value::as_array) else {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_TARGET_FILES_INVALID",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles",
-            "designTokenAssetPlan.targetFiles must be an array.",
-        ));
-        return;
-    };
-    if strategy != "not_applicable" && items.is_empty() {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_TARGET_FILES_REQUIRED",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles",
-            "designTokenAssetPlan.targetFiles must list the token/theme files to reuse, extend, or create.",
-        ));
-    }
-    if strategy == "not_applicable" && !items.is_empty() {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_TARGET_FILES_INVALID",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles",
-            "not_applicable designTokenAssetPlan must leave targetFiles empty.",
-        ));
-    }
-    for (index, item) in items.iter().enumerate() {
-        if item.as_str().map(str::trim).unwrap_or_default().is_empty() {
-            issues.push(issue(
-                "UI_QUALITY_TOKEN_TARGET_FILES_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.designTokenAssetPlan.targetFiles[{index}]"),
-                "targetFiles entries must be non-empty project-relative paths.",
-            ));
-        }
-    }
-}
-
-fn validate_design_token_style_evidence(plan: &Value, issues: &mut Vec<RepairIssue>) {
-    let Some(evidence) = plan.get("existingStyleEvidence") else {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_STYLE_EVIDENCE_REQUIRED",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence",
-            "designTokenAssetPlan must include compact existingStyleEvidence so agents know whether to reuse, extend, or create token assets.",
-        ));
-        return;
-    };
-    if !evidence.is_object() {
-        issues.push(issue(
-            "UI_QUALITY_TOKEN_STYLE_EVIDENCE_INVALID",
-            "content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence",
-            "existingStyleEvidence must be an object.",
-        ));
-        return;
-    }
-    for key in [
-        "tailwindConfigRefs",
-        "tokenFileRefs",
-        "globalStyleRefs",
-        "componentThemeRefs",
-    ] {
-        if !evidence.get(key).is_some_and(Value::is_array) {
-            issues.push(issue(
-                "UI_QUALITY_TOKEN_STYLE_EVIDENCE_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.{key}"),
-                "existingStyleEvidence ref fields must be arrays.",
-            ));
-        }
-    }
-    require_non_empty_string(
-        evidence,
-        "/summary",
-        "content.frontendExperience.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary",
-        "UI_QUALITY_TOKEN_STYLE_EVIDENCE_SUMMARY_REQUIRED",
-        issues,
-    );
-}
-
-fn validate_required_ui_states(contract: &Value, issues: &mut Vec<RepairIssue>) {
-    let Some(items) = contract.get("requiredUiStates").and_then(Value::as_array) else {
-        issues.push(issue(
-            "UI_QUALITY_STATES_REQUIRED",
-            "content.frontendExperience.uiQualityContract.requiredUiStates",
-            "requiredUiStates must list the user-visible states that frontend implementation must cover.",
-        ));
-        return;
-    };
-    let mut actual = BTreeSet::new();
-    for (index, item) in items.iter().enumerate() {
-        let state = item.get("state").and_then(Value::as_str);
-        let expectation = item.get("expectation").and_then(Value::as_str);
-        match state {
-            Some(value) if UI_REQUIRED_STATES.contains(&value) => {
-                actual.insert(value);
-            }
-            _ => issues.push(issue(
-                "UI_QUALITY_STATE_INVALID",
-                &format!(
-                    "content.frontendExperience.uiQualityContract.requiredUiStates[{index}].state"
-                ),
-                "requiredUiStates.state must be one of enumRefs.uiQuality.requiredUiState.",
-            )),
-        }
-        if expectation.map(str::trim).unwrap_or_default().is_empty() {
-            issues.push(issue(
-                "UI_QUALITY_STATE_EXPECTATION_REQUIRED",
-                &format!("content.frontendExperience.uiQualityContract.requiredUiStates[{index}].expectation"),
-                "requiredUiStates entries must include a concrete expectation.",
-            ));
-        }
-    }
-    for required in UI_REQUIRED_STATES {
-        if !actual.contains(required) {
-            issues.push(issue(
-                "UI_QUALITY_STATE_REQUIRED",
-                "content.frontendExperience.uiQualityContract.requiredUiStates",
-                "requiredUiStates must include loading, success, error, empty, and business_blocking.",
-            ));
-            break;
-        }
-    }
-}
-
-fn validate_business_rules(contract: &Value, issues: &mut Vec<RepairIssue>) {
-    let Some(items) = contract.get("businessUiRules").and_then(Value::as_array) else {
-        issues.push(issue(
-            "UI_QUALITY_BUSINESS_RULES_REQUIRED",
-            "content.frontendExperience.uiQualityContract.businessUiRules",
-            "businessUiRules must record generation-time UI rules for TaskPlan and Execution.",
-        ));
-        return;
-    };
-    if items.is_empty() {
-        issues.push(issue(
-            "UI_QUALITY_BUSINESS_RULES_REQUIRED",
-            "content.frontendExperience.uiQualityContract.businessUiRules",
-            "businessUiRules must not be empty.",
-        ));
-    }
-    for (index, item) in items.iter().enumerate() {
-        for key in ["ruleId", "expectation"] {
-            if item
-                .get(key)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default()
-                .is_empty()
-            {
-                issues.push(issue(
-                    "UI_QUALITY_BUSINESS_RULE_INVALID",
-                    &format!("content.frontendExperience.uiQualityContract.businessUiRules[{index}].{key}"),
-                    "businessUiRules entries must include ruleId and expectation.",
-                ));
-            }
-        }
-    }
-}
-
-fn validate_quality_gates(contract: &Value, issues: &mut Vec<RepairIssue>) {
-    let scenario = contract
-        .pointer("/scenario/kind")
-        .and_then(Value::as_str)
-        .unwrap_or("custom_product_ui");
-    let reference_groups = contract
-        .pointer("/referenceProfile/groups")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let design_token_plan = contract
-        .get("designTokenAssetPlan")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let expected = ui_quality_gates_for_contract(scenario, &reference_groups, &design_token_plan);
-    let expected_gate_ids = expected
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
-        .collect::<BTreeSet<_>>();
-    let Some(gates) = contract.get("qualityGates").and_then(Value::as_array) else {
-        issues.push(issue(
-            "UI_QUALITY_GATES_REQUIRED",
-            "content.frontendExperience.uiQualityContract.qualityGates",
-            "uiQualityContract must include generated qualityGates so selected UIX references become executable and reviewable.",
-        ));
-        return;
-    };
-    if gates.is_empty() {
-        issues.push(issue(
-            "UI_QUALITY_GATES_REQUIRED",
-            "content.frontendExperience.uiQualityContract.qualityGates",
-            "uiQualityContract.qualityGates must not be empty.",
-        ));
-        return;
-    }
-    let mut actual_gate_ids = BTreeSet::new();
-    for (index, gate) in gates.iter().enumerate() {
-        let Some(gate_id) = gate.get("gateId").and_then(Value::as_str) else {
-            issues.push(issue(
-                "UI_QUALITY_GATE_INVALID",
-                &format!(
-                    "content.frontendExperience.uiQualityContract.qualityGates[{index}].gateId"
-                ),
-                "qualityGates entries must include gateId.",
-            ));
-            continue;
-        };
-        actual_gate_ids.insert(gate_id);
-        if !expected_gate_ids.contains(gate_id) {
-            issues.push(issue(
-                "UI_QUALITY_GATE_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].gateId"),
-                "qualityGates.gateId must be one of the gates generated from selected scenario, references, stack, and token plan.",
-            ));
-        }
-        if !gate
-            .get("sourceRefId")
-            .and_then(Value::as_str)
-            .is_some_and(|value| value.starts_with("uix."))
-        {
-            issues.push(issue(
-                "UI_QUALITY_GATE_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].sourceRefId"),
-                "qualityGates.sourceRefId must reference the UIX source rule such as uix.scenarios.admin-dashboard.",
-            ));
-        }
-        let severity = gate.get("severity").and_then(Value::as_str);
-        if !severity.is_some_and(|value| UI_QUALITY_GATE_SEVERITIES.contains(&value)) {
-            issues.push(issue(
-                "UI_QUALITY_GATE_INVALID",
-                &format!(
-                    "content.frontendExperience.uiQualityContract.qualityGates[{index}].severity"
-                ),
-                "qualityGates.severity must be a known UI quality gate severity.",
-            ));
-        }
-        for field in ["appliesToSurfaceRoles", "evidenceRequired"] {
-            if !gate
-                .get(field)
-                .and_then(Value::as_array)
-                .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_string))
-            {
-                issues.push(issue(
-                    "UI_QUALITY_GATE_INVALID",
-                    &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].{field}"),
-                    "qualityGates array fields must be non-empty string arrays.",
-                ));
-            }
-        }
-        if gate
-            .get("expectation")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-        {
-            issues.push(issue(
-                "UI_QUALITY_GATE_INVALID",
-                &format!("content.frontendExperience.uiQualityContract.qualityGates[{index}].expectation"),
-                "qualityGates.expectation must describe the executable UI quality rule.",
-            ));
-        }
-    }
-    for expected_gate_id in expected_gate_ids {
-        if !actual_gate_ids.contains(expected_gate_id) {
-            issues.push(issue(
-                "UI_QUALITY_GATE_REQUIRED",
-                "content.frontendExperience.uiQualityContract.qualityGates",
-                "uiQualityContract.qualityGates must include every gate generated from selected scenario, references, stack, and token plan.",
-            ));
-            break;
         }
     }
 }
@@ -2165,16 +2418,19 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        build_ui_quality_seed, known_ui_reference_groups, scenario_supporting_reference_items,
-        ui_quality_contract_template, UI_CORE_REFERENCE_ITEMS, UI_DESIGN_TOKEN_TEMPLATE_IDS,
-        UI_TOKEN_REFERENCE_ITEMS,
+        build_ui_quality_seed, known_ui_reference_groups,
+        normalize_ui_surface_decision_contract_for_persist, scenario_supporting_reference_items,
+        ui_surface_decision_candidate_shape, ui_surface_decision_candidate_template,
+        ui_surface_decision_contract_shape, ui_surface_decision_enum_refs,
+        validate_ui_surface_decision_contract, UI_CORE_REFERENCE_ITEMS,
+        UI_DESIGN_TOKEN_TEMPLATE_IDS, UI_TOKEN_REFERENCE_ITEMS,
     };
     use crate::{
         ConfidenceLevel, ProjectKind, TechnicalBaselineApproval, TechnicalBaselineApprovalType,
         TechnicalBaselineContract, TechnicalBaselineScope, TechnicalBaselineSource,
         TechnicalBaselineStatus,
     };
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     #[test]
     fn known_ui_reference_groups_resolve_to_shared_reference_files() {
@@ -2211,6 +2467,226 @@ mod tests {
                 "uiQualitySeed.requiredReferenceGroups.tokens must include {reference_item}"
             );
         }
+    }
+
+    #[test]
+    fn ui_surface_decision_enums_allow_known_hybrid_and_custom() {
+        let refs = ui_surface_decision_enum_refs();
+        for mode in ["known", "hybrid", "custom"] {
+            assert!(
+                array_contains(&refs, "patternMode", mode),
+                "surface decision enum refs must allow {mode}"
+            );
+        }
+        for pattern in [
+            "collection_workbench",
+            "decision_queue",
+            "editor_workspace",
+            "immersive_workspace",
+        ] {
+            assert!(
+                array_contains(&refs, "knownPattern", pattern),
+                "surface decision enum refs must include {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_surface_decision_shapes_keep_custom_structured_not_relaxed() {
+        let candidate = ui_surface_decision_candidate_shape();
+        let contract = ui_surface_decision_contract_shape();
+
+        assert!(
+            candidate
+                .pointer("/selectedPattern/customPattern")
+                .is_some(),
+            "candidate shape must expose a custom pattern name"
+        );
+        assert!(
+            candidate
+                .pointer("/selectedPattern/nearestKnownPatterns")
+                .is_some(),
+            "custom candidates must compare against nearest known patterns"
+        );
+        for pointer in [
+            "/semanticFacts/customExtensions",
+            "/layoutModel/customLayoutIntent",
+            "/regionModel/0/regionId",
+            "/actionModel/0/placementRegionId",
+            "/stateModel/0/placementRegionId",
+            "/compositionConstraints/customRules",
+            "/contentBoundary/customForbiddenContent",
+        ] {
+            assert!(
+                candidate.pointer(pointer).is_some(),
+                "custom candidate shape must include {pointer}"
+            );
+        }
+
+        for pointer in [
+            "/patternDecision",
+            "/semanticFacts",
+            "/layoutModel",
+            "/regionModel",
+            "/informationModel",
+            "/actionModel",
+            "/stateModel",
+            "/compositionConstraints",
+            "/contentBoundary",
+            "/referencePlan",
+            "/qualityRules",
+        ] {
+            assert!(
+                contract.pointer(pointer).is_some(),
+                "decision contract shape must include {pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_surface_decision_template_has_structured_candidate_defaults() {
+        let template = ui_surface_decision_candidate_template();
+
+        for pointer in [
+            "/patternRankings/0/kind",
+            "/selectedPattern/mode",
+            "/semanticFacts/customExtensions",
+            "/layoutModel/primaryWorkRegionId",
+            "/regionModel/0/regionId",
+            "/informationModel/primaryObjects",
+            "/actionModel/0/actionId",
+            "/stateModel/0/state",
+            "/compositionConstraints/customRules",
+            "/contentBoundary/copyRule",
+        ] {
+            assert!(
+                template.pointer(pointer).is_some(),
+                "candidate template must include {pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_surface_decision_normalization_derives_contract_references_and_rules() {
+        let seed = build_ui_quality_seed(None, None);
+        let mut frontend = json!({
+            "required": true,
+            "surfaceDecisionCandidate": filled_surface_candidate()
+        });
+
+        assert!(
+            normalize_ui_surface_decision_contract_for_persist(&mut frontend, &seed),
+            "normalization must write uiSurfaceDecisionContract"
+        );
+
+        let issues = validate_ui_surface_decision_contract(&frontend);
+        assert!(
+            issues.is_empty(),
+            "normalized known surface contract should validate cleanly: {issues:?}"
+        );
+        let contract = frontend
+            .get("uiSurfaceDecisionContract")
+            .expect("surface contract must be written");
+        assert_eq!(
+            contract
+                .pointer("/patternDecision/mode")
+                .and_then(Value::as_str),
+            Some("known")
+        );
+        assert!(
+            contract
+                .get("referencePlan")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            "surface contract must contain MCP-derived references"
+        );
+        assert!(
+            contract
+                .get("referencePlan")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|item| item.get("refId").and_then(Value::as_str)
+                    == Some("uix.core.surface-decision")),
+            "surface contract must load the surface decision reference"
+        );
+        assert!(
+            contract
+                .get("qualityRules")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            "surface contract must contain MCP-derived quality rules"
+        );
+        assert!(
+            contract
+                .get("qualityRules")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|item| item.get("ruleId").and_then(Value::as_str)
+                    == Some("surface.contract.evidence_coverage")),
+            "surface contract must include the generic surface evidence quality rule"
+        );
+        assert!(
+            contract
+                .pointer("/contentBoundary/forbiddenUserVisibleContent")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .any(|item| item.as_str() == Some("runtime_commands")),
+            "MCP must merge universal forbidden content into the surface contract"
+        );
+    }
+
+    #[test]
+    fn ui_surface_decision_custom_mode_is_structured_and_reviewable() {
+        let seed = build_ui_quality_seed(None, None);
+        let mut candidate = filled_surface_candidate();
+        candidate["selectedPattern"]["mode"] = json!("custom");
+        candidate["selectedPattern"]["knownPattern"] = Value::Null;
+        candidate["selectedPattern"]["customPattern"] = json!("priority_capacity_map");
+        candidate["selectedPattern"]["nearestKnownPatterns"] =
+            json!(["collection_workbench", "analytics_monitor"]);
+        candidate["selectedPattern"]["rationale"] =
+            json!("The requested surface mixes dense queue work with monitoring, so no single known pattern is authoritative.");
+        let mut frontend = json!({
+            "required": true,
+            "surfaceDecisionCandidate": candidate
+        });
+
+        assert!(
+            normalize_ui_surface_decision_contract_for_persist(&mut frontend, &seed),
+            "normalization must write a custom uiSurfaceDecisionContract"
+        );
+
+        let issues = validate_ui_surface_decision_contract(&frontend);
+        assert!(
+            issues.is_empty(),
+            "normalized custom surface contract should validate cleanly: {issues:?}"
+        );
+        let contract = frontend
+            .get("uiSurfaceDecisionContract")
+            .expect("surface contract must be written");
+        assert_eq!(
+            contract
+                .pointer("/patternDecision/mode")
+                .and_then(Value::as_str),
+            Some("custom")
+        );
+        assert!(
+            contract
+                .pointer("/patternDecision/nearestKnownPatterns")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.len() >= 2),
+            "custom mode must retain nearest known pattern comparison"
+        );
+        assert!(
+            contract
+                .get("qualityRules")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+            "custom mode must still receive executable quality rules"
+        );
     }
 
     #[test]
@@ -2274,13 +2750,20 @@ mod tests {
             "browser UI seed must load uix/web-implementation.md"
         );
 
-        let contract = ui_quality_contract_template(&seed);
-        let gate_ids = contract
-            .get("qualityGates")
+        let mut frontend = json!({
+            "required": true,
+            "surfaceDecisionCandidate": filled_surface_candidate()
+        });
+        assert!(
+            normalize_ui_surface_decision_contract_for_persist(&mut frontend, &seed),
+            "normalization must write web-stack surface rules"
+        );
+        let rule_ids = frontend["uiSurfaceDecisionContract"]
+            .get("qualityRules")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
+            .filter_map(|rule| rule.get("ruleId").and_then(Value::as_str))
             .collect::<std::collections::BTreeSet<_>>();
         for expected in [
             "web.semantic_accessibility",
@@ -2288,8 +2771,8 @@ mod tests {
             "web.runtime_layout_safety",
         ] {
             assert!(
-                gate_ids.contains(expected),
-                "browser UI contract must include {expected}"
+                rule_ids.contains(expected),
+                "browser UI surface contract must include {expected}"
             );
         }
 
@@ -2393,6 +2876,94 @@ mod tests {
             .into_iter()
             .flatten()
             .any(|value| value.as_str() == Some(item))
+    }
+
+    fn array_contains(root: &serde_json::Value, key: &str, expected: &str) -> bool {
+        root.get(key)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|value| value.as_str() == Some(expected))
+    }
+
+    fn filled_surface_candidate() -> Value {
+        let mut candidate = ui_surface_decision_candidate_template();
+        candidate["patternRankings"][0]["score"] = json!(0.86);
+        candidate["patternRankings"][0]["matchedSignals"] = json!([
+            "record collection",
+            "filterable work queue",
+            "row-level action"
+        ]);
+        candidate["patternRankings"][0]["evidenceRefs"] = json!(["frontend.detail.queue"]);
+        candidate["selectedPattern"]["rationale"] =
+            json!("The current phase centers on scanning a record collection, comparing status, and taking row-level business action.");
+        candidate["selectedPattern"]["evidenceRefs"] = json!(["frontend.detail.queue"]);
+        candidate["semanticFacts"]["userJobs"] = json!(["browse", "compare", "create"]);
+        candidate["semanticFacts"]["informationShapes"] =
+            json!(["record_collection", "record_detail"]);
+        candidate["semanticFacts"]["operationModels"] =
+            json!(["filter_sort_paginate", "create_update"]);
+        candidate["semanticFacts"]["riskFactors"] = json!(["none"]);
+        candidate["semanticFacts"]["evidenceRefs"] = json!(["frontend.detail.queue"]);
+        candidate["layoutModel"]["desktop"]["layoutIntent"] =
+            json!("Show navigation, filters, dense record results, detail context, and primary action without displacing the work region.");
+        candidate["layoutModel"]["desktop"]["allowedPresentations"] =
+            json!(["table", "detail_panel", "form_sections"]);
+        candidate["layoutModel"]["tablet"]["layoutIntent"] =
+            json!("Keep record scan first and move detail/actions into a secondary region.");
+        candidate["layoutModel"]["tablet"]["allowedPresentations"] =
+            json!(["record_cards", "drawer"]);
+        candidate["layoutModel"]["mobile"]["layoutIntent"] =
+            json!("Stack records and use drill-down detail when comparison is not required.");
+        candidate["layoutModel"]["mobile"]["allowedPresentations"] =
+            json!(["record_cards", "route_detail"]);
+        candidate["regionModel"][0]["purpose"] =
+            json!("Primary record queue where users scan work items and start the main action.");
+        candidate["regionModel"][0]["desktopPlacement"] =
+            json!("Main content column below topbar and beside navigation.");
+        candidate["regionModel"][0]["mobilePlacement"] =
+            json!("First stacked region after compact page context.");
+        candidate["regionModel"][0]["requiredContent"] = json!([
+            "record identity",
+            "status",
+            "primary action",
+            "local feedback"
+        ]);
+        candidate["informationModel"]["primaryObjects"] = json!(["request"]);
+        candidate["informationModel"]["fields"] = json!(["id", "status", "owner", "updatedAt"]);
+        candidate["informationModel"]["identityFields"] = json!(["id"]);
+        candidate["informationModel"]["statusFields"] = json!(["status"]);
+        candidate["informationModel"]["scanOrder"] =
+            json!(["identity", "status", "decision field", "action"]);
+        candidate["actionModel"][0]["label"] = json!("Create request");
+        candidate["actionModel"][0]["pendingFeedback"] =
+            json!("Show pending state on the submitting action and affected form region.");
+        candidate["actionModel"][0]["successFeedback"] =
+            json!("Insert the created request into the visible list and show scoped confirmation.");
+        candidate["actionModel"][0]["errorFeedback"] =
+            json!("Show actionable error near the form fields or list region.");
+        candidate["actionModel"][0]["postSuccessUpdate"] =
+            json!("Refresh the affected list and clear the completed draft.");
+        candidate["stateModel"][0]["placementRule"] = json!(
+            "Show loading near the record queue or submitting form, not only in a global banner."
+        );
+        candidate["stateModel"][0]["recoveryPath"] =
+            json!("Keep filters and draft data stable while the user retries.");
+        candidate["compositionConstraints"]["requiredComposition"] = json!([
+            "business context",
+            "record queue",
+            "primary action",
+            "scoped feedback"
+        ]);
+        candidate["contentBoundary"]["allowedUserVisibleContent"] = json!([
+            "labels",
+            "filters",
+            "status",
+            "actions",
+            "validation",
+            "business_feedback"
+        ]);
+        candidate
     }
 
     fn technical_baseline_with_stack(stack: serde_json::Value) -> TechnicalBaselineContract {

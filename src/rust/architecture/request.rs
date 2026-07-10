@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed,
-    ui_quality_contract_agent_shape, ui_quality_contract_agent_template, ui_quality_enum_refs,
-    ArchitectureSectionGroup, PlanningGenerationContract, TechnicalBaselineContract,
-    COVERAGE_ARTIFACT_TYPES,
+    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
+    ui_surface_decision_candidate_shape, ui_surface_decision_candidate_template,
+    ui_surface_decision_enum_refs, ArchitectureSectionGroup, PlanningGenerationContract,
+    TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
@@ -135,7 +135,6 @@ fn materialize_request_inner(
         has_previous_runtime_delivery,
         &frontend_experience_source,
         &planning_contract,
-        &technical_baseline,
         &api_quality_seed,
     )?;
     let current_output = section_outputs.first().cloned().ok_or_else(|| {
@@ -256,7 +255,8 @@ fn build_request_root(
             "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
             "acceptancePriority": ["must", "should", "could"],
             "architectureQuality": architecture_quality_enum_refs(),
-            "uiQuality": ui_quality_enum_refs()
+            "uiQuality": ui_quality_enum_refs(),
+            "uiSurfaceDecision": ui_surface_decision_enum_refs()
         },
         "rules": {
             "onlyCurrentPhase": true,
@@ -501,7 +501,7 @@ pub(crate) fn architecture_read_groups(
             "uiQualitySeed.semanticTokenPolicy",
             "uiQualitySeed.requiredReferenceGroups",
             "uiQualitySeed.referenceLoadPlan",
-            "uiQualitySeed.qualityGatePreview",
+            "uiQualitySeed.qualityRulePreview",
             "uiQualitySeed.stackReferenceCandidates",
             "uiQualitySeed.designTokenAssetPlan",
             "uiQualitySeed.forbiddenUserVisibleContent",
@@ -783,16 +783,8 @@ fn build_section_outputs(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
-    technical_baseline: &TechnicalBaselineContract,
     api_quality_seed: &Value,
 ) -> Result<Vec<SectionOutput>, state::store::StateError> {
-    let ui_quality_seed = build_ui_quality_seed(
-        planning_contract
-            .planning_inputs
-            .frontend_experience
-            .as_ref(),
-        Some(technical_baseline),
-    );
     SECTION_ORDER
         .iter()
         .copied()
@@ -817,7 +809,6 @@ fn build_section_outputs(
                     has_previous_runtime_delivery,
                     frontend_experience_source,
                     planning_contract,
-                    &ui_quality_seed,
                     api_quality_seed,
                 ),
                 enum_refs: section_enum_refs(
@@ -993,7 +984,7 @@ fn section_content_shape(
                         "interfaceRefs": ["string"]
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_agent_shape(),
+                "surfaceDecisionCandidate": ui_surface_decision_candidate_shape(),
                 "sourceRefs": {
                     "brainstormFrontendExperienceRef": "string"
                 }
@@ -1197,7 +1188,6 @@ fn section_result_template(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
@@ -1212,7 +1202,6 @@ fn section_result_template(
             has_previous_runtime_delivery,
             frontend_experience_source,
             planning_contract,
-            ui_quality_seed,
             api_quality_seed
         ),
         "blockedReasons": [],
@@ -1225,7 +1214,6 @@ fn section_content_template(
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
-    ui_quality_seed: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     match section {
@@ -1416,7 +1404,7 @@ fn section_content_template(
                         "interfaceRefs": []
                     }]
                 },
-                "uiQualityContract": ui_quality_contract_agent_template(ui_quality_seed),
+                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
                 "sourceRefs": frontend_source_refs_template(frontend_experience_source)
             }
         }),
@@ -1729,7 +1717,8 @@ fn section_enum_refs(
             json!({ "apiQuality": api_quality_enum_refs() })
         }
         ArchitectureSectionGroup::FrontendExperience => json!({
-            "uiQuality": ui_quality_enum_refs()
+            "uiQuality": ui_quality_enum_refs(),
+            "uiSurfaceDecision": ui_surface_decision_enum_refs()
         }),
         _ => json!({}),
     }
@@ -1780,12 +1769,14 @@ fn section_generation_rules(
         ],
         ArchitectureSectionGroup::FrontendExperience => vec![
             "Read frontendExperienceSource before writing this section.".to_string(),
-            "Read uiQualitySeed before choosing uiQualityContract values.".to_string(),
+            "Read uiQualitySeed before writing the UI surface decision candidate.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
-            "Write only agent-owned uiQualityContract decisions: scenario.kind/reason, quality level, surface policy, layout baseline, density, design token asset plan, required UI state expectations, and business UI rules. MCP will derive referenceProfile, referenceLoadPlan, scenario.reference, semanticTokenPolicy, forbiddenUserVisibleContent, and qualityGates during submit; do not hand-maintain those machine-owned fields.".to_string(),
+            "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.".to_string(),
+            "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.".to_string(),
+            "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.".to_string(),
             "Write uiSurfaceRegistry for every business UI surface that the current phase can task: app shells, pages, panels, drawers, modals, tables, forms, detail views, widgets, navigation, and feedback areas.".to_string(),
-            "For each uiSurfaceRegistry surface, state the business purpose plus productIntent, compositionModel, informationModel, actionModel, statePlacementModel, visualModel, and responsiveModel. These fields are the product-grade source for TaskPlan ownership dimensions and execution uiProductionBrief.".to_string(),
+            "For each uiSurfaceRegistry surface, state the business purpose plus productIntent, compositionModel, informationModel, actionModel, statePlacementModel, visualModel, and responsiveModel only when those details are not already better represented by surfaceDecisionCandidate model objects.".to_string(),
             "Use requiredComposition/forbiddenComposition/stateRefs/dataViewRefs/actionRefs/operationPathRefs/workflowRefs/interfaceRefs as compact linking fields. Put product quality meaning in the model objects, not in repeated prose.".to_string(),
             "Business UI surfaces must directly serve the selected scenario and task workflow; honor uiQualitySeed.forbiddenUserVisibleContent without repeating reference prose.".to_string(),
         ],
@@ -1848,4 +1839,72 @@ fn read_technical_baseline(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frontend_request_schema_exposes_surface_decision_candidate() {
+        let content_shape = section_content_shape(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            &Value::Null,
+        );
+
+        assert!(
+            content_shape
+                .pointer("/frontendExperience/surfaceDecisionCandidate/selectedPattern/mode")
+                .is_some(),
+            "frontend schema must ask the agent for a surface decision candidate"
+        );
+        assert!(
+            content_shape
+                .pointer("/frontendExperience/surfaceDecisionCandidate/semanticFacts")
+                .is_some(),
+            "frontend schema must collect semantic facts for MCP normalization"
+        );
+        assert!(
+            content_shape
+                .pointer("/frontendExperience/surfaceDecisionCandidate/contentBoundary")
+                .is_some(),
+            "frontend schema must collect content-boundary facts"
+        );
+    }
+
+    #[test]
+    fn frontend_request_exposes_surface_decision_enums_and_rules() {
+        let enum_refs = section_enum_refs(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            &Value::Null,
+        );
+        assert!(
+            enum_refs
+                .pointer("/uiSurfaceDecision/patternMode")
+                .is_some(),
+            "frontend enum refs must include surface decision enums"
+        );
+
+        let rules = section_generation_rules(
+            ArchitectureSectionGroup::FrontendExperience,
+            false,
+            &Value::Null,
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule.contains("surfaceDecisionCandidate")),
+            "frontend generation rules must name surfaceDecisionCandidate"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.contains("Custom is stricter")),
+            "custom mode must be described as stricter, not relaxed"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.contains("MCP owns reference")),
+            "reference and rule derivation must stay MCP-owned"
+        );
+    }
 }

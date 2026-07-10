@@ -4,11 +4,11 @@ use std::{
 };
 
 use contracts::{
-    normalize_ui_quality_contract_for_persist, validate_ui_quality_contract, AcceptanceMatrixEntry,
-    ArchitectureArtifactContract, ArchitectureArtifactSource, ArchitectureArtifactStatus,
-    ArchitectureDetailCoverageEntry, ArchitectureHandoff, ArchitectureQuality,
-    ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup, ArchitectureSectionStatus,
-    COVERAGE_ARTIFACT_TYPES,
+    normalize_ui_surface_decision_contract_for_persist, validate_ui_surface_decision_contract,
+    AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
+    ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
+    ArchitectureQuality, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
+    ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -277,7 +277,7 @@ where
             &mut candidate.content,
         )?;
     }
-    if normalize_frontend_ui_quality_contract(&mut candidate.content, &request_root) {
+    if normalize_frontend_ui_surface_decision_contract(&mut candidate.content, &request_root) {
         candidate_normalized = true;
     }
     if normalize_runtime_delivery_deployment_shape(&mut candidate.content) {
@@ -629,17 +629,26 @@ fn validate_frontend_rules(
         }
     }
     if let Some(frontend_experience) = candidate.content.get("frontendExperience") {
-        issues.extend(validate_ui_quality_contract(frontend_experience));
+        issues.extend(validate_ui_surface_decision_contract(frontend_experience));
     }
     issues
 }
 
-fn normalize_frontend_ui_quality_contract(content: &mut Value, request_root: &Value) -> bool {
+fn normalize_frontend_ui_surface_decision_contract(
+    content: &mut Value,
+    request_root: &Value,
+) -> bool {
     let Some(frontend_experience) = content.get_mut("frontendExperience") else {
         return false;
     };
     let ui_quality_seed = request_root.get("uiQualitySeed").unwrap_or(&Value::Null);
-    normalize_ui_quality_contract_for_persist(frontend_experience, ui_quality_seed)
+    let surface_contract_changed =
+        normalize_ui_surface_decision_contract_for_persist(frontend_experience, ui_quality_seed);
+    let removed_legacy = frontend_experience
+        .as_object_mut()
+        .and_then(|object| object.remove("uiQualityContract"))
+        .is_some();
+    surface_contract_changed || removed_legacy
 }
 
 fn normalize_runtime_delivery_deployment_shape(content: &mut Value) -> bool {
@@ -1993,6 +2002,79 @@ fn repair_context_has_source_ref(
     Ok(fields
         .get("repairContext.sourceRef")
         .is_some_and(|field| !field.value.is_null()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contracts::{
+        build_ui_quality_seed, ui_surface_decision_candidate_template,
+        validate_ui_surface_decision_contract,
+    };
+
+    #[test]
+    fn frontend_submit_normalization_writes_surface_decision_contract() {
+        let ui_quality_seed = build_ui_quality_seed(None, None);
+        let mut candidate = ui_surface_decision_candidate_template();
+        candidate["patternRankings"][0]["score"] = json!(0.8);
+        candidate["patternRankings"][0]["matchedSignals"] =
+            json!(["record collection", "business action"]);
+        candidate["selectedPattern"]["rationale"] =
+            json!("The UI surface is a record workbench with scan, compare, and create actions.");
+        candidate["semanticFacts"]["userJobs"] = json!(["browse", "compare", "create"]);
+        candidate["semanticFacts"]["informationShapes"] =
+            json!(["record_collection", "record_detail"]);
+        candidate["semanticFacts"]["operationModels"] =
+            json!(["filter_sort_paginate", "create_update"]);
+        candidate["semanticFacts"]["riskFactors"] = json!(["none"]);
+        candidate["layoutModel"]["desktop"]["layoutIntent"] =
+            json!("Keep the working record region and primary action visible together.");
+        candidate["regionModel"][0]["purpose"] =
+            json!("Primary record work region for scanning and acting on business items.");
+        candidate["informationModel"]["primaryObjects"] = json!(["request"]);
+        candidate["informationModel"]["fields"] = json!(["id", "status"]);
+        candidate["actionModel"][0]["label"] = json!("Create request");
+        candidate["stateModel"][0]["placementRule"] =
+            json!("Place loading and errors near the affected record work region.");
+
+        let mut content = json!({
+            "frontendExperience": {
+                "required": true,
+                "surfaceDecisionCandidate": candidate
+            }
+        });
+        let request_root = json!({
+            "uiQualitySeed": ui_quality_seed
+        });
+
+        assert!(
+            normalize_frontend_ui_surface_decision_contract(&mut content, &request_root),
+            "submit normalization must write derived frontend quality fields"
+        );
+        let frontend = content
+            .get("frontendExperience")
+            .expect("frontendExperience must remain present");
+        assert!(
+            frontend.get("uiSurfaceDecisionContract").is_some(),
+            "submit normalization must derive uiSurfaceDecisionContract"
+        );
+        assert_eq!(
+            frontend
+                .pointer("/uiSurfaceDecisionContract/patternDecision/knownPattern")
+                .and_then(Value::as_str),
+            Some("collection_workbench"),
+            "uiSurfaceDecisionContract pattern must be derived from surfaceDecisionCandidate"
+        );
+        assert!(
+            frontend.get("uiQualityContract").is_none(),
+            "submit normalization must not persist legacy uiQualityContract"
+        );
+        let issues = validate_ui_surface_decision_contract(frontend);
+        assert!(
+            issues.is_empty(),
+            "derived surface decision contract should validate cleanly: {issues:?}"
+        );
+    }
 }
 
 fn update_output_contract_ref(

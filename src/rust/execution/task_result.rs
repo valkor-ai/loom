@@ -158,7 +158,10 @@ where
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
         "task.frontendExperienceRequirement.executionGuidance.surfacesInScope",
         "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
-        "task.frontendExperienceRequirement.uiTaskQualityGates",
+        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+        "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+        "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+        "task.frontendExperienceRequirement.uiSurfaceOwnership",
     ] {
         if allowed_read_fields.contains(optional_field) {
             fields_to_read.push(optional_field.to_string());
@@ -858,37 +861,34 @@ fn normalize_frontend_quality_self_check_shape(object: &mut serde_json::Map<Stri
     else {
         return;
     };
-    normalize_object_array_field(self_check, "statesCovered");
-    normalize_object_array_field(self_check, "businessUiRulesChecked");
-    normalize_object_array_field(self_check, "surfacesCovered");
-    normalize_object_array_field(self_check, "gateResults");
-    normalize_string_array_field(self_check, "referenceFilesChecked");
+    normalize_object_array_field(self_check, "surfaceRegionEvidence");
+    normalize_object_array_field(self_check, "surfaceActionEvidence");
+    normalize_object_array_field(self_check, "surfaceStateEvidence");
+    normalize_object_array_field(self_check, "surfaceQualityRuleEvidence");
+    normalize_string_array_field(self_check, "referencePlanFilesChecked");
     normalize_string_array_field(self_check, "knownGaps");
     if !self_check
-        .get("referenceGroupsChecked")
-        .is_some_and(Value::is_object)
-    {
-        self_check.insert("referenceGroupsChecked".to_string(), json!({}));
-    }
-    if !self_check
-        .get("forbiddenContentCheck")
+        .get("contentBoundaryEvidence")
         .is_some_and(Value::is_object)
     {
         self_check.insert(
-            "forbiddenContentCheck".to_string(),
+            "contentBoundaryEvidence".to_string(),
             json!({
                 "checked": true,
-                "violations": []
+                "allowedContentExamples": [],
+                "forbiddenContentViolations": [],
+                "evidence": ""
             }),
         );
-    } else if let Some(forbidden) = self_check
-        .get_mut("forbiddenContentCheck")
+    } else if let Some(content) = self_check
+        .get_mut("contentBoundaryEvidence")
         .and_then(Value::as_object_mut)
     {
-        if !forbidden.get("checked").is_some_and(Value::is_boolean) {
-            forbidden.insert("checked".to_string(), json!(true));
+        if !content.get("checked").is_some_and(Value::is_boolean) {
+            content.insert("checked".to_string(), json!(true));
         }
-        normalize_string_array_field(forbidden, "violations");
+        normalize_string_array_field(content, "allowedContentExamples");
+        normalize_string_array_field(content, "forbiddenContentViolations");
     }
     if self_check
         .get("designTokenEvidence")
@@ -1983,11 +1983,7 @@ fn validate_frontend_quality_self_check(
     if !frontend_quality_self_check_applies(task) {
         return;
     }
-    let ui_quality_contract = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiQualityContract"))
-        .unwrap_or(&Value::Null);
+    let frontend_requirement = task.frontend_experience_requirement.as_ref();
     let Some(self_check_model) = &result.frontend_quality_self_check else {
         if matches!(
             result.status,
@@ -2002,176 +1998,51 @@ fn validate_frontend_quality_self_check(
         return;
     };
     let self_check = serde_json::to_value(self_check_model).unwrap_or(Value::Null);
-    if self_check.get("referenceIdsChecked").is_some() {
-        issues.push(issue(
-            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.referenceIdsChecked",
-            "referenceIdsChecked is not allowed; use referenceGroupsChecked instead.",
-        ));
-    }
-    if self_check.get("scenarioKind").and_then(Value::as_str)
-        != ui_quality_contract
-            .pointer("/scenario/kind")
-            .and_then(Value::as_str)
-    {
-        issues.push(issue(
-            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.scenarioKind",
-            "frontendQualitySelfCheck.scenarioKind must match uiQualityContract.scenario.kind.",
-        ));
-    }
-    if self_check.get("qualityLevel").and_then(Value::as_str)
-        != ui_quality_contract
-            .get("qualityLevel")
-            .and_then(Value::as_str)
-    {
-        issues.push(issue(
-            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.qualityLevel",
-            "frontendQualitySelfCheck.qualityLevel must match uiQualityContract.qualityLevel.",
-        ));
-    }
-    let checked_groups = reference_groups_at(&self_check, "referenceGroupsChecked");
-    for (group, item) in reference_groups_at(
-        ui_quality_contract
-            .get("referenceProfile")
-            .unwrap_or(&Value::Null),
-        "groups",
-    ) {
-        if !checked_groups.contains(&(group, item)) {
+    for obsolete_field in [
+        "referenceIdsChecked",
+        "scenarioKind",
+        "qualityLevel",
+        "referenceGroupsChecked",
+        "referenceFilesChecked",
+        "statesCovered",
+        "businessUiRulesChecked",
+        "forbiddenContentCheck",
+        "surfacesCovered",
+        "gateResults",
+    ] {
+        if self_check.get(obsolete_field).is_some() {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.referenceGroupsChecked",
-                "frontendQualitySelfCheck must cover every uiQualityContract reference group item.",
+                &format!("frontendQualitySelfCheck.{obsolete_field}"),
+                "frontendQualitySelfCheck must use the surface decision evidence contract only; legacy UI quality self-check fields are not allowed.",
             ));
-            break;
         }
     }
-    let expected_reference_files = ui_quality_contract
-        .pointer("/referenceProfile/referenceLoadPlan")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("path").and_then(Value::as_str))
-                .collect::<BTreeSet<_>>()
+    let surface_contract = frontend_requirement
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
         })
-        .unwrap_or_default();
-    let checked_reference_files = self_check
-        .get("referenceFilesChecked")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    if !expected_reference_files.is_empty() && checked_reference_files != expected_reference_files {
+        .unwrap_or(&Value::Null);
+    if surface_contract.is_object() {
+        if let Some(requirement) = frontend_requirement {
+            validate_surface_decision_contract_evidence(
+                &self_check,
+                requirement,
+                surface_contract,
+                issues,
+            );
+            validate_design_token_evidence(&self_check, requirement, issues);
+        }
+    } else {
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.referenceFilesChecked",
-            "frontendQualitySelfCheck.referenceFilesChecked must exactly list uiQualityContract.referenceProfile.referenceLoadPlan paths.",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract",
+            "Frontend quality validation requires the task-scoped uiSurfaceDecisionContract in uiProductionBrief.",
         ));
     }
-    let covered_states = self_check
-        .get("statesCovered")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("state").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for state in ui_quality_contract
-        .get("requiredUiStates")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("state").and_then(Value::as_str))
-    {
-        if !covered_states.iter().any(|item| item == state) {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.statesCovered",
-                "frontendQualitySelfCheck must cover every uiQualityContract required UI state.",
-            ));
-            break;
-        }
-    }
-    let checked_rules = self_check
-        .get("businessUiRulesChecked")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    for rule_id in ui_quality_contract
-        .get("businessUiRules")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get("ruleId").and_then(Value::as_str))
-    {
-        if !checked_rules.iter().any(|item| item == rule_id) {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.businessUiRulesChecked",
-                "frontendQualitySelfCheck must cover every uiQualityContract business UI rule.",
-            ));
-            break;
-        }
-    }
-    let expected_surface_ids = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.pointer("/executionGuidance/surfacesInScope"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("surfaceId").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if !expected_surface_ids.is_empty() {
-        let covered_surface_ids = self_check
-            .get("surfacesCovered")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.get("surfaceId").and_then(Value::as_str))
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for surface_id in expected_surface_ids {
-            if !covered_surface_ids
-                .iter()
-                .any(|covered| covered == &surface_id)
-            {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    "frontendQualitySelfCheck.surfacesCovered",
-                    "frontendQualitySelfCheck must cover every task frontend surface with structured surface evidence.",
-                ));
-                break;
-            }
-        }
-    }
-    validate_design_token_evidence(&self_check, ui_quality_contract, issues);
-    validate_frontend_quality_gate_results(&self_check, task, ui_quality_contract, issues);
     if self_check.get("status").and_then(Value::as_str) == Some("satisfied") {
         let violations = self_check
-            .pointer("/forbiddenContentCheck/violations")
+            .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
             .and_then(Value::as_array)
             .map(|items| items.len())
             .unwrap_or(0);
@@ -2190,95 +2061,131 @@ fn validate_frontend_quality_self_check(
     }
 }
 
-fn validate_frontend_quality_gate_results(
+fn validate_surface_decision_contract_evidence(
     self_check: &Value,
-    task: &TaskDefinition,
-    ui_quality_contract: &Value,
+    requirement: &Value,
+    surface_contract: &Value,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    const VALID_GATE_STATUSES: &[&str] = &[
-        "satisfied",
-        "partial",
-        "missing",
-        "blocked_by_environment",
-        "not_applicable",
-    ];
-
-    let expected_gates = frontend_quality_gates_for_task(task, ui_quality_contract);
-    if expected_gates.is_empty() {
-        return;
+    let expected_ref = requirement
+        .get("uiSurfaceDecisionContractRef")
+        .and_then(Value::as_str)
+        .or_else(|| surface_contract.get("contractRef").and_then(Value::as_str));
+    if let Some(expected_ref) = expected_ref {
+        if self_check
+            .get("surfaceDecisionContractRef")
+            .and_then(Value::as_str)
+            != Some(expected_ref)
+        {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                "frontendQualitySelfCheck.surfaceDecisionContractRef",
+                "frontendQualitySelfCheck.surfaceDecisionContractRef must match the task uiSurfaceDecisionContractRef.",
+            ));
+        }
     }
 
-    let expected_by_id = expected_gates
-        .iter()
-        .filter_map(|gate| {
-            gate.get("gateId")
-                .and_then(Value::as_str)
-                .map(|gate_id| (gate_id.to_string(), gate))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let expected_ids = expected_by_id.keys().cloned().collect::<BTreeSet<_>>();
-    let Some(gate_results) = self_check.get("gateResults").and_then(Value::as_array) else {
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceRegionEvidence",
+        object_array_id_set(surface_contract, "regionsInScope", "regionId"),
+        "region",
+        issues,
+    );
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceActionEvidence",
+        object_array_id_set(surface_contract, "actionsInScope", "actionId"),
+        "action",
+        issues,
+    );
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceStateEvidence",
+        object_array_id_set(surface_contract, "statesInScope", "state"),
+        "state",
+        issues,
+    );
+    validate_surface_contract_evidence_array(
+        self_check,
+        "surfaceQualityRuleEvidence",
+        object_array_id_set(surface_contract, "qualityRulesInScope", "ruleId"),
+        "quality rule",
+        issues,
+    );
+    validate_content_boundary_evidence(self_check, issues);
+    validate_reference_plan_files_checked(self_check, requirement, issues);
+}
+
+fn validate_surface_contract_evidence_array(
+    self_check: &Value,
+    field: &str,
+    expected_ids: BTreeSet<String>,
+    label: &str,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    const VALID_STATUSES: &[&str] = &["satisfied", "partial", "missing", "blocked_by_environment"];
+
+    if expected_ids.is_empty() {
+        return;
+    }
+    let Some(items) = self_check.get(field).and_then(Value::as_array) else {
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.gateResults",
-            "frontendQualitySelfCheck.gateResults must report every assigned UI quality gate.",
+            &format!("frontendQualitySelfCheck.{field}"),
+            &format!(
+                "frontendQualitySelfCheck.{field} must prove every task-scoped UI surface {label}."
+            ),
         ));
         return;
     };
-    if gate_results.is_empty() {
+    if items.is_empty() {
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-            "frontendQualitySelfCheck.gateResults",
-            "frontendQualitySelfCheck.gateResults must not be empty for frontend quality tasks.",
+            &format!("frontendQualitySelfCheck.{field}"),
+            &format!("frontendQualitySelfCheck.{field} must not be empty when the surface contract declares task-scoped {label}s."),
         ));
         return;
     }
-
-    let mut seen = BTreeSet::new();
-    let mut result_status_by_gate = BTreeMap::<String, String>::new();
     let overall_satisfied = self_check.get("status").and_then(Value::as_str) == Some("satisfied");
-
-    for (index, gate_result) in gate_results.iter().enumerate() {
-        let Some(gate_id) = gate_result.get("gateId").and_then(Value::as_str) else {
+    let mut seen = BTreeSet::new();
+    for (index, item) in items.iter().enumerate() {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}].gateId"),
-                "Each frontendQualitySelfCheck.gateResults entry must include gateId.",
+                &format!("frontendQualitySelfCheck.{field}[{index}].id"),
+                &format!("Each frontendQualitySelfCheck.{field} entry must include the task-scoped {label} id."),
             ));
             continue;
         };
-        if !seen.insert(gate_id.to_string()) {
+        if !seen.insert(id.to_string()) {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}].gateId"),
-                "frontendQualitySelfCheck.gateResults must not contain duplicate gateId entries.",
+                &format!("frontendQualitySelfCheck.{field}[{index}].id"),
+                &format!(
+                    "frontendQualitySelfCheck.{field} must not duplicate {label} evidence ids."
+                ),
             ));
         }
-        if !expected_ids.contains(gate_id) {
+        if !expected_ids.contains(id) {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}].gateId"),
-                "frontendQualitySelfCheck.gateResults cannot invent gate ids; use only task.frontendExperienceRequirement.uiTaskQualityGates.",
+                &format!("frontendQualitySelfCheck.{field}[{index}].id"),
+                &format!("frontendQualitySelfCheck.{field} cannot invent {label} ids outside the task-scoped uiSurfaceDecisionContract."),
             ));
         }
-        let expected_gate = expected_by_id.get(gate_id).copied();
-
-        let status = gate_result
+        let status = item
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !VALID_GATE_STATUSES.contains(&status) {
+        if !VALID_STATUSES.contains(&status) {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
-                "frontendQualitySelfCheck.gateResults.status must be one of satisfied, partial, missing, blocked_by_environment, or not_applicable.",
+                &format!("frontendQualitySelfCheck.{field}[{index}].status"),
+                &format!("frontendQualitySelfCheck.{field}.status must be one of satisfied, partial, missing, or blocked_by_environment."),
             ));
-            continue;
         }
-        result_status_by_gate.insert(gate_id.to_string(), status.to_string());
-
-        let evidence_present = gate_result
+        let evidence_present = item
             .get("evidence")
             .and_then(Value::as_str)
             .map(str::trim)
@@ -2286,215 +2193,114 @@ fn validate_frontend_quality_gate_results(
         if !evidence_present {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}].evidence"),
-                "Each UI quality gate result must include concrete evidence, not an empty self-report.",
+                &format!("frontendQualitySelfCheck.{field}[{index}].evidence"),
+                &format!("Each frontendQualitySelfCheck.{field} entry must include concrete evidence for the {label}."),
+            ));
+        }
+        if status == "satisfied" && string_array_at(item, "files").is_empty() {
+            issues.push(issue(
+                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+                &format!("frontendQualitySelfCheck.{field}[{index}].files"),
+                &format!("Satisfied frontendQualitySelfCheck.{field} entries must cite concrete UI files."),
             ));
         }
         if matches!(status, "satisfied" | "blocked_by_environment")
-            && gate_result_contains_placeholder(gate_result)
+            && value_field_contains_placeholder(item)
         {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}]"),
-                "Satisfied or environment-blocked UI quality gate results must replace template placeholders with concrete files, checks, blocker reasons, or evidence.",
+                &format!("frontendQualitySelfCheck.{field}[{index}]"),
+                &format!("Satisfied or environment-blocked frontendQualitySelfCheck.{field} entries must replace template placeholders with concrete evidence."),
             ));
         }
-
-        if status == "satisfied" {
-            if string_array_at(gate_result, "files").is_empty() {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}].files"),
-                    "Satisfied UI quality gates must cite concrete files that implement or prove the gate.",
-                ));
-            }
-            let required_evidence = expected_gate
-                .map(|gate| string_array_at(gate, "requiredEvidence"))
-                .unwrap_or_default();
-            if evidence_requires_source_check(&required_evidence)
-                && string_array_at(gate_result, "sourceChecks").is_empty()
-            {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}].sourceChecks"),
-                    "Satisfied UI quality gates that require source_check must cite sourceChecks.",
-                ));
-            }
-            if evidence_requires_viewport_check(&required_evidence)
-                && string_array_at(gate_result, "viewportsChecked").is_empty()
-            {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}].viewportsChecked"),
-                    "Satisfied UI quality gates that require viewport_check must cite viewportsChecked.",
-                ));
-            }
-            if is_render_or_viewport_gate(gate_id)
-                && !has_desktop_and_mobile_viewports(&string_array_at(
-                    gate_result,
-                    "viewportsChecked",
-                ))
-            {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}].viewportsChecked"),
-                    "Satisfied render/viewport gate must record both desktop and mobile rendered checks.",
-                ));
-            }
-        }
-
-        if status == "blocked_by_environment" {
-            if !is_environment_blockable_gate(gate_id, expected_gate) {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
-                    "blocked_by_environment is only allowed for render or viewport verification gates.",
-                ));
-            }
-            let blocked_reason_present = gate_result
-                .get("blockedReason")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .is_some_and(|reason| !reason.is_empty());
-            if !blocked_reason_present
-                || string_array_at(gate_result, "attemptedChecks").is_empty()
-                || string_array_at(gate_result, "fallbackEvidence").is_empty()
-            {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}]"),
-                    "Environment-blocked render gates must include blockedReason, attemptedChecks, and fallbackEvidence.",
-                ));
-            }
-            if overall_satisfied {
-                issues.push(issue(
-                    "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                    &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
-                    "frontendQualitySelfCheck.status cannot be satisfied while any assigned gate is blocked_by_environment.",
-                ));
-            }
-        }
-
-        if overall_satisfied && matches!(status, "partial" | "missing") {
+        if overall_satisfied && matches!(status, "partial" | "missing" | "blocked_by_environment") {
             issues.push(issue(
                 "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                &format!("frontendQualitySelfCheck.gateResults[{index}].status"),
-                "frontendQualitySelfCheck.status cannot be satisfied while assigned gates are partial or missing.",
+                &format!("frontendQualitySelfCheck.{field}[{index}].status"),
+                &format!("frontendQualitySelfCheck.status cannot be satisfied while {label} evidence is partial, missing, or environment-blocked."),
             ));
         }
     }
-
-    for (gate_id, gate) in expected_by_id {
-        let Some(status) = result_status_by_gate.get(&gate_id).map(String::as_str) else {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.gateResults",
-                "frontendQualitySelfCheck.gateResults must include every assigned uiTaskQualityGates gateId.",
-            ));
-            continue;
-        };
-        let severity = gate
-            .get("severity")
-            .and_then(Value::as_str)
-            .unwrap_or("must");
-        if overall_satisfied && severity == "must" && status != "satisfied" {
-            issues.push(issue(
-                "TASK_RESULT_FRONTEND_QUALITY_INVALID",
-                "frontendQualitySelfCheck.status",
-                "Satisfied frontendQualitySelfCheck requires every must UI quality gate to be satisfied.",
-            ));
-        }
+    if !expected_ids.is_subset(&seen) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            &format!("frontendQualitySelfCheck.{field}"),
+            &format!("frontendQualitySelfCheck.{field} must include every task-scoped uiSurfaceDecisionContract {label} id."),
+        ));
     }
 }
 
-fn frontend_quality_gates_for_task(
-    task: &TaskDefinition,
-    ui_quality_contract: &Value,
-) -> Vec<Value> {
-    task.frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
+fn validate_content_boundary_evidence(
+    self_check: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(content) = self_check.get("contentBoundaryEvidence") else {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence",
+            "frontendQualitySelfCheck.contentBoundaryEvidence is required when a uiSurfaceDecisionContract is present.",
+        ));
+        return;
+    };
+    if content.get("checked").and_then(Value::as_bool) != Some(true) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.checked",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.checked must be true after checking the surface content boundary.",
+        ));
+    }
+    let evidence_present = content
+        .get("evidence")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|evidence| !evidence.is_empty());
+    if !evidence_present {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.evidence",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.evidence must explain how user-visible content respected the contract boundary.",
+        ));
+    }
+    let violations = content
+        .get("forbiddenContentViolations")
         .and_then(Value::as_array)
-        .cloned()
-        .or_else(|| {
-            ui_quality_contract
-                .get("qualityGates")
-                .and_then(Value::as_array)
-                .cloned()
-        })
-        .unwrap_or_default()
-}
-
-fn is_render_or_viewport_gate(gate_id: &str) -> bool {
-    gate_id.contains("render") || gate_id.contains("viewport")
-}
-
-fn is_environment_blockable_gate(gate_id: &str, expected_gate: Option<&Value>) -> bool {
-    if is_render_or_viewport_gate(gate_id) || gate_id.contains("mobile") {
-        return true;
-    }
-    let required = expected_gate
-        .map(|gate| string_array_at(gate, "requiredEvidence"))
-        .unwrap_or_default();
-    evidence_requires_viewport_check(&required)
-        || required
-            .iter()
-            .any(|item| item == "render_or_environment_reason")
-}
-
-fn evidence_requires_source_check(required: &[String]) -> bool {
-    required
-        .iter()
-        .any(|item| item == "source_check" || item == "responsive_source_check")
-}
-
-fn evidence_requires_viewport_check(required: &[String]) -> bool {
-    required.iter().any(|item| item == "viewport_check")
-}
-
-fn gate_result_contains_placeholder(gate_result: &Value) -> bool {
-    [
-        "evidence",
-        "blockedReason",
-        "files",
-        "surfaceIds",
-        "viewportsChecked",
-        "sourceChecks",
-        "attemptedChecks",
-        "fallbackEvidence",
-    ]
-    .iter()
-    .any(|field| value_field_contains_placeholder(gate_result.get(field).unwrap_or(&Value::Null)))
-}
-
-fn value_field_contains_placeholder(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.trim().starts_with("replace_with_"),
-        Value::Array(items) => items.iter().any(value_field_contains_placeholder),
-        _ => false,
+        .map(|items| items.len())
+        .unwrap_or(0);
+    if self_check.get("status").and_then(Value::as_str) == Some("satisfied") && violations > 0 {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.contentBoundaryEvidence.forbiddenContentViolations",
+            "Satisfied frontendQualitySelfCheck cannot contain content boundary violations.",
+        ));
     }
 }
 
-fn has_desktop_and_mobile_viewports(viewports: &[String]) -> bool {
-    let normalized = viewports
-        .iter()
-        .map(|viewport| viewport.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    normalized
-        .iter()
-        .any(|viewport| viewport.contains("desktop") || viewport.contains("1024"))
-        && normalized.iter().any(|viewport| {
-            viewport.contains("mobile") || viewport.contains("375") || viewport.contains("390")
-        })
+fn validate_reference_plan_files_checked(
+    self_check: &Value,
+    requirement: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let expected_files = reference_plan_paths(requirement);
+    if expected_files.is_empty() {
+        return;
+    }
+    let checked_files = string_set_from_array(self_check, "referencePlanFilesChecked");
+    if !expected_files.is_subset(&checked_files) {
+        issues.push(issue(
+            "TASK_RESULT_FRONTEND_QUALITY_INVALID",
+            "frontendQualitySelfCheck.referencePlanFilesChecked",
+            "frontendQualitySelfCheck.referencePlanFilesChecked must include every task-scoped styleAssetPlan.referencePlan path read for the UI task.",
+        ));
+    }
 }
 
 fn validate_design_token_evidence(
     self_check: &Value,
-    ui_quality_contract: &Value,
+    requirement: &Value,
     issues: &mut Vec<delivery_core::RepairIssue>,
 ) {
-    let plan = ui_quality_contract
-        .get("designTokenAssetPlan")
+    let plan = requirement
+        .pointer("/executionGuidance/styleAssetPlan/designTokenAssetPlan")
         .unwrap_or(&Value::Null);
     let strategy = plan
         .get("strategy")
@@ -2512,7 +2318,7 @@ fn validate_design_token_evidence(
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
             "frontendQualitySelfCheck.designTokenEvidence.strategyUsed",
-            "designTokenEvidence.strategyUsed must match uiQualityContract.designTokenAssetPlan.strategy.",
+            "designTokenEvidence.strategyUsed must match task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan.strategy.",
         ));
     }
     let expected_template = plan.get("templateId").unwrap_or(&Value::Null);
@@ -2521,7 +2327,7 @@ fn validate_design_token_evidence(
         issues.push(issue(
             "TASK_RESULT_FRONTEND_QUALITY_INVALID",
             "frontendQualitySelfCheck.designTokenEvidence.templateIdUsed",
-            "designTokenEvidence.templateIdUsed must match uiQualityContract.designTokenAssetPlan.templateId.",
+            "designTokenEvidence.templateIdUsed must match task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.designTokenAssetPlan.templateId.",
         ));
     }
     let satisfied = self_check.get("status").and_then(Value::as_str) == Some("satisfied");
@@ -2681,24 +2487,6 @@ fn string_array_at(value: &Value, field: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter_map(|item| item.as_str().map(str::to_string))
-        .collect()
-}
-
-fn reference_groups_at(value: &Value, field: &str) -> std::collections::BTreeSet<(String, String)> {
-    value
-        .get(field)
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .flat_map(|(group, items)| {
-            items
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str())
-                .map(|item| (group.clone(), item.to_string()))
-                .collect::<Vec<_>>()
-        })
         .collect()
 }
 
@@ -3009,8 +2797,10 @@ fn materialize_task_result_repair(
     }
     if frontend_quality_self_check_applies(&context.task) {
         context_fields.extend([
-            "task.frontendExperienceRequirement.executionGuidance.uiQuality",
-            "task.frontendExperienceRequirement.uiQualityContractRef",
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+            "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
+            "task.frontendExperienceRequirement.uiSurfaceOwnership",
         ]);
     }
     if runtime_delivery_evidence_applies(&context.task) {
@@ -3259,16 +3049,11 @@ fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) 
 }
 
 fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base: Value) -> Value {
-    let field_path = base
-        .get("fieldPath")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let ui_quality_contract = context
-        .task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiQualityContract"))
+    let frontend_requirement = context.task.frontend_experience_requirement.as_ref();
+    let surface_contract = frontend_requirement
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+        })
         .cloned()
         .unwrap_or(Value::Null);
     let self_check = context
@@ -3276,120 +3061,98 @@ fn task_result_frontend_quality_conflict(context: &RepairContextInput, mut base:
         .get("frontendQualitySelfCheck")
         .cloned()
         .unwrap_or(Value::Null);
-    let expected_reference_groups = reference_groups_at(
-        ui_quality_contract
-            .get("referenceProfile")
-            .unwrap_or(&Value::Null),
-        "groups",
-    );
-    let checked_reference_groups = reference_groups_at(&self_check, "referenceGroupsChecked");
-    let expected_reference_files = reference_load_plan_paths(&ui_quality_contract);
-    let checked_reference_files = string_set_from_array(&self_check, "referenceFilesChecked");
-    let expected_gates = frontend_quality_gates_for_task(&context.task, &ui_quality_contract);
-    let expected_gate_ids = gate_ids_from_gates(&expected_gates);
-    let reported_gate_ids = object_array_string_field(&self_check, "gateResults", "gateId");
-    let expected_state_ids = object_array_id_set(&ui_quality_contract, "requiredUiStates", "state");
-    let checked_state_ids = object_array_id_set(&self_check, "statesCovered", "state");
-    let expected_business_rule_ids =
-        object_array_id_set(&ui_quality_contract, "businessUiRules", "ruleId");
-    let checked_business_rule_ids =
-        object_array_id_set(&self_check, "businessUiRulesChecked", "ruleId");
-    let expected_surface_ids = context
-        .task
-        .frontend_experience_requirement
-        .as_ref()
-        .map(|requirement| {
-            object_array_id_set_at_pointer(
-                requirement,
-                "/executionGuidance/surfacesInScope",
-                "surfaceId",
-            )
-        })
+    let expected_region_ids = object_array_id_set(&surface_contract, "regionsInScope", "regionId");
+    let checked_region_ids = object_array_id_set(&self_check, "surfaceRegionEvidence", "id");
+    let expected_action_ids = object_array_id_set(&surface_contract, "actionsInScope", "actionId");
+    let checked_action_ids = object_array_id_set(&self_check, "surfaceActionEvidence", "id");
+    let expected_surface_state_ids =
+        object_array_id_set(&surface_contract, "statesInScope", "state");
+    let checked_surface_state_ids = object_array_id_set(&self_check, "surfaceStateEvidence", "id");
+    let expected_surface_quality_rule_ids =
+        object_array_id_set(&surface_contract, "qualityRulesInScope", "ruleId");
+    let checked_surface_quality_rule_ids =
+        object_array_id_set(&self_check, "surfaceQualityRuleEvidence", "id");
+    let expected_reference_plan_files = frontend_requirement
+        .map(reference_plan_paths)
         .unwrap_or_default();
-    let checked_surface_ids = object_array_id_set(&self_check, "surfacesCovered", "surfaceId");
-    let affected_gate_result = affected_gate_result_summary(&self_check, &field_path);
-    let affected_gate_id = affected_gate_result
-        .get("gateId")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let affected_gate_requirement = affected_gate_id
-        .as_deref()
-        .and_then(|gate_id| expected_gate_summary(&expected_gates, gate_id))
-        .unwrap_or(Value::Null);
+    let checked_reference_plan_files =
+        string_set_from_array(&self_check, "referencePlanFilesChecked");
+    let design_token_plan = frontend_requirement
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/styleAssetPlan/designTokenAssetPlan")
+        })
+        .unwrap_or(&Value::Null);
     base["current"] = json!({
         "status": self_check.get("status").and_then(Value::as_str),
-        "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
-        "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupCount": checked_reference_groups.len(),
-        "referenceFilesCheckedCount": self_check
-            .get("referenceFilesChecked")
-            .and_then(Value::as_array)
-            .map(|items| items.len())
-            .unwrap_or(0),
         "designTokenEvidence": design_token_evidence_summary(&self_check),
-        "gateResultsCount": self_check
-            .get("gateResults")
-            .and_then(Value::as_array)
-            .map(|items| items.len())
-            .unwrap_or(0),
-        "stateIdsCovered": checked_state_ids,
-        "businessUiRuleIdsChecked": checked_business_rule_ids,
-        "surfaceIdsCovered": checked_surface_ids,
-        "reportedGateIds": reported_gate_ids,
-        "affectedGateResult": affected_gate_result,
+        "surfaceDecisionContractRef": self_check
+            .get("surfaceDecisionContractRef")
+            .and_then(Value::as_str),
+        "surfaceRegionIdsCovered": checked_region_ids,
+        "surfaceActionIdsCovered": checked_action_ids,
+        "surfaceStateIdsCovered": checked_surface_state_ids,
+        "surfaceQualityRuleIdsCovered": checked_surface_quality_rule_ids,
+        "referencePlanFilesCheckedCount": checked_reference_plan_files.len(),
+        "contentBoundaryEvidence": {
+            "checked": self_check
+                .pointer("/contentBoundaryEvidence/checked")
+                .and_then(Value::as_bool),
+            "violationCount": self_check
+                .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "evidencePresent": self_check
+                .pointer("/contentBoundaryEvidence/evidence")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|evidence| !evidence.is_empty())
+        },
         "knownGapsCount": self_check
             .get("knownGaps")
             .and_then(Value::as_array)
             .map(|items| items.len())
     });
     base["expected"] = json!({
-        "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
-        "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupCount": expected_reference_groups.len(),
-        "missingReferenceGroups": reference_group_difference(
-            &expected_reference_groups,
-            &checked_reference_groups
+        "surfaceDecisionContractRef": frontend_requirement
+            .and_then(|requirement| requirement.get("uiSurfaceDecisionContractRef"))
+            .and_then(Value::as_str)
+            .or_else(|| surface_contract.get("contractRef").and_then(Value::as_str)),
+        "surfaceRegionIdsInScope": expected_region_ids,
+        "missingSurfaceRegionIds": string_set_difference(&expected_region_ids, &checked_region_ids),
+        "surfaceActionIdsInScope": expected_action_ids,
+        "missingSurfaceActionIds": string_set_difference(&expected_action_ids, &checked_action_ids),
+        "surfaceStateIdsInScope": expected_surface_state_ids,
+        "missingSurfaceStateIds": string_set_difference(&expected_surface_state_ids, &checked_surface_state_ids),
+        "surfaceQualityRuleIdsInScope": expected_surface_quality_rule_ids,
+        "missingSurfaceQualityRuleIds": string_set_difference(
+            &expected_surface_quality_rule_ids,
+            &checked_surface_quality_rule_ids
         ),
-        "referenceFileCount": expected_reference_files.len(),
-        "missingReferenceFiles": string_set_difference(
-            &expected_reference_files,
-            &checked_reference_files
+        "referencePlanFileCount": expected_reference_plan_files.len(),
+        "missingReferencePlanFiles": string_set_difference(
+            &expected_reference_plan_files,
+            &checked_reference_plan_files
         ),
-        "extraReferenceFiles": string_set_difference(
-            &checked_reference_files,
-            &expected_reference_files
-        ),
-        "requiredUiStateIds": expected_state_ids,
-        "missingUiStateIds": string_set_difference(&expected_state_ids, &checked_state_ids),
-        "businessUiRuleIds": expected_business_rule_ids,
-        "missingBusinessUiRuleIds": string_set_difference(
-            &expected_business_rule_ids,
-            &checked_business_rule_ids
-        ),
-        "surfaceIdsInScope": expected_surface_ids,
-        "missingSurfaceIds": string_set_difference(&expected_surface_ids, &checked_surface_ids),
-        "designTokenAssetPlan": design_token_plan_summary(&ui_quality_contract),
-        "expectedGateIds": expected_gate_ids,
-        "missingGateIds": string_set_difference(&expected_gate_ids, &reported_gate_ids),
-        "affectedGateRequirement": affected_gate_requirement,
-        "forbiddenUserVisibleContentCount": ui_quality_contract
-            .get("forbiddenUserVisibleContent")
+        "designTokenAssetPlan": design_token_plan_summary(design_token_plan),
+        "forbiddenUserVisibleContentCount": surface_contract
+            .pointer("/contentBoundary/forbiddenUserVisibleContent")
             .and_then(Value::as_array)
             .map(|items| items.len())
             .unwrap_or(0)
     });
     base["validRepairChoices"] = json!([
-        "Report every assigned uiTaskQualityGates gateId in frontendQualitySelfCheck.gateResults; do not invent or omit gate ids.",
-        "For satisfied gates, cite concrete files and evidence; render/viewport gates also need desktop and mobile viewports when local preview is available.",
-        "Use blocked_by_environment only for render/viewport gates when browser, preview, auth, or local dependencies prevent rendering; include blockedReason, attemptedChecks, and fallbackEvidence.",
-        "If any must gate is missing, partial, or environment-blocked, keep frontendQualitySelfCheck.status below satisfied and record the specific gap."
+        "When task.frontendExperienceRequirement.uiSurfaceDecisionContractRef is present, make frontendQualitySelfCheck prove surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, and referencePlanFilesChecked from the task-scoped uiProductionBrief.",
+        "For satisfied surface evidence, cite concrete UI files and non-empty evidence; do not leave replace_with_* placeholders.",
+        "If any task-scoped surface contract item remains partial, missing, or blocked_by_environment, keep frontendQualitySelfCheck.status below satisfied and record the specific gap.",
+        "Use frontendQualitySelfCheck.designTokenEvidence to prove the task styleAssetPlan.designTokenAssetPlan without creating a parallel token system."
     ]);
     base
 }
 
-fn reference_load_plan_paths(ui_quality_contract: &Value) -> BTreeSet<String> {
-    ui_quality_contract
-        .pointer("/referenceProfile/referenceLoadPlan")
+fn reference_plan_paths(requirement: &Value) -> BTreeSet<String> {
+    requirement
+        .pointer("/executionGuidance/styleAssetPlan/referencePlan")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -3413,19 +3176,13 @@ fn string_set_difference(left: &BTreeSet<String>, right: &BTreeSet<String>) -> V
     left.difference(right).cloned().collect()
 }
 
-fn reference_group_difference(
-    expected: &BTreeSet<(String, String)>,
-    checked: &BTreeSet<(String, String)>,
-) -> Vec<Value> {
-    expected
-        .difference(checked)
-        .map(|(group, item)| {
-            json!({
-                "group": group,
-                "item": item
-            })
-        })
-        .collect()
+fn value_field_contains_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains("replace_with_"),
+        Value::Array(items) => items.iter().any(value_field_contains_placeholder),
+        Value::Object(object) => object.values().any(value_field_contains_placeholder),
+        _ => false,
+    }
 }
 
 fn object_array_id_set(value: &Value, array_field: &str, id_field: &str) -> BTreeSet<String> {
@@ -3437,81 +3194,6 @@ fn object_array_id_set(value: &Value, array_field: &str, id_field: &str) -> BTre
         .filter_map(|item| item.get(id_field).and_then(Value::as_str))
         .map(str::to_string)
         .collect()
-}
-
-fn object_array_id_set_at_pointer(
-    value: &Value,
-    pointer: &str,
-    id_field: &str,
-) -> BTreeSet<String> {
-    value
-        .pointer(pointer)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get(id_field).and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
-}
-
-fn gate_ids_from_gates(gates: &[Value]) -> BTreeSet<String> {
-    gates
-        .iter()
-        .filter_map(|gate| gate.get("gateId").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
-}
-
-fn affected_gate_result_summary(self_check: &Value, field_path: &str) -> Value {
-    let Some(index) = gate_result_index(field_path) else {
-        return Value::Null;
-    };
-    let Some(gate_result) = self_check
-        .get("gateResults")
-        .and_then(Value::as_array)
-        .and_then(|items| items.get(index))
-    else {
-        return json!({
-            "index": index,
-            "present": false
-        });
-    };
-    json!({
-        "index": index,
-        "present": true,
-        "gateId": gate_result.get("gateId").and_then(Value::as_str),
-        "status": gate_result.get("status").and_then(Value::as_str),
-        "filesCount": gate_result.get("files").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
-        "surfaceIds": string_array_at(gate_result, "surfaceIds"),
-        "viewportsChecked": string_array_at(gate_result, "viewportsChecked"),
-        "sourceChecksCount": gate_result.get("sourceChecks").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
-        "attemptedChecksCount": gate_result.get("attemptedChecks").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
-        "fallbackEvidenceCount": gate_result.get("fallbackEvidence").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0),
-        "blockedReasonPresent": gate_result.get("blockedReason").and_then(Value::as_str).map(str::trim).is_some_and(|reason| !reason.is_empty()),
-        "evidencePresent": gate_result.get("evidence").and_then(Value::as_str).map(str::trim).is_some_and(|evidence| !evidence.is_empty())
-    })
-}
-
-fn gate_result_index(field_path: &str) -> Option<usize> {
-    let after_prefix = field_path.split("gateResults[").nth(1)?;
-    let index = after_prefix.split(']').next()?;
-    index.parse().ok()
-}
-
-fn expected_gate_summary(gates: &[Value], gate_id: &str) -> Option<Value> {
-    gates.iter().find_map(|gate| {
-        if gate.get("gateId").and_then(Value::as_str) != Some(gate_id) {
-            return None;
-        }
-        Some(json!({
-            "gateId": gate_id,
-            "sourceRefId": gate.get("sourceRefId").cloned().unwrap_or(Value::Null),
-            "severity": gate.get("severity").cloned().unwrap_or(Value::Null),
-            "requiredEvidence": gate.get("requiredEvidence").cloned().unwrap_or_else(|| json!([])),
-            "surfaceIds": gate.get("surfaceIds").cloned().unwrap_or_else(|| json!([])),
-            "expectation": gate.get("expectation").cloned().unwrap_or(Value::Null)
-        }))
-    })
 }
 
 fn design_token_evidence_summary(self_check: &Value) -> Value {
@@ -3530,8 +3212,8 @@ fn design_token_evidence_summary(self_check: &Value) -> Value {
     })
 }
 
-fn design_token_plan_summary(ui_quality_contract: &Value) -> Value {
-    let plan = ui_quality_contract
+fn design_token_plan_summary(design_token_plan: &Value) -> Value {
+    let plan = design_token_plan
         .get("designTokenAssetPlan")
         .unwrap_or(&Value::Null);
     json!({
@@ -3662,9 +3344,9 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
         .iter()
         .any(|issue| issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
     {
-        rules.push("frontendQualitySelfCheck must match the task uiQualityContract scenario, quality level, references, required states, and business UI rules.");
-        rules.push("frontendQualitySelfCheck.referenceFilesChecked must exactly list uiQualityContract.referenceProfile.referenceLoadPlan paths.");
-        rules.push("frontendQualitySelfCheck.status=satisfied is valid only when forbidden content violations and knownGaps are empty.");
+        rules.push("When uiSurfaceDecisionContractRef is present, frontendQualitySelfCheck must prove the task-scoped surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, and referencePlanFilesChecked from uiProductionBrief.");
+        rules.push("frontendQualitySelfCheck must not include removed legacy UI quality self-check fields such as scenarioKind, referenceFilesChecked, statesCovered, surfacesCovered, or gateResults.");
+        rules.push("frontendQualitySelfCheck.status=satisfied is valid only when contentBoundaryEvidence has no forbidden content violations and knownGaps is empty.");
     }
     if issues
         .iter()
@@ -4154,9 +3836,14 @@ fn frontend_experience_requirement_from_fields(
     let has_closure = fields.contains_key(
         "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
     );
-    let has_ui_quality =
-        fields.contains_key("task.frontendExperienceRequirement.uiQualityContract.scenario");
-    if !has_closure && !has_ui_quality {
+    let has_surface_contract = fields
+        .contains_key("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef")
+        || fields.contains_key("task.frontendExperienceRequirement.uiSurfaceOwnership")
+        || fields.contains_key("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
+        || fields.contains_key(
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
+        );
+    if !has_closure && !has_surface_contract {
         return Value::Null;
     }
     let mut requirement = json!({
@@ -4188,64 +3875,96 @@ fn frontend_experience_requirement_from_fields(
     {
         requirement["executionGuidance"]["actionsInScope"] = actions_in_scope;
     }
-    let ui_quality_guidance = value_field(
+    let surface_contract_ref = value_field(
         fields,
-        "task.frontendExperienceRequirement.executionGuidance.uiQuality",
+        "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
     );
-    if !ui_quality_guidance.is_null() {
-        requirement["executionGuidance"]["uiQuality"] = ui_quality_guidance;
+    if !surface_contract_ref.is_null() {
+        requirement["uiSurfaceDecisionContractRef"] = surface_contract_ref;
     }
-    let ui_quality_ref = value_field(
+    let surface_ownership = value_field(
         fields,
-        "task.frontendExperienceRequirement.uiQualityContractRef",
+        "task.frontendExperienceRequirement.uiSurfaceOwnership",
     );
-    if !ui_quality_ref.is_null() {
-        requirement["uiQualityContractRef"] = ui_quality_ref;
+    if !surface_ownership.is_null() {
+        requirement["uiSurfaceOwnership"] = surface_ownership;
     }
-    if has_ui_quality {
-        requirement["uiQualityContract"] = json!({
-            "scenario": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.scenario"),
-            "qualityLevel": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.qualityLevel"),
-            "surfacePolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.surfacePolicy"),
-            "layoutBaseline": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.layoutBaseline"),
-            "density": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.density"),
-            "semanticTokenPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.semanticTokenPolicy"),
-            "referenceProfile": {
-                "loadMode": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.loadMode"),
-                "groups": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.groups"),
-                "referenceLoadPlan": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.referenceProfile.referenceLoadPlan")
-            },
-            "designTokenAssetPlan": {
-                "strategy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.strategy"),
-                "templateId": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.templateId"),
-                "targetFiles": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.targetFiles"),
-                "existingStyleEvidence": {
-                    "tailwindConfigRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tailwindConfigRefs"),
-                    "tokenFileRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.tokenFileRefs"),
-                    "globalStyleRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.globalStyleRefs"),
-                    "componentThemeRefs": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.componentThemeRefs"),
-                    "summary": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.existingStyleEvidence.summary")
-                },
-                "mergePolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.mergePolicy"),
-                "duplicationPolicy": value_field(fields, "task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan.duplicationPolicy")
-            },
-            "requiredUiStates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.requiredUiStates"),
-            "businessUiRules": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.businessUiRules"),
-            "qualityGates": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.qualityGates"),
-            "forbiddenUserVisibleContent": array_field(fields, "task.frontendExperienceRequirement.uiQualityContract.forbiddenUserVisibleContent")
-        });
-    }
-    let ui_task_quality_gates = array_field(
+    let ui_production_brief = value_field(
         fields,
-        "task.frontendExperienceRequirement.uiTaskQualityGates",
+        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief",
     );
-    if ui_task_quality_gates
-        .as_array()
-        .is_some_and(|items| !items.is_empty())
-    {
-        requirement["uiTaskQualityGates"] = ui_task_quality_gates;
+    if ui_production_brief.is_object() {
+        requirement["executionGuidance"]["uiProductionBrief"] = ui_production_brief;
+    } else {
+        let surface_decision_contract = surface_decision_contract_from_fields(fields);
+        if !surface_decision_contract.is_null() {
+            requirement["executionGuidance"]["uiProductionBrief"]["surfaceDecisionContract"] =
+                surface_decision_contract;
+        }
+    }
+    let style_asset_plan = value_field(
+        fields,
+        "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan",
+    );
+    if style_asset_plan.is_object() {
+        requirement["executionGuidance"]["styleAssetPlan"] = style_asset_plan;
+    } else {
+        let reference_plan = array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan.referencePlan",
+        );
+        if reference_plan
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+        {
+            requirement["executionGuidance"]["styleAssetPlan"]["referencePlan"] = reference_plan;
+        }
     }
     requirement
+}
+
+fn surface_decision_contract_from_fields(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    if !fields.contains_key(
+        "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef",
+    ) {
+        return Value::Null;
+    }
+    json!({
+        "contractRef": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contractRef"
+        ),
+        "selectionMode": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.selectionMode"
+        ),
+        "patternDecision": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.patternDecision"
+        ),
+        "regionsInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope"
+        ),
+        "actionsInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope"
+        ),
+        "statesInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope"
+        ),
+        "contentBoundary": value_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.contentBoundary"
+        ),
+        "qualityRulesInScope": array_field(
+            fields,
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope"
+        )
+    })
 }
 
 fn private_request_value(
@@ -4278,4 +3997,119 @@ fn read_project_json_value(
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn surface_requirement() -> Value {
+        json!({
+            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "executionGuidance": {
+                "styleAssetPlan": {
+                    "referencePlan": [{
+                        "path": "plugins/shared/loom/references/uix/core.md"
+                    }]
+                }
+            }
+        })
+    }
+
+    fn surface_contract() -> Value {
+        json!({
+            "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "regionsInScope": [{
+                "regionId": "region-main"
+            }],
+            "actionsInScope": [{
+                "actionId": "action-submit"
+            }],
+            "statesInScope": [{
+                "state": "empty"
+            }],
+            "qualityRulesInScope": [{
+                "ruleId": "rule-density"
+            }]
+        })
+    }
+
+    fn complete_surface_self_check() -> Value {
+        json!({
+            "status": "satisfied",
+            "surfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "surfaceRegionEvidence": [{
+                "id": "region-main",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": ["action-submit"],
+                "evidence": "Main region implements the scoped workbench area."
+            }],
+            "surfaceActionEvidence": [{
+                "id": "action-submit",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": ["action-submit"],
+                "evidence": "Submit action is available in the task-owned form."
+            }],
+            "surfaceStateEvidence": [{
+                "id": "empty",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": [],
+                "evidence": "Empty state is rendered before records exist."
+            }],
+            "surfaceQualityRuleEvidence": [{
+                "id": "rule-density",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "states": ["empty"],
+                "actions": [],
+                "evidence": "Layout uses compact internal-product density."
+            }],
+            "contentBoundaryEvidence": {
+                "checked": true,
+                "allowedContentExamples": ["business labels only"],
+                "forbiddenContentViolations": [],
+                "evidence": "No runtime commands or delivery notes are visible."
+            },
+            "referencePlanFilesChecked": ["plugins/shared/loom/references/uix/core.md"]
+        })
+    }
+
+    #[test]
+    fn frontend_surface_contract_evidence_accepts_complete_task_scope() {
+        let mut issues = Vec::new();
+        validate_surface_decision_contract_evidence(
+            &complete_surface_self_check(),
+            &surface_requirement(),
+            &surface_contract(),
+            &mut issues,
+        );
+
+        assert!(issues.is_empty(), "{issues:#?}");
+    }
+
+    #[test]
+    fn frontend_surface_contract_evidence_rejects_missing_quality_rule() {
+        let mut self_check = complete_surface_self_check();
+        self_check["surfaceQualityRuleEvidence"] = json!([]);
+        let mut issues = Vec::new();
+
+        validate_surface_decision_contract_evidence(
+            &self_check,
+            &surface_requirement(),
+            &surface_contract(),
+            &mut issues,
+        );
+
+        assert!(
+            issues.iter().any(|issue| issue.field_path.as_deref()
+                == Some("frontendQualitySelfCheck.surfaceQualityRuleEvidence")),
+            "{issues:#?}"
+        );
+    }
 }

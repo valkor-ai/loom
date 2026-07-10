@@ -239,7 +239,7 @@ fn build_review_request(
     let api_contract_review_matrix = build_api_contract_review_matrix(task_plan, task_results);
     let code_quality_review_matrix = build_code_quality_review_matrix(task_plan, task_results);
     let frontend_quality_review_matrix =
-        build_frontend_quality_review_matrix(task_plan, task_results);
+        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract);
     let review_matrix_summary = compact_review_matrix_summary(
         &concept_review_matrix,
         &detail_review_matrix,
@@ -2975,15 +2975,18 @@ fn compact_requirement_detail_evidence(result: &TaskResult) -> Vec<Value> {
 fn build_frontend_quality_review_matrix(
     task_plan: &TaskPlan,
     task_results: &[TaskResult],
+    architecture_contract: Option<&ArchitectureArtifactContract>,
 ) -> Vec<Value> {
     task_plan
         .tasks
         .iter()
         .filter_map(|task| {
-            let ui_quality_contract = task
-                .frontend_experience_requirement
-                .as_ref()
-                .and_then(|requirement| requirement.get("uiQualityContract"))?;
+            let requirement = task.frontend_experience_requirement.as_ref()?;
+            let surface_contract =
+                task_scoped_surface_contract_for_review(requirement, architecture_contract);
+            if !surface_contract.is_object() {
+                return None;
+            }
             let result = task_results
                 .iter()
                 .find(|result| result.task_id == task.task_id);
@@ -2992,42 +2995,17 @@ fn build_frontend_quality_review_matrix(
                 .map(serde_json::to_value)
                 .and_then(Result::ok)
                 .unwrap_or(Value::Null);
-            let expected_refs = reference_groups(
-                ui_quality_contract
-                    .get("referenceProfile")
-                    .unwrap_or(&Value::Null),
-                "groups",
-            );
-            let checked_refs = reference_groups(&self_check, "referenceGroupsChecked");
-            let expected_reference_files = reference_load_plan_paths(
-                ui_quality_contract
-                    .get("referenceProfile")
-                    .unwrap_or(&Value::Null),
-            );
-            let checked_reference_files = string_array_field(&self_check, "referenceFilesChecked");
-            let expected_states =
-                object_array_string_field(ui_quality_contract, "requiredUiStates", "state");
-            let covered_states = object_array_string_field(&self_check, "statesCovered", "state");
-            let expected_rules =
-                object_array_string_field(ui_quality_contract, "businessUiRules", "ruleId");
-            let checked_rules =
-                object_array_string_field(&self_check, "businessUiRulesChecked", "ruleId");
-            let missing_reference_groups = missing_reference_groups(&expected_refs, &checked_refs);
-            let missing_reference_files =
-                missing_strings(&expected_reference_files, &checked_reference_files);
-            let missing_ui_states = missing_strings(&expected_states, &covered_states);
-            let missing_business_ui_rule_ids = missing_strings(&expected_rules, &checked_rules);
-            let expected_gates = frontend_quality_gates_for_review(task, ui_quality_contract);
-            let gate_review = frontend_quality_gate_review(&expected_gates, &self_check);
+            let surface_review =
+                frontend_surface_contract_review(requirement, &surface_contract, &self_check);
             let forbidden_violation_count = self_check
-                .pointer("/forbiddenContentCheck/violations")
+                .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
-            let token_plan = ui_quality_contract
-                .get("designTokenAssetPlan")
-                .cloned()
-                .unwrap_or(Value::Null);
+            let token_plan = requirement
+                .pointer("/executionGuidance/styleAssetPlan/designTokenAssetPlan")
+                .or_else(|| surface_contract.get("designTokenAssetPlan"))
+                .unwrap_or(&Value::Null);
             let token_evidence = self_check
                 .get("designTokenEvidence")
                 .cloned()
@@ -3072,44 +3050,23 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
-            let scenario_matches = self_check.get("scenarioKind").and_then(Value::as_str)
-                == ui_quality_contract
-                    .pointer("/scenario/kind")
-                    .and_then(Value::as_str);
-            let quality_level_matches = self_check.get("qualityLevel").and_then(Value::as_str)
-                == ui_quality_contract
-                    .get("qualityLevel")
-                    .and_then(Value::as_str);
+            let surface_contract_satisfied = surface_review
+                .get("satisfied")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let quality_satisfied = self_check.get("status").and_then(Value::as_str)
                 == Some("satisfied")
-                && scenario_matches
-                && quality_level_matches
-                && gate_review
-                    .get("satisfied")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                && missing_reference_groups.is_empty()
-                && missing_reference_files.is_empty()
-                && missing_ui_states.is_empty()
-                && missing_business_ui_rule_ids.is_empty()
+                && surface_contract_satisfied
                 && token_asset_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
                 "taskId": task.task_id,
                 "taskResultId": result.map(|result| result.task_result_id.clone()),
-                "scenarioKind": ui_quality_contract.pointer("/scenario/kind").and_then(Value::as_str),
-                "actualScenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
-                "qualityLevel": ui_quality_contract.get("qualityLevel").and_then(Value::as_str),
-                "actualQualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
+                "surfaceDecisionContractRef": requirement.get("uiSurfaceDecisionContractRef").cloned().unwrap_or(Value::Null),
                 "actualStatus": self_check.get("status").and_then(Value::as_str),
                 "qualitySatisfied": quality_satisfied,
-                "missingReferenceGroups": missing_reference_groups,
-                "referenceFiles": expected_reference_files,
-                "referenceFilesChecked": checked_reference_files,
-                "missingReferenceFiles": missing_reference_files,
-                "missingUiStates": missing_ui_states,
-                "missingBusinessUiRuleIds": missing_business_ui_rule_ids,
+                "surfaceContractCoverage": surface_review,
                 "designTokenAsset": {
                     "strategy": token_strategy,
                     "templateId": token_plan.get("templateId").cloned().unwrap_or(Value::Null),
@@ -3121,7 +3078,6 @@ fn build_frontend_quality_review_matrix(
                     "parallelTokenSystemCreated": parallel_token_system_created,
                     "satisfied": token_asset_satisfied
                 },
-                "qualityGateCoverage": gate_review,
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
                 "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" }
@@ -3130,188 +3086,251 @@ fn build_frontend_quality_review_matrix(
         .collect()
 }
 
-fn frontend_quality_gates_for_review(
-    task: &TaskDefinition,
-    ui_quality_contract: &Value,
-) -> Vec<Value> {
-    task.frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiTaskQualityGates"))
-        .and_then(Value::as_array)
+fn task_scoped_surface_contract_for_review(
+    requirement: &Value,
+    architecture_contract: Option<&ArchitectureArtifactContract>,
+) -> Value {
+    if let Some(contract) = requirement
+        .pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+        .filter(|value| value.is_object())
+    {
+        return contract.clone();
+    }
+
+    let full_contract = architecture_contract
+        .and_then(|contract| contract.frontend_experience.as_ref())
+        .and_then(|frontend| frontend.get("uiSurfaceDecisionContract"))
         .cloned()
-        .or_else(|| {
-            ui_quality_contract
-                .get("qualityGates")
-                .and_then(Value::as_array)
-                .cloned()
-        })
-        .unwrap_or_default()
+        .unwrap_or(Value::Null);
+    if !full_contract.is_object() {
+        return Value::Null;
+    }
+
+    let ownership = requirement
+        .get("uiSurfaceOwnership")
+        .unwrap_or(&Value::Null);
+    let region_ids = string_array_field(ownership, "regionIdsInScope");
+    let action_ids = string_array_field(ownership, "actionIdsInScope");
+    let state_ids = string_array_field(ownership, "stateKindsInScope");
+    let quality_rule_ids = string_array_field(ownership, "qualityRuleIdsInScope");
+    json!({
+        "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+        "selectionMode": if region_ids.is_empty()
+            && action_ids.is_empty()
+            && state_ids.is_empty()
+            && quality_rule_ids.is_empty()
+        {
+            "all_when_task_scope_empty"
+        } else {
+            "task_scope"
+        },
+        "patternDecision": full_contract.get("patternDecision").cloned().unwrap_or(Value::Null),
+        "semanticFacts": full_contract.get("semanticFacts").cloned().unwrap_or(Value::Null),
+        "layoutModel": full_contract.get("layoutModel").cloned().unwrap_or(Value::Null),
+        "regionsInScope": selected_surface_contract_values(&full_contract, "regionModel", "regionId", &region_ids),
+        "informationModel": full_contract.get("informationModel").cloned().unwrap_or(Value::Null),
+        "actionsInScope": selected_surface_contract_values(&full_contract, "actionModel", "actionId", &action_ids),
+        "statesInScope": selected_surface_contract_values(&full_contract, "stateModel", "state", &state_ids),
+        "compositionConstraints": full_contract.get("compositionConstraints").cloned().unwrap_or(Value::Null),
+        "contentBoundary": full_contract.get("contentBoundary").cloned().unwrap_or(Value::Null),
+        "qualityRulesInScope": selected_surface_contract_values(&full_contract, "qualityRules", "ruleId", &quality_rule_ids),
+        "designTokenAssetPlan": full_contract.get("designTokenAssetPlan").cloned().unwrap_or(Value::Null),
+        "referencePlan": full_contract.get("referencePlan").cloned().unwrap_or_else(|| json!([]))
+    })
 }
 
-fn frontend_quality_gate_review(expected_gates: &[Value], self_check: &Value) -> Value {
-    let expected = expected_gates
-        .iter()
-        .filter_map(|gate| {
-            let gate_id = gate.get("gateId").and_then(Value::as_str)?;
-            Some((
-                gate_id.to_string(),
-                gate.get("severity")
-                    .and_then(Value::as_str)
-                    .unwrap_or("must")
-                    .to_string(),
-            ))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let expected_by_id = expected_gates
-        .iter()
-        .filter_map(|gate| {
-            gate.get("gateId")
+fn selected_surface_contract_values(
+    contract: &Value,
+    array_key: &str,
+    id_key: &str,
+    ids: &[String],
+) -> Vec<Value> {
+    let values = contract
+        .get(array_key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        return values.into_iter().cloned().collect();
+    }
+    let selected = ids.iter().cloned().collect::<BTreeSet<_>>();
+    values
+        .into_iter()
+        .filter(|value| {
+            value
+                .get(id_key)
                 .and_then(Value::as_str)
-                .map(|gate_id| (gate_id.to_string(), gate))
+                .is_some_and(|id| selected.contains(id))
         })
-        .collect::<BTreeMap<_, _>>();
-    let expected_ids = expected.keys().cloned().collect::<BTreeSet<_>>();
-    let gate_results = self_check
-        .get("gateResults")
+        .cloned()
+        .collect()
+}
+
+fn frontend_surface_contract_review(
+    requirement: &Value,
+    surface_contract: &Value,
+    self_check: &Value,
+) -> Value {
+    if !surface_contract.is_object() {
+        return json!({
+            "present": false,
+            "satisfied": true
+        });
+    }
+
+    let expected_ref = requirement
+        .get("uiSurfaceDecisionContractRef")
+        .and_then(Value::as_str)
+        .or_else(|| surface_contract.get("contractRef").and_then(Value::as_str));
+    let actual_ref = self_check
+        .get("surfaceDecisionContractRef")
+        .and_then(Value::as_str);
+    let ref_matches = expected_ref
+        .map(|expected| actual_ref == Some(expected))
+        .unwrap_or(true);
+    let region_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "regionsInScope", "regionId"),
+        self_check,
+        "surfaceRegionEvidence",
+    );
+    let action_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "actionsInScope", "actionId"),
+        self_check,
+        "surfaceActionEvidence",
+    );
+    let state_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "statesInScope", "state"),
+        self_check,
+        "surfaceStateEvidence",
+    );
+    let quality_rule_review = surface_evidence_review(
+        &object_array_string_field(surface_contract, "qualityRulesInScope", "ruleId"),
+        self_check,
+        "surfaceQualityRuleEvidence",
+    );
+    let expected_reference_plan_files = reference_plan_paths(requirement, surface_contract);
+    let checked_reference_plan_files = string_array_field(self_check, "referencePlanFilesChecked");
+    let missing_reference_plan_files = missing_strings(
+        &expected_reference_plan_files,
+        &checked_reference_plan_files,
+    );
+    let content_checked = self_check
+        .pointer("/contentBoundaryEvidence/checked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let content_evidence_present = self_check
+        .pointer("/contentBoundaryEvidence/evidence")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|evidence| !evidence.is_empty());
+    let content_violation_count = self_check
+        .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let content_boundary_satisfied =
+        content_checked && content_evidence_present && content_violation_count == 0;
+    let satisfied = ref_matches
+        && review_satisfied(&region_review)
+        && review_satisfied(&action_review)
+        && review_satisfied(&state_review)
+        && review_satisfied(&quality_rule_review)
+        && missing_reference_plan_files.is_empty()
+        && content_boundary_satisfied;
+
+    json!({
+        "present": true,
+        "contractRefExpected": expected_ref,
+        "contractRefActual": actual_ref,
+        "contractRefMatches": ref_matches,
+        "regions": region_review,
+        "actions": action_review,
+        "states": state_review,
+        "qualityRules": quality_rule_review,
+        "referencePlanFileCount": expected_reference_plan_files.len(),
+        "referencePlanFilesCheckedCount": checked_reference_plan_files.len(),
+        "missingReferencePlanFiles": missing_reference_plan_files,
+        "contentBoundary": {
+            "checked": content_checked,
+            "evidencePresent": content_evidence_present,
+            "violationCount": content_violation_count,
+            "satisfied": content_boundary_satisfied
+        },
+        "satisfied": satisfied
+    })
+}
+
+fn surface_evidence_review(
+    expected_ids: &[String],
+    self_check: &Value,
+    evidence_field: &str,
+) -> Value {
+    let evidence = self_check
+        .get(evidence_field)
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-
+    let expected_set = expected_ids.iter().cloned().collect::<BTreeSet<_>>();
     let mut seen = BTreeSet::new();
-    let mut checked_gate_ids = Vec::new();
-    let mut duplicate_gate_ids = Vec::new();
-    let mut invented_gate_ids = Vec::new();
-    let mut invalid_status_gate_ids = Vec::new();
-    let mut partial_gate_ids = Vec::new();
-    let mut missing_status_gate_ids = Vec::new();
-    let mut blocked_environment_gate_ids = Vec::new();
-    let mut invalid_environment_block_gate_ids = Vec::new();
-    let mut render_gate_missing_viewport_ids = Vec::new();
-    let mut source_check_missing_gate_ids = Vec::new();
-    let mut viewport_check_missing_gate_ids = Vec::new();
-    let mut self_report_only_gate_ids = Vec::new();
-    let mut status_counts = BTreeMap::<String, usize>::new();
-    let mut status_by_gate = BTreeMap::<String, String>::new();
-
-    for result in &gate_results {
-        let Some(gate_id) = result.get("gateId").and_then(Value::as_str) else {
-            invalid_status_gate_ids.push("missing_gate_id".to_string());
+    let mut checked_ids = Vec::new();
+    let mut invented_ids = Vec::new();
+    let mut duplicate_ids = Vec::new();
+    let mut non_satisfied_ids = Vec::new();
+    let mut missing_file_ids = Vec::new();
+    let mut empty_evidence_ids = Vec::new();
+    for item in &evidence {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            empty_evidence_ids.push("missing_id".to_string());
             continue;
         };
-        checked_gate_ids.push(gate_id.to_string());
-        if !seen.insert(gate_id.to_string()) {
-            duplicate_gate_ids.push(gate_id.to_string());
+        checked_ids.push(id.to_string());
+        if !seen.insert(id.to_string()) {
+            duplicate_ids.push(id.to_string());
         }
-        if !expected_ids.contains(gate_id) {
-            invented_gate_ids.push(gate_id.to_string());
+        if !expected_set.contains(id) {
+            invented_ids.push(id.to_string());
         }
-        let required_evidence = expected_by_id
-            .get(gate_id)
-            .map(|gate| string_array_field(gate, "requiredEvidence"))
-            .unwrap_or_default();
-        let status = result
-            .get("status")
+        if item.get("status").and_then(Value::as_str) != Some("satisfied") {
+            non_satisfied_ids.push(id.to_string());
+        }
+        if string_array_field(item, "files").is_empty() {
+            missing_file_ids.push(id.to_string());
+        }
+        if item
+            .get("evidence")
             .and_then(Value::as_str)
-            .unwrap_or("missing");
-        *status_counts.entry(status.to_string()).or_insert(0) += 1;
-        status_by_gate.insert(gate_id.to_string(), status.to_string());
-        match status {
-            "partial" => partial_gate_ids.push(gate_id.to_string()),
-            "missing" => missing_status_gate_ids.push(gate_id.to_string()),
-            "blocked_by_environment" => {
-                blocked_environment_gate_ids.push(gate_id.to_string());
-                if !is_environment_blockable_gate(gate_id, &required_evidence) {
-                    invalid_environment_block_gate_ids.push(gate_id.to_string());
-                }
-            }
-            "satisfied" => {
-                if evidence_requires_source_check(&required_evidence)
-                    && string_array_field(result, "sourceChecks").is_empty()
-                {
-                    source_check_missing_gate_ids.push(gate_id.to_string());
-                }
-                if evidence_requires_viewport_check(&required_evidence)
-                    && string_array_field(result, "viewportsChecked").is_empty()
-                {
-                    viewport_check_missing_gate_ids.push(gate_id.to_string());
-                }
-                if is_render_or_viewport_gate(gate_id)
-                    && !has_desktop_and_mobile_viewports(&string_array_field(
-                        result,
-                        "viewportsChecked",
-                    ))
-                {
-                    render_gate_missing_viewport_ids.push(gate_id.to_string());
-                }
-                if string_array_field(result, "files").is_empty()
-                    && string_array_field(result, "sourceChecks").is_empty()
-                    && string_array_field(result, "viewportsChecked").is_empty()
-                    && string_array_field(result, "attemptedChecks").is_empty()
-                    && string_array_field(result, "fallbackEvidence").is_empty()
-                {
-                    self_report_only_gate_ids.push(gate_id.to_string());
-                }
-            }
-            "not_applicable" => {}
-            _ => invalid_status_gate_ids.push(gate_id.to_string()),
+            .map(str::trim)
+            .is_none_or(str::is_empty)
+        {
+            empty_evidence_ids.push(id.to_string());
         }
     }
-
-    let missing_gate_ids = expected_ids
-        .iter()
-        .filter(|gate_id| !seen.contains(*gate_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    let must_gate_unsatisfied_ids = expected
-        .iter()
-        .filter_map(|(gate_id, severity)| {
-            if severity != "must" {
-                return None;
-            }
-            let status = status_by_gate.get(gate_id).map(String::as_str);
-            if status == Some("satisfied") {
-                None
-            } else {
-                Some(gate_id.clone())
-            }
-        })
-        .collect::<Vec<_>>();
-    let satisfied = expected_ids.is_empty()
-        || (missing_gate_ids.is_empty()
-            && invented_gate_ids.is_empty()
-            && duplicate_gate_ids.is_empty()
-            && invalid_status_gate_ids.is_empty()
-            && partial_gate_ids.is_empty()
-            && missing_status_gate_ids.is_empty()
-            && blocked_environment_gate_ids.is_empty()
-            && invalid_environment_block_gate_ids.is_empty()
-            && render_gate_missing_viewport_ids.is_empty()
-            && source_check_missing_gate_ids.is_empty()
-            && viewport_check_missing_gate_ids.is_empty()
-            && self_report_only_gate_ids.is_empty()
-            && must_gate_unsatisfied_ids.is_empty());
-
+    let missing_ids = missing_strings(expected_ids, &checked_ids);
+    let satisfied = missing_ids.is_empty()
+        && invented_ids.is_empty()
+        && duplicate_ids.is_empty()
+        && non_satisfied_ids.is_empty()
+        && missing_file_ids.is_empty()
+        && empty_evidence_ids.is_empty();
     json!({
-        "expectedGateIds": expected_ids.into_iter().collect::<Vec<_>>(),
-        "checkedGateIds": checked_gate_ids,
-        "expectedGateCount": expected.len(),
-        "checkedGateCount": gate_results.len(),
-        "statusCounts": status_counts,
-        "missingGateIds": missing_gate_ids,
-        "inventedGateIds": invented_gate_ids,
-        "duplicateGateIds": duplicate_gate_ids,
-        "invalidStatusGateIds": invalid_status_gate_ids,
-        "partialGateIds": partial_gate_ids,
-        "missingStatusGateIds": missing_status_gate_ids,
-        "mustGateUnsatisfiedIds": must_gate_unsatisfied_ids,
-        "blockedEnvironmentGateIds": blocked_environment_gate_ids,
-        "invalidEnvironmentBlockGateIds": invalid_environment_block_gate_ids,
-        "renderGateMissingViewportIds": render_gate_missing_viewport_ids,
-        "sourceCheckMissingGateIds": source_check_missing_gate_ids,
-        "viewportCheckMissingGateIds": viewport_check_missing_gate_ids,
-        "selfReportOnlyGateIds": self_report_only_gate_ids,
+        "expectedIds": expected_ids,
+        "checkedIds": checked_ids,
+        "missingIds": missing_ids,
+        "inventedIds": invented_ids,
+        "duplicateIds": duplicate_ids,
+        "nonSatisfiedIds": non_satisfied_ids,
+        "missingFileIds": missing_file_ids,
+        "emptyEvidenceIds": empty_evidence_ids,
         "satisfied": satisfied
     })
+}
+
+fn review_satisfied(review: &Value) -> bool {
+    review
+        .get("satisfied")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn compact_review_matrix_summary(
@@ -3393,32 +3412,32 @@ fn compact_review_matrix_summary(
                 "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
                 "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
                 "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
-                "scenarioKind": item.get("scenarioKind").cloned().unwrap_or(Value::Null),
-                "actualScenarioKind": item.get("actualScenarioKind").cloned().unwrap_or(Value::Null),
-                "qualityLevel": item.get("qualityLevel").cloned().unwrap_or(Value::Null),
-                "actualQualityLevel": item.get("actualQualityLevel").cloned().unwrap_or(Value::Null),
-                "missingReferenceCount": item
-                    .get("missingReferenceGroups")
+                "surfaceContractSatisfied": item
+                    .pointer("/surfaceContractCoverage/satisfied")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                "missingSurfaceRegionCount": item
+                    .pointer("/surfaceContractCoverage/regions/missingIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
-                "missingQualityGateCount": item
-                    .pointer("/qualityGateCoverage/missingGateIds")
+                "missingSurfaceActionCount": item
+                    .pointer("/surfaceContractCoverage/actions/missingIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
-                "mustQualityGateUnsatisfiedCount": item
-                    .pointer("/qualityGateCoverage/mustGateUnsatisfiedIds")
+                "missingSurfaceStateCount": item
+                    .pointer("/surfaceContractCoverage/states/missingIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
-                "missingUiStateCount": item
-                    .get("missingUiStates")
+                "missingSurfaceQualityRuleCount": item
+                    .pointer("/surfaceContractCoverage/qualityRules/missingIds")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
-                "missingBusinessUiRuleCount": item
-                    .get("missingBusinessUiRuleIds")
+                "missingReferencePlanFileCount": item
+                    .pointer("/surfaceContractCoverage/missingReferencePlanFiles")
                     .and_then(Value::as_array)
                     .map(Vec::len)
                     .unwrap_or(0),
@@ -3469,7 +3488,9 @@ fn build_review_signals(
             }
         }));
     }
-    for quality in build_frontend_quality_review_matrix(task_plan, task_results) {
+    for quality in
+        build_frontend_quality_review_matrix(task_plan, task_results, architecture_contract)
+    {
         let task_id = quality
             .get("taskId")
             .and_then(Value::as_str)
@@ -3485,17 +3506,15 @@ fn build_review_signals(
             "taskResultId": quality.get("taskResultId").cloned().unwrap_or(Value::Null),
             "uiQualitySatisfied": quality_satisfied,
             "actualStatus": quality.get("actualStatus").cloned().unwrap_or(Value::Null),
-            "missingReferenceGroups": quality.get("missingReferenceGroups").cloned().unwrap_or_else(|| json!([])),
-            "qualityGateCoverage": quality.get("qualityGateCoverage").cloned().unwrap_or_else(|| json!({})),
-            "missingUiStates": quality.get("missingUiStates").cloned().unwrap_or_else(|| json!([])),
-            "missingBusinessUiRuleIds": quality.get("missingBusinessUiRuleIds").cloned().unwrap_or_else(|| json!([])),
+            "surfaceContractCoverage": quality.get("surfaceContractCoverage").cloned().unwrap_or_else(|| json!({})),
+            "designTokenAsset": quality.get("designTokenAsset").cloned().unwrap_or_else(|| json!({})),
             "forbiddenViolationCount": quality.get("forbiddenViolationCount").cloned().unwrap_or_else(|| json!(0)),
             "knownGapCount": quality.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
             "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
             "reason": if quality_satisfied {
-                "TaskResult frontend quality self-check satisfies the UI quality contract."
+                "TaskResult frontend quality self-check satisfies the task UI surface contract."
             } else {
-                "TaskResult frontend quality self-check does not satisfy the UI quality contract."
+                "TaskResult frontend quality self-check does not satisfy the task UI surface contract."
             }
         }));
     }
@@ -3808,24 +3827,6 @@ fn value_string_array(value: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn reference_groups(value: &Value, key: &str) -> Vec<(String, String)> {
-    value
-        .get(key)
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|object| object.iter())
-        .flat_map(|(group, items)| {
-            items
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str())
-                .map(|item| (group.clone(), item.to_string()))
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 fn reference_group_entry_count(value: &Value) -> usize {
     value
         .as_object()
@@ -3860,9 +3861,19 @@ fn string_array_field(value: &Value, array_key: &str) -> Vec<String> {
         .collect()
 }
 
-fn reference_load_plan_paths(value: &Value) -> Vec<String> {
-    value
-        .get("referenceLoadPlan")
+fn reference_plan_paths(requirement: &Value, surface_contract: &Value) -> Vec<String> {
+    let execution_paths = requirement
+        .pointer("/executionGuidance/styleAssetPlan/referencePlan")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_string))
+        .collect::<Vec<_>>();
+    if !execution_paths.is_empty() {
+        return execution_paths;
+    }
+    surface_contract
+        .get("referencePlan")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -3876,59 +3887,6 @@ fn missing_strings(expected: &[String], actual: &[String]) -> Vec<String> {
         .iter()
         .filter(|item| !actual.contains(item))
         .cloned()
-        .collect()
-}
-
-fn is_render_or_viewport_gate(gate_id: &str) -> bool {
-    gate_id.contains("render") || gate_id.contains("viewport")
-}
-
-fn is_environment_blockable_gate(gate_id: &str, required_evidence: &[String]) -> bool {
-    is_render_or_viewport_gate(gate_id)
-        || gate_id.contains("mobile")
-        || evidence_requires_viewport_check(required_evidence)
-        || required_evidence
-            .iter()
-            .any(|item| item == "render_or_environment_reason")
-}
-
-fn evidence_requires_source_check(required: &[String]) -> bool {
-    required
-        .iter()
-        .any(|item| item == "source_check" || item == "responsive_source_check")
-}
-
-fn evidence_requires_viewport_check(required: &[String]) -> bool {
-    required.iter().any(|item| item == "viewport_check")
-}
-
-fn has_desktop_and_mobile_viewports(viewports: &[String]) -> bool {
-    let normalized = viewports
-        .iter()
-        .map(|viewport| viewport.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    normalized
-        .iter()
-        .any(|viewport| viewport.contains("desktop") || viewport.contains("1024"))
-        && normalized.iter().any(|viewport| {
-            viewport.contains("mobile") || viewport.contains("375") || viewport.contains("390")
-        })
-}
-
-fn missing_reference_groups(
-    expected: &[(String, String)],
-    actual: &[(String, String)],
-) -> Vec<Value> {
-    let actual = actual.iter().collect::<BTreeSet<_>>();
-    expected
-        .iter()
-        .filter(|item| !actual.contains(item))
-        .map(|(group, item)| {
-            json!({
-                "group": group,
-                "item": item
-            })
-        })
         .collect()
 }
 
@@ -4116,39 +4074,44 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
     json!({
         "present": true,
         "status": self_check.get("status").and_then(Value::as_str),
-        "scenarioKind": self_check.get("scenarioKind").and_then(Value::as_str),
-        "qualityLevel": self_check.get("qualityLevel").and_then(Value::as_str),
-        "referenceGroupCheckCount": reference_groups(&self_check, "referenceGroupsChecked").len(),
-        "statesCoveredCount": self_check
-            .get("statesCovered")
+        "surfaceDecisionContractRef": self_check
+            .get("surfaceDecisionContractRef")
+            .and_then(Value::as_str),
+        "surfaceRegionEvidenceCount": self_check
+            .get("surfaceRegionEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "businessUiRuleCheckCount": self_check
-            .get("businessUiRulesChecked")
+        "surfaceActionEvidenceCount": self_check
+            .get("surfaceActionEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "surfacesCoveredCount": self_check
-            .get("surfacesCovered")
+        "surfaceStateEvidenceCount": self_check
+            .get("surfaceStateEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "qualityGateResultCount": self_check
-            .get("gateResults")
+        "surfaceQualityRuleEvidenceCount": self_check
+            .get("surfaceQualityRuleEvidence")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
-        "qualityGateStatusCounts": frontend_quality_gate_status_counts(&self_check),
-        "environmentBlockedGateCount": self_check
-            .get("gateResults")
+        "referencePlanFilesCheckedCount": self_check
+            .get("referencePlanFilesChecked")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|gate| {
-                gate.get("status").and_then(Value::as_str) == Some("blocked_by_environment")
-            })
-            .count(),
+            .map(Vec::len)
+            .unwrap_or(0),
+        "contentBoundaryEvidence": {
+            "checked": self_check
+                .pointer("/contentBoundaryEvidence/checked")
+                .and_then(Value::as_bool),
+                "violationCount": self_check
+                    .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0)
+        },
         "designTokenEvidence": self_check
             .get("designTokenEvidence")
             .map(|evidence| json!({
@@ -4176,7 +4139,7 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             }))
             .unwrap_or(Value::Null),
         "forbiddenViolationCount": self_check
-            .pointer("/forbiddenContentCheck/violations")
+            .pointer("/contentBoundaryEvidence/forbiddenContentViolations")
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
@@ -4186,23 +4149,6 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             .map(Vec::len)
             .unwrap_or(0)
     })
-}
-
-fn frontend_quality_gate_status_counts(self_check: &Value) -> BTreeMap<String, usize> {
-    let mut counts = BTreeMap::new();
-    for gate in self_check
-        .get("gateResults")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let status = gate
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("missing");
-        *counts.entry(status.to_string()).or_insert(0) += 1;
-    }
-    counts
 }
 
 fn allowed_refs(
@@ -4596,4 +4542,97 @@ fn safe_id(value: &str) -> String {
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {
     state::store::StateError::StateCorrupted(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn requirement() -> Value {
+        json!({
+            "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "executionGuidance": {
+                "styleAssetPlan": {
+                    "referencePlan": [{
+                        "path": "plugins/shared/loom/references/uix/core.md"
+                    }]
+                }
+            }
+        })
+    }
+
+    fn surface_contract() -> Value {
+        json!({
+            "contractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "regionsInScope": [{"regionId": "region-main"}],
+            "actionsInScope": [{"actionId": "action-submit"}],
+            "statesInScope": [{"state": "empty"}],
+            "qualityRulesInScope": [{"ruleId": "rule-density"}]
+        })
+    }
+
+    fn self_check() -> Value {
+        json!({
+            "status": "satisfied",
+            "surfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
+            "surfaceRegionEvidence": [{
+                "id": "region-main",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "Region implemented."
+            }],
+            "surfaceActionEvidence": [{
+                "id": "action-submit",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "Action implemented."
+            }],
+            "surfaceStateEvidence": [{
+                "id": "empty",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "State implemented."
+            }],
+            "surfaceQualityRuleEvidence": [{
+                "id": "rule-density",
+                "status": "satisfied",
+                "files": ["web/src/App.tsx"],
+                "evidence": "Density rule applied."
+            }],
+            "contentBoundaryEvidence": {
+                "checked": true,
+                "forbiddenContentViolations": [],
+                "evidence": "Only business UI copy is visible."
+            },
+            "referencePlanFilesChecked": ["plugins/shared/loom/references/uix/core.md"]
+        })
+    }
+
+    #[test]
+    fn frontend_surface_review_accepts_complete_coverage() {
+        let review =
+            frontend_surface_contract_review(&requirement(), &surface_contract(), &self_check());
+
+        assert_eq!(review.get("satisfied").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn frontend_surface_review_rejects_missing_action_evidence() {
+        let mut self_check = self_check();
+        self_check["surfaceActionEvidence"] = json!([]);
+        let review =
+            frontend_surface_contract_review(&requirement(), &surface_contract(), &self_check);
+
+        assert_eq!(
+            review.get("satisfied").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            review
+                .pointer("/actions/missingIds")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
 }
