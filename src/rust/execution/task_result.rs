@@ -26,6 +26,7 @@ use crate::{
     paths::task_result_file,
     task_execution::{
         load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
+        task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
@@ -236,6 +237,11 @@ where
         task = serde_json::from_value(normalize_task_definition_value(stored_task))
             .map_err(state::store::StateError::Json)?;
     }
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.clone(),
+        phase_id: phase_id.clone(),
+    };
+    task = task_with_phase_execution_guidance(root, &locator, task)?;
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let mut code_quality_requirements =
@@ -261,10 +267,6 @@ where
     let blocked_output = json!({
         "blockedReasons": array_field(&fields, "outputContract.blockedReasonOptions")
     });
-    let locator = DeliveryPhaseLocator {
-        delivery_id: delivery_id.clone(),
-        phase_id: phase_id.clone(),
-    };
     let normalized_result = normalize_task_result_machine_fields(
         raw_result.clone(),
         &authorized.request_id,

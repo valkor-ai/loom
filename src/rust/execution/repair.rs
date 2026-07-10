@@ -34,7 +34,7 @@ use crate::{
     },
     task_execution::{
         load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
-        task_execution_rules,
+        task_execution_rules, task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
@@ -298,6 +298,7 @@ fn materialize_delivery_execution_repair_inner(
         };
         state::store::StateError::StateCorrupted(message)
     })?;
+    let request_task = task_with_phase_execution_guidance(root, &locator, task.clone())?;
     let attempt_count = run
         .task_states
         .iter()
@@ -339,7 +340,7 @@ fn materialize_delivery_execution_repair_inner(
         &result_file,
         &task_plan,
         &run,
-        &task,
+        &request_task,
         repair_origin.clone(),
         source_ref.clone(),
         finding_refs.clone(),
@@ -373,7 +374,7 @@ fn materialize_delivery_execution_repair_inner(
         project_root,
         stored.request_ref,
         result_file,
-        &task,
+        &request_task,
         repair_origin,
         origin,
         source_ref,
@@ -456,6 +457,11 @@ fn existing_delivery_execution_repair_next_if_current(
     else {
         return Ok(None);
     };
+    if frontend_self_check_applies(task)
+        && !delivery_execution_repair_request_has_frontend_guidance(project_root, request_ref)?
+    {
+        return Ok(None);
+    }
     let attempt_count = run
         .task_states
         .iter()
@@ -495,6 +501,30 @@ fn existing_delivery_execution_repair_next_if_current(
         attempt_count,
     )
     .map(Some)
+}
+
+fn delivery_execution_repair_request_has_frontend_guidance(
+    project_root: &str,
+    request_ref: &str,
+) -> Result<bool, state::store::StateError> {
+    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
+        ],
+    })?
+    .fields;
+    let ui_production_brief = fields
+        .get("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief")
+        .map(|field| &field.value)
+        .unwrap_or(&Value::Null);
+    let style_asset_plan = fields
+        .get("task.frontendExperienceRequirement.executionGuidance.styleAssetPlan")
+        .map(|field| &field.value)
+        .unwrap_or(&Value::Null);
+    Ok(ui_production_brief.is_object() && style_asset_plan.is_object())
 }
 
 fn delivery_execution_repair_next(

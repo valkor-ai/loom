@@ -1091,7 +1091,33 @@ pub(crate) fn runtime_delivery_requirement_read_fields(task: &TaskDefinition) ->
     fields
 }
 
-fn task_with_execution_guidance(
+pub(crate) fn task_with_phase_execution_guidance(
+    project_root: &Path,
+    locator: &DeliveryPhaseLocator,
+    task: TaskDefinition,
+) -> Result<TaskDefinition, state::store::StateError> {
+    if task.frontend_experience_requirement.is_none() {
+        return Ok(task);
+    }
+    let planning_ref = format!(
+        ".loom/deliveries/{}/contracts/planning/{}/pgc.json",
+        locator.delivery_id, locator.phase_id
+    );
+    let architecture_ref = format!(
+        ".loom/deliveries/{}/contracts/architecture/{}/aac.json",
+        locator.delivery_id, locator.phase_id
+    );
+    let pgc: contracts::PlanningGenerationContract =
+        read_project_json(project_root, &planning_ref)?;
+    let aac: ArchitectureArtifactContract = read_project_json(project_root, &architecture_ref)?;
+    Ok(task_with_execution_guidance(
+        task,
+        &aac,
+        &pgc.planning_inputs.user_facing_language,
+    ))
+}
+
+pub(crate) fn task_with_execution_guidance(
     mut task: TaskDefinition,
     aac: &ArchitectureArtifactContract,
     user_facing_language: &Option<contracts::UserFacingLanguageConstraint>,

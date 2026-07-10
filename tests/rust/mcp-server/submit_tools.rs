@@ -3380,6 +3380,159 @@ fn task_result_repair_carries_compact_frontend_quality_context() {
 }
 
 #[test]
+fn task_result_submit_hydrates_stale_frontend_task_guidance() {
+    let fixture = Fixture::new("task-result-stale-frontend-guidance");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    mutate_private_request_storage_value(&fixture, &execution_request_ref, "task", |task| {
+        if let Some(requirement) = task
+            .get_mut("frontendExperienceRequirement")
+            .and_then(Value::as_object_mut)
+        {
+            requirement.remove("executionGuidance");
+        }
+    });
+    write_task_result_candidate(&fixture, &execution_request_ref);
+
+    let accepted = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(accepted["state"], "auto_runnable", "{accepted:#}");
+    assert_ne!(
+        accepted["next"]["artifactKind"], "task_result_repair",
+        "{accepted:#}"
+    );
+}
+
+#[test]
+fn review_execution_repair_carries_frontend_execution_guidance() {
+    let fixture = Fixture::new("review-exec-repair-frontend-guidance");
+    let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
+        &fixture,
+        valid_candidate_with_frontend_json(),
+    );
+    let taskplan_result = complete_architecture_sections_with(
+        &fixture,
+        &architecture_request_ref,
+        architecture_section_candidate_with_workflow_closure_no_runtime_json,
+    );
+    let taskplan_request_ref = taskplan_result["next"]["requestRef"]
+        .as_str()
+        .expect("taskplan requestRef");
+    write_taskplan_grouped_candidates_for_workflow_closure(&fixture, taskplan_request_ref);
+    let execution_result = call_submit(
+        "loom.taskPlanAcceptFile",
+        taskplan_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(
+        execution_result["state"], "auto_runnable",
+        "{execution_result:#}"
+    );
+    let execution_request_ref = execution_result["next"]["requestRef"]
+        .as_str()
+        .expect("execution requestRef")
+        .to_string();
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    let task_result = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    assert_eq!(task_result["next"]["artifactKind"], "review_result");
+    let review_request_ref = task_result["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef")
+        .to_string();
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "changes_requested",
+        "execution_repair",
+        vec![json!({
+            "findingId": "finding-frontend-quality",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "ui_quality",
+            "failureClass": "product_defect",
+            "category": "frontend_quality",
+            "summary": "The frontend quality implementation needs task-scoped repair.",
+            "evidence": "The review packet shows a frontend quality gap in the UI task.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "direct",
+            "scopeRelation": "within_task_changed_files",
+            "introducedByCurrentTask": "yes",
+            "recommendedNextAction": "execution_repair"
+        })],
+    );
+
+    let result = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    let repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_request_ref.to_string(),
+        fields: vec![
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
+            "outputContract.resultTemplate".to_string(),
+            "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
+        ],
+    })
+    .expect("read frontend repair execution fields")
+    .fields;
+    let ui_production_brief = &repair_fields
+        ["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
+        .value;
+    let surface_contract = &ui_production_brief["surfaceDecisionContract"];
+    assert!(surface_contract.is_object(), "{ui_production_brief:#}");
+    assert!(!surface_contract["regionsInScope"]
+        .as_array()
+        .expect("repair regions in scope")
+        .is_empty());
+    assert!(!surface_contract["actionsInScope"]
+        .as_array()
+        .expect("repair actions in scope")
+        .is_empty());
+    assert!(!surface_contract["qualityRulesInScope"]
+        .as_array()
+        .expect("repair quality rules in scope")
+        .is_empty());
+    assert!(
+        repair_fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"]
+            .value
+            .is_object()
+    );
+    let frontend_quality_template =
+        &repair_fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
+    assert_eq!(
+        frontend_quality_template["surfaceDecisionContractRef"],
+        surface_contract["contractRef"]
+    );
+    assert!(!frontend_quality_template["surfaceRegionEvidence"]
+        .as_array()
+        .expect("repair region evidence template")
+        .is_empty());
+    assert!(
+        repair_fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
+            .value
+            .is_object()
+    );
+}
+
+#[test]
 fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
     let fixture = Fixture::new("task-result-machine-ref-normalization");
     let architecture_request_ref = start_existing_project_architecture_flow_with_candidate(
