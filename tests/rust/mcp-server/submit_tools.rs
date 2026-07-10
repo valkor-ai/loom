@@ -3380,6 +3380,95 @@ fn task_result_repair_carries_compact_frontend_quality_context() {
 }
 
 #[test]
+fn continue_refreshes_stale_frontend_task_result_repair_contract() {
+    let fixture = Fixture::new("stale-frontend-task-result-repair-refresh");
+    let execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read execution contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("result file");
+    let mut result = fields["outputContract.resultTemplate"].value.clone();
+    result["changedFiles"] = json!(["src/App.tsx"]);
+    result
+        .as_object_mut()
+        .expect("result object")
+        .remove("frontendQualitySelfCheck");
+    write_json_atomic(&fixture.root.join(result_file), &result).expect("write invalid result");
+    let invalid = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(invalid["state"], "auto_runnable", "{invalid:#}");
+    assert_eq!(invalid["next"]["artifactKind"], "task_result_repair");
+    let stale_repair_ref = invalid["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef")
+        .to_string();
+    mutate_private_request_storage_value(&fixture, &stale_repair_ref, "task", |task| {
+        if let Some(requirement) = task
+            .get_mut("frontendExperienceRequirement")
+            .and_then(Value::as_object_mut)
+        {
+            requirement.remove("executionGuidance");
+        }
+    });
+
+    let refreshed = continue_delivery(fixture.root_str());
+
+    assert_eq!(refreshed["state"], "auto_runnable", "{refreshed:#}");
+    assert_eq!(refreshed["next"]["artifactKind"], "task_result_repair");
+    let refreshed_repair_ref = refreshed["next"]["requestRef"]
+        .as_str()
+        .expect("refreshed repair requestRef");
+    assert_ne!(refreshed_repair_ref, stale_repair_ref);
+    let refreshed_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: refreshed_repair_ref.to_string(),
+        fields: vec![
+            "repairContract.issueConflicts".to_string(),
+            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+        ],
+    })
+    .expect("read refreshed repair contract")
+    .fields;
+    let ui_production_brief = &refreshed_fields
+        ["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
+        .value;
+    assert!(
+        ui_production_brief["surfaceDecisionContract"].is_object(),
+        "{ui_production_brief:#}"
+    );
+    let issue_conflicts = refreshed_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("issue conflicts");
+    let frontend_issue = issue_conflicts
+        .iter()
+        .find(|issue| issue["code"] == "TASK_RESULT_FRONTEND_QUALITY_INVALID")
+        .expect("frontend quality issue");
+    assert!(!frontend_issue["expected"]["surfaceRegionIdsInScope"]
+        .as_array()
+        .expect("expected region ids")
+        .is_empty());
+    assert!(!frontend_issue["expected"]["surfaceQualityRuleIdsInScope"]
+        .as_array()
+        .expect("expected quality rule ids")
+        .is_empty());
+}
+
+#[test]
 fn task_result_submit_hydrates_stale_frontend_task_guidance() {
     let fixture = Fixture::new("task-result-stale-frontend-guidance");
     let execution_request_ref =

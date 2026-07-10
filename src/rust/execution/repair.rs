@@ -75,15 +75,20 @@ pub fn dispatch_repair_route(
             ) {
                 return existing;
             }
-            materialize_taskplan_repair(project_root, delivery_id, phase_id, action.request_ref.clone())
-                .unwrap_or_else(|error| {
-                    failed(
-                        project_root,
-                        "TASKPLAN_REPAIR_FAILED",
-                        error.to_string(),
-                        "taskplan_repair",
-                    )
-                })
+            materialize_taskplan_repair(
+                project_root,
+                delivery_id,
+                phase_id,
+                action.request_ref.clone(),
+            )
+            .unwrap_or_else(|error| {
+                failed(
+                    project_root,
+                    "TASKPLAN_REPAIR_FAILED",
+                    error.to_string(),
+                    "taskplan_repair",
+                )
+            })
         }
         RouteActionKind::ArchitectureArtifactRepair => {
             if let Some(existing) = existing_active_repair_action(
@@ -97,33 +102,59 @@ pub fn dispatch_repair_route(
             ) {
                 return existing;
             }
-            materialize_architecture_repair(project_root, delivery_id, phase_id, action.request_ref.clone())
-                .unwrap_or_else(|error| {
-                    failed(
-                        project_root,
-                        "ARCHITECTURE_REPAIR_FAILED",
-                        error.to_string(),
-                        "architecture_artifact_repair",
-                    )
-                })
-        }
-        RouteActionKind::TaskResultRepair => existing_active_repair_action(
-            project_root,
-            delivery_id,
-            phase_id,
-            action,
-            "activeTaskResultRepairActionRef",
-            ArtifactKind::TaskResultRepair,
-            WriteMode::SingleJson,
-        )
-        .unwrap_or_else(|| {
-            failed(
+            materialize_architecture_repair(
                 project_root,
-                "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
-                "The active TaskResult correction action is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
-                "task_result_repair",
+                delivery_id,
+                phase_id,
+                action.request_ref.clone(),
             )
-        }),
+            .unwrap_or_else(|error| {
+                failed(
+                    project_root,
+                    "ARCHITECTURE_REPAIR_FAILED",
+                    error.to_string(),
+                    "architecture_artifact_repair",
+                )
+            })
+        }
+        RouteActionKind::TaskResultRepair => {
+            if let Some(request_ref) = action.request_ref.as_deref() {
+                match crate::task_result::refresh_stale_task_result_repair_action(
+                    project_root,
+                    delivery_id,
+                    phase_id,
+                    request_ref,
+                ) {
+                    Ok(Some(refreshed)) => return refreshed,
+                    Ok(None) => {}
+                    Err(error) => {
+                        return failed(
+                            project_root,
+                            "TASK_RESULT_REPAIR_REFRESH_FAILED",
+                            error.to_string(),
+                            "task_result_repair",
+                        );
+                    }
+                }
+            }
+            existing_active_repair_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                action,
+                "activeTaskResultRepairActionRef",
+                ArtifactKind::TaskResultRepair,
+                WriteMode::SingleJson,
+            )
+            .unwrap_or_else(|| {
+                failed(
+                    project_root,
+                    "ACTIVE_TASK_RESULT_REPAIR_NOT_FOUND",
+                    "The active TaskResult correction action is missing or stale. Run loom.continue after the original TaskResult validation failure recreates the active repair state.".to_string(),
+                    "task_result_repair",
+                )
+            })
+        }
         _ => failed(
             project_root,
             "REPAIR_ROUTE_UNSUPPORTED",

@@ -33,8 +33,9 @@ use crate::{
         api_contract_evidence_applies, architecture_quality_evidence_applies,
         code_quality_evidence_applies, code_quality_execution_context,
         frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_schema_shape,
-        task_result_template_with_code_quality, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
+        task_result_schema_shape, task_result_template_with_code_quality,
+        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -2856,16 +2857,6 @@ fn repair_task_result_or_error(
     let Some(context) = context else {
         return Ok(repairable(input, authorized, target_file, issues));
     };
-    materialize_task_result_repair(input, authorized, target_file, issues, context)
-}
-
-fn materialize_task_result_repair(
-    input: &FileSubmitInput,
-    authorized: &AuthorizedWriteSet,
-    target_file: String,
-    issues: Vec<delivery_core::RepairIssue>,
-    context: RepairContextInput,
-) -> Result<LoomMcpActionResult, state::store::StateError> {
     let delivery_id = authorized.delivery_id.clone().ok_or_else(|| {
         state::store::StateError::InvalidArgument(
             "TaskResult repair action missing deliveryId".to_string(),
@@ -2876,6 +2867,220 @@ fn materialize_task_result_repair(
             "TaskResult repair action missing phaseId".to_string(),
         )
     })?;
+    materialize_task_result_repair(
+        input,
+        &delivery_id,
+        &phase_id,
+        input.request_ref.clone(),
+        target_file,
+        issues,
+        context,
+    )
+}
+
+pub(crate) fn refresh_stale_task_result_repair_action(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    request_ref: &str,
+) -> Result<Option<LoomMcpActionResult>, state::store::StateError> {
+    let request_id = request_id_from_ref(request_ref)?;
+    let Some(stored_task) = private_request_value(project_root, &request_id, "task")? else {
+        return Ok(None);
+    };
+    let task: TaskDefinition = serde_json::from_value(normalize_task_definition_value(stored_task))
+        .map_err(state::store::StateError::Json)?;
+    if !frontend_quality_self_check_applies(&task)
+        || task
+            .frontend_experience_requirement
+            .as_ref()
+            .and_then(|requirement| {
+                requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+            })
+            .is_some_and(Value::is_object)
+    {
+        return Ok(None);
+    }
+
+    let root = Path::new(project_root);
+    let locator = DeliveryPhaseLocator {
+        delivery_id: delivery_id.to_string(),
+        phase_id: phase_id.to_string(),
+    };
+    let hydrated_task = task_with_phase_execution_guidance(root, &locator, task)?;
+    if hydrated_task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| {
+            requirement.pointer("/executionGuidance/uiProductionBrief/surfaceDecisionContract")
+        })
+        .is_none_or(|value| !value.is_object())
+    {
+        return Ok(None);
+    }
+
+    let source = private_request_value(project_root, &request_id, "source")?.ok_or_else(|| {
+        state::store::StateError::StateCorrupted(
+            "TaskResult repair request is missing source.".to_string(),
+        )
+    })?;
+    let source_task_execution_request_ref = source
+        .get("taskExecutionRequestRef")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing source.taskExecutionRequestRef.".to_string(),
+            )
+        })?;
+    let task_plan_id = source
+        .get("taskPlanId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let task_id = source
+        .get("taskId")
+        .and_then(Value::as_str)
+        .unwrap_or(hydrated_task.task_id.as_str())
+        .to_string();
+    let run_id = source
+        .get("taskPlanRunId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let output_contract = private_request_value(project_root, &request_id, "outputContract")?
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing outputContract.".to_string(),
+            )
+        })?;
+    let target_file = source
+        .get("originalResultFile")
+        .and_then(Value::as_str)
+        .or_else(|| output_contract.get("resultFile").and_then(Value::as_str))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "TaskResult repair request is missing original result file.".to_string(),
+            )
+        })?;
+    let result_file = output_contract
+        .get("resultFile")
+        .and_then(Value::as_str)
+        .unwrap_or(target_file.as_str())
+        .to_string();
+    let required_top_level_fields = output_contract
+        .get("requiredTopLevelFields")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| {
+            task_result_required_top_level_fields(&hydrated_task)
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        });
+    let blocked_output = json!({
+        "blockedReasons": output_contract
+            .get("blockedReasonOptions")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
+    });
+    let code_quality_requirements =
+        private_request_value(project_root, &request_id, "sourceContext")?
+            .and_then(|source_context| source_context.get("codeQualityExecutionContext").cloned())
+            .filter(|value| !value.is_null())
+            .map(serde_json::from_value::<Vec<CodeQualityRequirement>>)
+            .transpose()
+            .map_err(state::store::StateError::Json)?
+            .unwrap_or_default();
+
+    let raw_result = read_project_json_value(root, &target_file)?;
+    let normalized_result = normalize_task_result_machine_fields(
+        raw_result,
+        &request_id,
+        &task_plan_id,
+        &task_id,
+        &hydrated_task,
+    );
+    let (issues, previous_changed_files) =
+        match serde_json::from_value::<TaskResult>(normalized_result.clone()) {
+            Ok(result) => {
+                let previous_changed_files =
+                    previous_persisted_changed_files(root, &locator, &run_id, &result);
+                (
+                    validate_result(
+                        root,
+                        &normalized_result,
+                        &result,
+                        &hydrated_task,
+                        &code_quality_requirements,
+                        &required_top_level_fields,
+                        &blocked_output,
+                        &task_plan_id,
+                        &task_id,
+                        &result_file,
+                        &target_file,
+                    ),
+                    previous_changed_files,
+                )
+            }
+            Err(error) => (
+                vec![issue(
+                    "TASK_RESULT_SCHEMA_INVALID",
+                    "$",
+                    &format!("TaskResult JSON has an invalid schema: {error}"),
+                )],
+                Vec::new(),
+            ),
+        };
+    if issues.is_empty() {
+        return Ok(None);
+    }
+    let context = RepairContextInput {
+        task_plan_id,
+        task_id,
+        run_id,
+        task: hydrated_task,
+        result_file,
+        required_top_level_fields,
+        blocked_output,
+        submitted_result: normalized_result,
+        previous_changed_files,
+        code_quality_requirements,
+    };
+    let input = FileSubmitInput {
+        project_root: project_root.to_string(),
+        request_ref: source_task_execution_request_ref.clone(),
+        written_target_ids: None,
+    };
+    materialize_task_result_repair(
+        &input,
+        delivery_id,
+        phase_id,
+        source_task_execution_request_ref,
+        target_file,
+        issues,
+        context,
+    )
+    .map(Some)
+}
+
+fn materialize_task_result_repair(
+    input: &FileSubmitInput,
+    delivery_id: &str,
+    phase_id: &str,
+    source_task_execution_request_ref: String,
+    target_file: String,
+    issues: Vec<delivery_core::RepairIssue>,
+    context: RepairContextInput,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
     let root = Path::new(&input.project_root);
     let request_id = format!(
         "task_result_repair_{}_{}",
@@ -2986,9 +3191,9 @@ fn materialize_task_result_repair(
         "requestId": request_id,
         "deliveryId": delivery_id,
         "phaseId": phase_id,
-        "artifactKind": ArtifactKind::TaskResultRepair,
-        "source": {
-            "taskExecutionRequestRef": input.request_ref,
+            "artifactKind": ArtifactKind::TaskResultRepair,
+            "source": {
+            "taskExecutionRequestRef": source_task_execution_request_ref,
             "taskPlanId": context.task_plan_id,
             "taskId": context.task_id,
             "taskPlanRunId": context.run_id,
@@ -3053,8 +3258,8 @@ fn materialize_task_result_repair(
             request_id,
             request_kind: "task_result_repair".to_string(),
             request_file: Some(request_file),
-            delivery_id: Some(delivery_id.clone()),
-            phase_id: Some(phase_id.clone()),
+            delivery_id: Some(delivery_id.to_string()),
+            phase_id: Some(phase_id.to_string()),
             root: root_value,
         },
     )?;
@@ -3865,6 +4070,17 @@ fn safe_id(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn request_id_from_ref(request_ref: &str) -> Result<String, state::store::StateError> {
+    request_ref
+        .split("/requests/")
+        .nth(1)
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            state::store::StateError::InvalidArgument(format!("invalid requestRef: {request_ref}"))
+        })
 }
 
 fn string_field(
