@@ -419,7 +419,16 @@ where
     run.next_action = next_action_for_run(&run);
     run.updated_at = now;
     save_run(root, &locator, &run)?;
-    let Some(next_action) = route_action_for_task_result(&run, &result, &persisted_ref)? else {
+    let Some(next_action) = route_action_for_task_result(
+        &input.project_root,
+        &delivery_id,
+        &phase_id,
+        &run,
+        &result,
+        &input.request_ref,
+        &persisted_ref,
+    )?
+    else {
         update_delivery_after_result(
             &input.project_root,
             &delivery_id,
@@ -2684,8 +2693,12 @@ fn next_action_for_run(run: &contracts::TaskPlanRun) -> Option<TaskPlanRunNextAc
 }
 
 fn route_action_for_task_result(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
     run: &contracts::TaskPlanRun,
     result: &TaskResult,
+    request_ref: &str,
     result_ref: &str,
 ) -> Result<Option<RouteAction>, state::store::StateError> {
     match run.status {
@@ -2704,6 +2717,15 @@ fn route_action_for_task_result(
             target_phase_id: None,
         })),
         TaskPlanRunStatus::Completed | TaskPlanRunStatus::CompletedWithNotes => {
+            if let Some(next_repair) = queued_execution_repair_action(
+                project_root,
+                delivery_id,
+                phase_id,
+                &result.task_id,
+                request_ref,
+            )? {
+                return Ok(Some(next_repair));
+            }
             Ok(Some(RouteAction {
                 kind: RouteActionKind::Review,
                 source: "task_result".to_string(),
@@ -2752,6 +2774,86 @@ fn route_action_for_task_result(
         }
         TaskPlanRunStatus::Blocked => route_blocked_task_result(result, result_ref),
     }
+}
+
+fn queued_execution_repair_action(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    completed_task_id: &str,
+    request_ref: &str,
+) -> Result<Option<RouteAction>, state::store::StateError> {
+    let store = FileTransitionStore;
+    let delivery = store
+        .load_delivery_index(project_root, delivery_id)
+        .map_err(to_state_error)?;
+    let Some(phase) = delivery
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == phase_id)
+    else {
+        return Ok(None);
+    };
+    if phase
+        .latest_refs
+        .get("taskExecutionRequestRef")
+        .map(String::as_str)
+        != Some(request_ref)
+    {
+        return Ok(None);
+    }
+    let Some(action) = phase.next_action.as_ref() else {
+        return Ok(None);
+    };
+    if action.kind != RouteActionKind::ExecutionRepair
+        || action.source != "delivery_execution_repair"
+    {
+        return Ok(None);
+    }
+    let Some(details) = action.details.as_ref() else {
+        return Ok(None);
+    };
+    if details.get("currentTargetTaskId").and_then(Value::as_str) != Some(completed_task_id) {
+        return Ok(None);
+    }
+    let mut pending_target_task_ids = string_array_at(details, "pendingTargetTaskIds");
+    let mut seen = BTreeSet::new();
+    pending_target_task_ids
+        .retain(|task_id| task_id != completed_task_id && seen.insert(task_id.clone()));
+    if pending_target_task_ids.is_empty() {
+        return Ok(None);
+    }
+    let origin = details
+        .get("origin")
+        .and_then(Value::as_str)
+        .unwrap_or("review_result")
+        .to_string();
+    let source_ref = details
+        .get("sourceRef")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| action.request_ref.clone());
+    let finding_refs = string_array_at(details, "findingRefs");
+    let mut next_details = json!({
+        "origin": origin,
+        "targetTaskIds": pending_target_task_ids
+    });
+    if let Some(source_ref) = source_ref.as_ref() {
+        next_details["sourceRef"] = json!(source_ref);
+    }
+    if !finding_refs.is_empty() {
+        next_details["findingRefs"] = json!(finding_refs);
+    }
+    Ok(Some(RouteAction {
+        kind: RouteActionKind::ExecutionRepair,
+        source: "delivery_execution_repair_queue".to_string(),
+        reason: format!("{origin}_repair_next_target"),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: source_ref,
+        details: Some(next_details),
+        target_phase_id: None,
+    }))
 }
 
 fn route_blocked_task_result(
@@ -3857,10 +3959,19 @@ fn update_delivery_after_result(
         phase.latest_refs.remove("activeTaskResultRepairActionRef");
         phase.next_action = next_action.cloned();
     }
-    delivery.status = if matches!(
-        run.status,
-        TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted
-    ) {
+    let next_is_execution = next_action
+        .map(|action| {
+            matches!(
+                action.kind,
+                RouteActionKind::ContinueExecution | RouteActionKind::ExecutionRepair
+            )
+        })
+        .unwrap_or(false);
+    delivery.status = if next_is_execution
+        || matches!(
+            run.status,
+            TaskPlanRunStatus::Running | TaskPlanRunStatus::NotStarted
+        ) {
         DeliveryLifecycleStatus::Executing
     } else {
         DeliveryLifecycleStatus::Reviewing

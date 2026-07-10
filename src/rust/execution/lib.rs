@@ -109,6 +109,7 @@ fn target_task_ids_from_action_details(details: &Value) -> Vec<String> {
     let mut values = Vec::new();
     for pointer in [
         "/nextAction/targetTaskIds",
+        "/targetTaskIds",
         "/changeRequest/details/targetTaskIds",
     ] {
         values.extend(

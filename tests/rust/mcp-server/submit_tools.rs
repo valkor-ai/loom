@@ -7049,13 +7049,68 @@ fn review_accept_hydrates_execution_repair_targets_from_all_review_signals() {
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     let review_result_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult");
     let persisted: Value = serde_json::from_str(
-        &std::fs::read_to_string(fixture.root.join(review_result_ref))
+        &std::fs::read_to_string(fixture.root.join(&review_result_ref))
             .expect("read persisted review result"),
     )
     .expect("parse persisted review result");
     assert_eq!(
         persisted["nextAction"]["targetTaskIds"],
         json!([task_ids[0], task_ids[1]])
+    );
+    assert_eq!(result["next"]["executionKind"], "delivery_execution_repair");
+    assert_eq!(result["next"]["taskId"], json!(first_task_id));
+    let first_repair_request_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("first repair request ref")
+        .to_string();
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(&index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let active_details = &index["phases"][0]["nextAction"]["details"];
+    assert_eq!(active_details["currentTargetTaskId"], json!(first_task_id));
+    assert_eq!(
+        active_details["pendingTargetTaskIds"],
+        json!([second_task_id])
+    );
+
+    write_task_result_candidate(&fixture, &first_repair_request_ref);
+    let next_repair = call_submit(
+        "loom.recordTaskResultFile",
+        &first_repair_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(next_repair["state"], "auto_runnable", "{next_repair:#}");
+    assert_eq!(
+        next_repair["next"]["executionKind"], "delivery_execution_repair",
+        "{next_repair:#}"
+    );
+    assert_eq!(next_repair["next"]["taskId"], json!(second_task_id));
+    assert_ne!(
+        next_repair["next"]["artifactKind"],
+        json!("review_result"),
+        "{next_repair:#}"
+    );
+    assert_eq!(
+        latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult"),
+        review_result_ref
+    );
+    let second_repair_request_ref = next_repair["next"]["requestRef"]
+        .as_str()
+        .expect("second repair request ref");
+    let second_repair_root = read_request_root_value(fixture.root_str(), second_repair_request_ref);
+    assert_eq!(
+        second_repair_root["repairContext"]["sourceRef"],
+        json!(review_result_ref)
+    );
+    assert_eq!(
+        second_repair_root["repairContext"]["findingRefs"],
+        json!(["finding-first-task-only"])
     );
 }
 

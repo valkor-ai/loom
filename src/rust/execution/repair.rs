@@ -318,17 +318,19 @@ fn materialize_delivery_execution_repair_inner(
     )? {
         return Ok(existing);
     }
-    let task = repair_source_task(&task_plan, &run, &target_task_ids).ok_or_else(|| {
-        let message = if target_task_ids.is_empty() {
-            "No task is available for delivery execution repair.".to_string()
-        } else {
-            format!(
-                "Execution repair target task is not in the current task run: {}.",
-                target_task_ids.join(", ")
-            )
-        };
-        state::store::StateError::StateCorrupted(message)
-    })?;
+    let selection =
+        repair_source_task_selection(&task_plan, &run, &target_task_ids).ok_or_else(|| {
+            let message = if target_task_ids.is_empty() {
+                "No task is available for delivery execution repair.".to_string()
+            } else {
+                format!(
+                    "Execution repair target task is not in the current task run: {}.",
+                    target_task_ids.join(", ")
+                )
+            };
+            state::store::StateError::StateCorrupted(message)
+        })?;
+    let task = selection.task;
     let request_task = task_with_phase_execution_guidance(root, &locator, task.clone())?;
     let attempt_count = run
         .task_states
@@ -400,6 +402,8 @@ fn materialize_delivery_execution_repair_inner(
         origin,
         source_ref.clone(),
         finding_refs.clone(),
+        &task.task_id,
+        &selection.pending_target_task_ids,
     )?;
     delivery_execution_repair_next(
         project_root,
@@ -2798,25 +2802,42 @@ fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<
     }
 }
 
-fn repair_source_task(
+struct RepairTaskSelection {
+    task: TaskDefinition,
+    pending_target_task_ids: Vec<String>,
+}
+
+fn repair_source_task_selection(
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     target_task_ids: &[String],
-) -> Option<TaskDefinition> {
+) -> Option<RepairTaskSelection> {
     if !target_task_ids.is_empty() {
-        return target_task_ids.iter().find_map(|target_task_id| {
-            let in_current_run = run
-                .task_states
-                .iter()
-                .any(|state| state.task_id == *target_task_id);
-            if !in_current_run {
-                return None;
-            }
-            task_plan
-                .tasks
-                .iter()
-                .find(|task| task.task_id == *target_task_id)
-                .cloned()
+        let mut targets = target_task_ids
+            .iter()
+            .filter_map(|target_task_id| {
+                let in_current_run = run
+                    .task_states
+                    .iter()
+                    .any(|state| state.task_id == *target_task_id);
+                if !in_current_run {
+                    return None;
+                }
+                task_plan
+                    .tasks
+                    .iter()
+                    .find(|task| task.task_id == *target_task_id)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return None;
+        }
+        let task = targets.remove(0);
+        let pending_target_task_ids = targets.into_iter().map(|task| task.task_id).collect();
+        return Some(RepairTaskSelection {
+            task,
+            pending_target_task_ids,
         });
     }
     let preferred = run
@@ -2834,6 +2855,10 @@ fn repair_source_task(
         .iter()
         .find(|task| task.task_id == preferred.task_id)
         .cloned()
+        .map(|task| RepairTaskSelection {
+            task,
+            pending_target_task_ids: vec![],
+        })
 }
 
 fn update_latest_execution_request(
@@ -2845,6 +2870,8 @@ fn update_latest_execution_request(
     origin: &str,
     source_ref: Option<String>,
     finding_refs: Vec<String>,
+    current_target_task_id: &str,
+    pending_target_task_ids: &[String],
 ) -> Result<(), state::store::StateError> {
     let store = FileTransitionStore;
     let mut delivery = store
@@ -2865,13 +2892,20 @@ fn update_latest_execution_request(
         );
         let mut details = json!({
             "resultFile": result_file,
-            "origin": origin
+            "origin": origin,
+            "currentTargetTaskId": current_target_task_id,
+            "targetTaskIds": std::iter::once(current_target_task_id.to_string())
+                .chain(pending_target_task_ids.iter().cloned())
+                .collect::<Vec<_>>()
         });
         if let Some(source_ref) = source_ref {
             details["sourceRef"] = json!(source_ref);
         }
         if !finding_refs.is_empty() {
             details["findingRefs"] = json!(finding_refs);
+        }
+        if !pending_target_task_ids.is_empty() {
+            details["pendingTargetTaskIds"] = json!(pending_target_task_ids);
         }
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ExecutionRepair,
