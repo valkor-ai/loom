@@ -2,7 +2,7 @@
 set -eu
 
 AGENT=""
-VERSION="0.2.3"
+VERSION="0.2.4"
 VERSION_FROM_ARGS=0
 BASE_URL="https://github.com/valkor-ai/loom/releases/latest/download"
 BASE_URL_FROM_ARGS=0

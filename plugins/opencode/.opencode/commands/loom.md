@@ -55,7 +55,7 @@ Protocol:
 - In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
-- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. In OpenCode, resolve `path` as `../references/loom/<path>` from this command/plugin location, not relative to the project workspace.
+- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to `../references/loom/` from this command/plugin location, not relative to the project workspace.
 - Load exactly the listed paths for the current action. Do not derive paths from group names, scan reference directories, or load external language/API/architecture/UI skills.
 - Treat token template paths as merge baselines for project files, not as text to copy into Loom artifacts.
 
