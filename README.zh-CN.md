@@ -62,7 +62,7 @@ Coding agents 已经会写代码。Loom 帮助它们从 idea 到 release 都守�
 
 Vibe Coding 和 AI Coding 正在让越来越多的人具备软件构建能力。过去只有程序员和专业团队才能完成的事情，现在普通构建者也可以借助 Coding Agent 快速做出 Demo、产品原型，甚至开发自己日常使用的软件工具。
 
-但从一个“能跑起来的 Demo”或“自己能用的小工具”，到一个真正可以被信任、可以交付、可以持续维护的生产级应用，中间仍然有一条巨大的鸿沟。
+但从一个“能跑起来的 Demo”或“自己能用的小工具”，到一套真正可以被信任、可以交付、可以持续修复和演进的软件交付过程，中间仍然有一条巨大的鸿沟。
 
 这条鸿沟不只是模型能力的问题。即使模型能力持续增强，构建者仍然需要处理很多交付层面的工作：澄清需求、保存项目上下文、做架构判断、拆分任务、准备后端和运行环境、执行测试、定位问题、修复错误、再次验证、预览结果、记录交付证据，以及为后续迭代保留清晰状态。
 
@@ -72,21 +72,20 @@ Loom 就是为弥合这条鸿沟而存在的。
 
 我们的目标很简单：
 
-**帮助构建者从 Vibe Coding 的 Demo 和自用工具，走向更可靠、更可维护、更接近生产级的软件产品，同时减少手工交付成本和重复上下文整理。**
+**帮助构建者从 Vibe Coding 的 Demo 和自用工具，走向更可靠、更可维护、具备生产级交付纪律的软件交付过程，同时减少手工交付成本和重复上下文整理。**
 
 能力 | 解决的问题
 --- | ---
-Dynamic workflows | 把每个交付目标变成一条可自适应的循环：澄清、规划、执行、验证、修复和交接。
-Delivery harness | 把需求澄清、规划、构建、检查、预览、review、修复和报告变成稳定流程。
-Requirement intelligence | 把需求澄清从普通聊天确认变成交付质量门：将已确认的阶段范围、业务规则、生命周期覆盖和页面办理路径沉淀为结构化上下文，让后续规划、编码和 review 必须承接。
-Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段，提升业务理解质量，同时避免把知识库变成隐藏需求来源。
-Context routing | 沉淀项目摘要、任务图、后端/运行时状态、测试和部署结果，让 agent 按步骤读取目标上下文，而不是反复读取全仓库。
-Task contracts | 将宽泛目标拆成有边界的任务，并带上 source refs、验收意图、结果文件和 continuation rules。
-Executable tools | 提供上下文整理、任务路由、结果记录、部署检查和交付证据等 MCP tools。
-Backend readiness | 将数据库、Auth、Storage、Functions、环境变量、服务和运行时需求纳入交付状态。
-UIX guidance | 将视觉方向、交互流程、响应式状态、可访问性期望和产品特定界面细节作为交付要求沉淀下来。
-Verification loop | 把 smoke test、Playwright 类验证、日志、错误摘要、修复请求和再次验证串成闭环。
-Multi-agent protocol | 让 Claude Code、Codex、OpenCode 等工具共享同一套交付流程。
+Stateful delivery protocol | 把一次性 coding session 变成可恢复的交付循环，并用 `.loom/` 状态、request refs、结果文件、review 记录、修复请求和交接证据承载过程。
+Requirement intelligence | 把松散 prompt 转成已确认的范围、业务规则、生命周期覆盖、页面办理路径和验收细节，让规划、执行和 review 都必须承接。
+Engineering contracts | 将架构、API、运行时、代码质量和任务归属决策作为结构化 contracts 传递，而不是依赖 agent 反复记住 prompt 提醒。
+Production UI guidance | 将 UI 质量前置到生成端：通过 surface decision、场景 references、布局密度、style asset plan、token 期望、禁用内容规则和 desktop/mobile 证据约束页面交付。
+Targeted context routing | 让 agent 按需读取 field groups、reference profiles、任务 contracts 和 repair context，避免反复读取大文件或整份 artifact。
+Task-scoped execution | 把交付拆成有边界的任务，并携带 source refs、写入边界、验证意图、结果模板和 continuation rules。
+Review and repair loop | 通过 review signals、TaskResult evidence、repair contracts、多目标 repair 队列和再次验证，把实现与验证分离。
+Runtime and deploy readiness | 面向本地 Docker Compose 预览准备 topology-aware services、build contexts、环境规则、端口、health checks、日志和 repair boundaries。
+Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段。
+Multi-agent MCP protocol | 让 Codex、Claude Code、OpenCode 和后续支持 MCP 的 agents 运行同一套交付状态机。
 
 ## 上下文路由
 
@@ -281,15 +280,17 @@ Agent 插件会自动设置 Loom 所需的路由环境。正常使用时请走 a
 
 ## 工作方式
 
-Loom 在项目本地创建 `.loom/` 交付状态，并把它作为 agent 下一步行动的 source of truth。核心循环很短：
+Loom 作为本地 MCP 交付状态机运行。Agent 不需要凭记忆决定完整流程；它向 Loom 获取下一步 request，只读取声明的字段，写入指定 artifact，提交给 Loom 校验，再由 Loom 持久化并路由下一步。
 
-1. 捕获并确认交付范围。
-2. 生成紧凑 context pack。
-3. 生成 planning、architecture 和 task contracts。
-4. 每次执行一个有边界的任务。
-5. 记录证据并运行验证。
-6. Review、修复、再次检查。
-7. 报告最终交付状态。
+1. 从 `.loom/` 状态启动或恢复。
+2. 澄清并确认范围，必要时读取已注册的本地知识库。
+3. 建立交付基线：repository context、technical baseline、planning contract 和 architecture artifact。
+4. 将 contracts 转成任务计划，明确任务归属、read groups、写入边界、验证意图和结果模板。
+5. 由 agent 执行有边界的任务，并写入带证据的 TaskResult。
+6. Loom 对提交的 artifact 做校验、归一、持久化，并决定下一步路由。
+7. 通过结构化 review signals 进行评审，并按问题类型路由到代码修复、任务计划修复、架构修复或人工 review。
+8. 当执行 `deploy` 时，基于 runtime facts、Compose topology、环境规则、日志和 repair boundaries 准备本地部署预览。
+9. 后续会话或其他 agent 可以从已保存状态继续，不需要重新整理交付上下文。
 
 ## 了解更多
 
