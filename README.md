@@ -24,6 +24,7 @@
     <img alt="Python" src="https://img.shields.io/badge/Python-algorithms-3776AB?logo=python&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
+  <p>⭐ If Loom is useful to you, give it a star and help more developers find it.</p>
 </div>
 
 ## What Is Loom?
