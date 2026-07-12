@@ -26,6 +26,7 @@
     <img alt="Python" src="https://img.shields.io/badge/Python-algorithms-3776AB?logo=python&logoColor=white">
     <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
+  <p>⭐ 如果 Loom 对你有帮助，欢迎点个 Star，让更多开发者看到它。</p>
 </div>
 
 ## 什么是 Loom？
