@@ -327,6 +327,7 @@ fn build_review_request(
                 "Every finding must include non-empty readRefs.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
+                "Use compact browser check status, attempts, command, and observed outcome first. Read a referenced Playwright trace, report, or screenshot only when a failed, blocked, retried, or ambiguous check cannot be judged from the compact evidence.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
                 "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
@@ -3137,6 +3138,36 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
+            let expected_browser_check_ids = task_plan
+                .browser_verification_profiles
+                .iter()
+                .find(|profile| profile.task_id == task.task_id)
+                .map(|profile| {
+                    profile
+                        .checks
+                        .iter()
+                        .map(|check| check.check_id.clone())
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            let referenced_browser_check_ids = self_check
+                .get("browserCheckRefs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            let passed_browser_check_ids = result
+                .into_iter()
+                .flat_map(|result| result.verification_results.iter())
+                .flat_map(|verification| verification.browser_checks.iter())
+                .filter(|check| check.status == contracts::BrowserCheckStatus::Passed)
+                .map(|check| check.check_id.clone())
+                .collect::<BTreeSet<_>>();
+            let browser_verification_satisfied = expected_browser_check_ids.is_empty()
+                || (referenced_browser_check_ids == expected_browser_check_ids
+                    && expected_browser_check_ids.is_subset(&passed_browser_check_ids));
             let surface_contract_satisfied = surface_review
                 .get("satisfied")
                 .and_then(Value::as_bool)
@@ -3145,6 +3176,7 @@ fn build_frontend_quality_review_matrix(
                 == Some("satisfied")
                 && surface_contract_satisfied
                 && token_asset_satisfied
+                && browser_verification_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
@@ -3164,6 +3196,14 @@ fn build_frontend_quality_review_matrix(
                     "mergeSummaryPresent": token_merge_summary_present,
                     "parallelTokenSystemCreated": parallel_token_system_created,
                     "satisfied": token_asset_satisfied
+                },
+                "browserVerification": {
+                    "expectedCheckCount": expected_browser_check_ids.len(),
+                    "referencedCheckCount": referenced_browser_check_ids.len(),
+                    "passedCheckCount": expected_browser_check_ids
+                        .intersection(&passed_browser_check_ids)
+                        .count(),
+                    "satisfied": browser_verification_satisfied
                 },
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
@@ -4075,7 +4115,27 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                     json!({
                         "verificationId": verification.verification_id,
                         "status": verification.status,
-                        "evidenceType": verification.evidence_type
+                        "evidenceType": verification.evidence_type,
+                        "browserChecks": verification.browser_checks.iter().map(|check| {
+                            let diagnostic_artifact_refs = if check.status != contracts::BrowserCheckStatus::Passed
+                                || check.attempts > 1
+                            {
+                                check.artifact_refs.clone()
+                            } else {
+                                Vec::new()
+                            };
+                            json!({
+                                "checkId": check.check_id,
+                                "status": check.status,
+                                "attempts": check.attempts,
+                                "retrySucceeded": check.status == contracts::BrowserCheckStatus::Passed && check.attempts > 1,
+                                "artifactRefCount": check.artifact_refs.len(),
+                                "diagnosticArtifactRefs": diagnostic_artifact_refs,
+                                "command": compact_summary(&check.command),
+                                "observedOutcome": compact_summary(&check.observed_outcome),
+                                "blockedReason": check.blocked_reason
+                            })
+                        }).collect::<Vec<_>>()
                     })
                 }).collect::<Vec<_>>(),
                 "requirementDetailEvidence": result.requirement_detail_evidence.iter().map(|evidence| {
@@ -4189,6 +4249,11 @@ fn compact_frontend_quality_self_check(result: &TaskResult) -> Value {
             .and_then(Value::as_array)
             .map(Vec::len)
             .unwrap_or(0),
+        "browserCheckRefCount": self_check
+            .get("browserCheckRefs")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
         "contentBoundaryEvidence": {
             "checked": self_check
                 .pointer("/contentBoundaryEvidence/checked")
@@ -4274,7 +4339,7 @@ fn allowed_refs(
                 .map(str::to_string),
         )
         .collect::<BTreeSet<_>>();
-    let verification_refs = task_results
+    let mut verification_refs = task_results
         .iter()
         .flat_map(|result| {
             result.verification_results.iter().flat_map(|verification| {
@@ -4286,6 +4351,15 @@ fn allowed_refs(
             })
         })
         .collect::<BTreeSet<_>>();
+    verification_refs.extend(task_results.iter().flat_map(|result| {
+        result
+            .verification_results
+            .iter()
+            .flat_map(|verification| verification.browser_checks.iter())
+            .flat_map(|check| {
+                std::iter::once(check.check_id.clone()).chain(check.artifact_refs.iter().cloned())
+            })
+    }));
     let mut read_refs = vec!["reviewPacket".to_string(), "changeContext".to_string()];
     read_refs.extend(
         task_results
@@ -4635,6 +4709,39 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 mod tests {
     use super::*;
 
+    fn task_result_with_browser_check(attempts: u32) -> TaskResult {
+        serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "taskResultId": "result-ui",
+            "taskId": "task-ui",
+            "taskPlanId": "taskplan",
+            "status": "completed",
+            "changedFiles": ["web/src/App.tsx"],
+            "verificationResults": [{
+                "verificationId": "verify-ui",
+                "status": "passed",
+                "evidenceType": "automated_test",
+                "summary": "Browser verification completed.",
+                "browserChecks": [{
+                    "checkId": "browser-ui-desktop",
+                    "status": "passed",
+                    "command": "pnpm playwright test --grep workflow",
+                    "attempts": attempts,
+                    "artifactRefs": ["test-results/workflow/trace.zip"],
+                    "observedOutcome": "The submitted record appears in the rendered list.",
+                    "blockedReason": null
+                }]
+            }],
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none"
+            },
+            "createdAt": "2026-07-13T10:00:00+08:00",
+            "updatedAt": "2026-07-13T10:00:00+08:00"
+        }))
+        .expect("browser TaskResult")
+    }
+
     fn requirement() -> Value {
         json!({
             "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
@@ -4720,6 +4827,25 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn compact_browser_summary_keeps_retry_visible_without_loading_success_artifacts() {
+        let first_pass = compact_task_result_summaries(&[task_result_with_browser_check(1)]);
+        let retried = compact_task_result_summaries(&[task_result_with_browser_check(2)]);
+
+        assert_eq!(
+            first_pass[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"],
+            json!([])
+        );
+        assert_eq!(
+            retried[0]["verificationResults"][0]["browserChecks"][0]["retrySucceeded"],
+            json!(true)
+        );
+        assert_eq!(
+            retried[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"][0],
+            json!("test-results/workflow/trace.zip")
         );
     }
 }

@@ -7,11 +7,23 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread;
+use std::time::{Duration, SystemTime};
 use toml_edit::{DocumentMut, Item};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PACKAGE_SCHEMA_VERSION: &str = "1.0";
+pub const PLAYWRIGHT_DEFAULT_VERSION: &str = "1.61.1";
+const PLAYWRIGHT_RUNTIME_SCHEMA_VERSION: &str = "1.0";
+const PLAYWRIGHT_RUNTIME_REVISION: &str = "1";
+const PLAYWRIGHT_LOCK_WAIT: Duration = Duration::from_secs(10 * 60);
+const PLAYWRIGHT_LOCK_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
+const PLAYWRIGHT_LOCK_POLL: Duration = Duration::from_millis(250);
 const INSTALL_STAMP: &str = ".loom-mcp-install.json";
 const SHARED_LOOM_REFERENCES: &str = "plugins/shared/loom/references";
 const SHARED_DEPLOY_REFERENCES: &str = "plugins/shared/loom-deploy/references";
@@ -72,6 +84,14 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/review/finding-quality.md",
     "plugins/shared/loom/references/tech/review/spec-compliance.md",
     "plugins/shared/loom/references/tech/review/test-evidence.md",
+    "plugins/shared/loom/references/tech/test/playwright/accessibility.md",
+    "plugins/shared/loom/references/tech/test/playwright/configuration.md",
+    "plugins/shared/loom/references/tech/test/playwright/core.md",
+    "plugins/shared/loom/references/tech/test/playwright/fixtures.md",
+    "plugins/shared/loom/references/tech/test/playwright/locators.md",
+    "plugins/shared/loom/references/tech/test/playwright/network.md",
+    "plugins/shared/loom/references/tech/test/playwright/reliability.md",
+    "plugins/shared/loom/references/tech/test/playwright/visual.md",
     "plugins/shared/loom/references/tech/backend/aspnetcore/architecture.md",
     "plugins/shared/loom/references/tech/backend/aspnetcore/data.md",
     "plugins/shared/loom/references/tech/backend/aspnetcore/minimal.md",
@@ -435,6 +455,66 @@ pub struct SetupEnvironment {
     pub opencode_home: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRuntimePrepareOptions {
+    pub requested_versions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_program: Option<PathBuf>,
+}
+
+impl Default for BrowserRuntimePrepareOptions {
+    fn default() -> Self {
+        Self {
+            requested_versions: vec![PLAYWRIGHT_DEFAULT_VERSION.to_string()],
+            npm_program: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRuntimePrepareReport {
+    pub status: String,
+    pub cache_root: String,
+    pub browsers_path: String,
+    pub runtimes: Vec<BrowserRuntimeEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRuntimeEntry {
+    pub runtime_id: String,
+    pub requested_version: String,
+    pub resolved_version: String,
+    pub runner_path: String,
+    pub manifest_path: String,
+    pub reused: bool,
+    pub doctor_checks: Vec<BrowserRuntimeDoctorCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRuntimeManifest {
+    schema_version: String,
+    runtime_revision: String,
+    runtime_id: String,
+    requested_version: String,
+    resolved_version: String,
+    package_lock_checksum: String,
+    runner_relative_path: String,
+    browser_entries: Vec<String>,
+    prepared_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRuntimeDoctorCheck {
+    pub check_id: String,
+    pub status: String,
+    pub summary: String,
+}
+
 impl SetupEnvironment {
     pub fn from_env(package_root_arg: Option<PathBuf>) -> Result<Self, SetupError> {
         let user_home = env_path("LOOM_SETUP_USER_HOME")
@@ -486,6 +566,10 @@ impl SetupEnvironment {
 
     pub fn runtime_current(&self) -> PathBuf {
         self.runtime_root().join("current")
+    }
+
+    pub fn playwright_cache_root(&self) -> PathBuf {
+        self.loom_home.join("runtime-cache/playwright")
     }
 
     pub fn install_registry_path(&self) -> PathBuf {
@@ -668,6 +752,12 @@ pub enum SetupError {
     MissingPackageEntry(PathBuf),
     LegacyCleanupBlocked(Vec<LegacyBlockedPath>),
     DoctorFailed(Vec<DoctorCheck>),
+    CommandFailed {
+        program: String,
+        status: i32,
+        stdout: String,
+        stderr: String,
+    },
 }
 
 impl fmt::Display for SetupError {
@@ -708,6 +798,16 @@ impl fmt::Display for SetupError {
                     .filter(|check| check.status != "passed")
                     .count()
             ),
+            Self::CommandFailed {
+                program,
+                status,
+                stderr,
+                ..
+            } => write!(
+                formatter,
+                "{program} failed with exit status {status}: {}",
+                stderr.trim()
+            ),
         }
     }
 }
@@ -719,6 +819,473 @@ pub fn parse_agent_selection(raw: &str) -> Result<Vec<AgentKind>, SetupError> {
         return Ok(AgentKind::all().to_vec());
     }
     Ok(vec![AgentKind::parse(raw)?])
+}
+
+pub fn prepare_browser_runtime(
+    env: &SetupEnvironment,
+    options: &BrowserRuntimePrepareOptions,
+) -> Result<BrowserRuntimePrepareReport, SetupError> {
+    let cache_root = env.playwright_cache_root();
+    let runners_root = cache_root.join("runners");
+    let browsers_path = cache_root.join("browsers");
+    let locks_root = cache_root.join("locks");
+    let staging_root = cache_root.join("staging");
+    for path in [&runners_root, &browsers_path, &locks_root, &staging_root] {
+        fs::create_dir_all(path).map_err(|source| SetupError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+    let mut versions = options
+        .requested_versions
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+    if versions.is_empty() {
+        versions.insert(PLAYWRIGHT_DEFAULT_VERSION.to_string());
+    }
+    let npm_program = options
+        .npm_program
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" }));
+    let mut runtimes = Vec::new();
+    for requested_version in versions {
+        validate_playwright_version_spec(&requested_version)?;
+        runtimes.push(prepare_browser_runtime_version(
+            &requested_version,
+            &npm_program,
+            &runners_root,
+            &browsers_path,
+            &locks_root,
+            &staging_root,
+        )?);
+    }
+    Ok(BrowserRuntimePrepareReport {
+        status: "ready".to_string(),
+        cache_root: path_string(&cache_root),
+        browsers_path: path_string(&browsers_path),
+        runtimes,
+    })
+}
+
+fn prepare_browser_runtime_version(
+    requested_version: &str,
+    npm_program: &Path,
+    runners_root: &Path,
+    browsers_path: &Path,
+    locks_root: &Path,
+    staging_root: &Path,
+) -> Result<BrowserRuntimeEntry, SetupError> {
+    let runtime_id = playwright_runtime_id(requested_version);
+    let runtime_root = runners_root.join(&runtime_id);
+    if let Some(entry) = reusable_browser_runtime(&runtime_root, browsers_path)? {
+        return Ok(entry);
+    }
+    let _lock = BrowserRuntimeLock::acquire(&locks_root.join(format!("{runtime_id}.lock")))?;
+    if let Some(entry) = reusable_browser_runtime(&runtime_root, browsers_path)? {
+        return Ok(entry);
+    }
+    if runtime_root.exists() {
+        fs::remove_dir_all(&runtime_root).map_err(|source| SetupError::Io {
+            path: runtime_root.clone(),
+            source,
+        })?;
+    }
+    let staging = staging_root.join(format!(
+        "{}-{}-{}",
+        runtime_id,
+        std::process::id(),
+        chrono::Utc::now().timestamp_millis()
+    ));
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|source| SetupError::Io {
+            path: staging.clone(),
+            source,
+        })?;
+    }
+    fs::create_dir_all(&staging).map_err(|source| SetupError::Io {
+        path: staging.clone(),
+        source,
+    })?;
+    let prepared = (|| {
+        write_json(
+            &staging.join("package.json"),
+            &json!({
+                "name": format!("loom-playwright-runtime-{runtime_id}"),
+                "private": true,
+                "version": "1.0.0"
+            }),
+        )?;
+        let package_spec = format!("@playwright/test@{requested_version}");
+        run_runtime_command(
+            npm_program,
+            &[
+                "install",
+                "--save-exact",
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                package_spec.as_str(),
+            ],
+            &staging,
+            &[],
+        )?;
+        let installed_package = staging.join("node_modules/@playwright/test/package.json");
+        let installed: Value = read_json_value(&installed_package)?;
+        let resolved_version = installed
+            .get("version")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SetupError::InvalidArgument(format!(
+                    "installed Playwright package has no version: {}",
+                    installed_package.display()
+                ))
+            })?
+            .to_string();
+        let runner_relative_path = if cfg!(windows) {
+            "node_modules/.bin/playwright.cmd"
+        } else {
+            "node_modules/.bin/playwright"
+        };
+        let runner = staging.join(runner_relative_path);
+        if !runner.is_file() {
+            return Err(SetupError::MissingPackageEntry(runner));
+        }
+        let browser_entries = {
+            let _browser_cache_lock =
+                BrowserRuntimeLock::acquire(&locks_root.join("browser-cache.lock"))?;
+            run_runtime_command(
+                &runner,
+                &["install", "chromium"],
+                &staging,
+                &[("PLAYWRIGHT_BROWSERS_PATH", browsers_path)],
+            )?;
+            browser_cache_entries_for_runtime(&staging, browsers_path)?
+        };
+        if browser_entries.is_empty() {
+            return Err(SetupError::InvalidArgument(format!(
+                "Playwright browser install produced no cache entries under {}",
+                browsers_path.display()
+            )));
+        }
+        let package_lock = staging.join("package-lock.json");
+        let package_lock_checksum = sha256_file(&package_lock)?;
+        write_json(
+            &staging.join("manifest.json"),
+            &BrowserRuntimeManifest {
+                schema_version: PLAYWRIGHT_RUNTIME_SCHEMA_VERSION.to_string(),
+                runtime_revision: PLAYWRIGHT_RUNTIME_REVISION.to_string(),
+                runtime_id: runtime_id.clone(),
+                requested_version: requested_version.to_string(),
+                resolved_version,
+                package_lock_checksum,
+                runner_relative_path: runner_relative_path.to_string(),
+                browser_entries,
+                prepared_at: now_string(),
+            },
+        )?;
+        fs::rename(&staging, &runtime_root).map_err(|source| SetupError::Io {
+            path: runtime_root.clone(),
+            source,
+        })?;
+        reusable_browser_runtime(&runtime_root, browsers_path)?.ok_or_else(|| {
+            SetupError::InvalidArgument(format!(
+                "prepared Playwright runtime failed doctor checks: {}",
+                runtime_root.display()
+            ))
+        })
+    })();
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    prepared.map(|mut entry| {
+        entry.reused = false;
+        entry
+    })
+}
+
+fn reusable_browser_runtime(
+    runtime_root: &Path,
+    browsers_path: &Path,
+) -> Result<Option<BrowserRuntimeEntry>, SetupError> {
+    let manifest_path = runtime_root.join("manifest.json");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let manifest: BrowserRuntimeManifest = serde_json::from_value(read_json_value(&manifest_path)?)
+        .map_err(|source| SetupError::Json {
+            path: manifest_path.clone(),
+            source,
+        })?;
+    let checks = browser_runtime_doctor(runtime_root, browsers_path, &manifest);
+    if checks.iter().any(|check| check.status != "passed") {
+        return Ok(None);
+    }
+    Ok(Some(BrowserRuntimeEntry {
+        runtime_id: manifest.runtime_id,
+        requested_version: manifest.requested_version,
+        resolved_version: manifest.resolved_version,
+        runner_path: path_string(runtime_root.join(manifest.runner_relative_path)),
+        manifest_path: path_string(manifest_path),
+        reused: true,
+        doctor_checks: checks,
+    }))
+}
+
+fn browser_runtime_doctor(
+    runtime_root: &Path,
+    browsers_path: &Path,
+    manifest: &BrowserRuntimeManifest,
+) -> Vec<BrowserRuntimeDoctorCheck> {
+    let mut checks = Vec::new();
+    checks.push(browser_doctor_check(
+        "manifest_version",
+        manifest.schema_version == PLAYWRIGHT_RUNTIME_SCHEMA_VERSION
+            && manifest.runtime_revision == PLAYWRIGHT_RUNTIME_REVISION,
+        "Runtime manifest schema and Loom runtime revision match.",
+    ));
+    let lock_path = runtime_root.join("package-lock.json");
+    let lock_matches = sha256_file(&lock_path)
+        .map(|actual| actual == manifest.package_lock_checksum)
+        .unwrap_or(false);
+    checks.push(browser_doctor_check(
+        "package_lock_checksum",
+        lock_matches,
+        "Runtime package lock checksum matches the manifest.",
+    ));
+    let installed_package = runtime_root.join("node_modules/@playwright/test/package.json");
+    let installed_version_matches = read_json_value(&installed_package)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("version")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .is_some_and(|version| version == manifest.resolved_version);
+    checks.push(browser_doctor_check(
+        "runner_package_version",
+        installed_version_matches,
+        "Installed @playwright/test version matches the manifest.",
+    ));
+    checks.push(browser_doctor_check(
+        "runner_executable",
+        runtime_root.join(&manifest.runner_relative_path).is_file(),
+        "Playwright runner executable is present.",
+    ));
+    let browsers_present = !manifest.browser_entries.is_empty()
+        && manifest
+            .browser_entries
+            .iter()
+            .all(|entry| browsers_path.join(entry).exists());
+    checks.push(browser_doctor_check(
+        "browser_cache",
+        browsers_present,
+        "Required Playwright browser cache entries are present.",
+    ));
+    checks
+}
+
+fn browser_doctor_check(check_id: &str, passed: bool, summary: &str) -> BrowserRuntimeDoctorCheck {
+    BrowserRuntimeDoctorCheck {
+        check_id: check_id.to_string(),
+        status: if passed { "passed" } else { "failed" }.to_string(),
+        summary: summary.to_string(),
+    }
+}
+
+fn validate_playwright_version_spec(value: &str) -> Result<(), SetupError> {
+    let lower = value.to_ascii_lowercase();
+    if value.is_empty()
+        || value.chars().any(char::is_whitespace)
+        || lower.starts_with("file:")
+        || lower.starts_with("link:")
+        || lower.starts_with("workspace:")
+        || lower.starts_with("git")
+        || lower.starts_with("http:")
+        || lower.starts_with("https:")
+    {
+        return Err(SetupError::InvalidArgument(format!(
+            "unsupported Playwright version spec `{value}`; use a registry version, range, or tag"
+        )));
+    }
+    Ok(())
+}
+
+fn playwright_runtime_id(requested_version: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PLAYWRIGHT_RUNTIME_REVISION.as_bytes());
+    hasher.update([0]);
+    hasher.update(requested_version.as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    format!("pw-{}", &digest[..16])
+}
+
+fn run_runtime_command(
+    program: &Path,
+    args: &[&str],
+    cwd: &Path,
+    envs: &[(&str, &Path)],
+) -> Result<(), SetupError> {
+    let mut command = Command::new(program);
+    command.current_dir(cwd).args(args);
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    let output = command.output().map_err(|source| SetupError::Io {
+        path: program.to_path_buf(),
+        source,
+    })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(SetupError::CommandFailed {
+        program: path_string(program),
+        status: output.status.code().unwrap_or(-1),
+        stdout: bounded_command_output(&output.stdout),
+        stderr: bounded_command_output(&output.stderr),
+    })
+}
+
+fn bounded_command_output(bytes: &[u8]) -> String {
+    const LIMIT: usize = 16 * 1024;
+    let start = bytes.len().saturating_sub(LIMIT);
+    String::from_utf8_lossy(&bytes[start..]).into_owned()
+}
+
+fn directory_entry_names(path: &Path) -> Result<Vec<String>, SetupError> {
+    let mut entries = fs::read_dir(path)
+        .map_err(|source| SetupError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<_>>();
+    entries.sort();
+    Ok(entries)
+}
+
+fn browser_cache_entries_for_runtime(
+    runtime_root: &Path,
+    browsers_path: &Path,
+) -> Result<Vec<String>, SetupError> {
+    let browser_manifest = runtime_root.join("node_modules/playwright-core/browsers.json");
+    let expected = read_json_value(&browser_manifest)
+        .ok()
+        .and_then(|value| value.get("browsers").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|browser| {
+            let name = browser.get("name").and_then(Value::as_str)?;
+            let revision = browser.get("revision").and_then(Value::as_str)?;
+            matches!(name, "chromium" | "chromium-headless-shell" | "ffmpeg")
+                .then(|| format!("{}-{revision}", name.replace('-', "_")))
+        })
+        .filter(|entry| browsers_path.join(entry).exists())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        return directory_entry_names(browsers_path);
+    }
+    Ok(expected)
+}
+
+struct BrowserRuntimeLock {
+    path: PathBuf,
+    running: Arc<AtomicBool>,
+    heartbeat: Option<thread::JoinHandle<()>>,
+}
+
+impl BrowserRuntimeLock {
+    fn acquire(path: &Path) -> Result<Self, SetupError> {
+        let started = SystemTime::now();
+        loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(mut file) => {
+                    writeln!(
+                        file,
+                        "pid={} preparedAt={}",
+                        std::process::id(),
+                        now_string()
+                    )
+                    .map_err(|source| SetupError::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
+                    let running = Arc::new(AtomicBool::new(true));
+                    let heartbeat_running = running.clone();
+                    let heartbeat_path = path.to_path_buf();
+                    let heartbeat = thread::spawn(move || {
+                        while heartbeat_running.load(Ordering::Acquire) {
+                            thread::park_timeout(Duration::from_secs(3));
+                            if !heartbeat_running.load(Ordering::Acquire) {
+                                break;
+                            }
+                            let _ = fs::write(
+                                &heartbeat_path,
+                                format!(
+                                    "pid={} heartbeatAt={}\n",
+                                    std::process::id(),
+                                    now_string()
+                                ),
+                            );
+                        }
+                    });
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                        running,
+                        heartbeat: Some(heartbeat),
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    if lock_is_stale(path) {
+                        let _ = fs::remove_file(path);
+                        continue;
+                    }
+                    if started.elapsed().unwrap_or_default() >= PLAYWRIGHT_LOCK_WAIT {
+                        return Err(SetupError::InvalidArgument(format!(
+                            "timed out waiting for Playwright runtime lock {}",
+                            path.display()
+                        )));
+                    }
+                    thread::sleep(PLAYWRIGHT_LOCK_POLL);
+                }
+                Err(source) => {
+                    return Err(SetupError::Io {
+                        path: path.to_path_buf(),
+                        source,
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl Drop for BrowserRuntimeLock {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Release);
+        if let Some(heartbeat) = self.heartbeat.take() {
+            heartbeat.thread().unpark();
+            let _ = heartbeat.join();
+        }
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= PLAYWRIGHT_LOCK_STALE_AFTER)
 }
 
 pub fn install(env: &SetupEnvironment, agents: &[AgentKind]) -> Result<SetupReport, SetupError> {
@@ -2585,4 +3152,30 @@ fn path_string(path: impl AsRef<Path>) -> String {
 
 fn now_string() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_runtime_lock_heartbeats_and_stops_on_drop() {
+        let root = std::env::temp_dir().join(format!(
+            "loom-playwright-lock-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let lock_path = root.join("runtime.lock");
+        let lock = BrowserRuntimeLock::acquire(&lock_path).unwrap();
+        let initial = fs::metadata(&lock_path).unwrap().modified().unwrap();
+        thread::sleep(Duration::from_millis(3300));
+        let refreshed = fs::metadata(&lock_path).unwrap().modified().unwrap();
+        assert!(refreshed > initial);
+        drop(lock);
+        assert!(!lock_path.exists());
+        thread::sleep(Duration::from_millis(100));
+        assert!(!lock_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

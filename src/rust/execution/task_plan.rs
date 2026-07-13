@@ -31,6 +31,10 @@ use state::{
     write_targets::AuthorizedWriteSet,
 };
 
+use crate::browser::{
+    derive_browser_verification_profiles, scan_browser_automation_facts,
+    task_requires_browser_verification,
+};
 use crate::paths::{
     task_plan_file, task_plan_group_pattern, task_plan_latest_file,
     task_plan_outline_candidate_file, task_plan_request_file, task_plan_run_file,
@@ -80,6 +84,7 @@ const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
 
 const VERIFICATION_EVIDENCE_VALUES: &[&str] = &[
     "automated_test",
+    "browser_automation",
     "manual_command_output",
     "runtime_api_check",
     "static_check",
@@ -784,6 +789,11 @@ where
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements = normalize_api_contract_requirements(&aac, &mut tasks);
     let code_quality_requirements = normalize_code_quality_requirements(&baseline, &mut tasks);
+    normalize_browser_verification_assignments(&mut tasks);
+    issues.extend(validate_browser_verification_assignments(&tasks));
+    let browser_automation_facts = scan_browser_automation_facts(root, &baseline);
+    let browser_verification_profiles =
+        derive_browser_verification_profiles(&browser_automation_facts, &tasks);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -856,6 +866,8 @@ where
         architecture_quality_requirements,
         api_contract_requirements,
         code_quality_requirements,
+        browser_automation_facts,
+        browser_verification_profiles,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -2614,6 +2626,53 @@ fn validate_runtime_delivery_closure_task(
     issues
 }
 
+fn normalize_browser_verification_assignments(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        if !task_requires_browser_verification(task)
+            || task.verification_intents.len() != 1
+            || task.verification_intents[0]
+                .preferred_evidence
+                .iter()
+                .chain(task.verification_intents[0].acceptable_evidence.iter())
+                .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
+        {
+            continue;
+        }
+        task.verification_intents[0]
+            .acceptable_evidence
+            .push(VerificationEvidence::BrowserAutomation);
+    }
+}
+
+fn validate_browser_verification_assignments(
+    tasks: &[TaskDefinition],
+) -> Vec<delivery_core::RepairIssue> {
+    tasks
+        .iter()
+        .filter(|task| task_requires_browser_verification(task))
+        .filter(|task| {
+            !task.verification_intents.iter().any(|intent| {
+                intent
+                    .preferred_evidence
+                    .iter()
+                    .chain(intent.acceptable_evidence.iter())
+                    .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
+            })
+        })
+        .map(|task| {
+            issue(
+                "TASKPLAN_BROWSER_VERIFICATION_REQUIRED",
+                "tasks[].verificationIntents[].acceptableEvidence",
+                &format!(
+                    "Task {} owns browser-verifiable UI scope. Mark the verification intent that proves rendered or interactive behavior with browser_automation; keep build, lint, unit-only, API-only, and static intents unchanged.",
+                    task.task_id
+                ),
+                Some(&task.group_id),
+            )
+        })
+        .collect()
+}
+
 fn transitive_group_dependencies(groups: &[TaskPlanGroup], group_id: &str) -> BTreeSet<String> {
     let by_id = groups
         .iter()
@@ -3403,7 +3462,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
             "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
             "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
-            "Avoid broad snapshots or weak no-op checks as the primary verification evidence."
+            "Avoid broad snapshots or weak no-op checks as the primary verification evidence.",
+            "For a task with browser-owned UI surfaces, workflows, actions, states, rendered viewport rules, or Playwright suite setup, mark each verification intent that truly requires a browser with browser_automation in acceptableEvidence. Do not attach browser_automation to build, lint, unit-only, API-only, or static verification intents."
         ],
         "detailOwnershipRules": {
             "source": "contextProjection.requirementDetailTransfer.requirementDetailAssignment.items",
@@ -4466,6 +4526,47 @@ pub(crate) fn execute_task_next_from_request(
 mod tests {
     use super::*;
 
+    fn browser_task(verification_count: usize) -> TaskDefinition {
+        let verification_intents = (0..verification_count)
+            .map(|index| {
+                json!({
+                    "verificationId": format!("verify-ui-{index}"),
+                    "acceptanceRefs": [],
+                    "requirementDetailRefs": [],
+                    "behavior": format!("Verify UI behavior {index}"),
+                    "preferredEvidence": ["automated_test"],
+                    "acceptableEvidence": ["automated_test"]
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::from_value(json!({
+            "taskId": "task-ui",
+            "groupId": "group-ui",
+            "title": "Implement UI",
+            "taskKind": "ui_flow_increment",
+            "implementationActions": ["create_or_update_ui_flow", "add_or_update_tests"],
+            "objective": "Implement the task-owned UI workflow.",
+            "dependsOn": [],
+            "scopeRefs": [],
+            "acceptanceRefs": [],
+            "requirementDetailRefs": [],
+            "writeBoundary": {"forbiddenPaths": [".loom"], "artifactRefs": {}},
+            "verificationIntents": verification_intents,
+            "conceptRefs": [],
+            "conceptResponsibilities": [],
+            "conceptVerificationIntents": [],
+            "frontendExperienceRequirement": {
+                "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
+                "uiSurfaceOwnership": {"regionIdsInScope": ["region-main"]}
+            },
+            "engineeringQualityRequirementRefs": [],
+            "architectureQualityRequirementRefs": [],
+            "apiContractRequirementRefs": [],
+            "codeQualityRequirementRefs": []
+        }))
+        .expect("browser task")
+    }
+
     #[test]
     fn ui_surface_ownership_template_keeps_task_scope_compact() {
         let surface_contract = json!({
@@ -4524,5 +4625,32 @@ mod tests {
                 .is_some_and(|items| items.is_empty()),
             "TaskPlan ownership scope starts empty so the agent selects task-owned ids"
         );
+    }
+
+    #[test]
+    fn single_browser_verification_intent_is_normalized_without_agent_retry() {
+        let mut tasks = vec![browser_task(1)];
+
+        normalize_browser_verification_assignments(&mut tasks);
+
+        assert!(tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(validate_browser_verification_assignments(&tasks).is_empty());
+    }
+
+    #[test]
+    fn multiple_verification_intents_require_explicit_browser_owner() {
+        let mut tasks = vec![browser_task(2)];
+
+        normalize_browser_verification_assignments(&mut tasks);
+        let issues = validate_browser_verification_assignments(&tasks);
+
+        assert!(!tasks[0].verification_intents.iter().any(|intent| intent
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation)));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TASKPLAN_BROWSER_VERIFICATION_REQUIRED"));
     }
 }

@@ -1,7 +1,7 @@
 use setup::{
-    archive_package_layout, install, package_file_names, purge, release_artifact_file_names,
-    write_package_layout, AgentKind, ReleaseManifest, SetupEnvironment, SetupError, TargetPlatform,
-    VERSION,
+    archive_package_layout, install, package_file_names, prepare_browser_runtime, purge,
+    release_artifact_file_names, write_package_layout, AgentKind, BrowserRuntimePrepareOptions,
+    ReleaseManifest, SetupEnvironment, SetupError, TargetPlatform, VERSION,
 };
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -170,6 +170,78 @@ const REVIEW_REFERENCE_FILES: &[&str] = &[
     "test-evidence",
 ];
 
+const PLAYWRIGHT_REFERENCE_FILES: &[&str] = &[
+    "accessibility",
+    "configuration",
+    "core",
+    "fixtures",
+    "locators",
+    "network",
+    "reliability",
+    "visual",
+];
+
+#[cfg(unix)]
+#[test]
+fn browser_runtime_prepare_reuses_valid_cache_and_rebuilds_checksum_drift() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new("browser-runtime-cache");
+    let fake_npm = fixture.root.join("fake-npm.sh");
+    fs::write(
+        &fake_npm,
+        r#"#!/bin/sh
+set -eu
+spec=""
+for arg in "$@"; do spec="$arg"; done
+version="${spec##*@}"
+mkdir -p node_modules/@playwright/test node_modules/.bin
+printf '{"name":"@playwright/test","version":"%s"}\n' "$version" > node_modules/@playwright/test/package.json
+cat > node_modules/.bin/playwright <<'EOF'
+#!/bin/sh
+set -eu
+mkdir -p "$PLAYWRIGHT_BROWSERS_PATH/chromium-test"
+printf ready > "$PLAYWRIGHT_BROWSERS_PATH/chromium-test/marker"
+EOF
+chmod +x node_modules/.bin/playwright
+printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
+"#,
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&fake_npm).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_npm, permissions).unwrap();
+    let env = fixture.env();
+    let options = BrowserRuntimePrepareOptions {
+        requested_versions: vec!["1.55.0".to_string()],
+        npm_program: Some(fake_npm),
+    };
+
+    let first = prepare_browser_runtime(&env, &options).unwrap();
+    assert_eq!(first.status, "ready");
+    assert_eq!(first.runtimes.len(), 1);
+    assert!(!first.runtimes[0].reused);
+    assert!(Path::new(&first.runtimes[0].runner_path).is_file());
+    assert!(first.runtimes[0]
+        .doctor_checks
+        .iter()
+        .all(|check| check.status == "passed"));
+
+    let second = prepare_browser_runtime(&env, &options).unwrap();
+    assert!(second.runtimes[0].reused);
+
+    let runtime_root = Path::new(&second.runtimes[0].manifest_path)
+        .parent()
+        .unwrap();
+    fs::write(runtime_root.join("package-lock.json"), "corrupt").unwrap();
+    let repaired = prepare_browser_runtime(&env, &options).unwrap();
+    assert!(!repaired.runtimes[0].reused);
+    assert!(repaired.runtimes[0]
+        .doctor_checks
+        .iter()
+        .all(|check| check.status == "passed"));
+}
+
 #[test]
 fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
     let fixture = Fixture::new("install_cleans_legacy");
@@ -326,6 +398,13 @@ fn install_projects_shared_references_to_agent_read_paths() {
                 .join(format!("skills/loom/references/tech/review/{file}.md"))
                 .exists());
         }
+        for file in PLAYWRIGHT_REFERENCE_FILES {
+            assert!(root
+                .join(format!(
+                    "skills/loom/references/tech/test/playwright/{file}.md"
+                ))
+                .exists());
+        }
         assert!(root
             .join("skills/loom/references/tech/code/common.md")
             .exists());
@@ -395,6 +474,12 @@ fn install_projects_shared_references_to_agent_read_paths() {
         assert!(env
             .opencode_home
             .join(format!("references/loom/tech/review/{file}.md"))
+            .exists());
+    }
+    for file in PLAYWRIGHT_REFERENCE_FILES {
+        assert!(env
+            .opencode_home
+            .join(format!("references/loom/tech/test/playwright/{file}.md"))
             .exists());
     }
     assert!(env
@@ -1885,6 +1970,14 @@ impl Fixture {
                     "plugins/shared/loom/references/tech/review/{path}.md"
                 )),
                 &format!("# {path} Review Reference\n"),
+            );
+        }
+        for path in PLAYWRIGHT_REFERENCE_FILES {
+            write_file(
+                &self.package_root.join(format!(
+                    "plugins/shared/loom/references/tech/test/playwright/{path}.md"
+                )),
+                &format!("# {path} Playwright Reference\n"),
             );
         }
         write_file(

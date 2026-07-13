@@ -5,8 +5,9 @@ use std::{
 
 use contracts::{
     ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
-    EngineeringQualityRequirement, ImplementationAction, TaskDefinition, TaskKind, TaskPlan,
-    TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus, TaskRunStatus, VerificationEvidence,
+    BrowserVerificationProfile, EngineeringQualityRequirement, ImplementationAction,
+    TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus,
+    TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
@@ -260,18 +261,26 @@ fn build_execution_request(
         task_scoped_architecture_quality_requirements(task_plan, &request_task);
     let api_contract_requirements = task_scoped_api_contract_requirements(task_plan, &request_task);
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, &request_task);
+    let browser_verification_profile =
+        browser_verification_profile_for_task(task_plan, &request_task);
+    let browser_verification_context = browser_verification_profile
+        .map(|profile| browser_verification_context(task_plan, profile));
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
-    let schema_shape = task_result_schema_shape(&request_task);
+    let schema_shape = task_result_schema_shape(&request_task, browser_verification_profile);
     let dependency_results = dependency_results(run, task);
     let read_groups = task_execution_read_groups(
         &request_task,
         !dependency_results.is_empty(),
         &architecture_projection,
+        browser_verification_context.is_some(),
     );
     let user_facing_language = pgc.planning_inputs.user_facing_language.clone();
-    let execution_rules =
+    let mut execution_rules =
         task_execution_rules(result_file, &request_task, user_facing_language.clone());
-    let result_rules = task_result_rules(&request_task);
+    if browser_verification_context.is_some() {
+        execution_rules["browserVerificationRules"] = browser_verification_rules();
+    }
+    let result_rules = task_result_rules(&request_task, browser_verification_profile.is_some());
     let mut source_context = json!({
         "technicalBaseline": {
             "projectKind": baseline.project_kind,
@@ -303,6 +312,9 @@ fn build_execution_request(
         source_context["codeQualityExecutionContext"] =
             code_quality_execution_context(&code_quality_requirements);
     }
+    if let Some(browser_verification_context) = browser_verification_context {
+        source_context["browserVerificationContext"] = browser_verification_context;
+    }
     Ok(json!({
         "schemaVersion": "1.0",
         "requestType": "execute_task",
@@ -330,7 +342,7 @@ fn build_execution_request(
         "enumRefs": {
             "taskResultStatus": ["completed", "completed_with_notes", "blocked", "failed"],
             "verificationStatus": ["passed", "not_run", "failed", "inconclusive"],
-            "verificationEvidence": ["automated_test", "manual_command_output", "runtime_api_check", "static_check", "agent_review_explanation"],
+            "verificationEvidence": ["automated_test", "browser_automation", "manual_command_output", "runtime_api_check", "static_check", "agent_review_explanation"],
             "selfRepairStopReason": ["not_attempted", "verification_passed", "blocked_condition_detected", "same_failure_repeated_without_progress", "hard_attempt_limit_reached", "repair_requires_contract_change", "repair_requires_scope_expansion"]
         },
         "outputContract": {
@@ -351,7 +363,12 @@ fn build_execution_request(
                 {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
             "schemaShape": schema_shape,
-            "resultTemplate": task_result_template_with_code_quality(&task_plan.task_plan_id, &request_task, &code_quality_requirements),
+            "resultTemplate": task_result_template_with_code_quality(
+                &task_plan.task_plan_id,
+                &request_task,
+                &code_quality_requirements,
+                browser_verification_profile,
+            ),
             "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
@@ -566,7 +583,7 @@ fn runtime_delivery_execution_rules() -> Value {
     })
 }
 
-fn task_result_rules(task: &TaskDefinition) -> Value {
+fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> Value {
     let mut rules = vec![
         "TaskResult must include every requiredTopLevelFields entry.".to_string(),
         "If status is completed, every verification intent should have passed evidence.".to_string(),
@@ -582,6 +599,10 @@ fn task_result_rules(task: &TaskDefinition) -> Value {
     }
     if frontend_quality_self_check_applies(task) {
         rules.push("For frontendQualitySelfCheck, prove the task-scoped uiProductionBrief.surfaceDecisionContract with concrete surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, referencePlanFilesChecked, UI files, and evidence from this task; do not leave replace_with_* values in submitted results.".to_string());
+    }
+    if has_browser_verification {
+        rules.push("Record every sourceContext.browserVerificationContext.profile.checks item under its matching verificationResults[].browserChecks entry. Use exact checkId values; do not copy trace, screenshot, or report contents into TaskResult prose.".to_string());
+        rules.push("Passed browser checks require the exact command, attempt count, and concise observed outcome. Blocked checks require a concrete blockedReason. Keep retry success visible with attempts greater than one.".to_string());
     }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
@@ -693,10 +714,53 @@ fn code_quality_execution_rules(task: &TaskDefinition) -> Value {
     })
 }
 
+pub(crate) fn browser_verification_profile_for_task<'a>(
+    task_plan: &'a TaskPlan,
+    task: &TaskDefinition,
+) -> Option<&'a BrowserVerificationProfile> {
+    task_plan
+        .browser_verification_profiles
+        .iter()
+        .find(|profile| profile.task_id == task.task_id)
+}
+
+pub(crate) fn browser_verification_context(
+    task_plan: &TaskPlan,
+    profile: &BrowserVerificationProfile,
+) -> Value {
+    let installation = profile
+        .installation_id
+        .as_ref()
+        .and_then(|installation_id| {
+            task_plan
+                .browser_automation_facts
+                .installations
+                .iter()
+                .find(|installation| &installation.installation_id == installation_id)
+        });
+    json!({
+        "profile": profile,
+        "projectRunner": installation,
+        "baselineSelection": task_plan.browser_automation_facts.baseline_selection
+    })
+}
+
+pub(crate) fn browser_verification_rules() -> Value {
+    json!({
+        "profileAuthority": "sourceContext.browserVerificationContext.profile",
+        "referenceLoadRule": "Read only files listed in sourceContext.browserVerificationContext.profile.referenceLoadPlan. Paths are relative to the installed Loom skill references root; do not browse sibling test references or load an external Playwright skill.",
+        "scopeRule": "Run only profile.checks and keep each check bounded to its declared task, verification, viewport, and backend mode.",
+        "runnerRule": "Reuse sourceContext.browserVerificationContext.projectRunner when present. Do not replace an existing project runner or install a second project-local Playwright stack.",
+        "sharedRuntimeRule": "Keep @playwright/test in the project package manifest and lockfile, restore project dependencies so Loom can derive the exact installed version, then call loom.browserRuntimePrepare once when the required browser binary is not ready and use its browserEnvironment. Do not install project dependencies into Loom's shared cache.",
+        "resultRule": "Record browser outcomes through verificationResults[].browserChecks; do not paste Playwright reports, traces, screenshots, or console logs into prose fields. MCP links accepted browser checks into frontendQualitySelfCheck."
+    })
+}
+
 fn task_execution_read_groups(
     task: &TaskDefinition,
     has_dependency_results: bool,
     architecture_projection: &Value,
+    has_browser_verification: bool,
 ) -> Value {
     let has_frontend_execution = task_has_frontend_execution(task);
     let has_frontend_requirement = task.frontend_experience_requirement.is_some();
@@ -795,6 +859,15 @@ fn task_execution_read_groups(
         runtime_fields.push("sourceContext.architectureArtifactProjection.runtimeDelivery");
         runtime_fields.push("executionRules.runtimeDeliveryExecutionRules");
     }
+
+    let browser_fields = if has_browser_verification {
+        vec![
+            "sourceContext.browserVerificationContext",
+            "executionRules.browserVerificationRules",
+        ]
+    } else {
+        vec![]
+    };
 
     let mut quality_fields = Vec::new();
     if !task.engineering_quality_requirement_refs.is_empty() {
@@ -924,6 +997,15 @@ fn task_execution_read_groups(
             "purpose": "Read runtime delivery and controlled probe rules only when this task needs runtime evidence.",
             "whenToRead": "Read before runtime-impacting edits or probes.",
             "selectors": read_selectors_value_from_paths(runtime_fields)
+        }));
+    }
+    if !browser_fields.is_empty() {
+        groups.push(json!({
+            "groupId": "task_execution_browser_verification",
+            "required": true,
+            "purpose": "Read the MCP-derived browser checks, selected runner facts, and task-scoped Playwright reference plan.",
+            "whenToRead": "Read before creating, changing, or running browser verification.",
+            "selectors": read_selectors_value_from_paths(browser_fields)
         }));
     }
     if !quality_fields.is_empty() {

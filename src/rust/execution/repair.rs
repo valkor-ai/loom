@@ -33,8 +33,10 @@ use crate::{
         task_plan_outline_candidate_file,
     },
     task_execution::{
-        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
-        task_execution_rules, task_with_phase_execution_guidance,
+        browser_verification_context, browser_verification_profile_for_task,
+        browser_verification_rules, load_current_plan_and_run,
+        runtime_delivery_requirement_read_fields, save_run, task_execution_rules,
+        task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
@@ -658,7 +660,8 @@ fn build_repair_execution_request(
     finding_refs: Vec<String>,
     attempt_count: u32,
 ) -> Value {
-    let schema_shape = task_result_schema_shape(task);
+    let browser_profile = browser_verification_profile_for_task(task_plan, task);
+    let schema_shape = task_result_schema_shape(task, browser_profile);
     let engineering_quality_requirements = task_plan
         .engineering_quality_requirements
         .iter()
@@ -682,8 +685,12 @@ fn build_repair_execution_request(
         &task_plan.task_plan_id,
         task,
         &code_quality_requirements,
+        browser_profile,
     );
     let mut execution_rules = task_execution_rules(result_file, task, None);
+    if browser_profile.is_some() {
+        execution_rules["browserVerificationRules"] = browser_verification_rules();
+    }
     if let Some(object) = execution_rules.as_object_mut() {
         object.insert(
             "boundaryRules".to_string(),
@@ -818,6 +825,12 @@ fn build_repair_execution_request(
             "task.codeQualityRequirementRefs",
             "sourceContext.codeQualityExecutionContext",
             "executionRules.codeQualityExecutionRules",
+        ]);
+    }
+    if browser_profile.is_some() {
+        repair_core_fields.extend([
+            "sourceContext.browserVerificationContext",
+            "executionRules.browserVerificationRules",
         ]);
     }
     if execution_rules
@@ -988,10 +1001,39 @@ fn build_repair_execution_request(
             code_quality_execution_context(&code_quality_requirements),
         );
     }
+    if let Some(browser_profile) = browser_profile {
+        source_context.insert(
+            "browserVerificationContext".to_string(),
+            browser_verification_repair_context(task_plan, browser_profile),
+        );
+    }
     if !source_context.is_empty() {
         root_value["sourceContext"] = Value::Object(source_context);
     }
     root_value
+}
+
+fn browser_verification_repair_context(
+    task_plan: &TaskPlan,
+    browser_profile: &contracts::BrowserVerificationProfile,
+) -> Value {
+    let mut context = browser_verification_context(task_plan, browser_profile);
+    let Some(reference_plan) = context
+        .pointer_mut("/profile/referenceLoadPlan")
+        .and_then(Value::as_array_mut)
+    else {
+        return context;
+    };
+    if !reference_plan.iter().any(|item| {
+        item.get("path").and_then(Value::as_str) == Some("tech/test/playwright/reliability.md")
+    }) {
+        reference_plan.push(json!({
+            "refId": "test.pw.reliability",
+            "path": "tech/test/playwright/reliability.md",
+            "reason": "Repair flaky, retried, failed, or blocked browser verification without hiding the original signal."
+        }));
+    }
+    context
 }
 
 pub fn materialize_taskplan_repair(

@@ -163,6 +163,11 @@ fn call_tool(
         "continue" => action_result(continue_tool(parse_args::<ProjectToolInput>(
             request.arguments,
         )?)),
+        "browserRuntimePrepare" => action_result(crate::browser_runtime::prepare(parse_args::<
+            ProjectToolInput,
+        >(
+            request.arguments,
+        )?)),
         "brainstormConfirmBlock" => action_result(brainstorm_confirm_block_tool(parse_args::<
             BrainstormConfirmBlockInput,
         >(

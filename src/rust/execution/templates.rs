@@ -1,4 +1,4 @@
-use contracts::{CodeQualityRequirement, TaskDefinition, TaskPlan};
+use contracts::{BrowserVerificationProfile, CodeQualityRequirement, TaskDefinition, TaskPlan};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -190,17 +190,46 @@ pub(crate) fn task_result_template_with_code_quality(
     task_plan_id: &str,
     task: &TaskDefinition,
     code_quality_requirements: &[CodeQualityRequirement],
+    browser_profile: Option<&BrowserVerificationProfile>,
 ) -> Value {
     let verification_results = task
         .verification_intents
         .iter()
         .map(|intent| {
-            json!({
+            let browser_checks = browser_profile
+                .map(|profile| {
+                    profile
+                        .checks
+                        .iter()
+                        .filter(|check| check.verification_id == intent.verification_id)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut result = json!({
                 "verificationId": intent.verification_id,
-                "status": "passed",
-                "evidenceType": "automated_test",
+                "status": if browser_checks.is_empty() { "passed" } else { "not_run" },
+                "evidenceType": if browser_checks.is_empty() { "automated_test" } else { "browser_automation" },
                 "summary": ""
-            })
+            });
+            if !browser_checks.is_empty() {
+                result["browserChecks"] = Value::Array(
+                    browser_checks
+                        .into_iter()
+                        .map(|check| {
+                            json!({
+                                "checkId": check.check_id,
+                                "status": "not_run",
+                                "command": "",
+                                "attempts": 0,
+                                "artifactRefs": [],
+                                "observedOutcome": "",
+                                "blockedReason": null
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            result
         })
         .collect::<Vec<_>>();
     let requirement_detail_evidence = task
@@ -304,7 +333,10 @@ pub(crate) fn task_result_template_with_code_quality(
     template
 }
 
-pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
+pub(crate) fn task_result_schema_shape(
+    task: &TaskDefinition,
+    browser_profile: Option<&BrowserVerificationProfile>,
+) -> Value {
     let mut properties = serde_json::Map::new();
     properties.insert("schemaVersion".to_string(), json!("1.0"));
     properties.insert("taskResultId".to_string(), json!("string"));
@@ -323,14 +355,26 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
             "summary": "string"
         }),
     );
+    let mut verification_shape = json!({
+        "verificationId": "task.verificationIntents[].verificationId",
+        "status": "passed | not_run | failed | inconclusive",
+        "evidenceType": "one of the matching verification intent acceptableEvidence values",
+        "summary": "string"
+    });
+    if browser_profile.is_some() {
+        verification_shape["browserChecks"] = json!([{
+            "checkId": "sourceContext.browserVerificationContext.profile.checks[].checkId for this verificationId",
+            "status": "passed | failed | blocked | not_run",
+            "command": "exact command used for this check",
+            "attempts": "non-negative integer; passed requires at least 1",
+            "artifactRefs": ["project-relative trace, screenshot, or report ref"],
+            "observedOutcome": "concise visible or behavioral outcome",
+            "blockedReason": "concrete string when status=blocked, otherwise null"
+        }]);
+    }
     properties.insert(
         "verificationResults".to_string(),
-        json!([{
-            "verificationId": "task.verificationIntents[].verificationId",
-            "status": "passed | not_run | failed | inconclusive",
-            "evidenceType": "one of the matching verification intent acceptableEvidence values",
-            "summary": "string"
-        }]),
+        Value::Array(vec![verification_shape]),
     );
     properties.insert(
         "selfRepairSummary".to_string(),
@@ -1062,5 +1106,69 @@ mod tests {
                 "frontend quality template must not emit legacy field {key}: {template:#}"
             );
         }
+    }
+
+    #[test]
+    fn task_result_template_exposes_browser_outcomes_without_agent_authored_linkage() {
+        let mut task = frontend_task(json!({
+            "uiSurfaceDecisionContractRef": "surface-contract",
+            "executionGuidance": {
+                "uiProductionBrief": {
+                    "surfaceDecisionContract": {"contractRef": "surface-contract"}
+                }
+            }
+        }));
+        task.verification_intents = serde_json::from_value(json!([{
+            "verificationId": "verify-ui",
+            "requirementDetailRefs": [],
+            "behavior": "Verify the UI.",
+            "preferredEvidence": ["automated_test"],
+            "acceptableEvidence": ["automated_test"]
+        }]))
+        .expect("verification intents");
+        let profile = BrowserVerificationProfile {
+            profile_id: "browser-task-ui-001".to_string(),
+            task_id: task.task_id.clone(),
+            mode: contracts::BrowserVerificationMode::RenderedInspection,
+            runner_source: contracts::BrowserRunnerSource::LoomManaged,
+            installation_id: None,
+            verification_ids: vec!["verify-ui".to_string()],
+            surface_refs: vec![],
+            workflow_refs: vec![],
+            region_refs: vec![],
+            action_refs: vec![],
+            state_refs: vec![],
+            quality_rule_refs: vec![],
+            checks: vec![contracts::BrowserVerificationCheck {
+                check_id: "browser-ui-desktop".to_string(),
+                verification_id: "verify-ui".to_string(),
+                viewport_ref: "desktop_primary".to_string(),
+                backend_mode: contracts::BrowserBackendMode::NotApplicable,
+            }],
+            reference_load_plan: vec![],
+        };
+
+        let template =
+            task_result_template_with_code_quality("taskplan", &task, &[], Some(&profile));
+
+        assert_eq!(
+            template["verificationResults"][0]["browserChecks"][0]["checkId"],
+            json!("browser-ui-desktop")
+        );
+        assert_eq!(
+            template["verificationResults"][0]["browserChecks"][0]["status"],
+            json!("not_run")
+        );
+        assert_eq!(
+            template["verificationResults"][0]["status"],
+            json!("not_run")
+        );
+        assert_eq!(
+            template["verificationResults"][0]["evidenceType"],
+            json!("browser_automation")
+        );
+        assert!(template["frontendQualitySelfCheck"]
+            .get("browserCheckRefs")
+            .is_none());
     }
 }

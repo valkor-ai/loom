@@ -2,6 +2,8 @@
 
 This file applies React testing discipline to task-owned components, hooks, state transitions, forms, API-backed views, and provider-wrapped feature surfaces.
 
+Keep this file at the React unit/component boundary. When the task has an MCP-derived browser verification profile, Playwright references own E2E locators, fixtures, network synchronization, viewport execution, and browser artifacts.
+
 ## When To Use
 
 - The task creates or changes React components, custom hooks, reducers, forms, API-backed screens, provider setup, or behavior that should be proved through user interaction.
@@ -29,4 +31,3 @@ This file applies React testing discipline to task-owned components, hooks, stat
 ## Evidence Focus
 
 - In the evidence summary, name the React testing decision: accessible query, provider harness, API mock boundary, hook contract, form behavior, async wait strategy, failure path, or cleanup proof.
-

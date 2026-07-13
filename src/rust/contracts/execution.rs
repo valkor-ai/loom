@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::CodeStackSignal;
+use crate::{BrowserAutomationFacts, BrowserVerificationProfile, CodeStackSignal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +60,7 @@ pub enum ImplementationAction {
 #[serde(rename_all = "snake_case")]
 pub enum VerificationEvidence {
     AutomatedTest,
+    BrowserAutomation,
     ManualCommandOutput,
     RuntimeApiCheck,
     StaticCheck,
@@ -411,6 +412,10 @@ pub struct TaskPlan {
     pub api_contract_requirements: Vec<ApiContractRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub code_quality_requirements: Vec<CodeQualityRequirement>,
+    #[serde(default, skip_serializing_if = "BrowserAutomationFacts::is_empty")]
+    pub browser_automation_facts: BrowserAutomationFacts,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_verification_profiles: Vec<BrowserVerificationProfile>,
     pub handoff: TaskPlanHandoff,
     pub created_at: String,
     pub updated_at: String,
@@ -546,6 +551,8 @@ pub struct VerificationResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence_type: Option<VerificationEvidence>,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_checks: Vec<crate::BrowserCheckResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -730,28 +737,6 @@ pub struct FrontendDesignTokenEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendQualityGateResult {
-    pub gate_id: String,
-    pub status: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub surface_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub viewports_checked: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub source_checks: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attempted_checks: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fallback_evidence: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocked_reason: Option<String>,
-    pub evidence: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendQualitySelfCheck {
     pub status: String,
@@ -769,6 +754,8 @@ pub struct FrontendQualitySelfCheck {
     pub content_boundary_evidence: Option<FrontendContentBoundaryEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_plan_files_checked: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub browser_check_refs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

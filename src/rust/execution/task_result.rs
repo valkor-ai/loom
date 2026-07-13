@@ -4,9 +4,9 @@ use std::{
 };
 
 use contracts::{
-    forbidden_jvm_package_prefixes, CodeQualityEvidence, CodeQualityRequirement, TaskDefinition,
-    TaskKind, TaskPlanRunNextAction, TaskPlanRunStatus, TaskResult, TaskResultStatus,
-    TaskRunStatus, VerificationEvidence,
+    forbidden_jvm_package_prefixes, BrowserCheckStatus, BrowserVerificationProfile,
+    CodeQualityEvidence, CodeQualityRequirement, TaskDefinition, TaskKind, TaskPlanRunNextAction,
+    TaskPlanRunStatus, TaskResult, TaskResultStatus, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -243,6 +243,12 @@ where
         phase_id: phase_id.clone(),
     };
     task = task_with_phase_execution_guidance(root, &locator, task)?;
+    let (current_task_plan, current_run) = load_current_plan_and_run(root, &locator)?;
+    let browser_profile = current_task_plan
+        .browser_verification_profiles
+        .iter()
+        .find(|profile| profile.task_id == task.task_id)
+        .cloned();
     let required_top_level_fields =
         string_vec_field(&fields, "outputContract.requiredTopLevelFields")?;
     let mut code_quality_requirements =
@@ -274,6 +280,7 @@ where
         &task_plan_id,
         &task_id,
         &task,
+        browser_profile.as_ref(),
     );
     let result: TaskResult = match serde_json::from_value(normalized_result.clone()) {
         Ok(result) => result,
@@ -298,6 +305,7 @@ where
         &normalized_result,
         &result,
         &task,
+        browser_profile.as_ref(),
         &code_quality_requirements,
         &required_top_level_fields,
         &blocked_output,
@@ -324,10 +332,11 @@ where
                 submitted_result: normalized_result.clone(),
                 previous_changed_files,
                 code_quality_requirements,
+                browser_profile,
             }),
         );
     }
-    let (_task_plan, mut run) = load_current_plan_and_run(root, &locator)?;
+    let mut run = current_run;
     if run.run_id != run_id {
         return Ok(failed(
             &input.project_root,
@@ -482,6 +491,7 @@ fn validate_result(
     raw_result: &Value,
     result: &TaskResult,
     task: &TaskDefinition,
+    browser_profile: Option<&BrowserVerificationProfile>,
     code_quality_requirements: &[CodeQualityRequirement],
     required_top_level_fields: &[String],
     blocked_output: &Value,
@@ -560,6 +570,7 @@ fn validate_result(
     }
     validate_self_repair(result, &mut issues);
     validate_verification_results(result, task, &mut issues);
+    validate_browser_verification_results(result, browser_profile, &mut issues);
     validate_requirement_detail_evidence(result, task, &mut issues);
     validate_concept_evidence(result, task, &mut issues);
     validate_runtime_delivery_evidence(result, task, &mut issues);
@@ -724,6 +735,7 @@ fn normalize_task_result_machine_fields(
     task_plan_id: &str,
     task_id: &str,
     task: &TaskDefinition,
+    browser_profile: Option<&BrowserVerificationProfile>,
 ) -> Value {
     let Some(object) = raw_result.as_object_mut() else {
         return raw_result;
@@ -808,7 +820,7 @@ fn normalize_task_result_machine_fields(
         object.insert("updatedAt".to_string(), json!(now));
     }
 
-    normalize_verification_result_machine_fields(object, task);
+    normalize_verification_result_machine_fields(object, task, browser_profile);
 
     let detail_ids = required_requirement_detail_ids(task);
     normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
@@ -832,7 +844,7 @@ fn normalize_task_result_machine_fields(
     if let Some(requirement) = &task.frontend_experience_requirement {
         normalize_frontend_experience_self_check(object, requirement);
     }
-    normalize_frontend_quality_self_check_shape(object);
+    normalize_frontend_quality_self_check_shape(object, browser_profile);
 
     raw_result
 }
@@ -985,7 +997,10 @@ fn normalize_applicable_evidence_array_fields(
     }
 }
 
-fn normalize_frontend_quality_self_check_shape(object: &mut serde_json::Map<String, Value>) {
+fn normalize_frontend_quality_self_check_shape(
+    object: &mut serde_json::Map<String, Value>,
+    browser_profile: Option<&BrowserVerificationProfile>,
+) {
     let Some(self_check) = object
         .get_mut("frontendQualitySelfCheck")
         .and_then(Value::as_object_mut)
@@ -997,6 +1012,16 @@ fn normalize_frontend_quality_self_check_shape(object: &mut serde_json::Map<Stri
     normalize_object_array_field(self_check, "surfaceStateEvidence");
     normalize_object_array_field(self_check, "surfaceQualityRuleEvidence");
     normalize_string_array_field(self_check, "referencePlanFilesChecked");
+    self_check.insert(
+        "browserCheckRefs".to_string(),
+        json!(browser_profile
+            .map(|profile| profile
+                .checks
+                .iter()
+                .map(|check| check.check_id.clone())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()),
+    );
     normalize_string_array_field(self_check, "knownGaps");
     if !self_check
         .get("contentBoundaryEvidence")
@@ -1060,6 +1085,7 @@ fn is_iso_datetime_string(value: &str) -> bool {
 fn normalize_verification_result_machine_fields(
     object: &mut serde_json::Map<String, Value>,
     task: &TaskDefinition,
+    browser_profile: Option<&BrowserVerificationProfile>,
 ) {
     let raw_items = object
         .get("verificationResults")
@@ -1129,6 +1155,7 @@ fn normalize_verification_result_machine_fields(
                 json!("Verification result was not reported before TaskResult submission."),
             );
         }
+        normalize_browser_check_machine_fields(&mut item, &intent.verification_id, browser_profile);
         normalized.push(Value::Object(item));
     }
     for (index, item) in raw_items.into_iter().enumerate() {
@@ -1137,6 +1164,91 @@ fn normalize_verification_result_machine_fields(
         }
     }
     object.insert("verificationResults".to_string(), Value::Array(normalized));
+}
+
+fn normalize_browser_check_machine_fields(
+    verification: &mut serde_json::Map<String, Value>,
+    verification_id: &str,
+    browser_profile: Option<&BrowserVerificationProfile>,
+) {
+    let Some(profile) = browser_profile else {
+        verification.remove("browserChecks");
+        return;
+    };
+    let expected = profile
+        .checks
+        .iter()
+        .filter(|check| check.verification_id == verification_id)
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        verification.remove("browserChecks");
+        return;
+    }
+    verification.insert("evidenceType".to_string(), json!("browser_automation"));
+    let raw_items = verification
+        .get("browserChecks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut used = BTreeSet::new();
+    let mut normalized = Vec::new();
+    for (index, check) in expected.into_iter().enumerate() {
+        let matching_index = raw_items
+            .iter()
+            .enumerate()
+            .find(|(item_index, item)| {
+                !used.contains(item_index)
+                    && item
+                        .get("checkId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == check.check_id)
+            })
+            .map(|(item_index, _)| item_index)
+            .or_else(|| {
+                raw_items.get(index).and_then(|item| {
+                    item.get("checkId")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+                        .then_some(index)
+                })
+            });
+        let raw = matching_index
+            .and_then(|item_index| {
+                used.insert(item_index);
+                raw_items.get(item_index).cloned()
+            })
+            .unwrap_or_else(|| json!({}));
+        let mut item = raw.as_object().cloned().unwrap_or_default();
+        item.insert("checkId".to_string(), json!(check.check_id));
+        if !matches!(
+            item.get("status").and_then(Value::as_str),
+            Some("passed" | "failed" | "blocked" | "not_run")
+        ) {
+            item.insert("status".to_string(), json!("not_run"));
+        }
+        if !item.get("command").is_some_and(Value::is_string) {
+            item.insert("command".to_string(), json!(""));
+        }
+        if item
+            .get("attempts")
+            .and_then(Value::as_u64)
+            .is_none_or(|value| value > u32::MAX as u64)
+        {
+            item.insert("attempts".to_string(), json!(0));
+        }
+        normalize_string_array_field(&mut item, "artifactRefs");
+        if !item.get("observedOutcome").is_some_and(Value::is_string) {
+            item.insert("observedOutcome".to_string(), json!(""));
+        }
+        if !item
+            .get("blockedReason")
+            .is_some_and(|value| value.is_null() || value.is_string())
+        {
+            item.insert("blockedReason".to_string(), Value::Null);
+        }
+        normalized.push(Value::Object(item));
+    }
+    verification.insert("browserChecks".to_string(), Value::Array(normalized));
 }
 
 fn normalize_requirement_detail_evidence_machine_fields(
@@ -1393,6 +1505,155 @@ fn validate_verification_results(
             "TASK_RESULT_STATUS_INCONSISTENT",
             "notes",
             "completed_with_notes TaskResult must explain not_run or inconclusive verification results.",
+        ));
+    }
+}
+
+fn validate_browser_verification_results(
+    result: &TaskResult,
+    browser_profile: Option<&BrowserVerificationProfile>,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(profile) = browser_profile else {
+        return;
+    };
+    let expected = profile
+        .checks
+        .iter()
+        .map(|check| (check.check_id.as_str(), check.verification_id.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut actual = BTreeMap::new();
+    for verification in &result.verification_results {
+        for check in &verification.browser_checks {
+            if actual
+                .insert(
+                    check.check_id.as_str(),
+                    verification.verification_id.as_str(),
+                )
+                .is_some()
+            {
+                issues.push(issue(
+                    "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                    "verificationResults[].browserChecks[].checkId",
+                    "Browser check ids must not be duplicated across verificationResults.",
+                ));
+            }
+            if expected.get(check.check_id.as_str()).copied()
+                != Some(verification.verification_id.as_str())
+            {
+                issues.push(issue(
+                    "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                    "verificationResults[].browserChecks[].checkId",
+                    "Each browser check must remain under the verificationId assigned by the MCP-derived browser profile.",
+                ));
+            }
+            for artifact_ref in &check.artifact_refs {
+                if !is_safe_project_relative_path(artifact_ref) {
+                    issues.push(issue(
+                        "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                        "verificationResults[].browserChecks[].artifactRefs",
+                        "Browser artifact refs must use safe project-relative paths.",
+                    ));
+                }
+            }
+            match check.status {
+                BrowserCheckStatus::Passed => {
+                    if check.attempts == 0 {
+                        issues.push(issue(
+                            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                            "verificationResults[].browserChecks[].attempts",
+                            "Passed browser checks must report at least one attempt.",
+                        ));
+                    }
+                    if check.command.trim().is_empty() {
+                        issues.push(issue(
+                            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                            "verificationResults[].browserChecks[].command",
+                            "Passed browser checks must report the exact command used.",
+                        ));
+                    }
+                    if check.observed_outcome.trim().is_empty() {
+                        issues.push(issue(
+                            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                            "verificationResults[].browserChecks[].observedOutcome",
+                            "Passed browser checks must report a concise observed outcome.",
+                        ));
+                    }
+                    if check
+                        .blocked_reason
+                        .as_deref()
+                        .is_some_and(|reason| !reason.trim().is_empty())
+                    {
+                        issues.push(issue(
+                            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                            "verificationResults[].browserChecks[].blockedReason",
+                            "Passed browser checks cannot retain a blocked reason.",
+                        ));
+                    }
+                }
+                BrowserCheckStatus::Blocked => {
+                    if check
+                        .blocked_reason
+                        .as_deref()
+                        .is_none_or(|reason| reason.trim().is_empty())
+                    {
+                        issues.push(issue(
+                            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                            "verificationResults[].browserChecks[].blockedReason",
+                            "Blocked browser checks must report a concrete environment or dependency reason.",
+                        ));
+                    }
+                }
+                BrowserCheckStatus::Failed => {
+                    if check.observed_outcome.trim().is_empty() {
+                        issues.push(issue(
+                            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                            "verificationResults[].browserChecks[].observedOutcome",
+                            "Failed browser checks must report the observed failure outcome.",
+                        ));
+                    }
+                }
+                BrowserCheckStatus::NotRun => {}
+            }
+        }
+        let all_browser_checks_passed = !verification.browser_checks.is_empty()
+            && verification
+                .browser_checks
+                .iter()
+                .all(|check| check.status == BrowserCheckStatus::Passed);
+        if verification.status == "passed"
+            && !verification.browser_checks.is_empty()
+            && !all_browser_checks_passed
+        {
+            issues.push(issue(
+                "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+                "verificationResults[].status",
+                "A verification result cannot be passed while one of its required browser checks is not passed.",
+            ));
+        }
+    }
+    let expected_ids = expected.keys().copied().collect::<BTreeSet<_>>();
+    let actual_ids = actual.keys().copied().collect::<BTreeSet<_>>();
+    if expected_ids != actual_ids {
+        issues.push(issue(
+            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+            "verificationResults[].browserChecks",
+            "Browser checks must cover exactly the check ids in the MCP-derived browser profile.",
+        ));
+    }
+    if matches!(
+        result.status,
+        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
+    ) && result
+        .verification_results
+        .iter()
+        .flat_map(|verification| verification.browser_checks.iter())
+        .any(|check| check.status != BrowserCheckStatus::Passed)
+    {
+        issues.push(issue(
+            "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
+            "verificationResults[].browserChecks[].status",
+            "Completed task results must pass every required browser check; use blocked or failed when browser verification cannot complete.",
         ));
     }
 }
@@ -2654,6 +2915,7 @@ fn object_array_string_field(
 fn verification_evidence_name(evidence: VerificationEvidence) -> &'static str {
     match evidence {
         VerificationEvidence::AutomatedTest => "automated_test",
+        VerificationEvidence::BrowserAutomation => "browser_automation",
         VerificationEvidence::ManualCommandOutput => "manual_command_output",
         VerificationEvidence::RuntimeApiCheck => "runtime_api_check",
         VerificationEvidence::StaticCheck => "static_check",
@@ -2936,6 +3198,7 @@ struct RepairContextInput {
     submitted_result: Value,
     previous_changed_files: Vec<String>,
     code_quality_requirements: Vec<CodeQualityRequirement>,
+    browser_profile: Option<BrowserVerificationProfile>,
 }
 
 fn repair_task_result_or_error(
@@ -3102,6 +3365,12 @@ pub(crate) fn refresh_stale_task_result_repair_action(
             .transpose()
             .map_err(state::store::StateError::Json)?
             .unwrap_or_default();
+    let (current_task_plan, _) = load_current_plan_and_run(root, &locator)?;
+    let browser_profile = current_task_plan
+        .browser_verification_profiles
+        .iter()
+        .find(|profile| profile.task_id == hydrated_task.task_id)
+        .cloned();
 
     let raw_result = read_project_json_value(root, &target_file)?;
     let normalized_result = normalize_task_result_machine_fields(
@@ -3110,6 +3379,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         &task_plan_id,
         &task_id,
         &hydrated_task,
+        browser_profile.as_ref(),
     );
     let (issues, previous_changed_files) =
         match serde_json::from_value::<TaskResult>(normalized_result.clone()) {
@@ -3122,6 +3392,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
                         &normalized_result,
                         &result,
                         &hydrated_task,
+                        browser_profile.as_ref(),
                         &code_quality_requirements,
                         &required_top_level_fields,
                         &blocked_output,
@@ -3156,6 +3427,7 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         submitted_result: normalized_result,
         previous_changed_files,
         code_quality_requirements,
+        browser_profile,
     };
     let input = FileSubmitInput {
         project_root: project_root.to_string(),
@@ -3197,8 +3469,20 @@ fn materialize_task_result_repair(
             .join("requests")
             .join(format!("{request_id}.json")),
     )?;
-    let schema_shape = task_result_schema_shape(&context.task);
+    let schema_shape = task_result_schema_shape(&context.task, context.browser_profile.as_ref());
     let result_template = task_result_repair_template(&context, &issues);
+    let browser_repair_reference_load_plan = if issues
+        .iter()
+        .any(|issue| issue.code == "TASK_RESULT_BROWSER_VERIFICATION_INVALID")
+    {
+        json!([{
+                "refId": "test.pw.reliability",
+                "path": "tech/test/playwright/reliability.md",
+                "reason": "Interpret retry, failure, blocked, and artifact evidence without hiding flaky behavior."
+        }])
+    } else {
+        json!([])
+    };
     let mut context_fields = vec![
         "source.taskPlanId",
         "source.taskId",
@@ -3218,6 +3502,12 @@ fn materialize_task_result_repair(
         "repairContract.issueConflicts",
         "repairContract.minimalRepairRules",
     ];
+    if browser_repair_reference_load_plan
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+    {
+        context_fields.push("repairContract.referenceLoadPlan");
+    }
     if !context.task.concept_refs.is_empty() {
         context_fields.push("task.conceptRefs");
     }
@@ -3305,7 +3595,8 @@ fn materialize_task_result_repair(
         "repairContract": {
             "profile": "minimal_task_result_repair",
             "issueConflicts": task_result_issue_conflicts(&context, &issues),
-            "minimalRepairRules": task_result_minimal_repair_rules(&issues)
+            "minimalRepairRules": task_result_minimal_repair_rules(&issues),
+            "referenceLoadPlan": browser_repair_reference_load_plan
         },
         "outputContract": {
             "artifactKind": ArtifactKind::TaskResultRepair,
@@ -3433,6 +3724,9 @@ fn task_result_issue_conflicts(
             if issue.code == "TASK_RESULT_FRONTEND_QUALITY_INVALID" {
                 return task_result_frontend_quality_conflict(context, base);
             }
+            if issue.code == "TASK_RESULT_BROWSER_VERIFICATION_INVALID" {
+                return task_result_browser_verification_conflict(context, base);
+            }
             if issue.code == "TASK_RESULT_RUNTIME_CHECK_ID_INVALID" {
                 return task_result_runtime_conflict(context, base);
             }
@@ -3448,6 +3742,99 @@ fn task_result_issue_conflicts(
             base
         })
         .collect()
+}
+
+fn task_result_browser_verification_conflict(
+    context: &RepairContextInput,
+    mut base: Value,
+) -> Value {
+    let unresolved = context
+        .submitted_result
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|verification| {
+            let verification_id = verification
+                .get("verificationId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            verification
+                .get("browserChecks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|check| browser_check_value_needs_repair(check))
+                .map(move |check| {
+                    json!({
+                        "verificationId": verification_id,
+                        "checkId": check.get("checkId").and_then(Value::as_str),
+                        "status": check.get("status").and_then(Value::as_str),
+                        "attempts": check.get("attempts").and_then(Value::as_u64),
+                        "blockedReason": check.get("blockedReason").cloned().unwrap_or(Value::Null),
+                        "observedOutcome": check.get("observedOutcome").and_then(Value::as_str)
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let unresolved_ids = unresolved
+        .iter()
+        .filter_map(|check| check.get("checkId").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    let expected = context
+        .browser_profile
+        .as_ref()
+        .map(|profile| {
+            profile
+                .checks
+                .iter()
+                .filter(|check| unresolved_ids.contains(check.check_id.as_str()))
+                .map(|check| {
+                    json!({
+                        "checkId": check.check_id,
+                        "verificationId": check.verification_id,
+                        "viewportRef": check.viewport_ref,
+                        "backendMode": check.backend_mode
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    base["currentUnresolvedChecks"] = json!(unresolved);
+    base["expectedChecks"] = json!(expected);
+    base["validRepairChoices"] = json!([
+        "Preserve actual browser outcomes. Repair only check ids, parent verification mapping, command, attempts, artifact refs, observed outcome, or blocked reason fields that were recorded incorrectly.",
+        "If a required browser check did not pass, keep it failed, blocked, or not_run and change the TaskResult status accordingly; never claim a pass to satisfy the contract."
+    ]);
+    base
+}
+
+fn browser_check_value_needs_repair(check: &Value) -> bool {
+    let status = check.get("status").and_then(Value::as_str);
+    if status != Some("passed") {
+        return true;
+    }
+    check.get("attempts").and_then(Value::as_u64) == Some(0)
+        || check
+            .get("command")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        || check
+            .get("observedOutcome")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        || check
+            .get("blockedReason")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        || check
+            .get("artifactRefs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|path| !is_safe_project_relative_path(path))
 }
 
 fn task_result_workflow_conflict(context: &RepairContextInput, mut base: Value) -> Value {
@@ -3790,6 +4177,14 @@ fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Ve
     }
     if issues
         .iter()
+        .any(|issue| issue.code == "TASK_RESULT_BROWSER_VERIFICATION_INVALID")
+    {
+        rules.push("Use only browser check ids from repairContract.issueConflicts[].expectedChecks and keep each check under its assigned verificationId.");
+        rules.push("Do not turn failed, blocked, or not-run browser evidence into passed evidence. Passed checks require the actual command, attempts, and observed outcome; blocked checks require a concrete blockedReason.");
+        rules.push("Keep retry-only success visible by preserving attempts greater than one; do not flatten it into a first-attempt pass.");
+    }
+    if issues
+        .iter()
         .any(|issue| issue.code == "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID")
     {
         rules.push("architectureQualityEvidence must cover every task.architectureQualityRequirementRefs item when the task is completed or completed_with_notes.");
@@ -3826,6 +4221,7 @@ fn task_result_repair_template(
         &context.task_plan_id,
         &context.task,
         &context.code_quality_requirements,
+        context.browser_profile.as_ref(),
     );
     merge_submitted_task_result_fields(&mut template, &context.submitted_result, issues);
     if changed_files_issue(issues)
@@ -4469,6 +4865,55 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 mod tests {
     use super::*;
 
+    fn browser_profile() -> BrowserVerificationProfile {
+        BrowserVerificationProfile {
+            profile_id: "browser-task-ui".to_string(),
+            task_id: "task-ui".to_string(),
+            mode: contracts::BrowserVerificationMode::RenderedInspection,
+            runner_source: contracts::BrowserRunnerSource::LoomManaged,
+            installation_id: None,
+            verification_ids: vec!["verify-ui".to_string()],
+            surface_refs: vec![],
+            workflow_refs: vec![],
+            region_refs: vec![],
+            action_refs: vec![],
+            state_refs: vec![],
+            quality_rule_refs: vec![],
+            checks: vec![contracts::BrowserVerificationCheck {
+                check_id: "browser-ui-desktop".to_string(),
+                verification_id: "verify-ui".to_string(),
+                viewport_ref: "desktop_primary".to_string(),
+                backend_mode: contracts::BrowserBackendMode::NotApplicable,
+            }],
+            reference_load_plan: vec![],
+        }
+    }
+
+    fn browser_task_result(check: Value) -> TaskResult {
+        serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "taskResultId": "result-ui",
+            "taskId": "task-ui",
+            "taskPlanId": "taskplan",
+            "status": "completed",
+            "changedFiles": ["web/src/App.tsx"],
+            "verificationResults": [{
+                "verificationId": "verify-ui",
+                "status": "passed",
+                "evidenceType": "automated_test",
+                "summary": "Browser verification completed.",
+                "browserChecks": [check]
+            }],
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none"
+            },
+            "createdAt": "2026-07-13T10:00:00+08:00",
+            "updatedAt": "2026-07-13T10:00:00+08:00"
+        }))
+        .expect("browser TaskResult")
+    }
+
     fn surface_requirement() -> Value {
         json!({
             "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
@@ -4577,5 +5022,93 @@ mod tests {
                 == Some("frontendQualitySelfCheck.surfaceQualityRuleEvidence")),
             "{issues:#?}"
         );
+    }
+
+    #[test]
+    fn browser_check_normalization_adds_contract_shape_without_claiming_evidence() {
+        let profile = browser_profile();
+        let mut verification = serde_json::Map::new();
+
+        normalize_browser_check_machine_fields(&mut verification, "verify-ui", Some(&profile));
+
+        assert_eq!(
+            verification["browserChecks"][0]["checkId"],
+            "browser-ui-desktop"
+        );
+        assert_eq!(verification["browserChecks"][0]["status"], "not_run");
+        assert_eq!(verification["browserChecks"][0]["attempts"], 0);
+        assert_eq!(verification["browserChecks"][0]["observedOutcome"], "");
+        assert_eq!(verification["evidenceType"], "browser_automation");
+    }
+
+    #[test]
+    fn browser_check_normalization_does_not_rebind_wrong_id_evidence_by_position() {
+        let profile = browser_profile();
+        let mut verification = json!({
+            "browserChecks": [{
+                "checkId": "browser-unrelated",
+                "status": "passed",
+                "command": "pnpm playwright test unrelated.spec.ts",
+                "attempts": 1,
+                "artifactRefs": [],
+                "observedOutcome": "An unrelated check passed.",
+                "blockedReason": null
+            }]
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+
+        normalize_browser_check_machine_fields(&mut verification, "verify-ui", Some(&profile));
+
+        assert_eq!(
+            verification["browserChecks"][0]["checkId"],
+            "browser-ui-desktop"
+        );
+        assert_eq!(verification["browserChecks"][0]["status"], "not_run");
+        assert_eq!(verification["browserChecks"][0]["attempts"], 0);
+    }
+
+    #[test]
+    fn browser_verification_accepts_visible_retry_success() {
+        let profile = browser_profile();
+        let result = browser_task_result(json!({
+            "checkId": "browser-ui-desktop",
+            "status": "passed",
+            "command": "pnpm playwright test --grep workflow",
+            "attempts": 2,
+            "artifactRefs": ["test-results/workflow/trace.zip"],
+            "observedOutcome": "The submitted record appears in the rendered list.",
+            "blockedReason": null
+        }));
+        let mut issues = Vec::new();
+
+        validate_browser_verification_results(&result, Some(&profile), &mut issues);
+
+        assert!(issues.is_empty(), "{issues:#?}");
+        assert_eq!(result.verification_results[0].browser_checks[0].attempts, 2);
+    }
+
+    #[test]
+    fn browser_verification_rejects_completed_not_run_check() {
+        let profile = browser_profile();
+        let result = browser_task_result(json!({
+            "checkId": "browser-ui-desktop",
+            "status": "not_run",
+            "command": "",
+            "attempts": 0,
+            "artifactRefs": [],
+            "observedOutcome": "",
+            "blockedReason": null
+        }));
+        let mut issues = Vec::new();
+
+        validate_browser_verification_results(&result, Some(&profile), &mut issues);
+
+        assert!(issues.iter().any(|issue| {
+            issue.code == "TASK_RESULT_BROWSER_VERIFICATION_INVALID"
+                && issue.field_path.as_deref()
+                    == Some("verificationResults[].browserChecks[].status")
+        }));
     }
 }

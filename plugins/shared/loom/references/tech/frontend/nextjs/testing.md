@@ -2,6 +2,8 @@
 
 This file applies Next.js testing and verification rules to task-owned routes, Server Components, Client Components, Server Actions, route handlers, and runtime configuration.
 
+Keep this file at the Next.js route/component/server boundary. When the task has an MCP-derived browser verification profile, Playwright references own E2E locators, fixtures, network synchronization, viewport execution, and browser artifacts.
+
 ## When To Use
 
 - The task changes App Router pages, layouts, route handlers, Server Actions, metadata, loading/error/not-found states, middleware, or Next.js configuration.

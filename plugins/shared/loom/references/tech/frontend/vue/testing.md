@@ -2,6 +2,8 @@
 
 This file applies Vue testing rules to task-owned components, composables, Pinia stores, router behavior, Nuxt pages, async UI, and build-time type contracts.
 
+Keep this file at the Vue unit/component/store boundary. When the task has an MCP-derived browser verification profile, Playwright references own E2E locators, fixtures, network synchronization, viewport execution, and browser artifacts.
+
 ## When To Use
 
 - The task creates or changes Vue components, composables, stores, forms, route guards, async data, Nuxt pages, or tests.
