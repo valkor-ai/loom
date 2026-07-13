@@ -2,6 +2,15 @@
 
 Use the MCP-derived browser verification profile as the scope authority. This reference explains how to turn its checks into maintainable browser automation without broadening the task or replacing the project's test stack.
 
+## Loom Browser Quality Closure
+
+Browser checks run in the MCP-generated browser quality closure after implementation and runtime delivery. Ordinary UI tasks implement and statically/component-test their owned surface; they do not install browsers or claim rendered evidence.
+
+- `sourceTaskId` and `sourceVerificationId` preserve the business task that each closure check proves.
+- `required` evidence must pass, use accepted external evidence, or receive an explicit quality waiver before automatic delivery closure.
+- `supplemental` evidence improves confidence but an environment gap does not turn completed product code into a failed task.
+- Run only checks in the closure profile. Do not recreate checks from UI prose, scan other task results for extra scope, or add a broad regression suite.
+
 ## Verification Design
 
 Start from the behavior the check must prove:
@@ -32,6 +41,7 @@ Keep pure functions, reducers, composables, hooks, isolated component states, an
 - Follow the request-selected project runner and shared-runtime contract; this reference does not override runner selection or dependency ownership.
 - When no Playwright project exists and the task owns suite setup, create the smallest config and test root that support the assigned checks.
 - Do not install a second E2E runner beside an accepted existing browser test stack unless the technical baseline selected Playwright for the new project.
+- Do not call `loom.browserRuntimePrepare` from inside the closure task. MCP prepares and attaches the exact runtime before issuing the execution request.
 
 ## Check Anatomy
 

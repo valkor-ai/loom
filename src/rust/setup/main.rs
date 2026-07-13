@@ -115,7 +115,10 @@ fn run() -> Result<serde_json::Value, SetupError> {
                 &env,
                 &BrowserRuntimePrepareOptions {
                     requested_versions: options.playwright_versions,
+                    requested_browsers: options.playwright_browsers,
                     npm_program: None,
+                    node_program: None,
+                    container_program: None,
                 },
             )?)
             .map_err(|source| SetupError::Json {
@@ -181,6 +184,7 @@ struct CliOptions {
     platform: Option<String>,
     all: bool,
     playwright_versions: Vec<String>,
+    playwright_browsers: Vec<String>,
 }
 
 impl CliOptions {
@@ -217,6 +221,12 @@ impl CliOptions {
                         .playwright_versions
                         .push(required_value(args, index, "--playwright-version")?.to_string());
                 }
+                "--browser" => {
+                    index += 1;
+                    options
+                        .playwright_browsers
+                        .push(required_value(args, index, "--browser")?.to_string());
+                }
                 unknown => {
                     return Err(SetupError::InvalidArgument(format!(
                         "unknown option '{unknown}'"
@@ -245,7 +255,7 @@ fn usage() -> &'static str {
      loom-setup uninstall --agent codex|claude-code|opencode|all\n\
      loom-setup uninstall --all\n\
      loom-setup purge\n\
-     loom-setup browser-runtime prepare [--playwright-version <registry-version-or-range>]\n\
+     loom-setup browser-runtime prepare [--playwright-version <registry-version-or-range>] [--browser chromium|firefox|webkit]\n\
      loom-setup package-layout --output-dir <dir> [--platform all|darwin-arm64|darwin-x64|linux-x64|linux-arm64|windows-x64]\n\
      loom-setup package-archive --package-root <dir> --output-dir <dir> --platform <platform>"
 }

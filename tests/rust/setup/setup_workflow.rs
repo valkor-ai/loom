@@ -211,16 +211,32 @@ printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
     let mut permissions = fs::metadata(&fake_npm).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&fake_npm, permissions).unwrap();
+    let fake_node = fixture.root.join("fake-node.sh");
+    fs::write(&fake_node, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = fs::metadata(&fake_node).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_node, permissions).unwrap();
+    let fake_container = fixture.root.join("fake-docker.sh");
+    fs::write(&fake_container, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = fs::metadata(&fake_container).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_container, permissions).unwrap();
     let env = fixture.env();
     let options = BrowserRuntimePrepareOptions {
         requested_versions: vec!["1.55.0".to_string()],
         npm_program: Some(fake_npm),
+        node_program: Some(fake_node),
+        container_program: Some(fake_container),
+        ..BrowserRuntimePrepareOptions::default()
     };
 
     let first = prepare_browser_runtime(&env, &options).unwrap();
     assert_eq!(first.status, "ready");
+    assert_eq!(first.platform, setup_platform_key());
     assert_eq!(first.runtimes.len(), 1);
     assert!(!first.runtimes[0].reused);
+    assert_eq!(first.runtimes[0].platform, first.platform);
+    assert_eq!(first.runtimes[0].browsers, vec!["chromium"]);
     assert!(Path::new(&first.runtimes[0].runner_path).is_file());
     assert!(first.runtimes[0]
         .doctor_checks
@@ -229,6 +245,23 @@ printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
 
     let second = prepare_browser_runtime(&env, &options).unwrap();
     assert!(second.runtimes[0].reused);
+
+    let fake_node = options.node_program.as_ref().unwrap();
+    fs::write(
+        fake_node,
+        "#!/bin/sh\necho 'Host system is missing dependencies' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let container_fallback = prepare_browser_runtime(&env, &options).unwrap();
+    assert_eq!(container_fallback.status, "ready");
+    assert!(container_fallback.runtimes[0].reused);
+    assert_eq!(container_fallback.runtimes[0].backend, "managed_container");
+    assert!(container_fallback.runtimes[0]
+        .doctor_checks
+        .iter()
+        .any(|check| { check.failure_code.as_deref() == Some("missing_system_dependencies") }));
+    assert!(container_fallback.runtimes[0].managed_container.is_some());
+    fs::write(fake_node, "#!/bin/sh\nexit 0\n").unwrap();
 
     let runtime_root = Path::new(&second.runtimes[0].manifest_path)
         .parent()
@@ -240,6 +273,20 @@ printf '{"lockfileVersion":3,"packages":{}}\n' > package-lock.json
         .doctor_checks
         .iter()
         .all(|check| check.status == "passed"));
+}
+
+fn setup_platform_key() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "windows",
+        value => value,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        value => value,
+    };
+    format!("{os}-{arch}")
 }
 
 #[test]

@@ -6,13 +6,13 @@ use std::{
 use contracts::{
     ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
     BrowserVerificationProfile, EngineeringQualityRequirement, ImplementationAction,
-    TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunStatus,
-    TaskRunStatus, VerificationEvidence,
+    TaskAttemptState, TaskDefinition, TaskKind, TaskPlan, TaskPlanRun, TaskPlanRunNextAction,
+    TaskPlanRunStatus, TaskResult, TaskRunStatus, VerificationEvidence,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, DeliveryLifecycleStatus,
-    LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult, RouteAction, RouteActionKind,
-    TransitionStore,
+    LoomMcpActionResult, LoomMcpAutoRunnableResult, LoomMcpFailure, LoomMcpFailureResult,
+    LoomMcpNextAction, RouteAction, RouteActionKind, RunLoomToolNext, TransitionStore,
 };
 use serde_json::{json, Value};
 use state::{
@@ -23,7 +23,7 @@ use state::{
 use crate::{
     paths::{
         task_execution_request_file, task_execution_result_candidate_file, task_plan_file,
-        task_plan_latest_file, task_plan_run_file, task_plan_run_latest_file,
+        task_plan_latest_file, task_plan_run_file, task_plan_run_latest_file, task_result_file,
     },
     task_plan::{
         execute_task_next_from_request, update_run_summary, UI_OWNERSHIP_DIMENSION_VALUES,
@@ -86,6 +86,29 @@ fn continue_execution_inner(
                 "TaskPlanRun references missing task {task_id}"
             ))
         })?;
+    if matches!(task.task_kind, TaskKind::BrowserQualityClosure)
+        && crate::browser::browser_runtime_preparation_state(root)
+            == crate::browser::BrowserRuntimePreparationState::Unavailable
+    {
+        return close_unavailable_browser_environment(
+            project_root,
+            &locator,
+            &task_plan,
+            &mut run,
+            &task,
+        );
+    }
+    if matches!(task.task_kind, TaskKind::BrowserQualityClosure)
+        && crate::browser::browser_runtime_preparation_state(root)
+            == crate::browser::BrowserRuntimePreparationState::NeedsPreparation
+    {
+        return materialize_browser_runtime_prepare_action(
+            project_root,
+            &locator,
+            &task_plan,
+            &task,
+        );
+    }
     if let Some(existing) =
         existing_execution_next_if_current(project_root, delivery_id, phase_id, &task)?
     {
@@ -171,6 +194,222 @@ fn continue_execution_inner(
         &run,
     )?;
     execute_task_next_from_request(project_root, &stored.request_ref, &task, result_file)
+}
+
+fn materialize_browser_runtime_prepare_action(
+    project_root: &str,
+    locator: &DeliveryPhaseLocator,
+    task_plan: &TaskPlan,
+    task: &TaskDefinition,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
+    let root = Path::new(project_root);
+    let profile = task_plan
+        .browser_verification_profiles
+        .iter()
+        .find(|profile| profile.task_id == task.task_id)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser quality closure is missing its verification profile".to_string(),
+            )
+        })?;
+    let request_id = format!("browser_runtime_prepare_{}", state::store::now_millis());
+    let request_file = to_project_relative(
+        root,
+        &task_execution_request_file(root, locator, &request_id),
+    )?;
+    let request_root = json!({
+        "schemaVersion": "1.0",
+        "requestType": "browser_runtime_prepare",
+        "source": {
+            "taskPlanId": task_plan.task_plan_id,
+            "taskId": task.task_id,
+            "profileId": profile.profile_id
+        },
+        "browserRuntimePreparation": {
+            "projectTargets": crate::browser::browser_runtime_targets(root),
+            "requestedBrowsers": ["chromium"],
+            "policy": "Resolve exact project versions, try host launch, then managed container fallback."
+        },
+        "requestReadPlan": {"groups": [{
+            "groupId": "browser_runtime_prepare_context",
+            "required": true,
+            "purpose": "Read the exact project targets and runtime fallback policy.",
+            "whenToRead": "Read before calling loom.browserRuntimePrepare.",
+            "selectors": read_selectors_value_from_paths([
+                "source.taskPlanId",
+                "source.taskId",
+                "source.profileId",
+                "browserRuntimePreparation.projectTargets",
+                "browserRuntimePreparation.requestedBrowsers",
+                "browserRuntimePreparation.policy"
+            ])
+        }]}
+    });
+    let stored = state::write_native_request(
+        project_root,
+        state::NativeRequestInput {
+            request_id,
+            request_kind: "browser_runtime_prepare_request".to_string(),
+            request_file: Some(request_file),
+            delivery_id: Some(locator.delivery_id.clone()),
+            phase_id: Some(locator.phase_id.clone()),
+            root: request_root,
+        },
+    )?;
+    update_route_for_browser_runtime_prepare(project_root, locator, &stored.request_ref, task)?;
+    Ok(LoomMcpActionResult::AutoRunnable(
+        LoomMcpAutoRunnableResult::new(
+            project_root.to_string(),
+            LoomMcpNextAction::RunLoomTool(RunLoomToolNext {
+                tool_name: "loom.browserRuntimePrepare".to_string(),
+                request_ref: stored.request_ref,
+                read_groups: stored.read_groups,
+                retry_tool: "loom.continue".to_string(),
+            }),
+        ),
+    ))
+}
+
+fn close_unavailable_browser_environment(
+    project_root: &str,
+    locator: &DeliveryPhaseLocator,
+    task_plan: &TaskPlan,
+    run: &mut TaskPlanRun,
+    task: &TaskDefinition,
+) -> Result<LoomMcpActionResult, state::store::StateError> {
+    let root = Path::new(project_root);
+    let profile = task_plan
+        .browser_verification_profiles
+        .iter()
+        .find(|profile| profile.task_id == task.task_id)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser quality closure is missing its MCP verification profile".to_string(),
+            )
+        })?;
+    let runtime_state =
+        state::store::read_json_value(&root.join(".loom/runtime/browser-automation/latest.json"))?;
+    let diagnostic = runtime_state
+        .pointer("/runtime/runtimes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|runtime| {
+            runtime
+                .get("doctorChecks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|check| check.get("status").and_then(Value::as_str) == Some("failed"))
+        .filter_map(|check| check.get("summary").and_then(Value::as_str))
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let blocked_reason = if diagnostic.is_empty() {
+        "Browser launch is unavailable on both the host and Loom-managed container.".to_string()
+    } else {
+        diagnostic
+    };
+    let verification_results = task
+        .verification_intents
+        .iter()
+        .map(|intent| {
+            json!({
+                "verificationId": intent.verification_id,
+                "status": "inconclusive",
+                "evidenceType": "browser_automation",
+                "summary": "Browser evidence could not run because both supported execution environments are unavailable.",
+                "browserChecks": profile.checks.iter()
+                    .filter(|check| check.verification_id == intent.verification_id)
+                    .map(|check| json!({
+                        "checkId": check.check_id,
+                        "status": "blocked",
+                        "command": "",
+                        "attempts": 0,
+                        "artifactRefs": [],
+                        "observedOutcome": "",
+                        "blockedReason": blocked_reason.clone()
+                    }))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+    let now = state::store::now_string();
+    let result_id = format!("system-browser-environment-{}", state::store::now_millis());
+    let result: TaskResult = serde_json::from_value(json!({
+        "schemaVersion": "1.0",
+        "taskResultId": result_id,
+        "taskId": task.task_id,
+        "taskPlanId": task_plan.task_plan_id,
+        "status": "completed_with_notes",
+        "changedFiles": [],
+        "noChangeReason": {
+            "code": "ENVIRONMENT_CHECK_ONLY",
+            "summary": "MCP closed the browser environment check without changing project files."
+        },
+        "verificationResults": verification_results,
+        "executionContinuity": {
+            "taskResultSubmittedAfterVerification": true,
+            "agentOwnedLongRunningWork": "none",
+            "notes": ["Browser environment failure was classified by MCP and did not enter execution repair."]
+        },
+        "notes": [blocked_reason],
+        "createdAt": now.clone(),
+        "updatedAt": now.clone()
+    }))
+    .map_err(state::store::StateError::Json)?;
+    let result_path = task_result_file(
+        root,
+        locator,
+        &run.run_id,
+        &task.task_id,
+        &result.task_result_id,
+    );
+    state::store::write_json_atomic(&result_path, &result)?;
+
+    if let Some(state) = run
+        .task_states
+        .iter_mut()
+        .find(|state| state.task_id == task.task_id)
+    {
+        state.status = TaskRunStatus::CompletedWithNotes;
+        state.result_id = Some(result.task_result_id.clone());
+        state.finished_at = Some(now.clone());
+        state.attempts.push(TaskAttemptState {
+            attempt: state.attempts.len() as u32 + 1,
+            result_id: result.task_result_id.clone(),
+            status: TaskRunStatus::CompletedWithNotes,
+        });
+    }
+    if let Some(group) = run
+        .group_states
+        .iter_mut()
+        .find(|group| group.group_id == task.group_id)
+    {
+        group.status = TaskRunStatus::CompletedWithNotes;
+        group.finished_at = Some(now.clone());
+    }
+    update_run_summary(run);
+    run.status = if run.summary.pending == 0 && run.summary.running == 0 {
+        TaskPlanRunStatus::CompletedWithNotes
+    } else {
+        TaskPlanRunStatus::Running
+    };
+    run.next_action = Some(TaskPlanRunNextAction {
+        r#type: "review".to_string(),
+        reason: "BROWSER_ENVIRONMENT_REQUIRES_REVIEW".to_string(),
+        source_task_id: Some(task.task_id.clone()),
+        target_node: "review".to_string(),
+    });
+    run.updated_at = now;
+    save_run(root, locator, run)?;
+    update_route_for_review(project_root, &locator.delivery_id, &locator.phase_id)?;
+    Ok(crate::review::materialize_review_request(
+        project_root,
+        &locator.delivery_id,
+        &locator.phase_id,
+    ))
 }
 
 fn existing_execution_next_if_current(
@@ -264,7 +503,7 @@ fn build_execution_request(
     let browser_verification_profile =
         browser_verification_profile_for_task(task_plan, &request_task);
     let browser_verification_context = browser_verification_profile
-        .map(|profile| browser_verification_context(task_plan, profile));
+        .map(|profile| browser_verification_context(root, task_plan, profile));
     let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
     let schema_shape = task_result_schema_shape(&request_task, browser_verification_profile);
     let dependency_results = dependency_results(run, task);
@@ -725,6 +964,7 @@ pub(crate) fn browser_verification_profile_for_task<'a>(
 }
 
 pub(crate) fn browser_verification_context(
+    project_root: &Path,
     task_plan: &TaskPlan,
     profile: &BrowserVerificationProfile,
 ) -> Value {
@@ -738,10 +978,28 @@ pub(crate) fn browser_verification_context(
                 .iter()
                 .find(|installation| &installation.installation_id == installation_id)
         });
+    let runtime = state::store::read_json_value(
+        &project_root.join(".loom/runtime/browser-automation/latest.json"),
+    )
+    .ok()
+    .filter(|value| {
+        matches!(
+            value.get("status").and_then(Value::as_str),
+            Some("ready" | "partial")
+        )
+    })
+    .map(|value| {
+        json!({
+            "status": value.get("status").cloned().unwrap_or(Value::Null),
+            "projectTargets": value.get("projectTargets").cloned().unwrap_or_else(|| json!([])),
+            "runtimeEnvironments": value.get("runtimeEnvironments").cloned().unwrap_or_else(|| json!([]))
+        })
+    });
     json!({
         "profile": profile,
         "projectRunner": installation,
-        "baselineSelection": task_plan.browser_automation_facts.baseline_selection
+        "baselineSelection": task_plan.browser_automation_facts.baseline_selection,
+        "runtime": runtime
     })
 }
 
@@ -749,10 +1007,13 @@ pub(crate) fn browser_verification_rules() -> Value {
     json!({
         "profileAuthority": "sourceContext.browserVerificationContext.profile",
         "referenceLoadRule": "Read only files listed in sourceContext.browserVerificationContext.profile.referenceLoadPlan. Paths are relative to the installed Loom skill references root; do not browse sibling test references or load an external Playwright skill.",
-        "scopeRule": "Run only profile.checks and keep each check bounded to its declared task, verification, viewport, and backend mode.",
+        "scopeRule": "Run only profile.checks in this MCP-generated browser quality closure and keep each check bounded to its source task, source verification, viewport, backend mode, and enforcement.",
         "runnerRule": "Reuse sourceContext.browserVerificationContext.projectRunner when present. Do not replace an existing project runner or install a second project-local Playwright stack.",
-        "sharedRuntimeRule": "Keep @playwright/test in the project package manifest and lockfile, restore project dependencies so Loom can derive the exact installed version, then call loom.browserRuntimePrepare once when the required browser binary is not ready and use its browserEnvironment. Do not install project dependencies into Loom's shared cache.",
-        "resultRule": "Record browser outcomes through verificationResults[].browserChecks; do not paste Playwright reports, traces, screenshots, or console logs into prose fields. MCP links accepted browser checks into frontendQualitySelfCheck."
+        "runnerBootstrapRule": "When projectRunner is absent and profile.runnerSource is baseline_selected or loom_managed, create the first project-owned Playwright dependency/config only for this closure, pin @playwright/test to the exact resolvedVersion supplied by runtime.runtimeEnvironments, and update the project lockfile. The shared runner remains a preparation/doctor asset and is never copied into the project.",
+        "runtimeAuthority": "MCP prepared sourceContext.browserVerificationContext.runtime before creating this execution request. Do not call loom.browserRuntimePrepare from inside the task, install browsers ad hoc, or edit shared cache state.",
+        "runtimeExecutionRule": "Select the runtime environment whose requested/resolved version matches the project runner. For host backend, apply browserEnvironment to the project-local runner. For managed_container backend, use its commandPrefix and browserEnvironment without copying shared assets into the project; when the tested service runs on the host, translate loopback base URLs to managedContainer.hostGateway while preserving the actual port.",
+        "environmentFailureRule": "Use blocked only when the supplied host/container browser environment cannot launch or execute, and include the exact environment diagnostic; Loom classifies that outside generic execution repair. Application startup, API, selector, assertion, and workflow failures are product evidence and must remain failed.",
+        "resultRule": "Record browser outcomes through verificationResults[].browserChecks; do not paste Playwright reports, traces, screenshots, or console logs into prose fields. MCP correlates closure checks to source UI tasks."
     })
 }
 
@@ -2737,6 +2998,51 @@ fn update_route_for_execution(
         .save_status(project_root, &status)
         .map_err(to_state_error)?;
     Ok(())
+}
+
+fn update_route_for_browser_runtime_prepare(
+    project_root: &str,
+    locator: &DeliveryPhaseLocator,
+    request_ref: &str,
+    task: &TaskDefinition,
+) -> Result<(), state::store::StateError> {
+    let store = FileTransitionStore;
+    let mut status = store.load_status(project_root).map_err(to_state_error)?;
+    let mut delivery = store
+        .load_delivery_index(project_root, &locator.delivery_id)
+        .map_err(to_state_error)?;
+    if let Some(phase) = delivery
+        .phases
+        .iter_mut()
+        .find(|phase| phase.phase_id == locator.phase_id)
+    {
+        phase.latest_refs.insert(
+            "browserRuntimePrepareRequestRef".to_string(),
+            request_ref.to_string(),
+        );
+        phase.next_action = Some(RouteAction {
+            kind: RouteActionKind::ContinueExecution,
+            source: "browser_runtime_prepare_request".to_string(),
+            reason: "browser_runtime_prepare_required".to_string(),
+            prompt: None,
+            accepted_responses: vec![],
+            request_ref: Some(request_ref.to_string()),
+            details: Some(json!({
+                "taskId": task.task_id,
+                "groupId": task.group_id
+            })),
+            target_phase_id: None,
+        });
+    }
+    delivery.status = DeliveryLifecycleStatus::Executing;
+    delivery.updated_at = state::store::now_string();
+    store
+        .save_delivery_index(project_root, &delivery)
+        .map_err(to_state_error)?;
+    apply_delivery_index(&mut status, &delivery);
+    store
+        .save_status(project_root, &status)
+        .map_err(to_state_error)
 }
 
 fn update_route_for_review(

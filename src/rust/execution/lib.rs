@@ -12,7 +12,7 @@ use delivery_core::{
 };
 use serde_json::Value;
 
-pub use browser::browser_runtime_package_specs;
+pub use browser::{browser_runtime_targets, BrowserRuntimeTarget};
 pub use repair::accept_repair_file;
 pub use review::{accept_manual_review_resolution_file, accept_review_result_file};
 pub use task_plan::accept_task_plan_file;

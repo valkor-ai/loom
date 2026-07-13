@@ -12,6 +12,16 @@ pub enum BrowserInstallationStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum BrowserVersionResolutionSource {
+    InstalledPackage,
+    PackageLock,
+    PnpmLock,
+    ExactManifest,
+    RegistryResolutionRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum BrowserRunnerSource {
     ExistingProject,
     BaselineSelected,
@@ -33,6 +43,13 @@ pub enum BrowserCheckStatus {
     Failed,
     Blocked,
     NotRun,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserEvidenceEnforcement {
+    Required,
+    Supplemental,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -66,7 +83,11 @@ pub struct BrowserAutomationInstallation {
     pub package_manager: String,
     pub dependency_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dependency_version: Option<String>,
+    pub declared_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_resolution_source: Option<BrowserVersionResolutionSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -101,6 +122,9 @@ impl BrowserAutomationFacts {
 pub struct BrowserVerificationCheck {
     pub check_id: String,
     pub verification_id: String,
+    pub source_task_id: String,
+    pub source_verification_id: String,
+    pub enforcement: BrowserEvidenceEnforcement,
     pub viewport_ref: String,
     pub backend_mode: BrowserBackendMode,
 }

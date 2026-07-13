@@ -20,7 +20,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PACKAGE_SCHEMA_VERSION: &str = "1.0";
 pub const PLAYWRIGHT_DEFAULT_VERSION: &str = "1.61.1";
 const PLAYWRIGHT_RUNTIME_SCHEMA_VERSION: &str = "1.0";
-const PLAYWRIGHT_RUNTIME_REVISION: &str = "1";
+const PLAYWRIGHT_RUNTIME_REVISION: &str = "2";
+const BROWSER_RUNTIME_MAX_RUNNERS: usize = 8;
+const BROWSER_RUNTIME_MAX_AGE: Duration = Duration::from_secs(45 * 24 * 60 * 60);
+const BROWSER_RUNTIME_CAPACITY_MIN_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const BROWSER_RUNTIME_STAGING_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const PLAYWRIGHT_LOCK_WAIT: Duration = Duration::from_secs(10 * 60);
 const PLAYWRIGHT_LOCK_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 const PLAYWRIGHT_LOCK_POLL: Duration = Duration::from_millis(250);
@@ -459,15 +463,23 @@ pub struct SetupEnvironment {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserRuntimePrepareOptions {
     pub requested_versions: Vec<String>,
+    pub requested_browsers: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub npm_program: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_program: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_program: Option<PathBuf>,
 }
 
 impl Default for BrowserRuntimePrepareOptions {
     fn default() -> Self {
         Self {
             requested_versions: vec![PLAYWRIGHT_DEFAULT_VERSION.to_string()],
+            requested_browsers: vec!["chromium".to_string()],
             npm_program: None,
+            node_program: None,
+            container_program: None,
         }
     }
 }
@@ -476,6 +488,7 @@ impl Default for BrowserRuntimePrepareOptions {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserRuntimePrepareReport {
     pub status: String,
+    pub platform: String,
     pub cache_root: String,
     pub browsers_path: String,
     pub runtimes: Vec<BrowserRuntimeEntry>,
@@ -484,13 +497,29 @@ pub struct BrowserRuntimePrepareReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserRuntimeEntry {
+    pub status: String,
+    pub backend: String,
     pub runtime_id: String,
     pub requested_version: String,
     pub resolved_version: String,
+    pub platform: String,
+    pub browsers: Vec<String>,
     pub runner_path: String,
     pub manifest_path: String,
     pub reused: bool,
     pub doctor_checks: Vec<BrowserRuntimeDoctorCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_container: Option<ManagedBrowserContainer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedBrowserContainer {
+    pub image: String,
+    pub browser_path: String,
+    pub project_mount_path: String,
+    pub host_gateway: String,
+    pub command_prefix: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -501,18 +530,28 @@ struct BrowserRuntimeManifest {
     runtime_id: String,
     requested_version: String,
     resolved_version: String,
+    platform: String,
+    browsers: Vec<String>,
     package_lock_checksum: String,
     runner_relative_path: String,
     browser_entries: Vec<String>,
     prepared_at: String,
+    last_used_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserRuntimeDoctorCheck {
     pub check_id: String,
+    pub scope: String,
     pub status: String,
     pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<String>,
 }
 
 impl SetupEnvironment {
@@ -825,7 +864,8 @@ pub fn prepare_browser_runtime(
     env: &SetupEnvironment,
     options: &BrowserRuntimePrepareOptions,
 ) -> Result<BrowserRuntimePrepareReport, SetupError> {
-    let cache_root = env.playwright_cache_root();
+    let platform = browser_runtime_platform();
+    let cache_root = env.playwright_cache_root().join(&platform);
     let runners_root = cache_root.join("runners");
     let browsers_path = cache_root.join("browsers");
     let locks_root = cache_root.join("locks");
@@ -845,24 +885,80 @@ pub fn prepare_browser_runtime(
     if versions.is_empty() {
         versions.insert(PLAYWRIGHT_DEFAULT_VERSION.to_string());
     }
+    let mut browsers = options
+        .requested_browsers
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>();
+    if browsers.is_empty() {
+        browsers.insert("chromium".to_string());
+    }
+    for browser in &browsers {
+        if !matches!(browser.as_str(), "chromium" | "firefox" | "webkit") {
+            return Err(SetupError::InvalidArgument(format!(
+                "unsupported Playwright browser `{browser}`; use chromium, firefox, or webkit"
+            )));
+        }
+    }
+    let browsers = browsers.into_iter().collect::<Vec<_>>();
     let npm_program = options
         .npm_program
         .clone()
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "npm.cmd" } else { "npm" }));
+    let node_program = options
+        .node_program
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "node.exe" } else { "node" }));
+    let container_program = options.container_program.clone().unwrap_or_else(|| {
+        PathBuf::from(if cfg!(windows) {
+            "docker.exe"
+        } else {
+            "docker"
+        })
+    });
     let mut runtimes = Vec::new();
     for requested_version in versions {
         validate_playwright_version_spec(&requested_version)?;
         runtimes.push(prepare_browser_runtime_version(
             &requested_version,
+            &platform,
+            &browsers,
             &npm_program,
+            &node_program,
+            &container_program,
             &runners_root,
             &browsers_path,
             &locks_root,
             &staging_root,
         )?);
     }
+    garbage_collect_browser_runtime_cache(
+        &runners_root,
+        &browsers_path,
+        &staging_root,
+        &locks_root,
+        &runtimes
+            .iter()
+            .map(|runtime| runtime.runtime_id.clone())
+            .collect::<BTreeSet<_>>(),
+    )?;
+    let ready_count = runtimes
+        .iter()
+        .filter(|runtime| runtime.status == "ready")
+        .count();
+    let status = if runtimes.is_empty() {
+        "unavailable"
+    } else if ready_count == runtimes.len() {
+        "ready"
+    } else if ready_count > 0 {
+        "partial"
+    } else {
+        "unavailable"
+    };
     Ok(BrowserRuntimePrepareReport {
-        status: "ready".to_string(),
+        status: status.to_string(),
+        platform,
         cache_root: path_string(&cache_root),
         browsers_path: path_string(&browsers_path),
         runtimes,
@@ -871,30 +967,52 @@ pub fn prepare_browser_runtime(
 
 fn prepare_browser_runtime_version(
     requested_version: &str,
+    platform: &str,
+    browsers: &[String],
     npm_program: &Path,
+    node_program: &Path,
+    container_program: &Path,
     runners_root: &Path,
     browsers_path: &Path,
     locks_root: &Path,
     staging_root: &Path,
 ) -> Result<BrowserRuntimeEntry, SetupError> {
-    let runtime_id = playwright_runtime_id(requested_version);
-    let runtime_root = runners_root.join(&runtime_id);
-    if let Some(entry) = reusable_browser_runtime(&runtime_root, browsers_path)? {
-        return Ok(entry);
-    }
-    let _lock = BrowserRuntimeLock::acquire(&locks_root.join(format!("{runtime_id}.lock")))?;
-    if let Some(entry) = reusable_browser_runtime(&runtime_root, browsers_path)? {
-        return Ok(entry);
-    }
-    if runtime_root.exists() {
-        fs::remove_dir_all(&runtime_root).map_err(|source| SetupError::Io {
-            path: runtime_root.clone(),
-            source,
-        })?;
+    let exact_requested = exact_playwright_version(requested_version);
+    let resolution_id = playwright_resolution_id(requested_version, platform, browsers);
+    let _resolution_lock = (!exact_requested)
+        .then(|| {
+            BrowserRuntimeLock::acquire(&locks_root.join(format!("resolve-{resolution_id}.lock")))
+        })
+        .transpose()?;
+    let exact_runtime_id = exact_requested.then(|| {
+        playwright_runtime_id(
+            requested_version.trim_start_matches('v'),
+            platform,
+            browsers,
+        )
+    });
+    let mut final_lock = if let Some(runtime_id) = &exact_runtime_id {
+        Some(BrowserRuntimeLock::acquire(
+            &locks_root.join(format!("{runtime_id}.lock")),
+        )?)
+    } else {
+        None
+    };
+    if let Some(runtime_id) = &exact_runtime_id {
+        let runtime_root = runners_root.join(runtime_id);
+        if let Some(mut entry) = reusable_browser_runtime(
+            &runtime_root,
+            browsers_path,
+            node_program,
+            container_program,
+        )? {
+            entry.requested_version = requested_version.to_string();
+            return Ok(entry);
+        }
     }
     let staging = staging_root.join(format!(
         "{}-{}-{}",
-        runtime_id,
+        resolution_id,
         std::process::id(),
         chrono::Utc::now().timestamp_millis()
     ));
@@ -912,7 +1030,7 @@ fn prepare_browser_runtime_version(
         write_json(
             &staging.join("package.json"),
             &json!({
-                "name": format!("loom-playwright-runtime-{runtime_id}"),
+                "name": format!("loom-playwright-runtime-{resolution_id}"),
                 "private": true,
                 "version": "1.0.0"
             }),
@@ -944,6 +1062,28 @@ fn prepare_browser_runtime_version(
                 ))
             })?
             .to_string();
+        let runtime_id = playwright_runtime_id(&resolved_version, platform, browsers);
+        if final_lock.is_none() {
+            final_lock = Some(BrowserRuntimeLock::acquire(
+                &locks_root.join(format!("{runtime_id}.lock")),
+            )?);
+        }
+        let runtime_root = runners_root.join(&runtime_id);
+        if let Some(mut entry) = reusable_browser_runtime(
+            &runtime_root,
+            browsers_path,
+            node_program,
+            container_program,
+        )? {
+            entry.requested_version = requested_version.to_string();
+            return Ok(entry);
+        }
+        if runtime_root.exists() {
+            fs::remove_dir_all(&runtime_root).map_err(|source| SetupError::Io {
+                path: runtime_root.clone(),
+                source,
+            })?;
+        }
         let runner_relative_path = if cfg!(windows) {
             "node_modules/.bin/playwright.cmd"
         } else {
@@ -956,13 +1096,15 @@ fn prepare_browser_runtime_version(
         let browser_entries = {
             let _browser_cache_lock =
                 BrowserRuntimeLock::acquire(&locks_root.join("browser-cache.lock"))?;
+            let mut install_args = vec!["install"];
+            install_args.extend(browsers.iter().map(String::as_str));
             run_runtime_command(
                 &runner,
-                &["install", "chromium"],
+                &install_args,
                 &staging,
                 &[("PLAYWRIGHT_BROWSERS_PATH", browsers_path)],
             )?;
-            browser_cache_entries_for_runtime(&staging, browsers_path)?
+            browser_cache_entries_for_runtime(&staging, browsers_path, browsers)?
         };
         if browser_entries.is_empty() {
             return Err(SetupError::InvalidArgument(format!(
@@ -980,35 +1122,45 @@ fn prepare_browser_runtime_version(
                 runtime_id: runtime_id.clone(),
                 requested_version: requested_version.to_string(),
                 resolved_version,
+                platform: platform.to_string(),
+                browsers: browsers.to_vec(),
                 package_lock_checksum,
                 runner_relative_path: runner_relative_path.to_string(),
                 browser_entries,
                 prepared_at: now_string(),
+                last_used_at: now_string(),
             },
         )?;
         fs::rename(&staging, &runtime_root).map_err(|source| SetupError::Io {
             path: runtime_root.clone(),
             source,
         })?;
-        reusable_browser_runtime(&runtime_root, browsers_path)?.ok_or_else(|| {
+        let mut entry = reusable_browser_runtime(
+            &runtime_root,
+            browsers_path,
+            node_program,
+            container_program,
+        )?
+        .ok_or_else(|| {
             SetupError::InvalidArgument(format!(
                 "prepared Playwright runtime failed doctor checks: {}",
                 runtime_root.display()
             ))
-        })
+        })?;
+        entry.reused = false;
+        Ok(entry)
     })();
     if staging.exists() {
         let _ = fs::remove_dir_all(&staging);
     }
-    prepared.map(|mut entry| {
-        entry.reused = false;
-        entry
-    })
+    prepared
 }
 
 fn reusable_browser_runtime(
     runtime_root: &Path,
     browsers_path: &Path,
+    node_program: &Path,
+    container_program: &Path,
 ) -> Result<Option<BrowserRuntimeEntry>, SetupError> {
     let manifest_path = runtime_root.join("manifest.json");
     if !manifest_path.is_file() {
@@ -1019,18 +1171,56 @@ fn reusable_browser_runtime(
             path: manifest_path.clone(),
             source,
         })?;
-    let checks = browser_runtime_doctor(runtime_root, browsers_path, &manifest);
-    if checks.iter().any(|check| check.status != "passed") {
+    let checks = browser_runtime_doctor(runtime_root, browsers_path, &manifest, node_program);
+    if checks
+        .iter()
+        .any(|check| check.scope == "integrity" && check.status != "passed")
+    {
         return Ok(None);
     }
+    let mut manifest = manifest;
+    manifest.last_used_at = now_string();
+    write_json(&manifest_path, &manifest)?;
+    let host_ready = checks
+        .iter()
+        .filter(|check| check.scope == "launch")
+        .all(|check| check.status == "passed");
+    let (container_checks, managed_container) = if host_ready {
+        (Vec::new(), None)
+    } else {
+        managed_container_doctor(
+            runtime_root,
+            &manifest.resolved_version,
+            &manifest.browsers,
+            container_program,
+        )
+    };
+    let container_ready = managed_container.is_some();
+    let mut checks = checks;
+    checks.extend(container_checks);
     Ok(Some(BrowserRuntimeEntry {
+        status: if host_ready || container_ready {
+            "ready".to_string()
+        } else {
+            "unavailable".to_string()
+        },
+        backend: if host_ready {
+            "host".to_string()
+        } else if container_ready {
+            "managed_container".to_string()
+        } else {
+            "unavailable".to_string()
+        },
         runtime_id: manifest.runtime_id,
         requested_version: manifest.requested_version,
         resolved_version: manifest.resolved_version,
+        platform: manifest.platform,
+        browsers: manifest.browsers,
         runner_path: path_string(runtime_root.join(manifest.runner_relative_path)),
         manifest_path: path_string(manifest_path),
         reused: true,
         doctor_checks: checks,
+        managed_container,
     }))
 }
 
@@ -1038,6 +1228,7 @@ fn browser_runtime_doctor(
     runtime_root: &Path,
     browsers_path: &Path,
     manifest: &BrowserRuntimeManifest,
+    node_program: &Path,
 ) -> Vec<BrowserRuntimeDoctorCheck> {
     let mut checks = Vec::new();
     checks.push(browser_doctor_check(
@@ -1085,14 +1276,246 @@ fn browser_runtime_doctor(
         browsers_present,
         "Required Playwright browser cache entries are present.",
     ));
+    if checks.iter().all(|check| check.status == "passed") {
+        checks.extend(manifest.browsers.iter().map(|browser| {
+            browser_launch_doctor_check(runtime_root, browsers_path, node_program, browser)
+        }));
+    }
     checks
 }
 
 fn browser_doctor_check(check_id: &str, passed: bool, summary: &str) -> BrowserRuntimeDoctorCheck {
     BrowserRuntimeDoctorCheck {
         check_id: check_id.to_string(),
+        scope: "integrity".to_string(),
         status: if passed { "passed" } else { "failed" }.to_string(),
         summary: summary.to_string(),
+        failure_code: (!passed).then(|| "runtime_integrity_failed".to_string()),
+        diagnostic: None,
+        remediation: (!passed)
+            .then(|| "Rebuild the Loom-managed Playwright runtime cache.".to_string()),
+    }
+}
+
+fn browser_launch_doctor_check(
+    runtime_root: &Path,
+    browsers_path: &Path,
+    node_program: &Path,
+    browser: &str,
+) -> BrowserRuntimeDoctorCheck {
+    let script = format!(
+        "const {{ {browser} }} = require('playwright'); (async () => {{ const instance = await {browser}.launch({{headless:true}}); const page = await instance.newPage(); await page.setContent('<main>loom-browser-smoke</main>'); if ((await page.textContent('main')) !== 'loom-browser-smoke') throw new Error('smoke content mismatch'); await instance.close(); }})().catch(error => {{ console.error(error && error.stack ? error.stack : String(error)); process.exit(1); }});"
+    );
+    let mut command = Command::new(node_program);
+    command
+        .current_dir(runtime_root)
+        .args(["-e", script.as_str()])
+        .env("PLAYWRIGHT_BROWSERS_PATH", browsers_path);
+    match command.output() {
+        Ok(output) if output.status.success() => BrowserRuntimeDoctorCheck {
+            check_id: format!("launch_smoke_{browser}"),
+            scope: "launch".to_string(),
+            status: "passed".to_string(),
+            summary: format!("{browser} launched, rendered a page, and closed successfully."),
+            failure_code: None,
+            diagnostic: None,
+            remediation: None,
+        },
+        Ok(output) => {
+            let diagnostic = bounded_command_output(&output.stderr);
+            let failure_code = classify_browser_launch_failure(&diagnostic);
+            BrowserRuntimeDoctorCheck {
+                check_id: format!("launch_smoke_{browser}"),
+                scope: "launch".to_string(),
+                status: "failed".to_string(),
+                summary: format!("{browser} could not launch on the host."),
+                failure_code: Some(failure_code.to_string()),
+                diagnostic: Some(diagnostic),
+                remediation: Some(browser_launch_remediation(failure_code).to_string()),
+            }
+        }
+        Err(error) => BrowserRuntimeDoctorCheck {
+            check_id: format!("launch_smoke_{browser}"),
+            scope: "launch".to_string(),
+            status: "failed".to_string(),
+            summary: format!("{browser} launch doctor could not start Node.js."),
+            failure_code: Some("node_runtime_unavailable".to_string()),
+            diagnostic: Some(error.to_string()),
+            remediation: Some(
+                "Install a compatible Node.js runtime or make it available on PATH.".to_string(),
+            ),
+        },
+    }
+}
+
+fn classify_browser_launch_failure(diagnostic: &str) -> &'static str {
+    let lower = diagnostic.to_ascii_lowercase();
+    if lower.contains("missing dependencies")
+        || lower.contains("missing shared libraries")
+        || lower.contains("error while loading shared libraries")
+    {
+        "missing_system_dependencies"
+    } else if lower.contains("executable doesn't exist")
+        || lower.contains("executable does not exist")
+    {
+        "browser_executable_missing"
+    } else if lower.contains("permission denied") || lower.contains("eacces") {
+        "browser_launch_permission_denied"
+    } else if lower.contains("wrong architecture") || lower.contains("bad cpu type") {
+        "browser_platform_mismatch"
+    } else {
+        "browser_launch_failed"
+    }
+}
+
+fn browser_launch_remediation(failure_code: &str) -> &'static str {
+    match failure_code {
+        "missing_system_dependencies" => {
+            "Use Loom's managed Playwright container fallback or install the host browser system dependencies."
+        }
+        "browser_executable_missing" => "Reprepare the Loom browser runtime for this platform.",
+        "browser_launch_permission_denied" => {
+            "Correct host execution permissions or use Loom's managed Playwright container fallback."
+        }
+        "browser_platform_mismatch" => "Prepare the runtime on the current OS and CPU architecture.",
+        _ => "Inspect the bounded launch diagnostic and use Loom's managed Playwright container fallback.",
+    }
+}
+
+fn managed_container_doctor(
+    runtime_root: &Path,
+    resolved_version: &str,
+    browsers: &[String],
+    container_program: &Path,
+) -> (
+    Vec<BrowserRuntimeDoctorCheck>,
+    Option<ManagedBrowserContainer>,
+) {
+    let mut last_failure = None;
+    for distribution in ["noble", "jammy"] {
+        let image = format!("mcr.microsoft.com/playwright:v{resolved_version}-{distribution}");
+        match ensure_container_image(container_program, &image) {
+            Ok(()) => {
+                let script = browsers
+                    .iter()
+                    .map(|browser| {
+                        format!(
+                            "const {{ {browser} }} = require('/loom-runner/node_modules/playwright'); const b_{browser} = await {browser}.launch({{headless:true}}); const p_{browser} = await b_{browser}.newPage(); await p_{browser}.setContent('<main>loom-container-smoke</main>'); await b_{browser}.close();"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let script = format!(
+                    "(async () => {{ {script} }})().catch(error => {{ console.error(error && error.stack ? error.stack : String(error)); process.exit(1); }});"
+                );
+                let mount = format!("{}:/loom-runner:ro", runtime_root.display());
+                let output = Command::new(container_program)
+                    .args([
+                        "run",
+                        "--rm",
+                        "-v",
+                        mount.as_str(),
+                        "-e",
+                        "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright",
+                        "--entrypoint",
+                        "node",
+                        image.as_str(),
+                        "-e",
+                        script.as_str(),
+                    ])
+                    .output();
+                match output {
+                    Ok(output) if output.status.success() => {
+                        let descriptor = ManagedBrowserContainer {
+                            image: image.clone(),
+                            browser_path: "/ms-playwright".to_string(),
+                            project_mount_path: "/work".to_string(),
+                            host_gateway: "host.docker.internal".to_string(),
+                            command_prefix: vec![
+                                path_string(container_program),
+                                "run".to_string(),
+                                "--rm".to_string(),
+                                "--add-host".to_string(),
+                                "host.docker.internal:host-gateway".to_string(),
+                                "-v".to_string(),
+                                "${PROJECT_ROOT}:/work".to_string(),
+                                "-w".to_string(),
+                                "/work".to_string(),
+                                "-e".to_string(),
+                                "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright".to_string(),
+                                image,
+                            ],
+                        };
+                        return (
+                            vec![BrowserRuntimeDoctorCheck {
+                                check_id: "managed_container_smoke".to_string(),
+                                scope: "container".to_string(),
+                                status: "passed".to_string(),
+                                summary: "Managed Playwright container launched every requested browser successfully.".to_string(),
+                                failure_code: None,
+                                diagnostic: None,
+                                remediation: None,
+                            }],
+                            Some(descriptor),
+                        );
+                    }
+                    Ok(output) => {
+                        last_failure = Some((
+                            "managed_container_launch_failed",
+                            bounded_command_output(&output.stderr),
+                        ));
+                    }
+                    Err(error) => {
+                        last_failure = Some(("container_runtime_unavailable", error.to_string()));
+                    }
+                }
+            }
+            Err((code, diagnostic)) => last_failure = Some((code, diagnostic)),
+        }
+    }
+    let (failure_code, diagnostic) = last_failure.unwrap_or((
+        "container_runtime_unavailable",
+        "No managed container runtime candidate was available.".to_string(),
+    ));
+    (
+        vec![BrowserRuntimeDoctorCheck {
+            check_id: "managed_container_smoke".to_string(),
+            scope: "container".to_string(),
+            status: "failed".to_string(),
+            summary: "Managed Playwright container fallback is unavailable.".to_string(),
+            failure_code: Some(failure_code.to_string()),
+            diagnostic: Some(diagnostic),
+            remediation: Some(
+                "Start a Docker-compatible container runtime, restore registry access, or provide external browser evidence."
+                    .to_string(),
+            ),
+        }],
+        None,
+    )
+}
+
+fn ensure_container_image(
+    container_program: &Path,
+    image: &str,
+) -> Result<(), (&'static str, String)> {
+    match Command::new(container_program)
+        .args(["image", "inspect", image])
+        .output()
+    {
+        Ok(output) if output.status.success() => return Ok(()),
+        Err(error) => return Err(("container_runtime_unavailable", error.to_string())),
+        Ok(_) => {}
+    }
+    match Command::new(container_program)
+        .args(["pull", image])
+        .output()
+    {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err((
+            "managed_container_image_unavailable",
+            bounded_command_output(&output.stderr),
+        )),
+        Err(error) => Err(("container_runtime_unavailable", error.to_string())),
     }
 }
 
@@ -1114,13 +1537,59 @@ fn validate_playwright_version_spec(value: &str) -> Result<(), SetupError> {
     Ok(())
 }
 
-fn playwright_runtime_id(requested_version: &str) -> String {
+fn exact_playwright_version(value: &str) -> bool {
+    let core = value
+        .trim()
+        .trim_start_matches('v')
+        .split(['-', '+'])
+        .next()
+        .unwrap_or_default();
+    let parts = core.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+        })
+}
+
+fn browser_runtime_platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "windows",
+        value => value,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        value => value,
+    };
+    format!("{os}-{arch}")
+}
+
+fn playwright_resolution_id(
+    requested_version: &str,
+    platform: &str,
+    browsers: &[String],
+) -> String {
+    runtime_hash_id("resolve", requested_version, platform, browsers)
+}
+
+fn playwright_runtime_id(resolved_version: &str, platform: &str, browsers: &[String]) -> String {
+    runtime_hash_id("pw", resolved_version, platform, browsers)
+}
+
+fn runtime_hash_id(prefix: &str, version: &str, platform: &str, browsers: &[String]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(PLAYWRIGHT_RUNTIME_REVISION.as_bytes());
     hasher.update([0]);
-    hasher.update(requested_version.as_bytes());
+    hasher.update(version.as_bytes());
+    hasher.update([0]);
+    hasher.update(platform.as_bytes());
+    for browser in browsers {
+        hasher.update([0]);
+        hasher.update(browser.as_bytes());
+    }
     let digest = format!("{:x}", hasher.finalize());
-    format!("pw-{}", &digest[..16])
+    format!("{prefix}-{}", &digest[..16])
 }
 
 fn run_runtime_command(
@@ -1171,6 +1640,7 @@ fn directory_entry_names(path: &Path) -> Result<Vec<String>, SetupError> {
 fn browser_cache_entries_for_runtime(
     runtime_root: &Path,
     browsers_path: &Path,
+    requested_browsers: &[String],
 ) -> Result<Vec<String>, SetupError> {
     let browser_manifest = runtime_root.join("node_modules/playwright-core/browsers.json");
     let expected = read_json_value(&browser_manifest)
@@ -1181,8 +1651,10 @@ fn browser_cache_entries_for_runtime(
         .filter_map(|browser| {
             let name = browser.get("name").and_then(Value::as_str)?;
             let revision = browser.get("revision").and_then(Value::as_str)?;
-            matches!(name, "chromium" | "chromium-headless-shell" | "ffmpeg")
-                .then(|| format!("{}-{revision}", name.replace('-', "_")))
+            let selected = requested_browsers.iter().any(|requested| {
+                name == requested || (requested == "chromium" && name == "chromium-headless-shell")
+            }) || name == "ffmpeg";
+            selected.then(|| format!("{}-{revision}", name.replace('-', "_")))
         })
         .filter(|entry| browsers_path.join(entry).exists())
         .collect::<BTreeSet<_>>()
@@ -1192,6 +1664,117 @@ fn browser_cache_entries_for_runtime(
         return directory_entry_names(browsers_path);
     }
     Ok(expected)
+}
+
+fn garbage_collect_browser_runtime_cache(
+    runners_root: &Path,
+    browsers_path: &Path,
+    staging_root: &Path,
+    locks_root: &Path,
+    active_runtime_ids: &BTreeSet<String>,
+) -> Result<(), SetupError> {
+    let _lock = BrowserRuntimeLock::acquire(&locks_root.join("gc.lock"))?;
+    remove_aged_directories(staging_root, BROWSER_RUNTIME_STAGING_MAX_AGE)?;
+
+    let mut runners = directory_metadata(runners_root)?;
+    runners.sort_by(|left, right| right.1.cmp(&left.1));
+    for (index, (name, _, path)) in runners.iter().enumerate() {
+        let active = active_runtime_ids.contains(name);
+        let runtime_lock = locks_root.join(format!("{name}.lock"));
+        let locked = runtime_lock.exists() && !lock_is_stale(&runtime_lock);
+        let age = path_age(path);
+        let expired = age.is_some_and(|age| age > BROWSER_RUNTIME_MAX_AGE);
+        let over_capacity = index >= BROWSER_RUNTIME_MAX_RUNNERS
+            && age.is_some_and(|age| age > BROWSER_RUNTIME_CAPACITY_MIN_AGE);
+        if !active && !locked && (expired || over_capacity) {
+            fs::remove_dir_all(path).map_err(|source| SetupError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        }
+    }
+
+    let referenced_browser_entries = fs::read_dir(runners_root)
+        .map_err(|source| SetupError::Io {
+            path: runners_root.to_path_buf(),
+            source,
+        })?
+        .filter_map(Result::ok)
+        .filter_map(|entry| read_json_value(&entry.path().join("manifest.json")).ok())
+        .filter_map(|value| serde_json::from_value::<BrowserRuntimeManifest>(value).ok())
+        .flat_map(|manifest| manifest.browser_entries)
+        .collect::<BTreeSet<_>>();
+    let _browser_lock = BrowserRuntimeLock::acquire(&locks_root.join("browser-cache.lock"))?;
+    for entry in fs::read_dir(browsers_path).map_err(|source| SetupError::Io {
+        path: browsers_path.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| SetupError::Io {
+            path: browsers_path.to_path_buf(),
+            source,
+        })?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if entry.path().is_dir()
+            && !name.starts_with('.')
+            && !referenced_browser_entries.contains(&name)
+        {
+            fs::remove_dir_all(entry.path()).map_err(|source| SetupError::Io {
+                path: entry.path(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_aged_directories(root: &Path, max_age: Duration) -> Result<(), SetupError> {
+    for (_, _, path) in directory_metadata(root)? {
+        if path_age(&path).is_some_and(|age| age > max_age) {
+            fs::remove_dir_all(&path).map_err(|source| SetupError::Io {
+                path: path.clone(),
+                source,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn directory_metadata(root: &Path) -> Result<Vec<(String, SystemTime, PathBuf)>, SetupError> {
+    let mut values = Vec::new();
+    for entry in fs::read_dir(root).map_err(|source| SetupError::Io {
+        path: root.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| SetupError::Io {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let activity_path = path.join("manifest.json");
+        let modified = fs::metadata(if activity_path.is_file() {
+            &activity_path
+        } else {
+            &path
+        })
+        .and_then(|metadata| metadata.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+        values.push((
+            entry.file_name().to_string_lossy().to_string(),
+            modified,
+            path,
+        ));
+    }
+    Ok(values)
+}
+
+fn path_age(path: &Path) -> Option<Duration> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
 }
 
 struct BrowserRuntimeLock {

@@ -83,10 +83,17 @@ Keep viewport names stable so TaskResult evidence identifies what ran. Do not em
 
 ## Shared Browser Runtime
 
-The project owns `@playwright/test`, config, scripts, and lockfile. Loom's runtime contract supplies a reusable browser binary path through `PLAYWRIGHT_BROWSERS_PATH`. Apply that environment to the project-local runner without copying cached `node_modules` or browser binaries into the repository.
+The project owns `@playwright/test`, config, scripts, and lockfile. MCP resolves the exact project version from installed dependencies or lockfiles, prepares only the selected browsers, and attaches the matching execution environment to the closure request.
 
-- Keep the project runner version aligned with the prepared browser revision; restore dependencies before runtime preparation when version facts are stale.
+- Host caches are isolated by OS/CPU and keyed by exact Playwright version plus browser set. Never construct or persist a cache path yourself.
+- A `partial` runtime matrix is runnable: select the environment matching the current project runner and mark only checks tied to an unavailable target as blocked. Do not treat an unrelated workspace version as a global browser outage.
+- For a host backend, apply the returned `browserEnvironment` to the project-local runner.
+- When host launch fails, Loom may return a managed-container backend with an exact-version image, command prefix, mount path, and browser environment. Run through that descriptor; do not invent another image or run `playwright install --with-deps` in the project.
+- When `projectRunner` is absent and the closure is authorized to establish Playwright, add the first project-owned `@playwright/test` dependency at the exact `resolvedVersion` supplied by the runtime, create the minimal config/test root, and update the project lockfile. Do not choose a different range or latest version after runtime preparation.
+- If the preview/API runs on the host, replace only the loopback hostname with the returned `hostGateway` and preserve the discovered port. Services running in an existing container network require that network's supported address instead.
+- Keep the project runner version aligned with the prepared browser revision; restore project dependencies when the execution request identifies stale package facts.
 - Do not commit the shared cache path, downloaded browser binaries, or machine-specific absolute paths.
+- Do not copy Loom's shared runner `node_modules` into the repository. The shared runner is a preparation/doctor asset; project tests still use the project-owned package and config.
 
 ## Artifacts And Reporters
 

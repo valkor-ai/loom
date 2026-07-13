@@ -100,6 +100,8 @@ Name artifacts by surface, state, and viewport so a reviewer can identify them w
 
 Missing browser binaries, unavailable fonts/assets, credentials, inaccessible preview, or unsupported GPU may block rendered evidence. Record the attempted check and concrete blocker. Source inspection can be fallback evidence, but it cannot be reported as a successful rendered check.
 
+MCP owns browser runtime recovery. Host launch failure first uses the managed-container fallback; failure of both environments is carried to Review as an environment limitation. Do not modify application CSS, Playwright assertions, or global timeouts to compensate for a browser that never launched. Required rendered evidence then needs an environment retry, complete external evidence, or an explicit quality waiver.
+
 Separate host-specific rendering differences from product layout defects by confirming the selected browser revision, font availability, device scale, and color scheme before changing application styles or snapshot tolerance.
 
 ## Evidence Summary

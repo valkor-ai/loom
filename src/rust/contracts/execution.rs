@@ -25,6 +25,7 @@ pub enum TaskKind {
     FrontendExperience,
     RuntimeDelivery,
     RuntimeDeliveryClosure,
+    BrowserQualityClosure,
     IntegrationIncrement,
     VerificationIncrement,
     RefactorSupport,
@@ -754,8 +755,6 @@ pub struct FrontendQualitySelfCheck {
     pub content_boundary_evidence: Option<FrontendContentBoundaryEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_plan_files_checked: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub browser_check_refs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub design_token_evidence: Option<FrontendDesignTokenEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

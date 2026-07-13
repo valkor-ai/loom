@@ -8,13 +8,14 @@ use contracts::{
     code_reference_load_plan, code_reference_selection_for_task, execution::TaskArtifactRefs,
     package_naming_policy_for_reference_groups, planning::RequirementDetailItem,
     ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
-    ArchitectureArtifactContract, ArchitectureQualityRequirement, CodeQualityRequirement,
-    CoverageStatus, EngineeringQualityRequirement, ImplementationAction, TaskDefinition,
-    TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
-    TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
-    TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary,
-    TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus,
-    VerificationEvidence,
+    ArchitectureArtifactContract, ArchitectureQualityRequirement, BrowserEvidenceEnforcement,
+    BrowserRunnerSource, BrowserVerificationMode, BrowserVerificationProfile,
+    CodeQualityRequirement, CoverageStatus, EngineeringQualityRequirement, ImplementationAction,
+    ReferenceLoadPlanItem, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
+    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
+    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
+    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
+    TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -792,8 +793,10 @@ where
     normalize_browser_verification_assignments(&mut tasks);
     issues.extend(validate_browser_verification_assignments(&tasks));
     let browser_automation_facts = scan_browser_automation_facts(root, &baseline);
-    let browser_verification_profiles =
+    let source_browser_profiles =
         derive_browser_verification_profiles(&browser_automation_facts, &tasks);
+    let browser_verification_profiles =
+        materialize_browser_quality_closure(&mut groups, &mut tasks, source_browser_profiles);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -2559,22 +2562,37 @@ fn validate_runtime_delivery_closure_task(
             Some(&closure_group.group_id),
         ));
     }
-    if groups.last().map(|group| group.group_id.as_str()) != Some(closure_group.group_id.as_str()) {
+    let browser_closure_group = browser_quality_closure_group(groups, tasks);
+    let expected_final_group_id = browser_closure_group
+        .map(|group| group.group_id.as_str())
+        .unwrap_or(closure_group.group_id.as_str());
+    if groups.last().map(|group| group.group_id.as_str()) != Some(expected_final_group_id) {
         issues.push(issue(
             "RUNTIME_CLOSURE_GROUP_INVALID",
             "groups[].position",
-            "runtime_delivery_closure group must be the final TaskPlan group.",
+            "runtime_delivery_closure must be final unless an MCP-generated browser quality closure follows it.",
             Some(&closure_group.group_id),
         ));
     }
-    for group in groups
-        .iter()
-        .filter(|group| group.depends_on.contains(&closure_group.group_id))
+    if browser_closure_group
+        .is_some_and(|group| !group.depends_on.contains(&closure_group.group_id))
     {
         issues.push(issue(
             "RUNTIME_CLOSURE_GROUP_INVALID",
             "groups[].dependsOn",
-            "No TaskPlan group may depend on the final runtime_delivery_closure group.",
+            "The browser quality closure must depend on runtime_delivery_closure.",
+            browser_closure_group.map(|group| group.group_id.as_str()),
+        ));
+    }
+    for group in groups.iter().filter(|group| {
+        group.depends_on.contains(&closure_group.group_id)
+            && Some(group.group_id.as_str())
+                != browser_closure_group.map(|browser| browser.group_id.as_str())
+    }) {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].dependsOn",
+            "Only the MCP-generated browser quality closure may depend on runtime_delivery_closure.",
             Some(&group.group_id),
         ));
     }
@@ -2626,6 +2644,19 @@ fn validate_runtime_delivery_closure_task(
     issues
 }
 
+fn browser_quality_closure_group<'a>(
+    groups: &'a [TaskPlanGroup],
+    tasks: &[TaskDefinition],
+) -> Option<&'a TaskPlanGroup> {
+    let closure_group_id = tasks
+        .iter()
+        .find(|task| matches!(task.task_kind, TaskKind::BrowserQualityClosure))
+        .map(|task| task.group_id.as_str())?;
+    groups
+        .iter()
+        .find(|group| group.group_id == closure_group_id)
+}
+
 fn normalize_browser_verification_assignments(tasks: &mut [TaskDefinition]) {
     for task in tasks {
         if !task_requires_browser_verification(task)
@@ -2671,6 +2702,227 @@ fn validate_browser_verification_assignments(
             )
         })
         .collect()
+}
+
+fn materialize_browser_quality_closure(
+    groups: &mut Vec<TaskPlanGroup>,
+    tasks: &mut Vec<TaskDefinition>,
+    source_profiles: Vec<BrowserVerificationProfile>,
+) -> Vec<BrowserVerificationProfile> {
+    if source_profiles.is_empty() {
+        return Vec::new();
+    }
+
+    const PREFERRED_TASK_ID: &str = "task-browser-quality-closure";
+    const PREFERRED_GROUP_ID: &str = "group-browser-quality-closure";
+    let task_id = next_unique_identifier(
+        PREFERRED_TASK_ID,
+        tasks.iter().map(|task| task.task_id.as_str()),
+    );
+    let group_id = next_unique_identifier(
+        PREFERRED_GROUP_ID,
+        groups.iter().map(|group| group.group_id.as_str()),
+    );
+    let source_task_indices = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.task_id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut checks = Vec::new();
+    let mut verification_intents = Vec::new();
+    let mut scope_refs = BTreeSet::new();
+    let mut acceptance_refs = BTreeSet::new();
+    let mut surface_refs = BTreeSet::new();
+    let mut workflow_refs = BTreeSet::new();
+    let mut region_refs = BTreeSet::new();
+    let mut action_refs = BTreeSet::new();
+    let mut state_refs = BTreeSet::new();
+    let mut quality_rule_refs = BTreeSet::new();
+    let mut reference_plan = BTreeMap::<String, ReferenceLoadPlanItem>::new();
+    let mut has_business_flow_mode = false;
+    let mut has_rendered_inspection_mode = false;
+    let mut runner_source = BrowserRunnerSource::LoomManaged;
+    let mut installation_id = None;
+
+    for profile in source_profiles {
+        has_business_flow_mode |= profile.mode == BrowserVerificationMode::BusinessFlow;
+        has_rendered_inspection_mode |= profile.mode == BrowserVerificationMode::RenderedInspection;
+        runner_source = profile.runner_source;
+        installation_id = installation_id.or(profile.installation_id.clone());
+        surface_refs.extend(profile.surface_refs);
+        workflow_refs.extend(profile.workflow_refs);
+        region_refs.extend(profile.region_refs);
+        action_refs.extend(profile.action_refs);
+        state_refs.extend(profile.state_refs);
+        quality_rule_refs.extend(profile.quality_rule_refs);
+        for item in profile.reference_load_plan {
+            reference_plan.entry(item.path.clone()).or_insert(item);
+        }
+        let Some(task_index) = source_task_indices.get(&profile.task_id).copied() else {
+            continue;
+        };
+        let source_task = &mut tasks[task_index];
+        scope_refs.extend(source_task.scope_refs.iter().cloned());
+        acceptance_refs.extend(source_task.acceptance_refs.iter().cloned());
+        for source_verification_id in profile.verification_ids {
+            let Some(intent) = source_task
+                .verification_intents
+                .iter_mut()
+                .find(|intent| intent.verification_id == source_verification_id)
+            else {
+                continue;
+            };
+            let closure_verification_id = format!(
+                "verify-browser-{}-{}",
+                normalized_identifier(&source_task.task_id),
+                normalized_identifier(&source_verification_id)
+            );
+            let intent_required = profile.checks.iter().any(|check| {
+                check.source_verification_id == source_verification_id
+                    && check.enforcement == BrowserEvidenceEnforcement::Required
+            });
+            acceptance_refs.extend(intent.acceptance_refs.iter().cloned());
+            verification_intents.push(VerificationIntent {
+                verification_id: closure_verification_id.clone(),
+                acceptance_refs: Vec::new(),
+                requirement_detail_refs: Vec::new(),
+                behavior: intent.behavior.clone(),
+                preferred_evidence: intent_required
+                    .then_some(VerificationEvidence::BrowserAutomation)
+                    .into_iter()
+                    .collect(),
+                acceptable_evidence: vec![VerificationEvidence::BrowserAutomation],
+            });
+            intent
+                .preferred_evidence
+                .retain(|evidence| *evidence != VerificationEvidence::BrowserAutomation);
+            intent
+                .acceptable_evidence
+                .retain(|evidence| *evidence != VerificationEvidence::BrowserAutomation);
+            if intent.preferred_evidence.is_empty() && intent.acceptable_evidence.is_empty() {
+                intent
+                    .acceptable_evidence
+                    .push(VerificationEvidence::AutomatedTest);
+            }
+            checks.extend(
+                profile
+                    .checks
+                    .iter()
+                    .filter(|check| check.source_verification_id == source_verification_id)
+                    .cloned()
+                    .map(|mut check| {
+                        check.verification_id = closure_verification_id.clone();
+                        check
+                    }),
+            );
+        }
+    }
+    if checks.is_empty() {
+        return Vec::new();
+    }
+
+    let mode = if has_business_flow_mode {
+        BrowserVerificationMode::BusinessFlow
+    } else if has_rendered_inspection_mode {
+        BrowserVerificationMode::RenderedInspection
+    } else {
+        BrowserVerificationMode::SuiteSetup
+    };
+    let mut implementation_actions = vec![ImplementationAction::AddOrUpdateTests];
+    if runner_source != BrowserRunnerSource::ExistingProject {
+        implementation_actions.push(ImplementationAction::AddOrUpdateConfig);
+    }
+    tasks.push(TaskDefinition {
+        task_id: task_id.clone(),
+        group_id: group_id.clone(),
+        title: "Verify browser quality closure".to_string(),
+        task_kind: TaskKind::BrowserQualityClosure,
+        implementation_actions,
+        objective: "Create or adapt the task-scoped browser checks and close required rendered, interaction, and workflow evidence.".to_string(),
+        depends_on: Vec::new(),
+        scope_refs: scope_refs.iter().cloned().collect(),
+        acceptance_refs: acceptance_refs.iter().cloned().collect(),
+        requirement_detail_refs: Vec::new(),
+        write_boundary: TaskWriteBoundary {
+            forbidden_paths: vec![".loom".to_string()],
+            artifact_refs: TaskArtifactRefs::default(),
+        },
+        verification_intents: verification_intents.clone(),
+        concept_refs: Vec::new(),
+        concept_responsibilities: Vec::new(),
+        concept_verification_intents: Vec::new(),
+        frontend_experience_requirement: None,
+        runtime_delivery_requirement: None,
+        engineering_quality_requirement_refs: Vec::new(),
+        architecture_quality_requirement_refs: Vec::new(),
+        api_contract_requirement_refs: Vec::new(),
+        code_quality_requirement_refs: Vec::new(),
+    });
+    let dependency_group_ids = groups
+        .iter()
+        .filter(|group| !group.task_ids.is_empty())
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    groups.push(TaskPlanGroup {
+        group_id: group_id.clone(),
+        title: "Browser quality closure".to_string(),
+        objective: "Close the phase browser evidence after implementation and runtime delivery are complete.".to_string(),
+        depends_on: dependency_group_ids,
+        scope_refs: scope_refs.into_iter().collect(),
+        acceptance_refs: acceptance_refs.into_iter().collect(),
+        task_ids: vec![task_id.clone()],
+    });
+
+    vec![BrowserVerificationProfile {
+        profile_id: format!(
+            "browser-quality-closure-{}",
+            normalized_identifier(&task_id)
+        ),
+        task_id,
+        mode,
+        runner_source,
+        installation_id,
+        verification_ids: verification_intents
+            .into_iter()
+            .map(|intent| intent.verification_id)
+            .collect(),
+        surface_refs: surface_refs.into_iter().collect(),
+        workflow_refs: workflow_refs.into_iter().collect(),
+        region_refs: region_refs.into_iter().collect(),
+        action_refs: action_refs.into_iter().collect(),
+        state_refs: state_refs.into_iter().collect(),
+        quality_rule_refs: quality_rule_refs.into_iter().collect(),
+        checks,
+        reference_load_plan: reference_plan.into_values().collect(),
+    }]
+}
+
+fn normalized_identifier(value: &str) -> String {
+    let value = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    value.trim_matches('-').to_string()
+}
+
+fn next_unique_identifier<'a>(preferred: &str, existing: impl Iterator<Item = &'a str>) -> String {
+    let existing = existing.collect::<BTreeSet<_>>();
+    if !existing.contains(preferred) {
+        return preferred.to_string();
+    }
+    for suffix in 2.. {
+        let candidate = format!("{preferred}-{suffix}");
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded closure identifier suffix search should always return")
 }
 
 fn transitive_group_dependencies(groups: &[TaskPlanGroup], group_id: &str) -> BTreeSet<String> {
@@ -4557,7 +4809,10 @@ mod tests {
             "conceptVerificationIntents": [],
             "frontendExperienceRequirement": {
                 "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
-                "uiSurfaceOwnership": {"regionIdsInScope": ["region-main"]}
+                "uiSurfaceOwnership": {
+                    "regionIdsInScope": ["region-main"],
+                    "qualityRuleIdsInScope": ["verify.rendered_viewports"]
+                }
             },
             "engineeringQualityRequirementRefs": [],
             "architectureQualityRequirementRefs": [],
@@ -4640,6 +4895,21 @@ mod tests {
     }
 
     #[test]
+    fn generic_frontend_tests_do_not_create_browser_verification() {
+        let mut task = browser_task(1);
+        task.frontend_experience_requirement.as_mut().unwrap()["uiSurfaceOwnership"]
+            ["qualityRuleIdsInScope"] = json!([]);
+        let mut tasks = vec![task];
+
+        normalize_browser_verification_assignments(&mut tasks);
+
+        assert!(!tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(validate_browser_verification_assignments(&tasks).is_empty());
+    }
+
+    #[test]
     fn multiple_verification_intents_require_explicit_browser_owner() {
         let mut tasks = vec![browser_task(2)];
 
@@ -4652,5 +4922,156 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.code == "TASKPLAN_BROWSER_VERIFICATION_REQUIRED"));
+    }
+
+    #[test]
+    fn browser_verification_is_moved_to_final_mcp_closure() {
+        let mut tasks = vec![browser_task(1)];
+        let mut groups = vec![TaskPlanGroup {
+            group_id: "group-ui".to_string(),
+            title: "UI".to_string(),
+            objective: "Implement UI".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec![],
+            task_ids: vec!["task-ui".to_string()],
+        }];
+        normalize_browser_verification_assignments(&mut tasks);
+        let profiles = derive_browser_verification_profiles(
+            &contracts::BrowserAutomationFacts::default(),
+            &tasks,
+        );
+
+        let closure_profiles =
+            materialize_browser_quality_closure(&mut groups, &mut tasks, profiles);
+
+        assert_eq!(
+            groups.last().unwrap().group_id,
+            "group-browser-quality-closure"
+        );
+        assert_eq!(
+            tasks.last().unwrap().task_id,
+            "task-browser-quality-closure"
+        );
+        assert_eq!(closure_profiles.len(), 1);
+        assert_eq!(closure_profiles[0].task_id, "task-browser-quality-closure");
+        assert_eq!(closure_profiles[0].checks[0].source_task_id, "task-ui");
+        assert_eq!(
+            closure_profiles[0].checks[0].enforcement,
+            BrowserEvidenceEnforcement::Required
+        );
+        assert!(!tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(tasks.last().unwrap().verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+    }
+
+    #[test]
+    fn preferred_browser_evidence_remains_required_in_closure() {
+        let mut tasks = vec![browser_task(1)];
+        let mut groups = vec![TaskPlanGroup {
+            group_id: "group-ui".to_string(),
+            title: "UI".to_string(),
+            objective: "Implement UI".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec![],
+            task_ids: vec!["task-ui".to_string()],
+        }];
+        normalize_browser_verification_assignments(&mut tasks);
+        tasks[0].verification_intents[0].preferred_evidence =
+            vec![VerificationEvidence::BrowserAutomation];
+        let profiles = derive_browser_verification_profiles(
+            &contracts::BrowserAutomationFacts::default(),
+            &tasks,
+        );
+
+        let closure_profiles =
+            materialize_browser_quality_closure(&mut groups, &mut tasks, profiles);
+
+        assert!(closure_profiles[0]
+            .checks
+            .iter()
+            .all(|check| { check.enforcement == BrowserEvidenceEnforcement::Required }));
+        assert!(matches!(
+            tasks.last().unwrap().task_kind,
+            TaskKind::BrowserQualityClosure
+        ));
+    }
+
+    #[test]
+    fn browser_closure_uses_collision_safe_ids_and_structural_detection() {
+        let mut source = browser_task(1);
+        source.verification_intents[0]
+            .acceptable_evidence
+            .push(VerificationEvidence::BrowserAutomation);
+        let mut tasks = vec![
+            source,
+            TaskDefinition {
+                task_id: "task-browser-quality-closure".to_string(),
+                group_id: "group-browser-quality-closure".to_string(),
+                title: "User task with reserved-looking id".to_string(),
+                task_kind: TaskKind::FeatureIncrement,
+                implementation_actions: vec![],
+                objective: "Existing task".to_string(),
+                depends_on: vec![],
+                scope_refs: vec![],
+                acceptance_refs: vec![],
+                requirement_detail_refs: vec![],
+                write_boundary: TaskWriteBoundary {
+                    forbidden_paths: vec![],
+                    artifact_refs: TaskArtifactRefs::default(),
+                },
+                verification_intents: vec![],
+                concept_refs: vec![],
+                concept_responsibilities: vec![],
+                concept_verification_intents: vec![],
+                frontend_experience_requirement: None,
+                runtime_delivery_requirement: None,
+                engineering_quality_requirement_refs: vec![],
+                architecture_quality_requirement_refs: vec![],
+                api_contract_requirement_refs: vec![],
+                code_quality_requirement_refs: vec![],
+            },
+        ];
+        let mut groups = vec![
+            TaskPlanGroup {
+                group_id: "group-ui".to_string(),
+                title: "UI".to_string(),
+                objective: "Implement UI".to_string(),
+                depends_on: vec![],
+                scope_refs: vec![],
+                acceptance_refs: vec![],
+                task_ids: vec!["task-ui".to_string()],
+            },
+            TaskPlanGroup {
+                group_id: "group-browser-quality-closure".to_string(),
+                title: "Existing".to_string(),
+                objective: "Existing group".to_string(),
+                depends_on: vec![],
+                scope_refs: vec![],
+                acceptance_refs: vec![],
+                task_ids: vec!["task-browser-quality-closure".to_string()],
+            },
+        ];
+        let profiles = derive_browser_verification_profiles(
+            &contracts::BrowserAutomationFacts::default(),
+            &tasks,
+        );
+
+        materialize_browser_quality_closure(&mut groups, &mut tasks, profiles);
+
+        let closure = tasks
+            .iter()
+            .find(|task| matches!(task.task_kind, TaskKind::BrowserQualityClosure))
+            .unwrap();
+        assert_eq!(closure.task_id, "task-browser-quality-closure-2");
+        assert_eq!(closure.group_id, "group-browser-quality-closure-2");
+        assert_eq!(
+            browser_quality_closure_group(&groups, &tasks).map(|group| group.group_id.as_str()),
+            Some("group-browser-quality-closure-2")
+        );
     }
 }

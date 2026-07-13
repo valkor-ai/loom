@@ -22,6 +22,19 @@ Load this reference for failed, blocked, retried, inconsistent, or flaky browser
 
 Classify from evidence. A timeout alone does not identify the class.
 
+## Environment Route
+
+Browser installation and launch failures are not test retries and are not product-code repair work.
+
+Use `blocked` only when the supplied browser execution environment cannot launch or run. A reachable browser that observes application startup, API, selector, assertion, state, or workflow failure is `failed` product evidence and remains eligible for execution repair.
+
+1. MCP runs host integrity and launch smoke checks.
+2. Host launch failure triggers the exact-version managed-container smoke automatically.
+3. If both fail, Loom records blocked browser checks and proceeds to Review without creating an execution-repair task.
+4. The user gate offers only `retry_browser_environment`, `submit_external_browser_evidence`, and `approve_quality_waiver`.
+
+Retry only after the environment, container runtime, registry access, or system dependencies changed. External evidence must cover every required check id with a concrete report/artifact and observed outcome. A waiver records accepted missing evidence; it does not rewrite blocked checks as passed.
+
 ## Diagnostic Order
 
 1. Read the check status, attempts, command, and observed outcome.
@@ -126,4 +139,4 @@ Increase a timeout only when the accepted operation legitimately takes longer an
 - Retain artifacts from the failing/retried attempt until the repair is reviewed.
 - Successful first-pass checks usually need counts/refs, not artifact inspection.
 
-Repair is complete only when the same assigned check passes with the intended viewport/backend mode, the attempt history remains truthful, the root cause is removed rather than suppressed, and no unmanaged runtime process remains. If the environment still blocks execution, record the specific blocker and stop claiming completion.
+Repair is complete only when the same assigned check passes with the intended viewport/backend mode, the attempt history remains truthful, the root cause is removed rather than suppressed, and no unmanaged runtime process remains. If the supplied runtime becomes unavailable during the closure task, record the specific blocker once. Do not reinstall browsers, rerun the same launch command, mark the product task failed, or enter generic execution repair.

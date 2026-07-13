@@ -166,6 +166,25 @@ pub struct ManualReviewChangeRequest {
     pub details: Value,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserExternalEvidence {
+    pub check_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+    pub observed_outcome: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserQualityManualResolution {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_evidence: Vec<BrowserExternalEvidence>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiver_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualReviewResolution {
@@ -178,6 +197,8 @@ pub struct ManualReviewResolution {
     pub decision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_request: Option<ManualReviewChangeRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_quality_resolution: Option<BrowserQualityManualResolution>,
     pub next_action: ReviewNextAction,
     pub created_at: String,
 }

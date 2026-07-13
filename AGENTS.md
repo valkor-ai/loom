@@ -41,9 +41,13 @@ Add focused regression coverage for behavioral changes. Rust integration tests b
 - Audit existing contracts before adding fields or references; remove superseded and duplicate guidance in the same change.
 - Do not ask agents to author fields that MCP derives.
 - Test both selection and non-selection for every reference route.
+- Do not infer testing work from a language, framework, or frontend task alone. Testing references and browser checks require explicit task-owned evidence.
+- Classify browser launch/runtime failures as environment state; never send them through generic code execution repair.
 
 ## Commit & Pull Request Guidelines
 
 Branches must match CI patterns such as `feature/name`, `fix/name`, or `docs/name`. Commit subjects use Conventional Commits, including an optional lowercase scope: `fix(deploy): validate source roots`. Keep subjects under 200 characters.
 
 PRs should stay focused, explain the user-visible or contract impact, list verification commands, and link relevant issues. Include screenshots for documentation or UI-visible changes. Keep unrelated formatting and refactors out of the diff; never commit generated `.loom/` runtime state.
+
+Spend time on thinking; you do not need to use the commentary channel to report progress to me. DO NOT send optional commentary.

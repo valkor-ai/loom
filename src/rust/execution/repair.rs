@@ -369,6 +369,7 @@ fn materialize_delivery_execution_repair_inner(
     )?;
     let repair_origin = repair_origin(origin);
     let request_root = build_repair_execution_request(
+        root,
         &request_id,
         delivery_id,
         phase_id,
@@ -648,6 +649,7 @@ fn delivery_execution_repair_next(
 }
 
 fn build_repair_execution_request(
+    project_root: &Path,
     request_id: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -1004,7 +1006,7 @@ fn build_repair_execution_request(
     if let Some(browser_profile) = browser_profile {
         source_context.insert(
             "browserVerificationContext".to_string(),
-            browser_verification_repair_context(task_plan, browser_profile),
+            browser_verification_repair_context(project_root, task_plan, browser_profile),
         );
     }
     if !source_context.is_empty() {
@@ -1014,10 +1016,11 @@ fn build_repair_execution_request(
 }
 
 fn browser_verification_repair_context(
+    project_root: &Path,
     task_plan: &TaskPlan,
     browser_profile: &contracts::BrowserVerificationProfile,
 ) -> Value {
-    let mut context = browser_verification_context(task_plan, browser_profile);
+    let mut context = browser_verification_context(project_root, task_plan, browser_profile);
     let Some(reference_plan) = context
         .pointer_mut("/profile/referenceLoadPlan")
         .and_then(Value::as_array_mut)

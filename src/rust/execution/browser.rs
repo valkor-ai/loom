@@ -6,10 +6,12 @@ use std::{
 
 use contracts::{
     playwright_reference_load_plan, BrowserAutomationFacts, BrowserAutomationInstallation,
-    BrowserBackendMode, BrowserInstallationStatus, BrowserRunnerSource, BrowserTargetAvailability,
-    BrowserVerificationCheck, BrowserVerificationMode, BrowserVerificationProfile,
-    ImplementationAction, TaskDefinition, TaskKind, TechnicalBaselineContract,
+    BrowserBackendMode, BrowserEvidenceEnforcement, BrowserInstallationStatus, BrowserRunnerSource,
+    BrowserTargetAvailability, BrowserVerificationCheck, BrowserVerificationMode,
+    BrowserVerificationProfile, BrowserVersionResolutionSource, ImplementationAction,
+    TaskDefinition, TaskKind, TechnicalBaselineContract,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const SKIPPED_DIRS: &[&str] = &[
@@ -50,7 +52,34 @@ pub(crate) fn scan_browser_automation_facts(
     }
 }
 
-pub fn browser_runtime_package_specs(project_root: &Path) -> Vec<String> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRuntimeTarget {
+    pub target_id: String,
+    pub package_root: String,
+    pub dependency_name: String,
+    pub declared_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_version: Option<String>,
+    pub resolution_source: BrowserVersionResolutionSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BrowserRuntimePreparationState {
+    Ready,
+    Unavailable,
+    NeedsPreparation,
+}
+
+impl BrowserRuntimeTarget {
+    pub fn package_spec(&self) -> &str {
+        self.resolved_version
+            .as_deref()
+            .unwrap_or(&self.declared_version)
+    }
+}
+
+pub fn browser_runtime_targets(project_root: &Path) -> Vec<BrowserRuntimeTarget> {
     let mut manifests = Vec::new();
     collect_package_manifests(project_root, project_root, 0, &mut manifests);
     manifests.sort();
@@ -62,12 +91,53 @@ pub fn browser_runtime_package_specs(project_root: &Path) -> Vec<String> {
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())?;
             let package_root = manifest.parent()?;
             let (dependency_name, declared_version) = dependency_entry(&package)?;
-            installed_dependency_version(package_root, &dependency_name).or(Some(declared_version))
+            if !registry_version_spec(&declared_version) {
+                return None;
+            }
+            let package_root_ref = project_relative(project_root, package_root)?;
+            let (resolved_version, resolution_source) = resolve_project_playwright_version(
+                project_root,
+                package_root,
+                &package_root_ref,
+                &dependency_name,
+                &declared_version,
+            );
+            Some(BrowserRuntimeTarget {
+                target_id: format!(
+                    "pw-target-{}-{:08x}",
+                    stable_id_part(&package_root_ref),
+                    stable_hash(&format!("{package_root_ref}:{dependency_name}"))
+                ),
+                package_root: package_root_ref,
+                dependency_name,
+                declared_version,
+                resolved_version,
+                resolution_source,
+            })
         })
-        .filter(|version| registry_version_spec(version))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
         .collect()
+}
+
+pub(crate) fn browser_runtime_preparation_state(
+    project_root: &Path,
+) -> BrowserRuntimePreparationState {
+    let latest_path = project_root.join(".loom/runtime/browser-automation/latest.json");
+    let Some(latest) = fs::read(&latest_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return BrowserRuntimePreparationState::NeedsPreparation;
+    };
+    let current_targets = serde_json::to_value(browser_runtime_targets(project_root))
+        .unwrap_or_else(|_| Value::Array(vec![]));
+    if latest.get("projectTargets") != Some(&current_targets) {
+        return BrowserRuntimePreparationState::NeedsPreparation;
+    }
+    match latest.get("status").and_then(Value::as_str) {
+        Some("ready" | "partial") => BrowserRuntimePreparationState::Ready,
+        Some("unavailable") => BrowserRuntimePreparationState::Unavailable,
+        _ => BrowserRuntimePreparationState::NeedsPreparation,
+    }
 }
 
 pub(crate) fn derive_browser_verification_profiles(
@@ -157,13 +227,22 @@ fn installation_from_manifest(
     }
     evidence_refs.sort();
     evidence_refs.dedup();
-    let (dependency_name, dependency_version) = dependency
-        .map(|(name, version)| {
-            let installed = installed_dependency_version(package_root_path, &name);
-            (name, installed.or(Some(version)))
-        })
-        .unwrap_or_else(|| ("@playwright/test".to_string(), None));
-    let status = if dependency_version.is_some() && (!commands.is_empty() || config_ref.is_some()) {
+    let (dependency_name, declared_version, resolved_version, version_resolution_source) =
+        dependency
+            .map(|(name, version)| {
+                let package_root_ref = project_relative(project_root, package_root_path)
+                    .unwrap_or_else(|| ".".to_string());
+                let (resolved, source) = resolve_project_playwright_version(
+                    project_root,
+                    package_root_path,
+                    &package_root_ref,
+                    &name,
+                    &version,
+                );
+                (name, Some(version), resolved, Some(source))
+            })
+            .unwrap_or_else(|| ("@playwright/test".to_string(), None, None, None));
+    let status = if resolved_version.is_some() && (!commands.is_empty() || config_ref.is_some()) {
         BrowserInstallationStatus::Ready
     } else {
         BrowserInstallationStatus::Partial
@@ -178,12 +257,172 @@ fn installation_from_manifest(
         package_root,
         package_manager,
         dependency_name,
-        dependency_version,
+        declared_version,
+        resolved_version,
+        version_resolution_source,
         config_ref,
         test_roots,
         commands,
         evidence_refs,
     })
+}
+
+fn resolve_project_playwright_version(
+    project_root: &Path,
+    package_root: &Path,
+    package_root_ref: &str,
+    dependency_name: &str,
+    declared_version: &str,
+) -> (Option<String>, BrowserVersionResolutionSource) {
+    if let Some(version) = installed_dependency_version(package_root, dependency_name) {
+        return (
+            Some(version),
+            BrowserVersionResolutionSource::InstalledPackage,
+        );
+    }
+    if let Some(version) = package_lock_dependency_version(
+        project_root,
+        package_root,
+        package_root_ref,
+        dependency_name,
+    ) {
+        return (Some(version), BrowserVersionResolutionSource::PackageLock);
+    }
+    if let Some(version) = pnpm_lock_dependency_version(
+        project_root,
+        package_root,
+        package_root_ref,
+        dependency_name,
+    ) {
+        return (Some(version), BrowserVersionResolutionSource::PnpmLock);
+    }
+    if exact_registry_version(declared_version) {
+        return (
+            Some(declared_version.trim_start_matches('v').to_string()),
+            BrowserVersionResolutionSource::ExactManifest,
+        );
+    }
+    (
+        None,
+        BrowserVersionResolutionSource::RegistryResolutionRequired,
+    )
+}
+
+fn package_lock_dependency_version(
+    project_root: &Path,
+    package_root: &Path,
+    package_root_ref: &str,
+    dependency_name: &str,
+) -> Option<String> {
+    for lock_root in unique_roots(package_root, project_root) {
+        let Some(lock) = fs::read(lock_root.join("package-lock.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        else {
+            continue;
+        };
+        let workspace_prefix = if lock_root == project_root && package_root_ref != "." {
+            format!("{package_root_ref}/")
+        } else {
+            String::new()
+        };
+        for package_key in [
+            format!("{workspace_prefix}node_modules/{dependency_name}"),
+            format!("node_modules/{dependency_name}"),
+        ] {
+            if let Some(version) = lock
+                .pointer(&format!("/packages/{}", json_pointer_escape(&package_key)))
+                .and_then(|entry| entry.get("version"))
+                .and_then(Value::as_str)
+                .filter(|version| exact_registry_version(version))
+            {
+                return Some(version.to_string());
+            }
+        }
+        if let Some(version) = lock
+            .get("dependencies")
+            .and_then(|dependencies| dependencies.get(dependency_name))
+            .and_then(|entry| entry.get("version"))
+            .and_then(Value::as_str)
+            .filter(|version| exact_registry_version(version))
+        {
+            return Some(version.to_string());
+        }
+    }
+    None
+}
+
+fn pnpm_lock_dependency_version(
+    project_root: &Path,
+    package_root: &Path,
+    package_root_ref: &str,
+    dependency_name: &str,
+) -> Option<String> {
+    for lock_root in unique_roots(package_root, project_root) {
+        let Some(lock) = fs::read_to_string(lock_root.join("pnpm-lock.yaml"))
+            .ok()
+            .and_then(|text| serde_yaml::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        let importer_key = if lock_root == project_root {
+            package_root_ref
+        } else {
+            "."
+        };
+        for section in ["devDependencies", "dependencies", "optionalDependencies"] {
+            let dependency = lock
+                .get("importers")
+                .and_then(|value| value.get(importer_key))
+                .and_then(|value| value.get(section))
+                .and_then(|value| value.get(dependency_name));
+            let version = dependency
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    dependency
+                        .and_then(|value| value.get("version"))
+                        .and_then(Value::as_str)
+                })
+                .and_then(normalize_pnpm_version);
+            if version.is_some() {
+                return version;
+            }
+        }
+    }
+    None
+}
+
+fn normalize_pnpm_version(value: &str) -> Option<String> {
+    let version = value
+        .trim()
+        .trim_start_matches("npm:")
+        .split('(')
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('v');
+    exact_registry_version(version).then(|| version.to_string())
+}
+
+fn unique_roots<'a>(first: &'a Path, second: &'a Path) -> Vec<&'a Path> {
+    if first == second {
+        vec![first]
+    } else {
+        vec![first, second]
+    }
+}
+
+fn json_pointer_escape(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
+}
+
+fn exact_registry_version(value: &str) -> bool {
+    let value = value.trim().trim_start_matches('v');
+    let core = value.split(['-', '+']).next().unwrap_or_default();
+    let parts = core.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+        })
 }
 
 fn installed_dependency_version(package_root: &Path, dependency_name: &str) -> Option<String> {
@@ -454,6 +693,23 @@ fn derive_profile(
     }
     let mut checks = Vec::new();
     for verification_id in &verification_ids {
+        let enforcement = task
+            .verification_intents
+            .iter()
+            .find(|intent| intent.verification_id == *verification_id)
+            .map(|intent| {
+                if intent.preferred_evidence.iter().any(|evidence| {
+                    matches!(evidence, contracts::VerificationEvidence::BrowserAutomation)
+                }) || quality_rule_refs
+                    .iter()
+                    .any(|rule| rule == "verify.rendered_viewports")
+                {
+                    BrowserEvidenceEnforcement::Required
+                } else {
+                    BrowserEvidenceEnforcement::Supplemental
+                }
+            })
+            .unwrap_or(BrowserEvidenceEnforcement::Supplemental);
         for viewport_ref in &viewport_refs {
             checks.push(BrowserVerificationCheck {
                 check_id: format!(
@@ -463,6 +719,9 @@ fn derive_profile(
                     viewport_ref
                 ),
                 verification_id: verification_id.clone(),
+                source_task_id: task.task_id.clone(),
+                source_verification_id: verification_id.clone(),
+                enforcement,
                 viewport_ref: (*viewport_ref).to_string(),
                 backend_mode,
             });
@@ -494,20 +753,32 @@ fn derive_profile(
 }
 
 pub(crate) fn task_requires_browser_verification(task: &TaskDefinition) -> bool {
-    let owns_browser_verification = matches!(task.task_kind, TaskKind::VerificationIncrement)
-        || task
-            .implementation_actions
+    let explicitly_requests_browser_evidence = task.verification_intents.iter().any(|intent| {
+        intent
+            .preferred_evidence
             .iter()
-            .any(|action| matches!(action, ImplementationAction::AddOrUpdateTests))
-        || task.verification_intents.iter().any(|intent| {
-            intent
-                .preferred_evidence
-                .iter()
-                .chain(intent.acceptable_evidence.iter())
-                .any(|evidence| {
-                    matches!(evidence, contracts::VerificationEvidence::BrowserAutomation)
-                })
+            .chain(intent.acceptable_evidence.iter())
+            .any(|evidence| matches!(evidence, contracts::VerificationEvidence::BrowserAutomation))
+    });
+    let owns_browser_suite_setup = matches!(task.task_kind, TaskKind::VerificationIncrement)
+        && task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::AddOrUpdateTests | ImplementationAction::AddOrUpdateConfig
+            )
         });
+    let owns_rendered_quality_rule = task
+        .frontend_experience_requirement
+        .as_ref()
+        .and_then(|requirement| requirement.get("uiSurfaceOwnership"))
+        .is_some_and(|ownership| {
+            string_array(ownership, "qualityRuleIdsInScope")
+                .iter()
+                .any(|rule| rule == "verify.rendered_viewports")
+        });
+    let owns_browser_verification = explicitly_requests_browser_evidence
+        || owns_browser_suite_setup
+        || owns_rendered_quality_rule;
     if !owns_browser_verification {
         return false;
     }
@@ -663,7 +934,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_specs_prefer_installed_exact_version_and_ignore_local_specs() {
+    fn runtime_targets_prefer_installed_exact_version_and_ignore_local_specs() {
         let root = fixture_root("runtime-specs");
         fs::create_dir_all(root.join("web/node_modules/@playwright/test")).unwrap();
         fs::create_dir_all(root.join("local")).unwrap();
@@ -683,8 +954,130 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(browser_runtime_package_specs(&root), vec!["1.55.1"]);
+        let targets = browser_runtime_targets(&root);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].package_root, "web");
+        assert_eq!(targets[0].declared_version, "^1.55.0");
+        assert_eq!(targets[0].resolved_version.as_deref(), Some("1.55.1"));
+        assert_eq!(
+            targets[0].resolution_source,
+            BrowserVersionResolutionSource::InstalledPackage
+        );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_target_resolves_workspace_version_from_package_lock() {
+        let root = fixture_root("runtime-package-lock");
+        fs::create_dir_all(root.join("web")).unwrap();
+        fs::write(
+            root.join("web/package.json"),
+            r#"{"devDependencies":{"@playwright/test":"^1.55.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("package-lock.json"),
+            r#"{
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/@playwright/test": {"version": "1.55.1"}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let targets = browser_runtime_targets(&root);
+
+        assert_eq!(targets[0].resolved_version.as_deref(), Some("1.55.1"));
+        assert_eq!(
+            targets[0].resolution_source,
+            BrowserVersionResolutionSource::PackageLock
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_target_resolves_workspace_version_from_pnpm_importer() {
+        let root = fixture_root("runtime-pnpm-lock");
+        fs::create_dir_all(root.join("web")).unwrap();
+        fs::write(
+            root.join("web/package.json"),
+            r#"{"devDependencies":{"@playwright/test":"^1.55.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("pnpm-lock.yaml"),
+            r#"lockfileVersion: '9.0'
+importers:
+  web:
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.55.0
+        version: 1.55.2
+"#,
+        )
+        .unwrap();
+
+        let targets = browser_runtime_targets(&root);
+
+        assert_eq!(targets[0].resolved_version.as_deref(), Some("1.55.2"));
+        assert_eq!(
+            targets[0].resolution_source,
+            BrowserVersionResolutionSource::PnpmLock
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_preparation_state_requires_fresh_project_targets() {
+        let root = fixture_root("runtime-preparation-state");
+        fs::create_dir_all(root.join(".loom/runtime/browser-automation")).unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"devDependencies":{"@playwright/test":"1.55.0"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            browser_runtime_preparation_state(&root),
+            BrowserRuntimePreparationState::NeedsPreparation
+        );
+        let targets = browser_runtime_targets(&root);
+        fs::write(
+            root.join(".loom/runtime/browser-automation/latest.json"),
+            serde_json::to_vec(&json!({
+                "status": "ready",
+                "projectTargets": targets
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            browser_runtime_preparation_state(&root),
+            BrowserRuntimePreparationState::Ready
+        );
+        fs::write(
+            root.join(".loom/runtime/browser-automation/latest.json"),
+            serde_json::to_vec(&json!({
+                "status": "partial",
+                "projectTargets": targets
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            browser_runtime_preparation_state(&root),
+            BrowserRuntimePreparationState::Ready
+        );
+        fs::write(
+            root.join("package.json"),
+            r#"{"devDependencies":{"@playwright/test":"1.56.0"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            browser_runtime_preparation_state(&root),
+            BrowserRuntimePreparationState::NeedsPreparation
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -772,6 +1165,25 @@ mod tests {
             "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
             "uiSurfaceOwnership": {"regionIdsInScope": ["region-main"]}
         }));
+        task.verification_intents[0].acceptable_evidence =
+            vec![contracts::VerificationEvidence::AutomatedTest];
+
+        assert!(!task_requires_browser_verification(&task));
+        assert!(
+            derive_browser_verification_profiles(&BrowserAutomationFacts::default(), &[task])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn generic_test_implementation_does_not_imply_browser_ownership() {
+        let mut task = task();
+        task.frontend_experience_requirement = Some(json!({
+            "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
+            "uiSurfaceOwnership": {"regionIdsInScope": ["region-main"]}
+        }));
+        task.implementation_actions
+            .push(ImplementationAction::AddOrUpdateTests);
         task.verification_intents[0].acceptable_evidence =
             vec![contracts::VerificationEvidence::AutomatedTest];
 

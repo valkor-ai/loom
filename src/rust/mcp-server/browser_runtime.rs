@@ -71,7 +71,11 @@ fn prepare_with_setup(
             )
         }
     };
-    let versions = execution::browser_runtime_package_specs(project_root);
+    let targets = execution::browser_runtime_targets(project_root);
+    let versions = targets
+        .iter()
+        .map(|target| target.package_spec().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
     let mut command = Command::new(setup);
     command
         .current_dir(project_root)
@@ -89,16 +93,20 @@ fn prepare_with_setup(
     let output = match output {
         Ok(output) => output,
         Err(error) => {
-            return failed(
+            return unavailable_after_setup_failure(
+                &paths,
                 project_root_display,
                 "BROWSER_RUNTIME_SETUP_FAILED",
                 format!("loom-setup could not start: {error}"),
+                &targets,
+                &versions,
             )
         }
     };
     let _ = write_process_log(&paths.log_file, &output.stdout, &output.stderr);
     if !output.status.success() {
-        return failed(
+        return unavailable_after_setup_failure(
+            &paths,
             project_root_display,
             "BROWSER_RUNTIME_SETUP_FAILED",
             format!(
@@ -106,6 +114,8 @@ fn prepare_with_setup(
                 output.status.code().unwrap_or(-1),
                 bounded_text(&output.stderr)
             ),
+            &targets,
+            &versions,
         );
     }
     let report: Value = match serde_json::from_slice(&output.stdout) {
@@ -118,20 +128,124 @@ fn prepare_with_setup(
             )
         }
     };
+    let runtime_status = report
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable")
+        .to_string();
+    let host_browser_path = report.get("browsersPath").cloned().unwrap_or(Value::Null);
+    let runtime_environments = report
+        .get("runtimes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|runtime| {
+            let backend = runtime
+                .get("backend")
+                .and_then(Value::as_str)
+                .unwrap_or("host");
+            let browser_path = if backend == "managed_container" {
+                runtime
+                    .pointer("/managedContainer/browserPath")
+                    .cloned()
+                    .unwrap_or_else(|| json!("/ms-playwright"))
+            } else {
+                host_browser_path.clone()
+            };
+            json!({
+                "runtimeId": runtime.get("runtimeId").cloned().unwrap_or(Value::Null),
+                "requestedVersion": runtime.get("requestedVersion").cloned().unwrap_or(Value::Null),
+                "resolvedVersion": runtime.get("resolvedVersion").cloned().unwrap_or(Value::Null),
+                "status": runtime.get("status").cloned().unwrap_or(Value::Null),
+                "backend": backend,
+                "runnerPath": runtime.get("runnerPath").cloned().unwrap_or(Value::Null),
+                "browserEnvironment": {"PLAYWRIGHT_BROWSERS_PATH": browser_path},
+                "managedContainer": runtime.get("managedContainer").cloned().unwrap_or(Value::Null)
+            })
+        })
+        .collect::<Vec<_>>();
     let details = json!({
+        "status": runtime_status.clone(),
         "runtime": report,
-        "browserEnvironment": {
-            "PLAYWRIGHT_BROWSERS_PATH": report.get("browsersPath").cloned().unwrap_or(Value::Null)
-        },
+        "runtimeEnvironments": runtime_environments,
         "projectDependencyPolicy": "Keep @playwright/test in the project package manifest and lockfile. Reuse only Loom's shared browser cache across projects.",
-        "requestedProjectVersions": versions
+        "projectTargets": targets,
+        "requestedRuntimeVersions": versions
     });
     let _ = state::store::write_json_atomic(&paths.latest_file, &details);
     LoomMcpActionResult::Done(LoomMcpDoneResult {
         project_root: project_root_display.to_string(),
-        summary: "Playwright browser runtime is ready.".to_string(),
+        summary: match runtime_status.as_str() {
+            "ready" => "Playwright browser runtime is ready.".to_string(),
+            "partial" => {
+                "Playwright browser runtime is ready for part of the project target matrix."
+                    .to_string()
+            }
+            _ => "Playwright browser runtime is unavailable on both host and managed container."
+                .to_string(),
+        },
         details: Some(details),
-        warnings: vec![],
+        warnings: match runtime_status.as_str() {
+            "ready" => vec![],
+            "partial" => vec![
+                "Some project Playwright targets are unavailable; the browser closure must use the runtime matching each project runner and report only affected checks as blocked."
+                    .to_string(),
+            ],
+            _ => vec!["Browser environment evidence requires manual resolution.".to_string()],
+        },
+    })
+}
+
+fn unavailable_after_setup_failure(
+    paths: &BrowserRuntimePaths,
+    project_root: &str,
+    code: &str,
+    message: String,
+    targets: &[execution::BrowserRuntimeTarget],
+    versions: &std::collections::BTreeSet<String>,
+) -> LoomMcpActionResult {
+    let message = if message.trim().is_empty() {
+        "Playwright runtime preparation failed before a browser could be launched.".to_string()
+    } else {
+        message
+    };
+    let attempted_versions = if versions.is_empty() {
+        vec![Value::Null]
+    } else {
+        versions.iter().cloned().map(Value::String).collect()
+    };
+    let details = json!({
+        "status": "unavailable",
+        "runtime": {
+            "status": "unavailable",
+            "runtimes": attempted_versions.into_iter().map(|version| json!({
+                "status": "unavailable",
+                "backend": "unavailable",
+                "requestedVersion": version,
+                "doctorChecks": [{
+                    "checkId": "runtime_prepare",
+                    "scope": "environment",
+                    "status": "failed",
+                    "summary": message,
+                    "failureCode": code,
+                    "diagnostic": message,
+                    "remediation": "Repair the package, registry, Node.js, browser, or container environment before selecting retry_browser_environment."
+                }]
+            })).collect::<Vec<_>>()
+        },
+        "runtimeEnvironments": [],
+        "projectDependencyPolicy": "Keep @playwright/test in the project package manifest and lockfile. Reuse only Loom's shared browser cache across projects.",
+        "projectTargets": targets,
+        "requestedRuntimeVersions": versions
+    });
+    let _ = state::store::write_json_atomic(&paths.latest_file, &details);
+    LoomMcpActionResult::Done(LoomMcpDoneResult {
+        project_root: project_root.to_string(),
+        summary:
+            "Playwright browser runtime is unavailable in the supported execution environments."
+                .to_string(),
+        details: Some(details),
+        warnings: vec![message],
     })
 }
 
@@ -394,7 +508,7 @@ printf '{"status":"ready","cacheRoot":"/tmp/loom-cache","browsersPath":"/tmp/loo
         };
         assert_eq!(done.summary, "Playwright browser runtime is ready.");
         assert_eq!(
-            done.details.as_ref().unwrap()["requestedProjectVersions"],
+            done.details.as_ref().unwrap()["requestedRuntimeVersions"],
             json!(["^1.55.0"])
         );
         let args = fs::read_to_string(root.join("setup-args.txt")).unwrap();
@@ -454,6 +568,82 @@ printf '{"status":"ready","cacheRoot":"/tmp/loom-cache","browsersPath":"/tmp/loo
         assert!(!active_file.exists());
         thread::sleep(Duration::from_millis(100));
         assert!(!active_file.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn setup_failure_records_unavailable_state_for_workflow_review() {
+        let root = std::env::temp_dir().join(format!(
+            "loom-browser-runtime-failed-{}-{}",
+            std::process::id(),
+            state::store::now_millis()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"devDependencies":{"@playwright/test":"1.55.0"}}"#,
+        )
+        .unwrap();
+        let setup = root.join("failed-loom-setup.sh");
+        fs::write(
+            &setup,
+            "#!/bin/sh\necho 'registry unavailable' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&setup).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&setup, permissions).unwrap();
+
+        let result = prepare_with_setup(&root, &root.to_string_lossy(), &setup);
+
+        let LoomMcpActionResult::Done(done) = result else {
+            panic!("setup environment failure must become a reviewable unavailable state");
+        };
+        assert!(done.summary.contains("unavailable"));
+        let latest: Value =
+            state::store::read_json(&root.join(".loom/runtime/browser-automation/latest.json"))
+                .unwrap();
+        assert_eq!(latest["status"], "unavailable");
+        assert_eq!(
+            latest["runtime"]["runtimes"][0]["doctorChecks"][0]["status"],
+            "failed"
+        );
+        assert_eq!(latest["projectTargets"][0]["resolvedVersion"], "1.55.0");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn partial_runtime_matrix_remains_runnable_with_target_warning() {
+        let root = std::env::temp_dir().join(format!(
+            "loom-browser-runtime-partial-{}-{}",
+            std::process::id(),
+            state::store::now_millis()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let setup = root.join("partial-loom-setup.sh");
+        fs::write(
+            &setup,
+            r#"#!/bin/sh
+printf '{"status":"partial","cacheRoot":"/tmp/loom-cache","browsersPath":"/tmp/loom-cache/browsers","runtimes":[{"status":"ready","backend":"host","runtimeId":"pw-ready","requestedVersion":"1.55.0","resolvedVersion":"1.55.0","runnerPath":"/tmp/loom-cache/runner","doctorChecks":[]},{"status":"unavailable","backend":"unavailable","runtimeId":"pw-blocked","requestedVersion":"1.56.0","resolvedVersion":"1.56.0","runnerPath":"/tmp/loom-cache/runner-2","doctorChecks":[{"status":"failed","summary":"Browser launch failed."}]}]}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&setup).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&setup, permissions).unwrap();
+
+        let result = prepare_with_setup(&root, &root.to_string_lossy(), &setup);
+
+        let LoomMcpActionResult::Done(done) = result else {
+            panic!("partial runtime matrix must remain runnable");
+        };
+        assert!(done.summary.contains("part of the project target matrix"));
+        assert_eq!(done.warnings.len(), 1);
+        let latest: Value =
+            state::store::read_json(&root.join(".loom/runtime/browser-automation/latest.json"))
+                .unwrap();
+        assert_eq!(latest["status"], "partial");
+        assert_eq!(latest["runtimeEnvironments"].as_array().unwrap().len(), 2);
         fs::remove_dir_all(root).unwrap();
     }
 }

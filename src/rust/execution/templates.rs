@@ -1142,6 +1142,9 @@ mod tests {
             checks: vec![contracts::BrowserVerificationCheck {
                 check_id: "browser-ui-desktop".to_string(),
                 verification_id: "verify-ui".to_string(),
+                source_task_id: "task-ui".to_string(),
+                source_verification_id: "verify-ui".to_string(),
+                enforcement: contracts::BrowserEvidenceEnforcement::Supplemental,
                 viewport_ref: "desktop_primary".to_string(),
                 backend_mode: contracts::BrowserBackendMode::NotApplicable,
             }],

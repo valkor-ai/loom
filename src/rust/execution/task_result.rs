@@ -821,6 +821,7 @@ fn normalize_task_result_machine_fields(
     }
 
     normalize_verification_result_machine_fields(object, task, browser_profile);
+    normalize_browser_environment_blocked_result(object, browser_profile);
 
     let detail_ids = required_requirement_detail_ids(task);
     normalize_requirement_detail_evidence_machine_fields(object, task, &detail_ids);
@@ -844,9 +845,92 @@ fn normalize_task_result_machine_fields(
     if let Some(requirement) = &task.frontend_experience_requirement {
         normalize_frontend_experience_self_check(object, requirement);
     }
-    normalize_frontend_quality_self_check_shape(object, browser_profile);
+    normalize_frontend_quality_self_check_shape(object);
 
     raw_result
+}
+
+fn normalize_browser_environment_blocked_result(
+    object: &mut serde_json::Map<String, Value>,
+    browser_profile: Option<&BrowserVerificationProfile>,
+) {
+    let Some(profile) = browser_profile else {
+        return;
+    };
+    let required_check_ids = profile
+        .checks
+        .iter()
+        .filter(|check| check.enforcement == contracts::BrowserEvidenceEnforcement::Required)
+        .map(|check| check.check_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if required_check_ids.is_empty() {
+        return;
+    }
+    let Some(verifications) = object
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    let mut seen_required = BTreeSet::new();
+    let mut has_environment_blocker = false;
+    let mut has_product_failure_or_missing_check = false;
+    for verification in verifications.iter_mut() {
+        let mut verification_environment_blocked = false;
+        for check in verification
+            .get("browserChecks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(check_id) = check.get("checkId").and_then(Value::as_str) else {
+                continue;
+            };
+            if !required_check_ids.contains(check_id) {
+                continue;
+            }
+            seen_required.insert(check_id.to_string());
+            match check.get("status").and_then(Value::as_str) {
+                Some("passed") => {}
+                Some("blocked")
+                    if check
+                        .get("blockedReason")
+                        .and_then(Value::as_str)
+                        .is_some_and(|reason| !reason.trim().is_empty()) =>
+                {
+                    has_environment_blocker = true;
+                    verification_environment_blocked = true;
+                }
+                _ => has_product_failure_or_missing_check = true,
+            }
+        }
+        if verification_environment_blocked {
+            verification["status"] = json!("inconclusive");
+            verification["evidenceType"] = json!("browser_automation");
+            verification["summary"] = json!(
+                "Required browser evidence was blocked by the supplied execution environment."
+            );
+        }
+    }
+    if seen_required.len() != required_check_ids.len()
+        || !has_environment_blocker
+        || has_product_failure_or_missing_check
+    {
+        return;
+    }
+    object.insert("status".to_string(), json!("completed_with_notes"));
+    object.insert("failure".to_string(), Value::Null);
+    object.insert("blockedReasons".to_string(), json!([]));
+    let notes = object
+        .entry("notes".to_string())
+        .or_insert_with(|| json!([]));
+    let Some(notes) = notes.as_array_mut() else {
+        return;
+    };
+    let note = "Required browser evidence is environment-blocked and must be resolved in Review.";
+    if !notes.iter().any(|item| item.as_str() == Some(note)) {
+        notes.push(json!(note));
+    }
 }
 
 fn remove_non_applicable_evidence_fields(
@@ -997,10 +1081,7 @@ fn normalize_applicable_evidence_array_fields(
     }
 }
 
-fn normalize_frontend_quality_self_check_shape(
-    object: &mut serde_json::Map<String, Value>,
-    browser_profile: Option<&BrowserVerificationProfile>,
-) {
+fn normalize_frontend_quality_self_check_shape(object: &mut serde_json::Map<String, Value>) {
     let Some(self_check) = object
         .get_mut("frontendQualitySelfCheck")
         .and_then(Value::as_object_mut)
@@ -1012,16 +1093,6 @@ fn normalize_frontend_quality_self_check_shape(
     normalize_object_array_field(self_check, "surfaceStateEvidence");
     normalize_object_array_field(self_check, "surfaceQualityRuleEvidence");
     normalize_string_array_field(self_check, "referencePlanFilesChecked");
-    self_check.insert(
-        "browserCheckRefs".to_string(),
-        json!(browser_profile
-            .map(|profile| profile
-                .checks
-                .iter()
-                .map(|check| check.check_id.clone())
-                .collect::<Vec<_>>())
-            .unwrap_or_default()),
-    );
     normalize_string_array_field(self_check, "knownGaps");
     if !self_check
         .get("contentBoundaryEvidence")
@@ -1616,14 +1687,19 @@ fn validate_browser_verification_results(
                 BrowserCheckStatus::NotRun => {}
             }
         }
-        let all_browser_checks_passed = !verification.browser_checks.is_empty()
-            && verification
-                .browser_checks
+        let all_required_browser_checks_passed = verification.browser_checks.iter().all(|result| {
+            profile
+                .checks
                 .iter()
-                .all(|check| check.status == BrowserCheckStatus::Passed);
+                .find(|check| check.check_id == result.check_id)
+                .is_none_or(|check| {
+                    check.enforcement != contracts::BrowserEvidenceEnforcement::Required
+                        || result.status == BrowserCheckStatus::Passed
+                })
+        });
         if verification.status == "passed"
             && !verification.browser_checks.is_empty()
-            && !all_browser_checks_passed
+            && !all_required_browser_checks_passed
         {
             issues.push(issue(
                 "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
@@ -1641,19 +1717,30 @@ fn validate_browser_verification_results(
             "Browser checks must cover exactly the check ids in the MCP-derived browser profile.",
         ));
     }
-    if matches!(
-        result.status,
-        TaskResultStatus::Completed | TaskResultStatus::CompletedWithNotes
-    ) && result
+    let required_non_passed = result
         .verification_results
         .iter()
         .flat_map(|verification| verification.browser_checks.iter())
-        .any(|check| check.status != BrowserCheckStatus::Passed)
-    {
+        .filter(|result| {
+            result.status != BrowserCheckStatus::Passed
+                && profile.checks.iter().any(|check| {
+                    check.check_id == result.check_id
+                        && check.enforcement == contracts::BrowserEvidenceEnforcement::Required
+                })
+        })
+        .collect::<Vec<_>>();
+    let invalid_completed_browser_status = match result.status {
+        TaskResultStatus::Completed => !required_non_passed.is_empty(),
+        TaskResultStatus::CompletedWithNotes => required_non_passed
+            .iter()
+            .any(|check| check.status != BrowserCheckStatus::Blocked),
+        TaskResultStatus::Failed | TaskResultStatus::Blocked => false,
+    };
+    if invalid_completed_browser_status {
         issues.push(issue(
             "TASK_RESULT_BROWSER_VERIFICATION_INVALID",
             "verificationResults[].browserChecks[].status",
-            "Completed task results must pass every required browser check; use blocked or failed when browser verification cannot complete.",
+            "completed must pass every required browser check. completed_with_notes may carry required checks only when they are explicitly environment-blocked; failed and not_run required checks remain incomplete product verification.",
         ));
     }
 }
@@ -2823,7 +2910,10 @@ fn validate_blocked_reasons(
 }
 
 fn allows_empty_changed_files(task: &TaskDefinition, result: &TaskResult) -> bool {
-    if matches!(task.task_kind, TaskKind::VerificationIncrement) {
+    if matches!(
+        task.task_kind,
+        TaskKind::VerificationIncrement | TaskKind::BrowserQualityClosure
+    ) {
         return true;
     }
     matches!(
@@ -4882,6 +4972,9 @@ mod tests {
             checks: vec![contracts::BrowserVerificationCheck {
                 check_id: "browser-ui-desktop".to_string(),
                 verification_id: "verify-ui".to_string(),
+                source_task_id: "task-ui".to_string(),
+                source_verification_id: "verify-ui".to_string(),
+                enforcement: contracts::BrowserEvidenceEnforcement::Supplemental,
                 viewport_ref: "desktop_primary".to_string(),
                 backend_mode: contracts::BrowserBackendMode::NotApplicable,
             }],
@@ -5091,7 +5184,8 @@ mod tests {
 
     #[test]
     fn browser_verification_rejects_completed_not_run_check() {
-        let profile = browser_profile();
+        let mut profile = browser_profile();
+        profile.checks[0].enforcement = contracts::BrowserEvidenceEnforcement::Required;
         let result = browser_task_result(json!({
             "checkId": "browser-ui-desktop",
             "status": "not_run",
@@ -5110,5 +5204,78 @@ mod tests {
                 && issue.field_path.as_deref()
                     == Some("verificationResults[].browserChecks[].status")
         }));
+    }
+
+    #[test]
+    fn required_environment_blocker_is_normalized_to_reviewable_completion() {
+        let mut profile = browser_profile();
+        profile.checks[0].enforcement = contracts::BrowserEvidenceEnforcement::Required;
+        let mut value = serde_json::to_value(browser_task_result(json!({
+            "checkId": "browser-ui-desktop",
+            "status": "blocked",
+            "command": "",
+            "attempts": 1,
+            "artifactRefs": [],
+            "observedOutcome": "",
+            "blockedReason": "Chromium stopped launching after runtime preparation."
+        })))
+        .unwrap();
+        value["status"] = json!("failed");
+        value["failure"] = json!({
+            "code": "BROWSER_LAUNCH_FAILED",
+            "summary": "Chromium did not launch."
+        });
+        let object = value.as_object_mut().unwrap();
+
+        normalize_browser_environment_blocked_result(object, Some(&profile));
+
+        assert_eq!(object["status"], "completed_with_notes");
+        assert!(object["failure"].is_null());
+        assert_eq!(object["verificationResults"][0]["status"], "inconclusive");
+        let result: TaskResult = serde_json::from_value(value).unwrap();
+        let mut issues = Vec::new();
+        validate_browser_verification_results(&result, Some(&profile), &mut issues);
+        assert!(issues.is_empty(), "{issues:#?}");
+    }
+
+    #[test]
+    fn failed_browser_assertion_is_not_reclassified_as_environment_blocker() {
+        let mut profile = browser_profile();
+        profile.checks[0].enforcement = contracts::BrowserEvidenceEnforcement::Required;
+        let mut value = serde_json::to_value(browser_task_result(json!({
+            "checkId": "browser-ui-desktop",
+            "status": "failed",
+            "command": "pnpm playwright test",
+            "attempts": 1,
+            "artifactRefs": [],
+            "observedOutcome": "The submit action returned no success feedback.",
+            "blockedReason": null
+        })))
+        .unwrap();
+        value["status"] = json!("failed");
+        let object = value.as_object_mut().unwrap();
+
+        normalize_browser_environment_blocked_result(object, Some(&profile));
+
+        assert_eq!(object["status"], "failed");
+    }
+
+    #[test]
+    fn browser_verification_allows_completed_supplemental_gap() {
+        let profile = browser_profile();
+        let result = browser_task_result(json!({
+            "checkId": "browser-ui-desktop",
+            "status": "blocked",
+            "command": "",
+            "attempts": 0,
+            "artifactRefs": [],
+            "observedOutcome": "",
+            "blockedReason": "Browser execution is unavailable in this environment."
+        }));
+        let mut issues = Vec::new();
+
+        validate_browser_verification_results(&result, Some(&profile), &mut issues);
+
+        assert!(issues.is_empty(), "{issues:#?}");
     }
 }
