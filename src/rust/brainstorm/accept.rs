@@ -6,8 +6,8 @@ use contracts::{
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpFailure, LoomMcpFailureResult,
-    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, SubmitAcceptedEvent,
-    TransitionEngine, TransitionStore,
+    LoomMcpRepairableErrorResult, LoomMcpUserGateResult, OperationContext, ReadFieldGroupInput,
+    SubmitAcceptedEvent, TransitionEngine, TransitionStore,
 };
 use state::{
     lifecycle_store::FileTransitionStore, paths::from_project_relative,
@@ -87,7 +87,13 @@ where
     )? {
         return Ok(result);
     }
-    let raw = state::store::read_json_value(&candidate_file)?;
+    let mut raw = state::store::read_json_value(&candidate_file)?;
+    normalize_machine_owned_candidate_fields(
+        &input.project_root,
+        &input.request_ref,
+        &phase_id,
+        &mut raw,
+    )?;
     let gate_check = gate_check(&raw);
     if !gate_check.repair_issues.is_empty() {
         return Ok(LoomMcpActionResult::RepairableError(
@@ -260,6 +266,144 @@ where
             },
         )
         .map_err(to_state_error)
+}
+
+fn normalize_machine_owned_candidate_fields(
+    project_root: &str,
+    request_ref: &str,
+    phase_id: &str,
+    candidate: &mut serde_json::Value,
+) -> Result<(), state::store::StateError> {
+    let confirmed = state::read_field_group_flat(ReadFieldGroupInput {
+        project_root: project_root.to_string(),
+        request_ref: request_ref.to_string(),
+        group_id: "confirmed_clarification_state".to_string(),
+    })?;
+    let blocks = confirmed
+        .fields
+        .get("confirmedClarificationState.blocks")
+        .and_then(|field| field.value.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let final_summary_confirmed = confirmed
+        .fields
+        .get("confirmedClarificationState.finalSummaryConfirmed")
+        .and_then(|field| field.value.as_bool())
+        .unwrap_or(false);
+    let mut confirmed_blocks = Vec::new();
+    let mut skipped_blocks = Vec::new();
+    let mut presented_items = Vec::new();
+    let mut final_summary = None;
+    let mut final_confirmed_at = None;
+    for block in blocks {
+        let Some(block_name) = block.get("block").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let summary = block
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if block_name == "final_summary" {
+            final_summary = Some(summary);
+            final_confirmed_at = block
+                .get("confirmedAt")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            continue;
+        }
+        presented_items.push(block_name.to_string());
+        if block
+            .get("skipped")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            skipped_blocks.push(serde_json::json!({
+                "block": block_name,
+                "reason": block
+                    .get("skipReason")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(&summary)
+            }));
+        } else if block
+            .get("confirmedByUser")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            confirmed_blocks.push(serde_json::json!({
+                "block": block_name,
+                "summary": summary,
+                "confirmedByUser": true
+            }));
+        }
+    }
+    if final_summary_confirmed {
+        presented_items.push("final_summary".to_string());
+    }
+
+    let Some(object) = candidate.as_object_mut() else {
+        return Ok(());
+    };
+    object.insert(
+        "userConfirmation".to_string(),
+        serde_json::json!({
+            "confirmed": final_summary_confirmed,
+            "confirmedAt": final_confirmed_at,
+            "confirmationSummary": final_summary.unwrap_or_default(),
+            "confirmationBasis": {
+                "initialRequestOnly": false,
+                "summaryPresentedToUser": final_summary_confirmed,
+                "confirmedAfterSummary": final_summary_confirmed,
+                "presentedItems": presented_items
+            }
+        }),
+    );
+    object.insert(
+        "clarificationProgress".to_string(),
+        serde_json::json!({
+            "mode": "progressive_blocks",
+            "confirmedBlocks": confirmed_blocks,
+            "skippedBlocks": skipped_blocks,
+            "finalSummaryConfirmed": final_summary_confirmed
+        }),
+    );
+    if let Some(roadmap) = object
+        .get_mut("roadmap")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        roadmap.insert(
+            "currentPhaseId".to_string(),
+            serde_json::Value::String(phase_id.to_string()),
+        );
+    }
+    if let Some(current) = object
+        .get_mut("phasePlan")
+        .and_then(|phase_plan| phase_plan.get_mut("current"))
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        current.insert(
+            "phaseId".to_string(),
+            serde_json::Value::String(phase_id.to_string()),
+        );
+    }
+
+    let Some(updates) = candidate
+        .pointer_mut("/conceptGrounding/glossaryUpdates")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+
+    for (index, update) in updates.iter_mut().enumerate() {
+        let Some(update) = update.as_object_mut() else {
+            continue;
+        };
+        update.insert(
+            "updateId".to_string(),
+            serde_json::Value::String(format!("glossary_update_{}", index + 1)),
+        );
+    }
+    Ok(())
 }
 
 fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateError {

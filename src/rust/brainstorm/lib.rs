@@ -10,7 +10,7 @@ mod validation;
 
 use std::{collections::BTreeMap, path::Path};
 
-use contracts::{BrainstormContract, NextPhasePreview};
+use contracts::{BrainstormContract, ClarificationBlockName, NextPhasePreview};
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, DeliveryIndex, DeliveryLifecycleStatus,
     DeliveryPhaseState, DomainDispatcher, LoomMcpActionResult, RouteAction, RouteActionKind,
@@ -22,6 +22,8 @@ use state::{
     paths::{from_project_relative, DeliveryPhaseLocator},
     store::{ensure_dir, read_json_value, StateError, StateResult},
 };
+
+use crate::gate::{gate_for_block, to_value};
 
 pub use accept::accept_brainstorm_file;
 pub use clarification::{confirm_block, BrainstormConfirmBlockInput};
@@ -74,6 +76,23 @@ impl DomainDispatcher for BrainstormDomainDispatcher {
 
 pub fn module_name() -> &'static str {
     "brainstorm"
+}
+
+/// Return the active gate for a phase continuation before the user confirms its scope.
+///
+/// Phase handoff creates the clarification request and immediately exposes this gate. Keeping
+/// the gate shape identical to the initial Brainstorm gate lets adapters ask the current
+/// user-facing question without guessing from a generic phase-handoff message.
+pub fn phase_scope_gate() -> Value {
+    let current_block = ClarificationBlockName::PhaseScope;
+    let gate = gate_for_block(current_block, vec![], vec![]);
+    to_value(&gate)
+}
+
+pub fn phase_scope_prompt(phase_id: &str) -> String {
+    format!(
+        "Brainstorm clarification for {phase_id} is active. Do not wait for @loom continue or report this as an optional next step. Immediately inspect the returned requestRef, read its required requestReadPlan groups, run the required request-scoped knowledge context steps, and present the active phase-scope options in the user's language. Wait for the user's visible confirmation before calling loom.brainstormConfirmBlock."
+    )
 }
 
 pub fn next_phase_handoff_from_preview(
@@ -406,6 +425,23 @@ pub fn materialize_phase_brainstorm_from_preview(
         .iter_mut()
         .find(|phase| phase.phase_id == handoff.phase_id)
     {
+        let mut gate = phase_scope_gate();
+        if let Some(object) = gate.as_object_mut() {
+            object.insert("gateId".to_string(), json!("phase_brainstorm_required"));
+            object.insert("kind".to_string(), json!("phase_brainstorm_continuation"));
+            object.insert("requestRef".to_string(), json!(stored.request_ref.clone()));
+            object.insert(
+                "nextPhaseSeed".to_string(),
+                json!({
+                    "fromPhaseId": source_phase_id.clone(),
+                    "phaseId": handoff.phase_id.clone(),
+                    "title": handoff.title.clone(),
+                    "goal": handoff.goal.clone(),
+                    "scopePreview": handoff.scope_preview.clone(),
+                    "reason": handoff.reason.clone()
+                }),
+            );
+        }
         active_phase
             .latest_refs
             .insert("brainstormRequestId".to_string(), request_id.clone());
@@ -430,20 +466,10 @@ pub fn materialize_phase_brainstorm_from_preview(
             kind: RouteActionKind::BrainstormClarification,
             source: "repository_context_accept".to_string(),
             reason: "repository_context_ready_for_phase_brainstorm".to_string(),
-            prompt: Some(
-                "Read the current Brainstorm block request, query request-scoped knowledge for this block, and confirm the next active phase boundary in the user's language."
-                    .to_string(),
-            ),
+            prompt: Some(phase_scope_prompt(&handoff.phase_id)),
             accepted_responses: vec!["reply_in_chat".to_string()],
             request_ref: Some(stored.request_ref.clone()),
-            details: Some(json!({
-                "fromPhaseId": source_phase_id,
-                "phaseId": handoff.phase_id,
-                "title": handoff.title,
-                "goal": handoff.goal,
-                "scopePreview": handoff.scope_preview,
-                "reason": handoff.reason
-            })),
+            details: Some(gate),
             target_phase_id: None,
         });
     }

@@ -266,9 +266,8 @@ fn build_request_root(
     let code_quality_seed = build_code_quality_seed(baseline);
     let code_quality_template = code_quality_requirement_template(&code_quality_seed);
     let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
-    let outline_result_template =
-        taskplan_outline_result_template(request_id, delivery_id, phase_id);
-    let group_result_template = taskplan_group_result_template(request_id, delivery_id, phase_id);
+    let outline_result_template = taskplan_outline_result_template();
+    let group_result_template = taskplan_group_result_template();
     let mut output_contract = json!({
         "artifactKind": ArtifactKind::TaskPlanCandidate,
         "writeMode": "taskplan_grouped",
@@ -718,7 +717,13 @@ where
         "nfrRefs": value_field(&fields, "allowedRefs.nfrRefs"),
         "riskRefs": value_field(&fields, "allowedRefs.riskRefs")
     });
-    let outline_value = read_project_json_value(root, &outline_ref)?;
+    let mut outline_value = read_project_json_value(root, &outline_ref)?;
+    normalize_taskplan_outline_envelope(
+        &mut outline_value,
+        &authorized.request_id,
+        &delivery_id,
+        &phase_id,
+    );
     let outline: TaskPlanOutlineCandidateAgentWritable = match deserialize_candidate(
         outline_value,
         "outline",
@@ -736,7 +741,7 @@ where
             ));
         }
     };
-    let mut issues = validate_outline(&outline, &authorized.request_id, &delivery_id, &phase_id);
+    let mut issues = validate_outline(&outline);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
@@ -754,7 +759,13 @@ where
     let mut tasks = Vec::new();
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
-        let group_value = read_project_json_value(root, &group_file)?;
+        let mut group_value = read_project_json_value(root, &group_file)?;
+        normalize_taskplan_group_envelope(
+            &mut group_value,
+            &authorized.request_id,
+            &delivery_id,
+            &phase_id,
+        );
         let mut candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
             group_value,
             "group",
@@ -767,13 +778,7 @@ where
             }
         };
         normalize_taskplan_write_boundaries(&mut candidate.tasks, &allowed_refs);
-        issues.extend(validate_group_candidate(
-            &candidate,
-            group,
-            &authorized.request_id,
-            &delivery_id,
-            &phase_id,
-        ));
+        issues.extend(validate_group_candidate(&candidate, group));
         groups.push(candidate.group.clone());
         tasks.extend(candidate.tasks);
     }
@@ -784,6 +789,7 @@ where
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
+    normalize_runtime_delivery_requirements(&mut tasks, &aac);
     let engineering_quality_requirements =
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
     let architecture_quality_requirements =
@@ -1074,37 +1080,46 @@ pub(crate) fn update_run_summary(run: &mut TaskPlanRun) {
     run.summary = summary;
 }
 
-fn validate_outline(
-    outline: &TaskPlanOutlineCandidateAgentWritable,
+fn normalize_taskplan_outline_envelope(
+    raw: &mut Value,
     request_id: &str,
     delivery_id: &str,
     phase_id: &str,
+) {
+    let Some(object) = raw.as_object_mut() else {
+        return;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert("requestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert(
+        "taskPlanId".to_string(),
+        json!(format!("taskplan-{phase_id}")),
+    );
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+}
+
+fn normalize_taskplan_group_envelope(
+    raw: &mut Value,
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) {
+    let Some(object) = raw.as_object_mut() else {
+        return;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert("requestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+}
+
+fn validate_outline(
+    outline: &TaskPlanOutlineCandidateAgentWritable,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if outline.request_id != request_id {
-        issues.push(issue(
-            "REQUEST_ID_MISMATCH",
-            "outline.requestId",
-            "TaskPlan outline requestId must match the active request.",
-            Some("outline"),
-        ));
-    }
-    if outline.delivery_id != delivery_id {
-        issues.push(issue(
-            "DELIVERY_ID_MISMATCH",
-            "outline.deliveryId",
-            "TaskPlan outline deliveryId must match the active delivery.",
-            Some("outline"),
-        ));
-    }
-    if outline.phase_id != phase_id {
-        issues.push(issue(
-            "PHASE_ID_MISMATCH",
-            "outline.phaseId",
-            "TaskPlan outline phaseId must match the active phase.",
-            Some("outline"),
-        ));
-    }
     if outline.groups.is_empty() {
         issues.push(issue(
             "GROUPS_REQUIRED",
@@ -1119,36 +1134,9 @@ fn validate_outline(
 fn validate_group_candidate(
     candidate: &TaskPlanGroupCandidateAgentWritable,
     expected: &TaskPlanGroup,
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     let target = Some(candidate.group.group_id.as_str());
-    if candidate.request_id != request_id {
-        issues.push(issue(
-            "REQUEST_ID_MISMATCH",
-            "group.requestId",
-            "TaskPlan group requestId must match the active request.",
-            target,
-        ));
-    }
-    if candidate.delivery_id != delivery_id {
-        issues.push(issue(
-            "DELIVERY_ID_MISMATCH",
-            "group.deliveryId",
-            "TaskPlan group deliveryId must match the active delivery.",
-            target,
-        ));
-    }
-    if candidate.phase_id != phase_id {
-        issues.push(issue(
-            "PHASE_ID_MISMATCH",
-            "group.phaseId",
-            "TaskPlan group phaseId must match the active phase.",
-            target,
-        ));
-    }
     if candidate.group.group_id != expected.group_id {
         issues.push(issue(
             "GROUP_ID_MISMATCH",
@@ -1489,6 +1477,71 @@ fn normalize_taskplan_candidate_relationships(
     normalize_missing_requirement_detail_task_refs(tasks, pgc, aac);
     normalize_task_verification_detail_refs(tasks, pgc, aac);
     normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
+}
+
+fn normalize_runtime_delivery_requirements(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    let Some(runtime_delivery) = aac.runtime_delivery.as_ref() else {
+        for task in tasks {
+            task.runtime_delivery_requirement = None;
+        }
+        return;
+    };
+    let runtime_ref = "sourceRefs.architectureArtifactContractRef#/runtimeDelivery";
+    let contract_fields = runtime_delivery_closure_fields(runtime_delivery);
+    let contract_field_set = contract_fields.iter().cloned().collect::<BTreeSet<_>>();
+
+    for task in tasks {
+        let Some(requirement) = task.runtime_delivery_requirement.as_mut() else {
+            continue;
+        };
+        if !requirement.applies_to_this_task {
+            requirement.runtime_delivery_ref = None;
+            requirement.affected_contract_fields.clear();
+            requirement.required_code_level_checks.clear();
+            continue;
+        }
+
+        requirement.runtime_delivery_ref = Some(runtime_ref.to_string());
+        let is_closure = matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure);
+        let requested_fields = if is_closure {
+            contract_fields.clone()
+        } else {
+            requirement
+                .affected_contract_fields
+                .iter()
+                .filter(|field| contract_field_set.contains(*field))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        requirement.affected_contract_fields = unique_strings(requested_fields);
+
+        let raw_checks = std::mem::take(&mut requirement.required_code_level_checks);
+        let mut checks_by_field = raw_checks
+            .into_iter()
+            .filter_map(|check| {
+                check
+                    .contract_field
+                    .clone()
+                    .filter(|field| requirement.affected_contract_fields.contains(field))
+                    .map(|field| (field, check))
+            })
+            .collect::<BTreeMap<_, _>>();
+        requirement.required_code_level_checks = requirement
+            .affected_contract_fields
+            .iter()
+            .map(|field| {
+                let mut check = checks_by_field
+                    .remove(field)
+                    .unwrap_or_else(|| runtime_delivery_check_for_field(field));
+                check.check_id = runtime_delivery_check_id(field);
+                check.contract_field = Some(field.clone());
+                check
+            })
+            .collect();
+    }
 }
 
 fn normalize_frontend_experience_requirements(
@@ -3754,7 +3807,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
             "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified.",
-            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement exactly from that template.",
+            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement scope and evidence expectations from that template. Loom derives runtimeDeliveryRef, contractField, and checkId values during accept.",
             "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
             "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
         },
@@ -3787,7 +3840,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "seedSource": "codeQualitySeed",
             "requirementSource": "outputContract.codeQualityRequirementTemplate",
             "assignmentRule": "loom.taskPlanAcceptFile derives task codeQualityRequirementRefs from TechnicalBaseline stack signals and task scope; do not inline full code quality requirements inside every task.",
-            "referenceRule": "Use codeQualitySeed.codeStackSignals to understand available language/framework signals, then assign task-scoped codeQualityRequirementRefs with their own referenceLoadPlan; groups are semantic evidence labels and must not be used as path maps.",
+            "referenceRule": "Use codeQualitySeed.codeStackSignals to choose task scope and implementation practices. Do not write codeQualityRequirementRefs or inline reference paths; Loom derives the task-scoped requirement and referenceLoadPlan during accept. Groups are semantic evidence labels, not path maps.",
             "nonDuplicationRule": "Do not repeat language or framework best-practice prose in task objective or verification intents; use codeQualityRequirementRefs and TaskResult codeQualityEvidence."
         }
     })
@@ -3811,7 +3864,7 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "packageNamingPolicySource": "codeQualitySeed.packageNamingPolicy",
         "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
-        "taskRefRule": "Tasks reference generated requirements by codeQualityRequirementRefs; do not inline language or framework reference prose inside tasks."
+        "taskRefRule": "Loom attaches the generated requirement through codeQualityRequirementRefs during accept; agents must not write that field or inline language/framework reference prose inside tasks."
     })
 }
 
@@ -3829,7 +3882,7 @@ fn engineering_quality_requirement_template(
         "alignmentTargets": persistence_alignment_targets(),
         "riskFieldKinds": persistence_risk_field_kinds(),
         "verificationObligations": persistence_verification_obligations(),
-        "taskRefRule": "Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task."
+        "taskRefRule": "Loom attaches this generated requirement through engineeringQualityRequirementRefs during accept; agents must not write that field or duplicate the full object in each task."
     })
 }
 
@@ -3856,7 +3909,7 @@ fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract)
             "TaskResult architectureQualityEvidence must cite requirementId and verificationIds for the task-owned architecture quality refs.",
             "Verification summaries should state how implementation respected the referenced decision, NFR, or risk mitigation."
         ],
-        "taskRefRule": "Tasks reference generated requirements by architectureQualityRequirementRefs; do not inline or duplicate full decisions, NFRs, or risks inside every task."
+        "taskRefRule": "Loom attaches generated requirements through architectureQualityRequirementRefs during accept; agents must not write that field or duplicate full decisions, NFRs, or risks inside every task."
     })
 }
 
@@ -3876,7 +3929,7 @@ fn api_contract_requirement_template(aac: &ArchitectureArtifactContract) -> Valu
         "interfaceRefs": interface_refs,
         "implementationObligations": api_contract_implementation_obligations(),
         "verificationObligations": api_contract_verification_obligations(),
-        "taskRefRule": "Tasks reference generated requirements by apiContractRequirementRefs; do not inline or duplicate full API requirements inside every task."
+        "taskRefRule": "Loom attaches generated requirements through apiContractRequirementRefs during accept; agents must not write that field or duplicate full API requirements inside every task."
     })
 }
 
@@ -4406,7 +4459,6 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
         "runtimeDeliveryRequirement": {
             "appliesToThisTask": true,
             "reason": "Final code-level closure for the RuntimeDeliveryContract.",
-            "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
             "affectedContractFields": affected_contract_fields,
             "requiredCodeLevelChecks": required_code_level_checks,
             "evidenceExpectedInTaskResult": [],
@@ -4455,11 +4507,32 @@ fn runtime_delivery_closure_fields(runtime_delivery: &Value) -> Vec<String> {
 
 fn runtime_delivery_closure_check(contract_field: &str) -> Value {
     json!({
-        "checkId": runtime_delivery_closure_check_id(contract_field),
-        "contractField": contract_field,
         "objective": format!("Confirm {contract_field} is closed at code level against RuntimeDeliveryContract."),
         "acceptableEvidence": acceptable_evidence_for_runtime_closure_field(contract_field)
     })
+}
+
+fn runtime_delivery_check_for_field(contract_field: &str) -> contracts::RuntimeCodeLevelCheck {
+    contracts::RuntimeCodeLevelCheck {
+        check_id: runtime_delivery_check_id(contract_field),
+        contract_field: Some(contract_field.to_string()),
+        objective: format!(
+            "Confirm {contract_field} is closed at code level against RuntimeDeliveryContract."
+        ),
+        acceptable_evidence: acceptable_evidence_for_runtime_closure_field(contract_field)
+            .into_iter()
+            .filter_map(|evidence| match evidence {
+                "static_check" => Some(VerificationEvidence::StaticCheck),
+                "runtime_api_check" => Some(VerificationEvidence::RuntimeApiCheck),
+                "manual_command_output" => Some(VerificationEvidence::ManualCommandOutput),
+                _ => None,
+            })
+            .collect(),
+    }
+}
+
+fn runtime_delivery_check_id(contract_field: &str) -> String {
+    runtime_delivery_closure_check_id(contract_field)
 }
 
 fn runtime_delivery_closure_check_id(contract_field: &str) -> String {

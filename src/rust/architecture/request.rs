@@ -130,8 +130,6 @@ fn materialize_request_inner(
     let section_outputs = build_section_outputs(
         root,
         &request_id,
-        delivery_id,
-        phase_id,
         has_previous_runtime_delivery,
         &frontend_experience_source,
         &planning_contract,
@@ -280,14 +278,8 @@ fn build_request_root(
             "schemaShape": current_output.schema_shape.clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
-                    "schemaVersion",
-                    "requestId",
-                    "deliveryId",
-                    "phaseId",
-                    "section",
                     "status",
-                    "content",
-                    "createdAt"
+                    "content"
                 ],
                 "requiredContentKeys": required_content_keys(current_output.section)
             }
@@ -778,8 +770,6 @@ fn compact_requirement_details_index(planning_contract: &PlanningGenerationContr
 fn build_section_outputs(
     project_root: &Path,
     request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
@@ -802,9 +792,6 @@ fn build_section_outputs(
                     api_quality_seed,
                 ),
                 result_template: section_result_template(
-                    request_id,
-                    delivery_id,
-                    phase_id,
                     section,
                     has_previous_runtime_delivery,
                     frontend_experience_source,
@@ -844,7 +831,7 @@ pub fn section_order() -> &'static [ArchitectureSectionGroup] {
 
 pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static str> {
     match section {
-        ArchitectureSectionGroup::Foundation => vec!["source", "engineeringBoundary", "modules"],
+        ArchitectureSectionGroup::Foundation => vec!["engineeringBoundary", "modules"],
         ArchitectureSectionGroup::DomainContract => vec!["dataModel", "interfaces"],
         ArchitectureSectionGroup::Behavior => vec!["userFlows", "stateMachines"],
         ArchitectureSectionGroup::FrontendExperience => vec!["frontendExperience"],
@@ -866,19 +853,13 @@ fn section_schema_shape(
     api_quality_seed: &Value,
 ) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": "string",
-        "deliveryId": "string",
-        "phaseId": "string",
-        "section": section,
         "status": "ready | blocked",
         "content": section_content_shape(section, has_previous_runtime_delivery, api_quality_seed),
         "blockedReasons": [{
             "code": "string",
             "message": "string",
             "nextNode": "string"
-        }],
-        "createdAt": "string"
+        }]
     })
 }
 
@@ -889,10 +870,6 @@ fn section_content_shape(
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
-            "source": {
-                "planningGenerationContractId": "string",
-                "technicalBaselineId": "string"
-            },
             "engineeringBoundary": {
                 "summary": "string",
                 "applications": ["object"],
@@ -1181,9 +1158,6 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
 }
 
 fn section_result_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
@@ -1191,11 +1165,6 @@ fn section_result_template(
     api_quality_seed: &Value,
 ) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
-        "section": section,
         "status": "ready",
         "content": section_content_template(
             section,
@@ -1204,8 +1173,7 @@ fn section_result_template(
             planning_contract,
             api_quality_seed
         ),
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime"
+        "blockedReasons": []
     })
 }
 
@@ -1218,10 +1186,6 @@ fn section_content_template(
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
-            "source": {
-                "planningGenerationContractId": "",
-                "technicalBaselineId": ""
-            },
             "engineeringBoundary": {
                 "summary": "",
                 "applications": [{

@@ -664,9 +664,15 @@ pub struct DeploymentFailureReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployExecutionRepairTaskResult {
+    #[serde(default)]
+    #[schemars(skip)]
     pub schema_version: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub repair_id: String,
     pub status: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub deployment_failure_ref: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_files: Vec<String>,

@@ -2,7 +2,7 @@
 
 Load this file before frontend review, visual inspection, accessibility checks, or screenshot-based evidence gathering.
 
-This file owns product-quality targets: required states, interaction outcomes, responsive usability, visual hierarchy, and acceptable evidence. When the MCP reference plan also selects Playwright references, those files own runner configuration, locators, fixtures, network control, artifact capture, and flaky-test repair; do not duplicate those mechanics here.
+This file owns product-quality targets: required states, interaction outcomes, responsive usability, visual hierarchy, and acceptable evidence. When browser verification references are selected, those files own runner configuration, locators, fixtures, network control, artifact capture, and flaky-test repair; do not duplicate those mechanics here.
 
 ## Rendered Inspection
 

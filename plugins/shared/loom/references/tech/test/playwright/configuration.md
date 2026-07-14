@@ -70,7 +70,7 @@ Map profile viewport refs to named projects or per-test `test.use()` values:
 | `desktop_primary` | supported desktop browser and production work-surface width |
 | `mobile_primary` | supported narrow/touch viewport with no hover dependency |
 
-Keep viewport names stable so TaskResult evidence identifies what ran. Do not emulate a branded device unless device-specific behavior matters; viewport and input mode are usually enough for responsive web checks.
+Keep viewport names stable so verification evidence identifies what ran. Do not emulate a branded device unless device-specific behavior matters; viewport and input mode are usually enough for responsive web checks.
 
 ## Servers And Base URLs
 

@@ -85,10 +85,14 @@ fn knowledge_build_submit_publish_search_and_disable_are_mcp_native() {
         ],
     })
     .expect("semantic request fields");
-    assert_eq!(
-        fields.fields["outputContract.resultTemplate"].value["buildId"],
-        semantic.build_id
-    );
+    assert!(fields.fields["outputContract.resultTemplate"]
+        .value
+        .get("buildId")
+        .is_none());
+    assert!(fields.fields["outputContract.resultTemplate"]
+        .value
+        .get("packId")
+        .is_none());
     assert_eq!(
         fields.fields["generationRules"].value["noScriptRuleExtraction"],
         true

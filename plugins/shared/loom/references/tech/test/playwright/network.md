@@ -114,4 +114,4 @@ HAR playback is appropriate for stable external dependencies with reviewed fixtu
 - Wrong request method, payload, path, response mapping, or missing feedback is a product/integration defect.
 - A mock that no longer matches the accepted API is a test defect; update it only after comparing the current contract.
 
-Record concise request identity, status, and user-visible outcome. Keep full bodies, headers, traces, and secrets out of TaskResult prose.
+Record concise request identity, status, and user-visible outcome. Keep full bodies, headers, traces, and secrets out of the delivery result summary.

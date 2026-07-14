@@ -683,12 +683,8 @@ fn build_repair_execution_request(
         .cloned()
         .collect::<Vec<_>>();
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
-    let result_template = task_result_template_with_code_quality(
-        &task_plan.task_plan_id,
-        task,
-        &code_quality_requirements,
-        browser_profile,
-    );
+    let result_template =
+        task_result_template_with_code_quality(task, &code_quality_requirements, browser_profile);
     let mut execution_rules = task_execution_rules(result_file, task, None);
     if browser_profile.is_some() {
         execution_rules["browserVerificationRules"] = browser_verification_rules();
@@ -1372,8 +1368,8 @@ fn materialize_taskplan_repair_action(
             },
             "outlineSchemaShape": schema_shape,
             "groupSchemaShape": group_schema,
-            "outlineResultTemplate": taskplan_outline_result_template(&request_id, delivery_id, phase_id),
-            "groupResultTemplate": taskplan_group_result_template(&request_id, delivery_id, phase_id)
+            "outlineResultTemplate": taskplan_outline_result_template(),
+            "groupResultTemplate": taskplan_group_result_template()
         },
         "requestReadPlan": {
             "groups": [
@@ -1720,8 +1716,6 @@ fn materialize_architecture_repair_action(
     let section_outputs = build_architecture_repair_section_outputs(
         root,
         &request_id,
-        delivery_id,
-        phase_id,
         &frontend_experience_source,
         &context_projection,
         &api_quality_seed,
@@ -1798,14 +1792,8 @@ fn materialize_architecture_repair_action(
             "schemaShape": current_output["schemaShape"].clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
-                    "schemaVersion",
-                    "requestId",
-                    "deliveryId",
-                    "phaseId",
-                    "section",
                     "status",
-                    "content",
-                    "createdAt"
+                    "content"
                 ],
                 "requiredContentKeys": required_architecture_content_keys(ArchitectureSectionGroup::Foundation)
             }
@@ -2242,8 +2230,6 @@ fn has_non_null_key(value: &Value, key: &str) -> bool {
 fn build_architecture_repair_section_outputs(
     project_root: &Path,
     request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     frontend_experience_source: &Value,
     context_projection: &Value,
     api_quality_seed: &Value,
@@ -2257,16 +2243,12 @@ fn build_architecture_repair_section_outputs(
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
             let result_template = architecture_repair_section_result_template(
-                request_id,
-                delivery_id,
-                phase_id,
                 *section,
                 frontend_experience_source,
                 context_projection,
                 api_quality_seed
             );
-            let schema_shape =
-                architecture_repair_section_schema_shape(*section, &result_template["content"]);
+            let schema_shape = architecture_repair_section_schema_shape(&result_template["content"]);
             let mut output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
@@ -2306,20 +2288,12 @@ fn build_architecture_repair_section_outputs(
 }
 
 fn architecture_repair_section_result_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
-        "section": section,
         "status": "ready",
         "content": architecture_repair_section_content_template(
             section,
@@ -2327,29 +2301,19 @@ fn architecture_repair_section_result_template(
             context_projection,
             api_quality_seed
         ),
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime"
+        "blockedReasons": []
     })
 }
 
-fn architecture_repair_section_schema_shape(
-    section: ArchitectureSectionGroup,
-    content_shape: &Value,
-) -> Value {
+fn architecture_repair_section_schema_shape(content_shape: &Value) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": "string",
-        "deliveryId": "string",
-        "phaseId": "string",
-        "section": section,
         "status": "ready | blocked",
         "content": content_shape,
         "blockedReasons": [{
             "code": "string",
             "message": "string",
             "nextNode": "string"
-        }],
-        "createdAt": "string"
+        }]
     })
 }
 
@@ -2443,10 +2407,6 @@ fn architecture_repair_section_content_template(
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
-            "source": {
-                "planningGenerationContractId": "",
-                "technicalBaselineId": ""
-            },
             "engineeringBoundary": {
                 "summary": "",
                 "applications": [{
@@ -2831,7 +2791,7 @@ fn section_name(section: ArchitectureSectionGroup) -> &'static str {
 
 fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static str> {
     match section {
-        ArchitectureSectionGroup::Foundation => vec!["source", "engineeringBoundary", "modules"],
+        ArchitectureSectionGroup::Foundation => vec!["engineeringBoundary", "modules"],
         ArchitectureSectionGroup::DomainContract => vec!["dataModel", "interfaces"],
         ArchitectureSectionGroup::Behavior => vec!["userFlows", "stateMachines"],
         ArchitectureSectionGroup::FrontendExperience => vec!["frontendExperience"],

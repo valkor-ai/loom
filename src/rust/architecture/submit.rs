@@ -186,7 +186,17 @@ where
 
     let project_root = Path::new(&input.project_root);
     let candidate_file = from_project_relative(project_root, &target.path)?;
-    let raw = state::store::read_json_value(&candidate_file)?;
+    let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
+    let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
+    let mut raw = state::store::read_json_value(&candidate_file)?;
+    normalize_architecture_candidate_envelope(
+        &mut raw,
+        &authorized.request_id,
+        &delivery_id,
+        &phase_id,
+        current_section,
+        &request_root,
+    );
     let mut candidate: ArchitectureSectionCandidateAgentWritable =
         match serde_json::from_value(raw.clone()) {
             Ok(candidate) => candidate,
@@ -223,9 +233,7 @@ where
         }));
     }
 
-    let request_root = load_request_root(&input.project_root, &authorized.request_id)?;
     let source_refs = read_source_refs(&input.project_root, &input.request_ref, &request_root)?;
-    let current_section = parse_section(&request_root, "/sectionState/currentSection")?;
     let section_outputs =
         parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
     let allowed_refs = if section_uses_allowed_refs(current_section) {
@@ -254,22 +262,7 @@ where
     } else {
         json!({})
     };
-    let expected_request_id = request_root
-        .get("requestId")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let expected_delivery_id = request_root
-        .get("deliveryId")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let expected_phase_id = request_root
-        .get("phaseId")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let mut candidate_normalized = false;
+    let mut candidate_normalized = true;
     if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
         candidate_normalized = normalize_coverage_deferred_reasons(
             project_root,
@@ -284,13 +277,7 @@ where
         candidate_normalized = true;
     }
 
-    let mut issues = validate_candidate_identity(
-        &candidate,
-        &expected_request_id,
-        &expected_delivery_id,
-        &expected_phase_id,
-        current_section,
-    );
+    let mut issues = Vec::new();
     issues.extend(validate_section_content(&candidate));
     if section_uses_allowed_refs(current_section) {
         issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
@@ -473,43 +460,34 @@ where
         .map_err(to_state_error)
 }
 
-fn validate_candidate_identity(
-    candidate: &ArchitectureSectionCandidateAgentWritable,
+fn normalize_architecture_candidate_envelope(
+    raw: &mut Value,
     request_id: &str,
     delivery_id: &str,
     phase_id: &str,
     current_section: ArchitectureSectionGroup,
-) -> Vec<delivery_core::RepairIssue> {
-    let mut issues = Vec::new();
-    if candidate.request_id != request_id {
-        issues.push(issue(
-            "REQUEST_ID_MISMATCH",
-            "requestId",
-            "Architecture section candidate requestId must match the active request.",
-        ));
+    request_root: &Value,
+) {
+    let Some(object) = raw.as_object_mut() else {
+        return;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert("requestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert("section".to_string(), json!(current_section));
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+    if matches!(current_section, ArchitectureSectionGroup::Foundation) {
+        if let Some(content) = object.get_mut("content").and_then(Value::as_object_mut) {
+            content.insert(
+                "source".to_string(),
+                json!({
+                    "planningGenerationContractId": request_root.pointer("/contextProjection/planningContractId").cloned().unwrap_or(Value::Null),
+                    "technicalBaselineId": request_root.pointer("/contextProjection/technicalBaseline/technicalBaselineId").cloned().unwrap_or(Value::Null)
+                }),
+            );
+        }
     }
-    if candidate.delivery_id != delivery_id {
-        issues.push(issue(
-            "DELIVERY_ID_MISMATCH",
-            "deliveryId",
-            "Architecture section candidate deliveryId must match the active delivery.",
-        ));
-    }
-    if candidate.phase_id != phase_id {
-        issues.push(issue(
-            "PHASE_ID_MISMATCH",
-            "phaseId",
-            "Architecture section candidate phaseId must match the active phase.",
-        ));
-    }
-    if candidate.section != current_section {
-        issues.push(issue(
-            "SECTION_ORDER_INVALID",
-            "section",
-            "Architecture section candidate section must match the current expected section.",
-        ));
-    }
-    issues
 }
 
 fn validate_section_content(

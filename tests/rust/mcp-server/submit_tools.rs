@@ -174,14 +174,14 @@ fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
     assert_eq!(result["state"], "repairable_error");
     assert_eq!(
         result["issues"][0]["code"],
-        "CLARIFICATION_PROGRESS_INVALID"
+        "BRAINSTORM_CANDIDATE_SCHEMA_INVALID"
     );
     assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
 }
 
 #[test]
-fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_gate() {
-    let fixture = Fixture::new("submit-legacy-progress-shape");
+fn brainstorm_submit_ignores_agent_authored_confirmation_metadata() {
+    let fixture = Fixture::new("submit-derived-confirmation-metadata");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     let mut candidate = valid_candidate_json();
     candidate["clarificationProgress"] = json!({
@@ -203,12 +203,33 @@ fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_ga
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let contract = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(delivery_id)
+            .join("brainstorm/contract.json"),
+    )
+    .expect("read accepted brainstorm contract");
     assert_eq!(
-        result["issues"][0]["code"],
-        "CLARIFICATION_PROGRESS_LEGACY_FIELDS"
+        contract["clarificationProgress"]["skippedBlocks"][0]["block"],
+        "frontend_experience"
     );
-    assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
+    assert_eq!(
+        contract["clarificationProgress"]["skippedBlocks"][0]["reason"],
+        "This submit fixture does not require a frontend experience."
+    );
+    assert_eq!(
+        contract["userConfirmation"]["confirmationBasis"]["presentedItems"],
+        json!([
+            "phase_scope",
+            "concept_grounding",
+            "frontend_experience",
+            "final_summary"
+        ])
+    );
 }
 
 #[test]
@@ -425,6 +446,146 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
             .as_str()
             .unwrap_or_default()
             .contains("Do not mention Loom internals")));
+}
+
+#[test]
+fn brainstorm_submit_derives_glossary_update_ids_instead_of_repairing_agent_output() {
+    let fixture = Fixture::new("submit-derived-glossary-update-id");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let write_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.clone(),
+        group_id: "candidate_write_contract".to_string(),
+    })
+    .expect("read candidate write contract");
+    let schema = &write_contract.fields["outputContract.schemaProjection"].value;
+    assert!(
+        schema["objectShapeRules"]["conceptGrounding.glossaryUpdates[]"]
+            .as_str()
+            .expect("glossary update shape rule")
+            .contains("Loom generates updateId")
+    );
+    let request_id = request_ref
+        .rsplit('/')
+        .next()
+        .expect("brainstorm request id");
+    let stored_output_contract = read_json_value(
+        &fixture
+            .root
+            .join(".loom/requests")
+            .join(format!("{request_id}.refs/output-contract.json")),
+    )
+    .expect("read stored output contract");
+    let glossary_update_schema = &stored_output_contract["schemaShape"]["$defs"]["GlossaryUpdate"];
+    assert!(glossary_update_schema["properties"]
+        .get("updateId")
+        .is_none());
+    assert!(!glossary_update_schema["required"]
+        .as_array()
+        .expect("glossary update required fields")
+        .contains(&json!("updateId")));
+
+    let mut candidate = valid_candidate_json();
+    let glossary_concept = json!({
+        "conceptId": "concept_account_opening",
+        "term": "证券账户开户",
+        "normalizedName": "securities account opening",
+        "explanation": "The confirmed account-opening capability for the current phase.",
+        "mustNotMisinterpretAs": [],
+        "phaseRelevance": "current",
+        "priority": "must_understand",
+        "attentionRank": 1,
+        "riskFactors": ["business_invariant"],
+        "scopeRefs": ["scope_1"],
+        "acceptanceRefs": ["acc_1"],
+        "humanReadableReason": "The term owns the current phase workflow boundary."
+    });
+    candidate["conceptGrounding"]["glossaryUpdates"] = json!([{
+        "operation": "add",
+        "concept": glossary_concept,
+        "reason": "Add the confirmed account term to the delivery glossary."
+    }]);
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let contract = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(delivery_id)
+            .join("brainstorm/contract.json"),
+    )
+    .expect("read accepted brainstorm contract");
+    assert_eq!(
+        contract["conceptGrounding"]["glossaryUpdates"][0]["updateId"],
+        "glossary_update_1"
+    );
+}
+
+#[test]
+fn brainstorm_submit_rejects_incomplete_glossary_update_semantics() {
+    let fixture = Fixture::new("submit-incomplete-glossary-update");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let mut candidate = valid_candidate_json();
+    candidate["conceptGrounding"]["glossaryUpdates"] = json!([{
+        "operation": "add",
+        "reason": "Add a confirmed term."
+    }]);
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(
+        result["issues"][0]["code"],
+        "GLOSSARY_UPDATE_CONCEPT_REQUIRED"
+    );
+    assert_eq!(
+        result["issues"][0]["fieldPath"],
+        "conceptGrounding.glossaryUpdates[0].concept"
+    );
+}
+
+#[test]
+fn brainstorm_submit_rejects_flattened_glossary_concept_fields() {
+    let fixture = Fixture::new("submit-flattened-glossary-update");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let mut candidate = valid_candidate_json();
+    candidate["conceptGrounding"]["glossaryUpdates"] = json!([{
+        "operation": "add",
+        "reason": "Add a confirmed term.",
+        "term": "证券账户开户",
+        "normalizedName": "securities account opening",
+        "explanation": "A flattened concept must not be silently discarded."
+    }]);
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(
+        result["issues"][0]["code"],
+        "BRAINSTORM_CANDIDATE_SCHEMA_INVALID"
+    );
+    assert!(result["issues"][0]["message"]
+        .as_str()
+        .expect("schema issue message")
+        .contains("unknown field"));
 }
 
 #[test]
@@ -647,21 +808,23 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         write_contract.fields["outputContract.resultTemplate"].value["warnings"][0]["code"],
         "LOW_CONFIDENCE_REPOSITORY_SCAN"
     );
+    assert!(write_contract
+        .fields
+        .get("outputContract.bindingRules")
+        .is_none());
+    assert!(write_contract.fields["outputContract.resultTemplate"]
+        .value
+        .get("source")
+        .is_none());
+    assert!(write_contract.fields["outputContract.resultTemplate"]
+        .value
+        .get("requestLens")
+        .is_none());
     assert!(
-        write_contract.fields["outputContract.bindingRules"].value[0]
-            .as_str()
-            .expect("binding rule")
-            .contains("source.requestRef")
-    );
-    assert!(
-        write_contract.fields["outputContract.resultTemplate"].value["source"]
-            .get("requestRef")
-            .is_some()
-    );
-    assert!(
-        write_contract.fields["outputContract.resultTemplate"].value["source"]
-            .get("requestId")
-            .is_none()
+        !write_contract.fields["outputContract.schemaProjection"].value["requiredTopLevelFields"]
+            .as_array()
+            .expect("repository context required fields")
+            .contains(&json!("source"))
     );
     assert_eq!(
         write_contract.fields["outputContract.schemaProjection"].value["enumFields"]
@@ -690,10 +853,9 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
             .contains("code and message")
     );
 
-    let mut repository_candidate = write_contract.fields["outputContract.resultTemplate"]
+    let repository_candidate = write_contract.fields["outputContract.resultTemplate"]
         .value
         .clone();
-    repository_candidate["source"]["requestRef"] = json!(repository_context_request_ref);
     write_candidate_target(
         &fixture,
         repository_context_request_ref,
@@ -711,6 +873,19 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
     assert_eq!(
         repository_result["next"]["artifactKind"],
         "architecture_section_candidate"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let accepted = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(delivery_id)
+            .join("workspace/phase-1/repository-context.json"),
+    )
+    .expect("read accepted repository context");
+    assert_eq!(
+        accepted["source"]["requestRef"],
+        repository_context_request_ref
     );
 }
 
@@ -2730,8 +2905,10 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
     assert!(runtime_requirement_template.is_object());
     assert!(
-        runtime_requirement_template["requiredCodeLevelChecks"][0]["checkId"].is_string(),
-        "{runtime_requirement_template:#}"
+        runtime_requirement_template["requiredCodeLevelChecks"][0]
+            .get("checkId")
+            .is_none(),
+        "runtime check identity is MCP-owned: {runtime_requirement_template:#}"
     );
     assert!(
         runtime_requirement_template["requiredCodeLevelChecks"][0]["acceptableEvidence"]
@@ -2762,8 +2939,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .expect("requiredCodeLevelChecks");
     assert!(closure_checks
         .iter()
-        .any(|check| check["checkId"] == json!("rd-closure-httpprobes")
-            && check["contractField"] == json!("httpProbes")));
+        .all(|check| { check.get("checkId").is_none() && check.get("contractField").is_none() }));
     assert_eq!(
         closure_checks.len(),
         closure_requirement["affectedContractFields"]
@@ -2804,7 +2980,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .contains_key("persistence"));
     assert_eq!(
         engineering_template["taskRefRule"],
-        json!("Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task.")
+        json!("Loom attaches this generated requirement through engineeringQualityRequirementRefs during accept; agents must not write that field or duplicate the full object in each task.")
     );
     let engineering_rules =
         &taskplan_contract_fields["generationRules.engineeringQualityRules"].value;
@@ -3190,8 +3366,8 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     );
     assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendExperienceSelfCheck"]
-            ["closureRequirementIds"],
-        json!(["closure:flow.account-lifecycle:step.submit-open-account"])
+            .get("closureRequirementIds"),
+        None
     );
     let frontend_quality_template =
         &fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
@@ -3209,20 +3385,18 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         frontend_quality_template.get("qualityLevel").is_none(),
         "frontend quality template must not emit legacy qualityLevel"
     );
-    assert_eq!(
-        frontend_quality_template["surfaceDecisionContractRef"],
-        fields["task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"].value
-    );
+    assert!(frontend_quality_template
+        .get("surfaceDecisionContractRef")
+        .is_none());
     assert!(frontend_quality_template["referencePlanFilesChecked"]
         .as_array()
         .expect("reference plan files checked")
         .contains(&json!("uix/tokens/spacing.md")));
     assert!(frontend_quality_template["surfaceStateEvidence"][0].is_object());
     assert!(frontend_quality_template["surfaceQualityRuleEvidence"][0].is_object());
-    assert_eq!(
-        frontend_quality_template["surfaceRegionEvidence"][0]["id"],
-        json!("region_account_results")
-    );
+    assert!(frontend_quality_template["surfaceRegionEvidence"][0]
+        .get("id")
+        .is_none());
     assert!(
         frontend_quality_template["surfaceRegionEvidence"][0]["files"]
             .as_array()
@@ -3252,7 +3426,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .iter()
         .any(|rule| rule
             .as_str()
-            .is_some_and(|text| text.contains("do not leave replace_with_* values"))));
+            .is_some_and(|text| text.contains("replace_with_*"))));
     assert!(
         fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
             .value
@@ -4004,10 +4178,9 @@ fn review_execution_repair_carries_frontend_execution_guidance() {
     );
     let frontend_quality_template =
         &repair_fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
-    assert_eq!(
-        frontend_quality_template["surfaceDecisionContractRef"],
-        surface_contract["contractRef"]
-    );
+    assert!(frontend_quality_template
+        .get("surfaceDecisionContractRef")
+        .is_none());
     assert!(!frontend_quality_template["surfaceRegionEvidence"]
         .as_array()
         .expect("repair region evidence template")
@@ -4375,7 +4548,7 @@ fn task_result_submit_fills_single_intent_detail_verification_ids() {
         .as_str()
         .expect("result file");
     let result_rules_text = fields["outputContract.resultRules"].value.to_string();
-    assert!(result_rules_text.contains("do not leave verificationIds empty"));
+    assert!(result_rules_text.contains("Loom derives detailId and verificationIds"));
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["taskResultId"] = json!("result-single-intent-fallback");
     result["taskPlanId"] = fields["source.taskPlanId"].value.clone();
@@ -4693,10 +4866,14 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     })
     .expect("read execution result template")
     .fields;
-    assert_eq!(
-        execution_fields["outputContract.resultTemplate"].value["taskId"],
-        execution_fields["source.taskId"].value
-    );
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("taskId")
+        .is_none());
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("taskPlanId")
+        .is_none());
     assert!(
         execution_fields["outputContract.resultTemplate"].value["verificationResults"][0]
             .is_object()
@@ -4997,10 +5174,14 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(review_manifest_refs.contains_key("reviewPacket"));
     assert!(review_manifest_refs.contains_key("changeContext"));
     assert!(review_manifest_refs.contains_key("outputContract"));
-    assert_eq!(
-        review_fields["outputContract.resultTemplate"].value["source"]["requestId"],
-        review_root["requestId"]
-    );
+    assert!(review_fields["outputContract.resultTemplate"]
+        .value
+        .get("source")
+        .is_none());
+    assert!(review_fields["outputContract.resultTemplate"]
+        .value
+        .get("reviewId")
+        .is_none());
     let review_rules = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: review_request_ref.to_string(),
@@ -5622,7 +5803,7 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
     let final_group = persisted_groups.last().expect("final group");
     assert_eq!(
         final_group["groupId"],
-        json!("group-browser-quality-closure")
+        json!("group-runtime-delivery-closure")
     );
     let runtime_closure_group = persisted_groups
         .iter()
@@ -5638,11 +5819,6 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
         .expect("runtime closure dependencies")
         .iter()
         .any(|item| item == &json!(implementation_group_id)));
-    assert!(final_group["dependsOn"]
-        .as_array()
-        .expect("browser closure dependencies")
-        .iter()
-        .any(|item| item == &json!("group-runtime-delivery-closure")));
     let closure_task = persisted["tasks"]
         .as_array()
         .expect("persisted tasks")
@@ -5733,17 +5909,28 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     .fields;
     assert_eq!(
         fields["task.runtimeDeliveryRequirement.requiredCodeLevelChecks"].value[0]["checkId"],
-        json!("check-runtime-wiring")
+        json!("rd-closure-runtimesurfaces")
     );
     assert!(
         serde_json::to_string(&fields["executionRules.controlledRuntimeProbeRules"].value)
             .unwrap()
             .contains("foreground blocking verification commands")
     );
-    assert_eq!(
+    assert!(
+        fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
+            .get("requirementRef")
+            .is_none()
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
+            .get("checkedFields")
+            .is_none()
+    );
+    assert!(
         fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]["codeLevelChecks"]
-            [0]["checkId"],
-        json!("check-runtime-wiring")
+            [0]
+        .get("checkId")
+        .is_none()
     );
     assert!(fields["outputContract.requiredTopLevelFields"]
         .value
@@ -5815,7 +6002,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     );
     assert_eq!(
         persisted["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"],
-        json!("check-runtime-wiring")
+        json!("rd-closure-runtimesurfaces")
     );
 }
 
@@ -5902,15 +6089,16 @@ fn task_result_repair_template_restores_missing_runtime_evidence() {
     .expect("read task result repair template")
     .fields;
 
-    assert_eq!(
+    assert!(
         repair_fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
-            ["codeLevelChecks"][0]["checkId"],
-        json!("check-runtime-wiring")
+            ["codeLevelChecks"][0]
+            .get("checkId")
+            .is_none()
     );
     assert!(
         serde_json::to_string(&repair_fields["repairContract.issueConflicts"].value)
             .expect("serialize issue conflicts")
-            .contains("check-runtime-wiring")
+            .contains("rd-closure-runtimesurfaces")
     );
 }
 
@@ -6356,7 +6544,10 @@ fn review_accept_approved_marks_delivery_done() {
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     assert_eq!(
         latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult"),
-        format!(".loom/deliveries/{delivery_id}/reviews/phase-1/results/review-phase-1.json")
+        format!(
+            ".loom/deliveries/{delivery_id}/reviews/phase-1/results/{}.json",
+            request_id_from_ref(&review_request_ref)
+        )
     );
     let index_path = fixture
         .root
@@ -6483,9 +6674,10 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         template_fields["outputContract.resultTemplate"].value["nextAction"]["type"],
         "continue_to_next_phase"
     );
-    assert_eq!(
-        template_fields["outputContract.resultTemplate"].value["nextAction"]["targetPhaseId"],
-        "phase-2"
+    assert!(
+        template_fields["outputContract.resultTemplate"].value["nextAction"]
+            .get("targetPhaseId")
+            .is_none()
     );
 
     write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
@@ -6603,9 +6795,28 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         repository_result["gate"]["gateId"],
         "phase_brainstorm_required"
     );
+    assert_eq!(repository_result["gate"]["currentBlock"], "phase_scope");
+    assert_eq!(
+        repository_result["gate"]["kind"],
+        "phase_brainstorm_continuation"
+    );
+    assert!(repository_result["prompt"]
+        .as_str()
+        .expect("phase-3 brainstorm prompt")
+        .contains("Brainstorm clarification for phase-2 is active"));
+    assert!(!repository_result["prompt"]
+        .as_str()
+        .expect("phase-3 brainstorm prompt")
+        .contains("if you want to continue"));
     let phase_2_request_ref = repository_result["requestRef"]
         .as_str()
         .expect("phase-2 brainstorm request ref");
+    let continued = continue_delivery(fixture.root_str());
+    assert_eq!(continued["state"], "user_gate", "{continued:#}");
+    assert_eq!(continued["requestRef"], phase_2_request_ref);
+    assert_eq!(continued["gate"]["gateId"], "phase_brainstorm_required");
+    assert_eq!(continued["gate"]["currentBlock"], "phase_scope");
+    assert_eq!(continued["gate"]["nextPhaseSeed"]["phaseId"], "phase-2");
     let refreshed_index_path = fixture
         .root
         .join(".loom/deliveries")
@@ -6872,7 +7083,7 @@ fn review_accept_allows_normalized_changed_file_refs() {
 }
 
 #[test]
-fn review_accept_rejects_pending_action_refs_with_wrong_route() {
+fn review_accept_derives_pending_action_refs_from_finding_routes() {
     let fixture = Fixture::new("review-pending-action-route-mismatch");
     let review_request_ref = complete_task_execution_to_review(&fixture);
     write_review_result_candidate(
@@ -6910,11 +7121,7 @@ fn review_accept_rejects_pending_action_refs_with_wrong_route() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
-            && issue["fieldPath"] == "pendingActions[].findingRefs"
-    }));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
 }
 
 #[test]
@@ -7512,7 +7719,7 @@ fn review_accept_hydrates_execution_repair_targets_from_all_review_signals() {
     );
     assert_eq!(
         second_repair_root["repairContext"]["findingRefs"],
-        json!(["finding-first-task-only"])
+        json!(["finding-1"])
     );
 }
 
@@ -7595,14 +7802,14 @@ fn review_execution_repair_materializes_repair_task() {
     );
     assert_eq!(
         result["next"]["repairContext"]["findingRefs"],
-        json!(["finding-product"])
+        json!(["finding-1"])
     );
     let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
     let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
     assert!(repair_root["repairContext"].get("attemptCount").is_none());
     assert_eq!(
         repair_root["repairContext"]["findingRefs"],
-        json!(["finding-product"])
+        json!(["finding-1"])
     );
     let inspected_repair = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
@@ -8396,7 +8603,7 @@ fn taskplan_submit_requires_runtime_delivery_closure() {
 }
 
 #[test]
-fn taskplan_submit_rejects_runtime_closure_check_mismatch() {
+fn taskplan_submit_derives_runtime_closure_check_identity() {
     let fixture = Fixture::new("taskplan-runtime-closure-check-mismatch");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
@@ -8433,11 +8640,39 @@ fn taskplan_submit_rejects_runtime_closure_check_mismatch() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "RUNTIME_CLOSURE_CHECK_INVALID"
-            && issue["fieldPath"] == "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks"
-    }));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let taskplan_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("execution request ref");
+    let delivery_id = request_delivery_id(fixture.root_str(), taskplan_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let persisted_ref = index["phases"][0]["latestRefs"]["taskPlan"]
+        .as_str()
+        .expect("taskplan ref");
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(persisted_ref)).expect("read taskplan"),
+    )
+    .expect("parse taskplan");
+    let closure = persisted["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["taskKind"] == json!("runtime_delivery_closure"))
+        .expect("runtime closure task");
+    let http_probe_check = closure["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"]
+        .as_array()
+        .expect("runtime closure checks")
+        .iter()
+        .find(|check| check["contractField"] == json!("httpProbes"))
+        .expect("http probe closure check");
+    assert_eq!(http_probe_check["checkId"], json!("rd-closure-httpprobes"));
 }
 
 #[test]
@@ -9057,6 +9292,13 @@ fn start_brainstorm_request(fixture: &Fixture) -> String {
 }
 
 fn start_brainstorm_candidate_write_request(fixture: &Fixture) -> String {
+    start_brainstorm_candidate_write_request_with_frontend(fixture, false)
+}
+
+fn start_brainstorm_candidate_write_request_with_frontend(
+    fixture: &Fixture,
+    include_frontend: bool,
+) -> String {
     let server = LoomMcpServer::default();
     let mut request_ref = start_brainstorm_request(fixture);
 
@@ -9097,20 +9339,31 @@ fn start_brainstorm_candidate_write_request(fixture: &Fixture) -> String {
         .as_str()
         .expect("frontend requestRef")
         .to_string();
-    request_ref = confirm_brainstorm_block(
-        &server,
-        fixture,
-        &request_ref,
-        "frontend_experience",
-        "确认工作人员后台证券账户管理页面路径。",
-        json!({
-            "required": true,
-            "surfaces": ["证券账户管理页面"],
-            "targetDiscovery": ["分页查询列表", "按账户号、姓名、证件号查询"],
-            "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
-            "mustNot": ["不能只靠内部主键触发办理动作"]
-        }),
-    )["requestRef"]
+    let frontend_action = if include_frontend {
+        confirm_brainstorm_block(
+            &server,
+            fixture,
+            &request_ref,
+            "frontend_experience",
+            "确认工作人员后台证券账户管理页面路径。",
+            json!({
+                "required": true,
+                "surfaces": ["证券账户管理页面"],
+                "targetDiscovery": ["分页查询列表", "按账户号、姓名、证件号查询"],
+                "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
+                "mustNot": ["不能只靠内部主键触发办理动作"]
+            }),
+        )
+    } else {
+        skip_brainstorm_block(
+            &server,
+            fixture,
+            &request_ref,
+            "frontend_experience",
+            "This submit fixture does not require a frontend experience.",
+        )
+    };
+    request_ref = frontend_action["requestRef"]
         .as_str()
         .expect("final summary requestRef")
         .to_string();
@@ -9172,6 +9425,37 @@ fn confirm_brainstorm_block(
     let result = server
         .invoke_tool("loom.brainstormConfirmBlock", Some(arguments))
         .expect("confirm brainstorm block")
+        .structured_content
+        .expect("structured content");
+    assert!(
+        result["state"] == "user_gate" || result["state"] == "auto_runnable",
+        "{result:#}"
+    );
+    result
+}
+
+fn skip_brainstorm_block(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+    reason: &str,
+) -> Value {
+    run_knowledge_context(server, fixture, request_ref, block);
+    let arguments = json!({
+        "projectRoot": fixture.root_str(),
+        "requestRef": request_ref,
+        "block": block,
+        "summary": reason,
+        "skipped": true,
+        "skipReason": reason
+    })
+    .as_object()
+    .expect("arguments object")
+    .clone();
+    let result = server
+        .invoke_tool("loom.brainstormConfirmBlock", Some(arguments))
+        .expect("skip brainstorm block")
         .structured_content
         .expect("structured content");
     assert!(
@@ -9349,7 +9633,10 @@ fn architecture_write_target_path(fixture: &Fixture, request_ref: &str) -> Strin
 }
 
 fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
-    start_existing_project_architecture_flow_with_candidate(fixture, valid_candidate_json())
+    start_existing_project_architecture_flow_with_candidate(
+        fixture,
+        valid_candidate_with_frontend_json(),
+    )
 }
 
 fn start_existing_project_architecture_flow_with_candidate(
@@ -9368,7 +9655,10 @@ fn start_existing_project_architecture_flow_with_candidate(
     )
     .expect("write entrypoint");
 
-    let request_ref = start_brainstorm_candidate_write_request(fixture);
+    let request_ref = start_brainstorm_candidate_write_request_with_frontend(
+        fixture,
+        candidate.get("frontendExperience").is_some(),
+    );
     write_candidate_target(fixture, &request_ref, &candidate);
 
     let brainstorm_result = call_submit(
@@ -10627,11 +10917,7 @@ fn write_task_result_candidate_with_detail_evidence(
     };
     let mut browser_checks = result["verificationResults"]
         .as_array()
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("verificationId").and_then(Value::as_str) == Some(verification_id)
-            })
-        })
+        .and_then(|items| items.first())
         .and_then(|item| item.get("browserChecks"))
         .and_then(Value::as_array)
         .cloned()
@@ -10856,16 +11142,14 @@ fn write_browser_quality_resolution_candidate(
     });
     candidate["createdAt"] = json!("2026-07-13T16:30:00+08:00");
     if decision == "submit_external_browser_evidence" {
-        for evidence in candidate["browserQualityResolution"]["externalEvidence"]
+        for (index, evidence) in candidate["browserQualityResolution"]["externalEvidence"]
             .as_array_mut()
             .expect("external browser evidence template")
+            .iter_mut()
+            .enumerate()
         {
-            let check_id = evidence["checkId"]
-                .as_str()
-                .expect("external browser check id")
-                .to_string();
             evidence["evidenceRefs"] =
-                json!([format!("https://ci.example.test/browser/{check_id}")]);
+                json!([format!("https://ci.example.test/browser/{}", index + 1)]);
             evidence["observedOutcome"] =
                 json!("The required workflow and rendered viewport passed in CI.");
             evidence["source"] = json!("CI Playwright job");
@@ -11165,7 +11449,7 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
 }
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {
-    start_planned_task_execution_with_candidate(fixture, valid_candidate_json())
+    start_planned_task_execution_with_candidate(fixture, valid_candidate_with_frontend_json())
 }
 
 fn start_frontend_quality_task_execution_without_architecture_quality(fixture: &Fixture) -> String {
@@ -12908,7 +13192,7 @@ fn candidate_with_next_phase_preview() -> Value {
 }
 
 fn phase2_candidate_json() -> Value {
-    let mut candidate = valid_candidate_json();
+    let mut candidate = valid_candidate_with_frontend_json();
     candidate["requestSummary"]["title"] = json!("资金账户基础能力");
     candidate["requestSummary"]["oneLine"] = json!("实现资金账户开户、密码、存取款与账户关联");
     candidate["requestSummary"]["businessGoal"] = json!("承接证券账户闭环，完成资金账户基础能力");

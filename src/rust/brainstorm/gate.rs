@@ -40,6 +40,36 @@ pub fn required_blocks() -> Vec<ClarificationBlockName> {
     ]
 }
 
+pub fn gate_for_block(
+    block: ClarificationBlockName,
+    already_confirmed_blocks: Vec<ClarificationBlockName>,
+    skipped_blocks: Vec<SkippedBlockSummary>,
+) -> BrainstormGate {
+    BrainstormGate {
+        gate_id: format!("gate_{}", block_id(&block)),
+        current_block: block.clone(),
+        required_blocks: required_blocks(),
+        already_confirmed_blocks,
+        skipped_blocks,
+        user_message: block_message(&block),
+        response_rule: BrainstormResponseRule {
+            mode: "progressive_brainstorm".to_string(),
+            final_summary_required_before_write: true,
+            user_visible_confirmation_required: true,
+        },
+        issues: vec![],
+    }
+}
+
+pub fn block_id(block: &ClarificationBlockName) -> &'static str {
+    match block {
+        ClarificationBlockName::PhaseScope => "phase_scope",
+        ClarificationBlockName::ConceptGrounding => "concept_grounding",
+        ClarificationBlockName::FrontendExperience => "frontend_experience",
+        ClarificationBlockName::FinalSummary => "final_summary",
+    }
+}
+
 pub fn to_value(gate: &BrainstormGate) -> Value {
     serde_json::to_value(gate).unwrap_or_else(|_| serde_json::json!({}))
 }

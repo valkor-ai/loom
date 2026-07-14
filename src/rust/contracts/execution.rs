@@ -130,7 +130,10 @@ pub struct TaskWriteBoundary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeCodeLevelCheck {
+    #[schemars(skip)]
+    #[serde(default)]
     pub check_id: String,
+    #[schemars(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract_field: Option<String>,
     pub objective: String,
@@ -143,6 +146,7 @@ pub struct RuntimeCodeLevelCheck {
 pub struct TaskRuntimeDeliveryRequirement {
     pub applies_to_this_task: bool,
     pub reason: String,
+    #[schemars(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -284,12 +288,16 @@ pub struct TaskDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_delivery_requirement: Option<TaskRuntimeDeliveryRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub engineering_quality_requirement_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub architecture_quality_requirement_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub api_contract_requirement_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub code_quality_requirement_refs: Vec<String>,
 }
 
@@ -320,25 +328,45 @@ pub struct TaskPlanBlockedReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskPlanOutlineCandidateAgentWritable {
+    #[serde(default)]
+    #[schemars(skip)]
     pub schema_version: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub request_id: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub delivery_id: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub phase_id: String,
     pub status: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub task_plan_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<TaskPlanGroup>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<TaskPlanBlockedReason>,
+    #[serde(default)]
+    #[schemars(skip)]
     pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskPlanGroupCandidateAgentWritable {
+    #[serde(default)]
+    #[schemars(skip)]
     pub schema_version: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub request_id: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub delivery_id: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub phase_id: String,
     pub status: String,
     pub group: TaskPlanGroup,
@@ -346,6 +374,8 @@ pub struct TaskPlanGroupCandidateAgentWritable {
     pub tasks: Vec<TaskDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<TaskPlanBlockedReason>,
+    #[serde(default)]
+    #[schemars(skip)]
     pub created_at: String,
 }
 

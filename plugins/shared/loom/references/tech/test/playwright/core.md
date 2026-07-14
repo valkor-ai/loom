@@ -41,7 +41,7 @@ Keep pure functions, reducers, composables, hooks, isolated component states, an
 - Follow the request-selected project runner and shared-runtime contract; this reference does not override runner selection or dependency ownership.
 - When no Playwright project exists and the task owns suite setup, create the smallest config and test root that support the assigned checks.
 - Do not install a second E2E runner beside an accepted existing browser test stack unless the technical baseline selected Playwright for the new project.
-- Do not call `loom.browserRuntimePrepare` from inside the closure task. MCP prepares and attaches the exact runtime before issuing the execution request.
+- Do not prepare the browser runtime from inside the closure task. The delivery runtime is prepared before the execution request and attached to the task scope.
 
 ## Check Anatomy
 
@@ -92,7 +92,7 @@ Do not use `waitForTimeout()` as synchronization. Do not use `networkidle` as a 
 ## Artifact Discipline
 
 - Keep traces, screenshots, videos, and reports in the project's configured output directory.
-- Retain diagnostic artifacts on failure or retry according to configuration; do not paste their contents into TaskResult summaries.
+- Retain diagnostic artifacts on failure or retry according to configuration; keep their contents out of the concise verification summary.
 - A retry success remains a retry success. Preserve the attempt count and investigate repeated instability instead of reporting a clean first-pass result.
 - If environment preparation fails, record the concrete missing dependency or service. Do not relabel an environment failure as a product defect.
 

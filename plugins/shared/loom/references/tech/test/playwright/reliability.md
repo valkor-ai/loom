@@ -7,7 +7,7 @@ Load this reference for failed, blocked, retried, inconsistent, or flaky browser
 - Keep the original check id, command, attempt count, observed outcome, and artifact refs.
 - A pass after retry is not equivalent to a first-attempt pass.
 - Do not delete a failing assertion, add a broad catch, mark a test skipped, or raise global retries to make delivery green.
-- Do not rewrite failed or blocked evidence as passed to satisfy TaskResult validation.
+- Do not rewrite failed or blocked evidence as passed to satisfy the delivery result contract.
 - Inspect compact check evidence first; open trace/report/screenshot artifacts only when the cause remains ambiguous.
 
 ## Failure Classification

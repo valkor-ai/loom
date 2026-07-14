@@ -20,18 +20,10 @@ use crate::{
     },
 };
 
-pub fn semantic_result_template(
-    build_id: &str,
-    pack_id: &str,
-    read_plan: &[KnowledgeChunkReadRef],
-) -> Value {
+pub fn semantic_result_template(read_plan: &[KnowledgeChunkReadRef]) -> Value {
     json!({
-        "schemaVersion": 1,
-        "buildId": build_id,
-        "packId": pack_id,
-        "chunkResults": read_plan.iter().map(|chunk| {
+        "chunkResults": read_plan.iter().map(|_chunk| {
             json!({
-                "chunkId": chunk.chunk_id,
                 "status": "completed",
                 "summary": "",
                 "semanticLabels": [{
@@ -73,6 +65,7 @@ pub fn semantic_generation_rules() -> Value {
             "For each state or flow label, include one short state/flow goal alias that a user might query.",
             "Do not invent business facts that are not in the chunk. Do not include source ids, chunk ids, or file paths."
         ],
+        "chunkResultOrderRule": "Write exactly one chunkResults item for each chunk in chunkReadPlan, in the same order. Loom assigns schemaVersion, buildId, packId, and each chunkId from the request; do not write those machine fields.",
         "blockAffinityFields": ["phaseScope", "conceptGrounding", "frontendExperience"],
         "blockAffinityGuidance": {
             "phaseScope": "Score high when the chunk helps decide phase boundaries, included work, excluded work, deferred work, dependency order, or next-phase handoff.",
@@ -133,7 +126,7 @@ pub fn next_pending_pack(
             request_ref: pack.request_ref.clone(),
             result_file: pack.result_file.clone(),
             output_contract: json!({
-                "resultTemplate": semantic_result_template(build_id, &pack.pack_id, &read_plan)
+                "resultTemplate": semantic_result_template(&read_plan)
             }),
             generation_rules: semantic_generation_rules(),
             read_mode: KnowledgeReadMode::ChunkInspect,
@@ -179,41 +172,30 @@ pub fn submit_semantic_pack(
             return Err(KnowledgeError::invalid(format!("{code}: {message}")));
         }
     };
-    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
-        project_root: project_root.to_string(),
-        request_ref: request_ref.to_string(),
-        fields: vec![
-            "sourceName".to_string(),
-            "sourceId".to_string(),
-            "buildId".to_string(),
-            "packId".to_string(),
-            "chunkReadPlan".to_string(),
-        ],
-    })
-    .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
-    let source_name = fields.fields["sourceName"]
-        .value
-        .as_str()
+    let request_root = read_semantic_request_root(project_root, request_ref)?;
+    let source_name = request_root
+        .get("sourceName")
+        .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let source_id = fields.fields["sourceId"]
-        .value
-        .as_str()
+    let source_id = request_root
+        .get("sourceId")
+        .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let build_id = fields.fields["buildId"]
-        .value
-        .as_str()
+    let build_id = request_root
+        .get("buildId")
+        .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let pack_id = fields.fields["packId"]
-        .value
-        .as_str()
+    let pack_id = request_root
+        .get("packId")
+        .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let expected_chunk_ids = fields.fields["chunkReadPlan"]
-        .value
-        .as_array()
+    let expected_chunk_ids = request_root
+        .get("chunkReadPlan")
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|chunk| chunk.get("chunkId").and_then(Value::as_str))
@@ -225,14 +207,14 @@ pub fn submit_semantic_pack(
         .first()
         .ok_or_else(|| KnowledgeError::invalid("semantic submit has no authorized target"))?;
     let result_file = std::path::PathBuf::from(project_root).join(&target.path);
-    let result: Value = read_json(&result_file)?;
-    let issues = validate_semantic_result(
-        &result,
+    let raw_result: Value = read_json(&result_file)?;
+    let result = normalize_semantic_result_machine_fields(
+        raw_result,
         &build_id,
         &pack_id,
         &expected_chunk_ids,
-        &source_id,
-    )?;
+    );
+    let issues = validate_semantic_result(&result, &build_id, &expected_chunk_ids, &source_id)?;
     if !issues.is_empty() {
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
@@ -280,33 +262,51 @@ pub fn submit_semantic_pack(
     }))
 }
 
+fn read_semantic_request_root(project_root: &str, request_ref: &str) -> KnowledgeResult<Value> {
+    let request_id = parse_semantic_request_id(request_ref)?;
+    let request_index = state::request_index::get_request_index_entry(project_root, &request_id)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    let project_paths = state::paths::project_paths(project_root)
+        .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    let request_file =
+        state::paths::from_project_relative(&project_paths.root, &request_index.request_file)
+            .map_err(|error| KnowledgeError::invalid(error.to_string()))?;
+    read_json(&request_file).map_err(|error| KnowledgeError::invalid(error.to_string()))
+}
+
+fn parse_semantic_request_id(request_ref: &str) -> KnowledgeResult<String> {
+    let rest = request_ref
+        .strip_prefix("loom://projects/")
+        .ok_or_else(|| KnowledgeError::invalid(format!("invalid requestRef: {request_ref}")))?;
+    let request_id = rest
+        .split_once("/requests/")
+        .and_then(|(_, id)| (!id.is_empty()).then_some(id))
+        .ok_or_else(|| KnowledgeError::invalid(format!("invalid requestRef: {request_ref}")))?;
+    Ok(request_id.to_string())
+}
+
 fn validate_semantic_result(
     result: &Value,
     build_id: &str,
-    pack_id: &str,
     expected_chunk_ids: &[String],
     source_id: &str,
 ) -> KnowledgeResult<Vec<RepairIssue>> {
     let mut issues = Vec::new();
-    if result.get("buildId").and_then(Value::as_str) != Some(build_id) {
-        issues.push(issue(
-            "BUILD_ID_MISMATCH",
-            "buildId must match request.",
-            Some("buildId"),
-        ));
-    }
-    if result.get("packId").and_then(Value::as_str) != Some(pack_id) {
-        issues.push(issue(
-            "PACK_ID_MISMATCH",
-            "packId must match request.",
-            Some("packId"),
-        ));
-    }
     let chunk_results = result
         .get("chunkResults")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    if chunk_results.len() != expected_chunk_ids.len() {
+        issues.push(issue(
+            "CHUNK_RESULT_COUNT_MISMATCH",
+            format!(
+                "chunkResults must contain exactly {} item(s) in chunkReadPlan order.",
+                expected_chunk_ids.len()
+            ),
+            Some("chunkResults"),
+        ));
+    }
     let returned = chunk_results
         .iter()
         .filter_map(|chunk| chunk.get("chunkId").and_then(Value::as_str))
@@ -321,7 +321,10 @@ fn validate_semantic_result(
             ));
         }
     }
-    for chunk in &chunk_results {
+    for (index, chunk) in chunk_results.iter().enumerate() {
+        if index >= expected_chunk_ids.len() {
+            continue;
+        }
         let chunk_id = chunk
             .get("chunkId")
             .and_then(Value::as_str)
@@ -426,6 +429,34 @@ fn validate_semantic_result(
         }
     }
     Ok(issues)
+}
+
+fn normalize_semantic_result_machine_fields(
+    mut raw: Value,
+    build_id: &str,
+    pack_id: &str,
+    expected_chunk_ids: &[String],
+) -> Value {
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    object.insert("schemaVersion".to_string(), json!(1));
+    object.insert("buildId".to_string(), json!(build_id));
+    object.insert("packId".to_string(), json!(pack_id));
+    let Some(chunks) = object.get_mut("chunkResults").and_then(Value::as_array_mut) else {
+        return raw;
+    };
+    for (index, chunk) in chunks.iter_mut().enumerate() {
+        let Some(chunk) = chunk.as_object_mut() else {
+            continue;
+        };
+        if let Some(chunk_id) = expected_chunk_ids.get(index) {
+            chunk.insert("chunkId".to_string(), json!(chunk_id));
+        } else {
+            chunk.remove("chunkId");
+        }
+    }
+    raw
 }
 
 fn publish_build(source_id: &str, build_id: &str) -> KnowledgeResult<()> {

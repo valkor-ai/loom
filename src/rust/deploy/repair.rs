@@ -263,36 +263,6 @@ fn accept_deploy_execution_repair_file_inner(
     })?;
     let project_root = Path::new(&input.project_root);
     let target_file = target.path.clone();
-    let raw_result = match read_json_value(&from_project_relative(project_root, &target_file)?) {
-        Ok(value) => value,
-        Err(error) => {
-            return Ok(repairable(
-                input,
-                authorized,
-                target_file,
-                vec![repair_issue(
-                    "DEPLOY_REPAIR_RESULT_JSON_INVALID",
-                    "$",
-                    &format!("Deploy execution repair result JSON is not readable: {error}"),
-                )],
-            ))
-        }
-    };
-    let result: DeployExecutionRepairTaskResult = match serde_json::from_value(raw_result) {
-        Ok(result) => result,
-        Err(error) => {
-            return Ok(repairable(
-                input,
-                authorized,
-                target_file,
-                vec![repair_issue(
-                    "DEPLOY_REPAIR_RESULT_SCHEMA_INVALID",
-                    "$",
-                    &format!("Deploy execution repair result has an invalid schema: {error}"),
-                )],
-            ))
-        }
-    };
     let request_fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
@@ -313,40 +283,79 @@ fn accept_deploy_execution_repair_file_inner(
             StateError::StateCorrupted(
                 "deploy repair action missing outputContract.repairId.".to_string(),
             )
-        })?;
+        })?
+        .to_string();
     let deployment_failure_ref = request_fields
         .fields
         .get("outputContract.deploymentFailureRef")
         .and_then(|field| field.value.as_str())
         .ok_or_else(|| {
             StateError::StateCorrupted(
-                "deploy repair action missing deploymentFailureRef.".to_string(),
+                "deploy repair action missing outputContract.deploymentFailureRef.".to_string(),
             )
-        })?;
-    if result.repair_id != repair_id {
-        return Ok(repairable(
-            input,
-            authorized,
-            target_file,
-            vec![repair_issue(
-                "DEPLOY_REPAIR_ID_MISMATCH",
-                "repairId",
-                "repairId must match outputContract.repairId from the active deploy repair action.",
-            )],
-        ));
-    }
-    if result.deployment_failure_ref != deployment_failure_ref {
-        return Ok(repairable(
-            input,
-            authorized,
-            target_file,
-            vec![repair_issue(
-                "DEPLOY_REPAIR_FAILURE_REF_MISMATCH",
-                "deploymentFailureRef",
-                "deploymentFailureRef must match outputContract.deploymentFailureRef from the active deploy repair action.",
-            )],
-        ));
-    }
+        })?
+        .to_string();
+    let failed_contract_fields = request_fields
+        .fields
+        .get("repairContext.failedContractFields")
+        .and_then(|field| field.value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let required_code_level_checks = request_fields
+        .fields
+        .get("repairContext.requiredCodeLevelChecks")
+        .and_then(|field| field.value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let raw_result = match read_json_value(&from_project_relative(project_root, &target_file)?) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(repairable(
+                input,
+                authorized,
+                target_file,
+                vec![repair_issue(
+                    "DEPLOY_REPAIR_RESULT_JSON_INVALID",
+                    "$",
+                    &format!("Deploy execution repair result JSON is not readable: {error}"),
+                )],
+            ))
+        }
+    };
+    let result: DeployExecutionRepairTaskResult =
+        match serde_json::from_value(normalize_deploy_repair_result_machine_fields(
+            raw_result,
+            &repair_id,
+            &deployment_failure_ref,
+            &failed_contract_fields,
+            &required_code_level_checks,
+        )) {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(repairable(
+                    input,
+                    authorized,
+                    target_file,
+                    vec![repair_issue(
+                        "DEPLOY_REPAIR_RESULT_SCHEMA_INVALID",
+                        "$",
+                        &format!("Deploy execution repair result has an invalid schema: {error}"),
+                    )],
+                ))
+            }
+        };
     if !is_valid_deploy_repair_status(&result.status) {
         return Ok(repairable(
             input,
@@ -559,11 +568,11 @@ fn materialize_deploy_execution_repair(
                 "description": "Write the deploy execution repair result JSON."
             }],
             "schemaShape": schema_shape,
-            "resultTemplate": deploy_execution_repair_result_template(request, &failure_ref, &failure),
+            "resultTemplate": deploy_execution_repair_result_template(&failure),
             "resultRules": [
                 "changedFiles must not include generated Dockerfile, Compose, nginx, dockerignore, RuntimeDeliveryContract, AAC, TaskPlan, ReviewResult, or .loom.",
-                "runtimeDeliveryEvidence.addressedFailedContractFields must cover failedContractFields.",
-                "codeLevelChecks must cover requiredCodeLevelChecks."
+                "Loom derives runtimeDeliveryEvidence.addressedFailedContractFields from repairContext.failedContractFields; do not write that linkage field.",
+                "Report codeLevelChecks in repairContext.requiredCodeLevelChecks order with status and evidence only; Loom derives each checkId."
             ]
         },
         "requestReadPlan": {
@@ -667,22 +676,13 @@ fn deploy_execution_repair_next(
     ))
 }
 
-fn deploy_execution_repair_result_template(
-    request: &DeploymentRepairAction,
-    failure_ref: &str,
-    failure: &DeploymentFailureReport,
-) -> Value {
+fn deploy_execution_repair_result_template(failure: &DeploymentFailureReport) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "repairId": request.repair_id,
         "status": "completed",
-        "deploymentFailureRef": failure_ref,
         "changedFiles": ["project-relative/source-or-config-file"],
         "runtimeDeliveryEvidence": {
-            "addressedFailedContractFields": failure.failed_contract_fields,
-            "codeLevelChecks": failure.required_code_level_checks.iter().map(|check| {
+            "codeLevelChecks": failure.required_code_level_checks.iter().map(|_| {
                 json!({
-                    "checkId": check,
                     "status": "passed",
                     "evidence": ""
                 })
@@ -698,6 +698,64 @@ fn deploy_execution_repair_result_template(
         },
         "notes": []
     })
+}
+
+fn normalize_deploy_repair_result_machine_fields(
+    mut raw: Value,
+    repair_id: &str,
+    deployment_failure_ref: &str,
+    failed_contract_fields: &[String],
+    required_code_level_checks: &[String],
+) -> Value {
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert("repairId".to_string(), json!(repair_id));
+    object.insert(
+        "deploymentFailureRef".to_string(),
+        json!(deployment_failure_ref),
+    );
+    let Some(evidence) = object
+        .get_mut("runtimeDeliveryEvidence")
+        .and_then(Value::as_object_mut)
+    else {
+        return raw;
+    };
+    evidence.insert(
+        "addressedFailedContractFields".to_string(),
+        json!(failed_contract_fields),
+    );
+    let raw_checks = evidence
+        .get("codeLevelChecks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let normalized_checks = required_code_level_checks
+        .iter()
+        .enumerate()
+        .map(|(index, check_id)| {
+            let mut check = raw_checks
+                .get(index)
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            check.remove("checkId");
+            check.insert("checkId".to_string(), json!(check_id));
+            if !check.get("status").is_some_and(Value::is_string) {
+                check.insert("status".to_string(), json!("not_applicable"));
+            }
+            if !check.get("evidence").is_some_and(Value::is_string) {
+                check.insert("evidence".to_string(), json!(""));
+            }
+            Value::Object(check)
+        })
+        .collect::<Vec<_>>();
+    evidence.insert(
+        "codeLevelChecks".to_string(),
+        Value::Array(normalized_checks),
+    );
+    raw
 }
 
 fn latest_repair_action(project_root: &Path) -> StateResult<Option<DeploymentRepairAction>> {

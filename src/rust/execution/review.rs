@@ -326,6 +326,7 @@ fn build_review_request(
                 "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, outputContract.reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
                 "Every finding must include non-empty readRefs.",
+                "Write finding observations and evidence only. Loom derives findingId, pendingActions.findingRefs, nextAction.findingRefs, nextAction.targetTaskIds, and approved phase linkage from the current review signals.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
                 "Use compact browser check status, attempts, command, and observed outcome first. Read a referenced Playwright trace, report, or screenshot only when a failed, blocked, retried, or ambiguous check cannot be judged from the compact evidence.",
@@ -360,9 +361,9 @@ fn build_review_request(
                 "description": "Write the ReviewResult JSON for this phase run."
             }],
             "schemaShape": schema_shape,
-            "resultTemplate": review_result_template(review_id, phase_id, task_plan, run, next_phase_handoff),
+            "resultTemplate": review_result_template(task_plan, run, next_phase_handoff),
             "allowedRefs": allowed_refs,
-            "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
+            "requiredFields": ["decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
             "reviewSignals": {
                 "items": review_signals
             },
@@ -491,7 +492,6 @@ fn build_review_request(
                         "outputContract.allowedRefs.readRefs",
                         "outputContract.requiredFields",
                         "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.source",
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.findings",
                         "outputContract.schemaShape.properties.coverageAssessment",
@@ -566,30 +566,16 @@ fn review_result_schema_shape() -> Value {
     json!({
         "type": "object",
         "required": [
-            "schemaVersion",
-            "reviewId",
-            "source",
             "decision",
             "findings",
             "coverageAssessment",
             "limitations",
             "pendingActions",
-            "nextAction",
-            "createdAt",
-            "updatedAt"
+            "nextAction"
         ],
         "properties": {
-            "schemaVersion": "1.0",
-            "reviewId": "outputContract.resultTemplate.reviewId",
-            "source": {
-                "requestId": "active review request id",
-                "phaseId": "source.phaseId",
-                "taskPlanId": "source.taskPlanId",
-                "taskPlanRunId": "source.taskPlanRunId"
-            },
             "decision": "approved | approved_with_notes | changes_requested | blocked | needs_user_decision",
             "findings": [{
-                "findingId": "string",
                 "findingType": "defect | note | limitation | contract_gap",
                 "severity": "critical | major | minor | note",
                 "severityClass": "blocking | warning | info",
@@ -641,28 +627,19 @@ fn review_result_schema_shape() -> Value {
             }],
             "pendingActions": [{
                 "type": "enumRefs.nextAction item other than top-level nextAction.type",
-                "findingRefs": ["findings[].findingId"],
                 "reason": "string"
             }],
             "nextAction": {
                 "type": "enumRefs.nextAction item",
                 "reason": "string",
-                "targetNode": "string or null",
-                "targetPhaseId": "string or null",
-                "targetTaskIds": ["task id"],
-                "findingRefs": ["findings[].findingId"],
                 "userVisibleState": "string or null"
-            },
-            "createdAt": "ISO-8601 datetime",
-            "updatedAt": "ISO-8601 datetime"
+            }
         },
         "additionalProperties": false
     })
 }
 
 fn review_result_template(
-    review_id: &str,
-    phase_id: &str,
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
@@ -689,31 +666,17 @@ fn review_result_template(
     let next_action = if let Some(handoff) = next_phase_handoff {
         json!({
             "type": "continue_to_next_phase",
-            "reason": handoff.reason,
-            "targetPhaseId": handoff.phase_id,
-            "targetTaskIds": [],
-            "findingRefs": []
+            "reason": handoff.reason
         })
     } else {
         json!({
             "type": "done",
-            "reason": "",
-            "targetTaskIds": [],
-            "findingRefs": []
+            "reason": ""
         })
     };
     json!({
-        "schemaVersion": "1.0",
-        "reviewId": review_id,
-        "source": {
-            "requestId": review_id,
-            "phaseId": phase_id,
-            "taskPlanId": task_plan.task_plan_id,
-            "taskPlanRunId": run.run_id
-        },
         "decision": "approved",
         "findings": [{
-            "findingId": "finding_1",
             "findingType": "note",
             "severity": "note",
             "severityClass": "info",
@@ -754,9 +717,7 @@ fn review_result_template(
         },
         "limitations": [],
         "pendingActions": [],
-        "nextAction": next_action,
-        "createdAt": "ISO-8601 datetime",
-        "updatedAt": "ISO-8601 datetime"
+        "nextAction": next_action
     })
 }
 
@@ -1012,12 +973,7 @@ fn review_validator_rules(mode: &str) -> Value {
     })
 }
 
-fn manual_review_resolution_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
-    result: &ReviewResult,
-) -> Value {
+fn manual_review_resolution_template(result: &ReviewResult) -> Value {
     let route = match result.next_action.r#type.as_str() {
         "execution_repair" | "taskplan_repair" | "architecture_artifact_repair" => {
             result.next_action.r#type.as_str()
@@ -1025,11 +981,6 @@ fn manual_review_resolution_template(
         _ => "needs_user_decision",
     };
     json!({
-        "schemaVersion": "1.0",
-        "manualReviewResolutionId": format!("manual-review-resolution-{request_id}"),
-        "manualReviewRequestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
         "userAnswer": {
             "text": "",
             "selectedShortReply": "request_changes"
@@ -1043,11 +994,8 @@ fn manual_review_resolution_template(
         },
         "nextAction": {
             "type": route,
-            "reason": "",
-            "targetTaskIds": result.next_action.target_task_ids.clone(),
-            "findingRefs": result.next_action.finding_refs.clone()
-        },
-        "createdAt": "ISO-8601 datetime"
+            "reason": ""
+        }
     })
 }
 
@@ -1117,8 +1065,9 @@ where
         return Ok(stale);
     }
     let root = Path::new(&input.project_root);
+    let fields = read_review_submit_fields(input)?;
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id);
+    let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id, &fields);
     let mut result: ReviewResult = match serde_json::from_value(normalized) {
         Ok(result) => result,
         Err(error) => {
@@ -1134,29 +1083,6 @@ where
             )
         }
     };
-    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
-        project_root: input.project_root.clone(),
-        request_ref: input.request_ref.clone(),
-        fields: vec![
-            "source.phaseId".to_string(),
-            "source.taskPlanId".to_string(),
-            "source.taskPlanRunId".to_string(),
-            "outputContract.allowedRefs.taskIds".to_string(),
-            "outputContract.allowedRefs.groupIds".to_string(),
-            "outputContract.allowedRefs.acceptanceRefs".to_string(),
-            "outputContract.allowedRefs.taskResultIds".to_string(),
-            "outputContract.allowedRefs.changedFilePaths".to_string(),
-            "outputContract.allowedRefs.diffRefs".to_string(),
-            "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
-            "outputContract.allowedRefs.readRefs".to_string(),
-            "enumRefs.readRefType".to_string(),
-            "enumRefs.evidenceRefType".to_string(),
-            "outputContract.changeContextMode".to_string(),
-            "outputContract.reviewSignals.items".to_string(),
-            "reviewScope.nextPhasePreview.kind".to_string(),
-        ],
-    })?
-    .fields;
     if let Some(handoff) =
         normalize_approved_next_phase(&input.project_root, &delivery_id, &phase_id, &result)?
     {
@@ -1164,9 +1090,10 @@ where
         result.next_action.target_phase_id = Some(handoff.phase_id);
         result.next_action.reason = handoff.reason;
     }
-    normalize_review_signal_targets(&mut result, &fields);
     normalize_browser_environment_review_route(&mut result, &fields);
-    let issues = validate_review_result(&result, &authorized.request_id, &fields);
+    normalize_review_signal_targets(&mut result, &fields);
+    normalize_review_linkage_fields(&mut result, &fields);
+    let issues = validate_review_result(&result, &fields);
     if !issues.is_empty() {
         return repairable_or_fallback_manual_review(
             input,
@@ -1209,30 +1136,79 @@ where
     )
 }
 
-fn normalize_review_result_machine_fields(mut raw: Value, request_id: &str) -> Value {
+fn read_review_submit_fields(
+    input: &FileSubmitInput,
+) -> Result<
+    std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    state::store::StateError,
+> {
+    Ok(
+        state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+            project_root: input.project_root.clone(),
+            request_ref: input.request_ref.clone(),
+            fields: vec![
+                "source.phaseId".to_string(),
+                "source.taskPlanId".to_string(),
+                "source.taskPlanRunId".to_string(),
+                "outputContract.allowedRefs.taskIds".to_string(),
+                "outputContract.allowedRefs.groupIds".to_string(),
+                "outputContract.allowedRefs.acceptanceRefs".to_string(),
+                "outputContract.allowedRefs.taskResultIds".to_string(),
+                "outputContract.allowedRefs.changedFilePaths".to_string(),
+                "outputContract.allowedRefs.diffRefs".to_string(),
+                "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
+                "outputContract.allowedRefs.readRefs".to_string(),
+                "enumRefs.readRefType".to_string(),
+                "enumRefs.evidenceRefType".to_string(),
+                "outputContract.changeContextMode".to_string(),
+                "outputContract.reviewSignals.items".to_string(),
+                "reviewScope.nextPhasePreview.kind".to_string(),
+                "reviewScope.nextPhasePreview.suggestedPhaseId".to_string(),
+            ],
+        })?
+        .fields,
+    )
+}
+
+fn normalize_review_result_machine_fields(
+    mut raw: Value,
+    request_id: &str,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
     let Some(object) = raw.as_object_mut() else {
         return raw;
     };
     object.insert("schemaVersion".to_string(), json!("1.0"));
-    if let Some(source) = object.get_mut("source").and_then(Value::as_object_mut) {
-        source.insert("requestId".to_string(), json!(request_id));
-    }
+    object.insert("reviewId".to_string(), json!(request_id));
+    object.insert(
+        "source".to_string(),
+        json!({
+            "requestId": request_id,
+            "phaseId": review_field_value(fields, "source.phaseId"),
+            "taskPlanId": review_field_value(fields, "source.taskPlanId"),
+            "taskPlanRunId": review_field_value(fields, "source.taskPlanRunId")
+        }),
+    );
     let now = state::store::now_string();
-    if !object
-        .get("createdAt")
-        .and_then(Value::as_str)
-        .is_some_and(is_iso_datetime_string)
-    {
-        object.insert("createdAt".to_string(), json!(now.clone()));
-    }
-    if !object
-        .get("updatedAt")
-        .and_then(Value::as_str)
-        .is_some_and(is_iso_datetime_string)
-    {
-        object.insert("updatedAt".to_string(), json!(now));
+    object.insert("createdAt".to_string(), json!(now.clone()));
+    object.insert("updatedAt".to_string(), json!(now));
+    if let Some(findings) = object.get_mut("findings").and_then(Value::as_array_mut) {
+        for (index, finding) in findings.iter_mut().enumerate() {
+            if let Some(finding) = finding.as_object_mut() {
+                finding.insert(
+                    "findingId".to_string(),
+                    json!(format!("finding-{}", index + 1)),
+                );
+            }
+        }
     }
     normalize_review_pending_actions(object);
+    if let Some(next_action) = object.get_mut("nextAction").and_then(Value::as_object_mut) {
+        next_action.remove("targetTaskIds");
+        next_action.remove("findingRefs");
+        next_action.remove("targetPhaseId");
+        next_action.remove("targetNode");
+    }
     raw
 }
 
@@ -1252,7 +1228,6 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
         object.insert("pendingActions".to_string(), json!([]));
         return;
     };
-    let mut duplicate_finding_refs = BTreeSet::new();
     let actions = raw_items
         .into_iter()
         .filter_map(|item| {
@@ -1264,14 +1239,10 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
                 .filter(|value| !value.is_empty())?
                 .to_string();
             if next_action_type.as_deref() == Some(action_type.as_str()) {
-                duplicate_finding_refs
-                    .extend(value_string_array(&Value::Object(action), "findingRefs"));
                 return None;
             }
             action.insert("type".to_string(), json!(action_type));
-            if !action.get("findingRefs").is_some_and(Value::is_array) {
-                action.insert("findingRefs".to_string(), json!([]));
-            }
+            action.remove("findingRefs");
             if !action
                 .get("reason")
                 .and_then(Value::as_str)
@@ -1286,42 +1257,72 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
         })
         .collect::<Vec<_>>();
     object.insert("pendingActions".to_string(), Value::Array(actions));
-    if !duplicate_finding_refs.is_empty() {
-        let Some(next_action) = object.get_mut("nextAction").and_then(Value::as_object_mut) else {
-            return;
-        };
-        let mut refs = next_action
-            .get("findingRefs")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect::<BTreeSet<_>>();
-        refs.extend(duplicate_finding_refs);
-        next_action.insert(
-            "findingRefs".to_string(),
-            Value::Array(refs.into_iter().map(Value::String).collect()),
-        );
-    }
 }
 
 fn normalize_review_signal_targets(
     result: &mut ReviewResult,
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) {
-    if result.next_action.r#type != "execution_repair" {
-        return;
-    }
     let signals = array_field(fields, "outputContract.reviewSignals.items");
-    let mut target_task_ids = result.next_action.target_task_ids.clone();
+    let action_type = result.next_action.r#type.as_str();
+    let mut target_task_ids = Vec::new();
     for signal in signals.as_array().into_iter().flatten() {
-        if signal.get("recommendedNextAction").and_then(Value::as_str) != Some("execution_repair") {
+        if signal.get("recommendedNextAction").and_then(Value::as_str) != Some(action_type) {
             continue;
         }
         target_task_ids.extend(value_string_array(signal, "taskRefs"));
     }
-    result.next_action.target_task_ids = dedupe_non_empty(target_task_ids);
+    target_task_ids.extend(
+        result
+            .findings
+            .iter()
+            .filter(|finding| finding.recommended_next_action == action_type)
+            .flat_map(|finding| finding.task_refs.clone()),
+    );
+    result.next_action.target_task_ids = if matches!(
+        action_type,
+        "done" | "continue_to_next_phase" | "review" | "retry_browser_environment"
+    ) {
+        Vec::new()
+    } else {
+        dedupe_non_empty(target_task_ids)
+    };
+}
+
+fn normalize_review_linkage_fields(
+    result: &mut ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    if result.next_action.r#type == "continue_to_next_phase" {
+        result.next_action.target_phase_id =
+            review_field_value(fields, "reviewScope.nextPhasePreview.suggestedPhaseId")
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| result.next_action.target_phase_id.clone());
+    } else {
+        result.next_action.target_phase_id = None;
+    }
+    let next_action_type = result.next_action.r#type.clone();
+    result.next_action.finding_refs =
+        if matches!(next_action_type.as_str(), "done" | "continue_to_next_phase") {
+            Vec::new()
+        } else {
+            result
+                .findings
+                .iter()
+                .filter(|finding| finding.recommended_next_action == next_action_type)
+                .map(|finding| finding.finding_id.clone())
+                .collect()
+        };
+    for action in &mut result.pending_actions {
+        action.finding_refs = result
+            .findings
+            .iter()
+            .filter(|finding| finding.recommended_next_action == action.r#type)
+            .map(|finding| finding.finding_id.clone())
+            .collect();
+    }
 }
 
 fn normalize_browser_environment_review_route(
@@ -1416,38 +1417,21 @@ fn normalize_browser_environment_review_route(
     result.next_action.finding_refs = vec![finding_id];
 }
 
-fn is_iso_datetime_string(value: &str) -> bool {
-    value.contains('T')
-        && (value.ends_with('Z') || value.contains('+') || value.rsplit_once('-').is_some())
-        && !value.contains("ISO-8601")
+fn review_field_value(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> Value {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .unwrap_or(Value::Null)
 }
 
 fn validate_review_result(
     result: &ReviewResult,
-    request_id: &str,
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if result.source.request_id != request_id
-        || fields
-            .get("source.phaseId")
-            .and_then(|field| field.value.as_str())
-            != Some(result.source.phase_id.as_str())
-        || fields
-            .get("source.taskPlanId")
-            .and_then(|field| field.value.as_str())
-            != Some(result.source.task_plan_id.as_str())
-        || fields
-            .get("source.taskPlanRunId")
-            .and_then(|field| field.value.as_str())
-            != Some(result.source.task_plan_run_id.as_str())
-    {
-        issues.push(issue(
-            "REVIEW_RESULT_REF_INVALID",
-            "source",
-            "ReviewResult source must match the active ReviewRequest.",
-        ));
-    }
     validate_review_enums(result, &mut issues);
     let allowed = json!({
         "taskIds": array_field(fields, "outputContract.allowedRefs.taskIds"),
@@ -2220,13 +2204,7 @@ fn build_manual_review_request(
             "done"
         };
         let common = json!({
-            "schemaVersion": "1.0",
-            "manualReviewResolutionId": format!("manual-review-resolution-{request_id}"),
-            "manualReviewRequestId": request_id,
-            "deliveryId": delivery_id,
-            "phaseId": phase_id,
-            "userAnswer": {"text": "", "selectedShortReply": ""},
-            "createdAt": "ISO-8601 datetime"
+            "userAnswer": {"text": "", "selectedShortReply": ""}
         });
         let template = |decision: &str, browser_resolution: Value, next_type: &str| {
             let mut value = common.clone();
@@ -2239,13 +2217,6 @@ fn build_manual_review_request(
             value["nextAction"] = json!({
                 "type": next_type,
                 "reason": "",
-                "targetPhaseId": result.next_action.target_phase_id,
-                "targetTaskIds": browser_quality_gate
-                    .pointer("/browserVerification/closureTaskId")
-                    .and_then(Value::as_str)
-                    .map(|task_id| vec![task_id])
-                    .unwrap_or_default(),
-                "findingRefs": ["finding-browser-environment-unavailable"]
             });
             value
         };
@@ -2270,7 +2241,7 @@ fn build_manual_review_request(
                     "approve_quality_waiver"
                 ],
                 "retryRule": "Re-run MCP browser preparation after the environment or dependencies have changed; do not route through execution repair.",
-                "externalEvidenceRule": "Provide one concrete evidence item for every required check id. Evidence may cite project-relative artifacts or HTTPS CI/report URLs.",
+                "externalEvidenceRule": "Provide one concrete evidence item for every required check id in source.browserQualityGate.browserVerification.requiredCheckIds order. Loom binds each item to its check id; evidence may cite project-relative artifacts or HTTPS CI/report URLs.",
                 "waiverRule": "A quality waiver requires an explicit user reason and records the missing browser evidence as an accepted limitation."
             },
             "enumRefs": {
@@ -2289,8 +2260,7 @@ fn build_manual_review_request(
                     "description": "Write the selected browser quality resolution."
                 }],
                 "requiredFields": [
-                    "schemaVersion", "manualReviewResolutionId", "manualReviewRequestId",
-                    "deliveryId", "phaseId", "userAnswer", "decision", "nextAction", "createdAt"
+                    "userAnswer", "decision", "nextAction"
                 ],
                 "schemaShape": schema_shape,
                 "resultTemplatesByDecision": {
@@ -2298,8 +2268,7 @@ fn build_manual_review_request(
                     "submit_external_browser_evidence": template(
                         "submit_external_browser_evidence",
                         json!({
-                            "externalEvidence": required_check_ids.iter().map(|check_id| json!({
-                                "checkId": check_id,
+                            "externalEvidence": required_check_ids.iter().map(|_| json!({
                                 "evidenceRefs": [],
                                 "observedOutcome": "",
                                 "source": ""
@@ -2323,6 +2292,7 @@ fn build_manual_review_request(
                     "selectors": read_selectors_value_from_paths([
                         "source.reviewId",
                         "source.reviewResultRef",
+                        "source.reviewNextAction",
                         "source.browserQualityGate",
                         "manualReviewProtocol.acceptedDecisions",
                         "manualReviewProtocol.retryRule",
@@ -2396,15 +2366,10 @@ fn build_manual_review_request(
                 "description": "Write the ManualReviewResolution JSON after the user answers the review gate."
             }],
             "requiredFields": [
-                "schemaVersion", "manualReviewResolutionId", "manualReviewRequestId",
-                "deliveryId", "phaseId", "userAnswer", "decision", "changeRequest",
-                "nextAction", "createdAt"
+                "userAnswer", "decision", "changeRequest", "nextAction"
             ],
             "schemaShape": schema_shape,
             "resultTemplate": manual_review_resolution_template(
-                request_id,
-                delivery_id,
-                phase_id,
                 result,
             )
         },
@@ -2440,7 +2405,6 @@ fn build_manual_review_request(
                         "outputContract.writeTargets",
                         "outputContract.requiredFields",
                         "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.manualReviewRequestId",
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.changeRequest",
                         "outputContract.schemaShape.properties.nextAction"
@@ -2486,7 +2450,13 @@ where
     }
     let root = Path::new(&input.project_root);
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let resolution: ManualReviewResolution = match serde_json::from_value(raw) {
+    let normalized = normalize_manual_review_resolution_machine_fields(
+        raw,
+        &authorized.request_id,
+        &delivery_id,
+        &phase_id,
+    );
+    let mut resolution: ManualReviewResolution = match serde_json::from_value(normalized) {
         Ok(resolution) => resolution,
         Err(error) => {
             return Ok(repairable_with_tool(
@@ -2505,6 +2475,7 @@ where
     };
     let mut requested_fields = vec![
         "source.reviewId".to_string(),
+        "source.reviewNextAction".to_string(),
         "enumRefs.decision".to_string(),
         "enumRefs.nextActionType".to_string(),
     ];
@@ -2523,7 +2494,8 @@ where
         fields: requested_fields,
     })?
     .fields;
-    let issues = validate_manual_review_resolution(&resolution, authorized, &fields);
+    normalize_manual_review_resolution_links(&mut resolution, &fields);
+    let issues = validate_manual_review_resolution(&resolution, &fields);
     if !issues.is_empty() {
         return Ok(repairable_with_tool(
             input,
@@ -2561,28 +2533,90 @@ where
     )
 }
 
+fn normalize_manual_review_resolution_machine_fields(
+    mut raw: Value,
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> Value {
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert(
+        "manualReviewResolutionId".to_string(),
+        json!(format!("manual-review-resolution-{request_id}")),
+    );
+    object.insert("manualReviewRequestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+    raw
+}
+
+fn normalize_manual_review_resolution_links(
+    resolution: &mut ManualReviewResolution,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    let source_next_action = fields
+        .get("source.reviewNextAction")
+        .map(|field| &field.value)
+        .filter(|value| value.is_object());
+    let source_next_action = source_next_action.unwrap_or(&Value::Null);
+    resolution.next_action.target_task_ids =
+        value_string_array(source_next_action, "targetTaskIds");
+    resolution.next_action.finding_refs = value_string_array(source_next_action, "findingRefs");
+    if resolution.next_action.r#type == "continue_to_next_phase" {
+        resolution.next_action.target_phase_id = source_next_action
+            .get("targetPhaseId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+    } else {
+        resolution.next_action.target_phase_id = None;
+    }
+    let required_check_ids = fields
+        .get("source.browserQualityGate")
+        .map(|field| &field.value)
+        .and_then(|gate| gate.pointer("/browserVerification/requiredCheckIds"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !required_check_ids.is_empty() {
+        let raw_evidence = resolution
+            .browser_quality_resolution
+            .as_ref()
+            .map(|value| value.external_evidence.clone())
+            .unwrap_or_default();
+        if let Some(browser_resolution) = resolution.browser_quality_resolution.as_mut() {
+            browser_resolution.external_evidence = required_check_ids
+                .iter()
+                .enumerate()
+                .map(|(index, check_id)| {
+                    let mut evidence = raw_evidence.get(index).cloned().unwrap_or(
+                        contracts::BrowserExternalEvidence {
+                            check_id: String::new(),
+                            evidence_refs: Vec::new(),
+                            observed_outcome: String::new(),
+                            source: String::new(),
+                        },
+                    );
+                    evidence.check_id = check_id.clone();
+                    evidence
+                })
+                .collect();
+        }
+    }
+}
+
 fn validate_manual_review_resolution(
     resolution: &ManualReviewResolution,
-    authorized: &AuthorizedWriteSet,
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if resolution.manual_review_request_id != authorized.request_id {
-        issues.push(issue(
-            "MANUAL_REVIEW_RESOLUTION_REF_INVALID",
-            "manualReviewRequestId",
-            "ManualReviewResolution must reference the active ManualReview requestId.",
-        ));
-    }
-    if authorized.delivery_id.as_deref() != Some(resolution.delivery_id.as_str())
-        || authorized.phase_id.as_deref() != Some(resolution.phase_id.as_str())
-    {
-        issues.push(issue(
-            "MANUAL_REVIEW_RESOLUTION_REF_INVALID",
-            "deliveryId",
-            "ManualReviewResolution deliveryId and phaseId must match the active request.",
-        ));
-    }
     if fields
         .get("source.reviewId")
         .and_then(|field| field.value.as_str())
@@ -3062,19 +3096,7 @@ fn route_next_action_with_target_task_ids(
 }
 
 fn manual_review_target_task_ids(resolution: &ManualReviewResolution) -> Vec<String> {
-    let mut values = resolution.next_action.target_task_ids.clone();
-    if let Some(change_request) = &resolution.change_request {
-        values.extend(
-            change_request
-                .details
-                .get("targetTaskIds")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str().map(str::to_string)),
-        );
-    }
-    dedupe_non_empty(values)
+    dedupe_non_empty(resolution.next_action.target_task_ids.clone())
 }
 
 fn dedupe_non_empty(mut values: Vec<String>) -> Vec<String> {

@@ -603,7 +603,6 @@ fn build_execution_request(
             ],
             "schemaShape": schema_shape,
             "resultTemplate": task_result_template_with_code_quality(
-                &task_plan.task_plan_id,
                 &request_task,
                 &code_quality_requirements,
                 browser_verification_profile,
@@ -830,22 +829,22 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         "TaskResult must include executionContinuity; if agent-owned long-running work release state is unknown, status cannot be completed.".to_string(),
         "changedFiles must list intended deliverable files, not incidental dependency directories, caches, logs, or generated build output.".to_string(),
         "noChangeReason must be null when changedFiles is non-empty; when changedFiles is empty and a reason is needed, noChangeReason must be an object with code and summary, never a string or array.".to_string(),
-        "For completed or completed_with_notes results, every requirementDetailEvidence entry must include verificationIds that reference task.verificationIntents; do not leave verificationIds empty.".to_string(),
+        "For completed or completed_with_notes results, provide substantive status, evidenceRefs, and summary for every requirementDetailEvidence entry; Loom derives detailId and verificationIds from the task contract.".to_string(),
     ];
     if frontend_self_check_applies(task) {
-        rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present.".to_string());
+        rules.push("For frontend tasks, fill frontendExperienceSelfCheck using task.frontendExperienceRequirement.executionGuidance and frontend/backend bindings when present; Loom derives closureRequirementIds from the assigned closure contract.".to_string());
         rules.push("For browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy and record evidence through existing TaskResult fields.".to_string());
     }
     if frontend_quality_self_check_applies(task) {
-        rules.push("For frontendQualitySelfCheck, prove the task-scoped uiProductionBrief.surfaceDecisionContract with concrete surfaceRegionEvidence, surfaceActionEvidence, surfaceStateEvidence, surfaceQualityRuleEvidence, contentBoundaryEvidence, referencePlanFilesChecked, UI files, and evidence from this task; do not leave replace_with_* values in submitted results.".to_string());
+        rules.push("For frontendQualitySelfCheck, provide substantive status, files, evidence, contentBoundaryEvidence, referencePlanFilesChecked, and token evidence for the task-scoped uiProductionBrief.surfaceDecisionContract. Submit surface evidence arrays in the contract order; Loom derives surfaceDecisionContractRef and every evidence id. Do not leave replace_with_* values in submitted results.".to_string());
     }
     if has_browser_verification {
-        rules.push("Record every sourceContext.browserVerificationContext.profile.checks item under its matching verificationResults[].browserChecks entry. Use exact checkId values; do not copy trace, screenshot, or report contents into TaskResult prose.".to_string());
+        rules.push("Record every sourceContext.browserVerificationContext.profile.checks outcome under verificationResults[].browserChecks in the profile order. Loom derives verificationId and checkId; do not write or copy those linkage fields, and do not paste trace, screenshot, or report contents into TaskResult prose.".to_string());
         rules.push("Passed browser checks require the exact command, attempt count, and concise observed outcome. Blocked checks require a concrete blockedReason. Keep retry success visible with attempts greater than one.".to_string());
     }
     if runtime_delivery_evidence_applies(task) {
         rules.push("For runtimeDeliveryRequirement tasks, include runtimeDeliveryEvidence with checkedFields, codeLevelChecks, commandsRun when commands were run, and unverifiedItems when environment prevents a check.".to_string());
-        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, use only the exact checkId values listed in task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId.".to_string());
+        rules.push("For runtimeDeliveryEvidence.codeLevelChecks, report status and evidence in the task.runtimeDeliveryRequirement.requiredCodeLevelChecks order. Loom derives requirementRef, checkedFields, checkId, and contractField.".to_string());
         rules.push("If a temporary runtime/probe/server/container was started, include runtimeDeliveryEvidence.runtimeProbeCleanup; cleanup failure alone should be completed_with_notes, not failed or blocked.".to_string());
     }
     if !task.engineering_quality_requirement_refs.is_empty() {
@@ -853,16 +852,13 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         rules.push("For persistence_mapping requirements, evidence must cover changed risk field kinds across domain model, storage schema or migration, data access mapping, DTO/API contract, and same-provider persistence behavior when those parts are in task scope.".to_string());
     }
     if !task.architecture_quality_requirement_refs.is_empty() {
-        rules.push("For referenced architectureQualityRequirements, include architectureQualityEvidence with the exact requirementId values assigned to this task.".to_string());
-        rules.push("architectureQualityEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files respected the referenced decision, NFR, or risk mitigation.".to_string());
+        rules.push("For referenced architectureQualityRequirements, provide one architectureQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. Summaries must state how changed files respected the referenced decision, NFR, or risk mitigation.".to_string());
     }
     if !task.api_contract_requirement_refs.is_empty() {
-        rules.push("For referenced apiContractRequirements, include apiContractEvidence with the exact requirementId values assigned to this task.".to_string());
-        rules.push("apiContractEvidence.verificationIds must reference task.verificationIntents and summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
+        rules.push("For referenced apiContractRequirements, provide one apiContractEvidence entry per assigned requirement in task order; Loom derives requirementId, interfaceRefs, and verificationIds. Summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
-        rules.push("For referenced codeQualityExecutionContext entries, include codeQualityEvidence with the exact requirementId values assigned to this task.".to_string());
-        rules.push("codeQualityEvidence.referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan; verificationIds must reference task.verificationIntents and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
+        rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
     }
     json!(rules)

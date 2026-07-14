@@ -317,7 +317,7 @@ fn write_semantic_request(
     read_plan: &[KnowledgeChunkReadRef],
 ) -> KnowledgeResult<String> {
     let request_id = format!("ksem_{build_id}_{pack_id}");
-    let result_template = semantic_result_template(build_id, pack_id, read_plan);
+    let result_template = semantic_result_template(read_plan);
     let generation_rules = semantic_generation_rules();
     let stored = state::write_native_request(
         project_root,
@@ -355,12 +355,6 @@ fn write_semantic_request(
                         "purpose": "Read the semantic pack contract and chunk inspect plan.",
                         "whenToRead": "Before reading chunks and writing the semantic result.",
                         "selectors": read_selectors_value_from_paths([
-                            "sourceName",
-                            "sourceId",
-                            "buildId",
-                            "packId",
-                            "packIndex",
-                            "packCount",
                             "chunkReadPlan",
                             "outputContract.resultTemplate",
                             "generationRules",

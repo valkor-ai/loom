@@ -17,8 +17,8 @@ use state::{
 
 use crate::{
     gate::{
-        block_message, required_knowledge_step_ids, to_value, BrainstormGate,
-        BrainstormResponseRule, SkippedBlockSummary,
+        block_id, gate_for_block, required_knowledge_step_ids, to_value, BrainstormGate,
+        SkippedBlockSummary,
     },
     paths::{brainstorm_agent_candidate_file, brainstorm_clarification_state_file},
     request::{
@@ -709,46 +709,26 @@ fn block_order(block: &ClarificationBlockName) -> u8 {
     }
 }
 
-fn block_id(block: &ClarificationBlockName) -> &'static str {
-    match block {
-        ClarificationBlockName::PhaseScope => "phase_scope",
-        ClarificationBlockName::ConceptGrounding => "concept_grounding",
-        ClarificationBlockName::FrontendExperience => "frontend_experience",
-        ClarificationBlockName::FinalSummary => "final_summary",
-    }
-}
-
 fn gate_for_state(block: ClarificationBlockName, state: &ClarificationState) -> BrainstormGate {
-    BrainstormGate {
-        gate_id: format!("gate_{}", block_id(&block)),
-        current_block: block.clone(),
-        required_blocks: crate::gate::required_blocks(),
-        already_confirmed_blocks: state
-            .blocks
-            .iter()
-            .filter(|confirmed| confirmed.confirmed_by_user && !confirmed.skipped)
-            .map(|confirmed| confirmed.block.clone())
-            .collect(),
-        skipped_blocks: state
-            .blocks
-            .iter()
-            .filter(|confirmed| confirmed.skipped)
-            .map(|confirmed| SkippedBlockSummary {
-                block: confirmed.block.clone(),
-                reason: confirmed
-                    .skip_reason
-                    .clone()
-                    .unwrap_or_else(|| "User confirmed this block is not applicable.".to_string()),
-            })
-            .collect(),
-        user_message: block_message(&block),
-        response_rule: BrainstormResponseRule {
-            mode: "progressive_brainstorm".to_string(),
-            final_summary_required_before_write: true,
-            user_visible_confirmation_required: true,
-        },
-        issues: vec![],
-    }
+    let already_confirmed_blocks = state
+        .blocks
+        .iter()
+        .filter(|confirmed| confirmed.confirmed_by_user && !confirmed.skipped)
+        .map(|confirmed| confirmed.block.clone())
+        .collect();
+    let skipped_blocks = state
+        .blocks
+        .iter()
+        .filter(|confirmed| confirmed.skipped)
+        .map(|confirmed| SkippedBlockSummary {
+            block: confirmed.block.clone(),
+            reason: confirmed
+                .skip_reason
+                .clone()
+                .unwrap_or_else(|| "User confirmed this block is not applicable.".to_string()),
+        })
+        .collect();
+    gate_for_block(block, already_confirmed_blocks, skipped_blocks)
 }
 
 fn clean_confirmed_value(value: Value) -> Value {

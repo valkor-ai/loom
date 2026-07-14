@@ -279,6 +279,8 @@ pub struct RoadmapPhase {
 #[serde(rename_all = "camelCase")]
 pub struct Roadmap {
     pub required: bool,
+    #[serde(default)]
+    #[schemars(skip)]
     pub current_phase_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub phases: Vec<RoadmapPhase>,
@@ -287,6 +289,8 @@ pub struct Roadmap {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PhasePlanCurrent {
+    #[serde(default)]
+    #[schemars(skip)]
     pub phase_id: String,
     pub title: String,
     pub goal: String,
@@ -400,8 +404,10 @@ pub struct ConceptSet {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GlossaryUpdate {
+    #[serde(default)]
+    #[schemars(skip)]
     pub update_id: String,
     pub operation: GlossaryUpdateOperation,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -678,12 +684,14 @@ pub struct BrainstormCandidateAgentWritable {
     pub acceptance: Vec<AcceptanceCandidate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_model: Option<DomainModel>,
+    #[schemars(skip)]
     pub user_confirmation: UserConfirmation,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concept_grounding: Option<ConceptGrounding>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub concept_confirmation: Option<ConceptConfirmation>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
     pub clarification_progress: Option<ClarificationProgress>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontend_experience: Option<FrontendExperience>,

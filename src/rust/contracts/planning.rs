@@ -378,7 +378,9 @@ pub struct ContextQuality {
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryContextCandidateAgentWritable {
     pub status: String,
+    #[schemars(skip)]
     pub source: RepositoryContextSource,
+    #[schemars(skip)]
     pub request_lens: RepositoryContextRequestLens,
     pub repo_overview: RepositoryOverview,
     pub technology_signals: TechnologySignals,

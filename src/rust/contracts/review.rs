@@ -30,6 +30,7 @@ pub struct ReviewEvidenceRef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewFinding {
+    #[schemars(skip)]
     pub finding_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finding_type: Option<String>,
@@ -107,6 +108,7 @@ pub struct ReviewLimitation {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewPendingAction {
     pub r#type: String,
+    #[schemars(skip)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub finding_refs: Vec<String>,
     pub reason: String,
@@ -117,14 +119,19 @@ pub struct ReviewPendingAction {
 pub struct ReviewNextAction {
     pub r#type: String,
     pub reason: String,
+    #[schemars(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_node: Option<String>,
+    #[schemars(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_phase_id: Option<String>,
+    #[schemars(skip)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_task_ids: Vec<String>,
+    #[schemars(skip)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub finding_refs: Vec<String>,
+    #[schemars(skip)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_visible_state: Option<String>,
 }
@@ -132,8 +139,11 @@ pub struct ReviewNextAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewResult {
+    #[schemars(skip)]
     pub schema_version: String,
+    #[schemars(skip)]
     pub review_id: String,
+    #[schemars(skip)]
     pub source: ReviewResultSource,
     pub decision: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -144,7 +154,9 @@ pub struct ReviewResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_actions: Vec<ReviewPendingAction>,
     pub next_action: ReviewNextAction,
+    #[schemars(skip)]
     pub created_at: String,
+    #[schemars(skip)]
     pub updated_at: String,
 }
 
@@ -169,6 +181,8 @@ pub struct ManualReviewChangeRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserExternalEvidence {
+    #[schemars(skip)]
+    #[serde(default)]
     pub check_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_refs: Vec<String>,
@@ -188,10 +202,15 @@ pub struct BrowserQualityManualResolution {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualReviewResolution {
+    #[schemars(skip)]
     pub schema_version: String,
+    #[schemars(skip)]
     pub manual_review_resolution_id: String,
+    #[schemars(skip)]
     pub manual_review_request_id: String,
+    #[schemars(skip)]
     pub delivery_id: String,
+    #[schemars(skip)]
     pub phase_id: String,
     pub user_answer: ManualReviewUserAnswer,
     pub decision: String,
@@ -200,5 +219,6 @@ pub struct ManualReviewResolution {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser_quality_resolution: Option<BrowserQualityManualResolution>,
     pub next_action: ReviewNextAction,
+    #[schemars(skip)]
     pub created_at: String,
 }

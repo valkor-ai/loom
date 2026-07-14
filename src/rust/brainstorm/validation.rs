@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::{
     BrainstormCandidateAgentWritable, ClarificationBlockName, ClarificationProgress,
-    FrontendExperience, NextPhasePreview,
+    FrontendExperience, GlossaryUpdateOperation, NextPhasePreview,
 };
 use delivery_core::RepairIssue;
 use serde_json::Value;
@@ -232,20 +232,6 @@ pub fn validate_candidate(
 ) -> Vec<RepairIssue> {
     let mut issues = Vec::new();
 
-    if candidate.roadmap.current_phase_id != phase_id {
-        issues.push(issue(
-            "ROADMAP_CURRENT_PHASE_MISMATCH",
-            "roadmap.currentPhaseId",
-            "roadmap.currentPhaseId must equal the active phase id.",
-        ));
-    }
-    if candidate.phase_plan.current.phase_id != phase_id {
-        issues.push(issue(
-            "PHASE_PLAN_CURRENT_MISMATCH",
-            "phasePlan.current.phaseId",
-            "phasePlan.current.phaseId must equal the active phase id.",
-        ));
-    }
     let scope_ids = candidate
         .scope
         .included
@@ -351,11 +337,70 @@ pub fn validate_candidate(
             "conceptConfirmation is required after concept_grounding confirmation.",
         ));
     }
+    validate_glossary_updates(candidate, &mut issues);
     if let Some(frontend) = &candidate.frontend_experience {
         validate_frontend_source_refs(frontend, request_source_ids, &mut issues);
     }
     validate_nested_source_refs(candidate, request_source_ids, &mut issues);
     issues
+}
+
+fn validate_glossary_updates(
+    candidate: &BrainstormCandidateAgentWritable,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let Some(grounding) = &candidate.concept_grounding else {
+        return;
+    };
+
+    for (index, update) in grounding.glossary_updates.iter().enumerate() {
+        let path = format!("conceptGrounding.glossaryUpdates[{index}]");
+        if update.reason.trim().is_empty() {
+            issues.push(issue(
+                "GLOSSARY_UPDATE_REASON_REQUIRED",
+                &format!("{path}.reason"),
+                "A glossary update must explain why the delivery glossary changes.",
+            ));
+        }
+        match update.operation {
+            GlossaryUpdateOperation::Add if update.concept.is_none() => issues.push(issue(
+                "GLOSSARY_UPDATE_CONCEPT_REQUIRED",
+                &format!("{path}.concept"),
+                "An add glossary update requires a concept object using the phase concept shape.",
+            )),
+            GlossaryUpdateOperation::Replace
+                if update
+                    .concept_ref
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                    || update.concept.is_none() =>
+            {
+                issues.push(issue(
+                    "GLOSSARY_UPDATE_REPLACE_PAYLOAD_REQUIRED",
+                    &path,
+                    "A replace glossary update requires a non-empty conceptRef and a replacement concept object.",
+                ));
+            }
+            GlossaryUpdateOperation::Remove
+                if update
+                    .concept_ref
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty()) =>
+            {
+                issues.push(issue(
+                    "GLOSSARY_UPDATE_CONCEPT_REF_REQUIRED",
+                    &format!("{path}.conceptRef"),
+                    "A remove glossary update requires a non-empty conceptRef.",
+                ));
+            }
+            GlossaryUpdateOperation::Remove if update.concept.is_some() => issues.push(issue(
+                "GLOSSARY_UPDATE_REMOVE_CONCEPT_FORBIDDEN",
+                &format!("{path}.concept"),
+                "A remove glossary update must not include a replacement concept.",
+            )),
+            _ => {}
+        }
+    }
 }
 
 fn validate_frontend_source_refs(
