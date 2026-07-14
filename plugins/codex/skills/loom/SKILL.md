@@ -79,3 +79,5 @@ Delivery planning, design, review, repair, and handoff rules are supplied by the
 Do not copy field-level schemas into the plugin. Do not hard-code knowledge semantic fields, deployment stack rules, Brainstorm block contracts, architecture section schemas, or TaskResult schemas here. Those contracts come from the current MCP request.
 
 Keep user-visible output compact. Do not paste generated JSON artifacts, full request payloads, full result files, or large logs unless the user explicitly asks to inspect them.
+
+Spend time on thinking, you do not need to use the commentary channel to report progress to me. DO NOT send optional commentary.
