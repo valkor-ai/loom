@@ -27,7 +27,11 @@ pub fn build_topology(
                 public_path: api_base_path(runtime),
                 target_service_id: backend.service_id.clone(),
                 target_port: backend.port,
-                preserve_path: true,
+                preserve_path: runtime
+                    .api_contract
+                    .as_ref()
+                    .map(|contract| contract.preserve_path)
+                    .unwrap_or(true),
             });
         }
     }

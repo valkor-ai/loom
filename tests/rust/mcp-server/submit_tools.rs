@@ -2264,7 +2264,6 @@ fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
         "content.runtimeDelivery.taskPlanningGuidance.verificationBoundary",
         "content.runtimeDelivery.frontend.outputDir",
         "content.runtimeDelivery.start.port",
-        "content.runtimeDelivery.api",
     ] {
         assert!(
             issues
@@ -2273,6 +2272,12 @@ fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
             "missing issue for {field_path}: {issues:#?}"
         );
     }
+    assert!(
+        !issues
+            .iter()
+            .any(|issue| issue["fieldPath"] == json!("content.runtimeDelivery.api")),
+        "API probe paths are MCP-derived and must not be required from the agent: {issues:#?}"
+    );
 }
 
 #[test]
@@ -5523,9 +5528,10 @@ fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
         frontend.get("engineeringQualityRequirementRefs").is_none(),
         "pure frontend task must not receive persistence quality refs: {frontend:#}"
     );
-    assert!(
-        frontend.get("apiContractRequirementRefs").is_none(),
-        "frontend API binding task must not receive API contract owner refs: {frontend:#}"
+    assert_eq!(
+        frontend["apiContractRequirementRefs"],
+        json!(["api-contract-task-frontend-001"]),
+        "frontend API binding task must receive the accepted API contract binding requirement: {frontend:#}"
     );
     let code_requirements = taskplan["codeQualityRequirements"]
         .as_array()
@@ -10629,6 +10635,7 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
 
 fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
     complete_architecture_quality_evidence_for_test(result);
+    complete_api_contract_evidence_for_test(result);
     complete_browser_check_evidence_for_test(result);
     if let Some(self_check) = result
         .get_mut("frontendQualitySelfCheck")

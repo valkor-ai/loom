@@ -24,6 +24,7 @@ use state::{
 
 use crate::{
     active_operation::{acquire_operation, active_operation_result},
+    api_binding::derive_frontend_api_binding,
     bootstrap::analyze_deployment_bootstrap,
     code_evidence::{build_deployment_code_probe, DeploymentCodeProbe},
     existing::{
@@ -131,6 +132,37 @@ pub fn deploy_prepare_inner(
         apply_healthcheck_override(&mut source_model, path);
     }
     let topology = build_topology(&runtime_contract, &source_model);
+    if runtime_contract
+        .api_contract
+        .as_ref()
+        .is_some_and(|contract| contract.status != "resolved")
+    {
+        return Err(StateError::InvalidArgument(
+            "Accepted API contract has interface paths outside its declared public exposure base path."
+                .to_string(),
+        ));
+    }
+    let frontend_api_binding = derive_frontend_api_binding(
+        project_root,
+        source_model
+            .services
+            .iter()
+            .find(|service| service.service_id == source_model.preview_service_id),
+        runtime_contract.api_contract.as_ref(),
+        runtime_contract.source == "heuristic"
+            && (runtime_contract
+                .api
+                .as_ref()
+                .is_some_and(|api| api.required)
+                || !runtime_contract.api_paths.is_empty()),
+    );
+    if strategy.provider == DeployProvider::Generated && frontend_api_binding.status == "unresolved"
+    {
+        return Err(StateError::InvalidArgument(format!(
+            "Frontend API binding is unresolved: {}",
+            frontend_api_binding.reason
+        )));
+    }
     let runtime_contract_ref = to_project_relative(
         project_root,
         &paths.generated_dir.join("runtime-contract.json"),
@@ -189,6 +221,7 @@ pub fn deploy_prepare_inner(
         source_model,
         topology,
         facts,
+        frontend_api_binding,
         environment,
         bootstrap,
         compose: compose_info,
@@ -716,6 +749,7 @@ pub(crate) fn deployment_prepare_details(
             "previewPaths": spec.topology.validation.preview_paths,
             "apiPaths": spec.topology.validation.api_paths
         },
+        "frontendApiBinding": spec.frontend_api_binding,
         "composeSummary": spec.compose.as_ref().map(|compose| json!({
             "selectedService": compose.selected_service.clone(),
             "serviceReason": compose.service_reason.clone(),

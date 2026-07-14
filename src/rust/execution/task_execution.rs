@@ -906,6 +906,7 @@ fn api_contract_execution_rules(task: &TaskDefinition) -> Value {
         "appliesToRequirementRefs": task.api_contract_requirement_refs,
         "requirementSource": "sourceContext.apiContractRequirements",
         "interfaceSource": "sourceContext.architectureArtifactProjection.interfaces",
+        "bindingSource": "sourceContext.architectureArtifactProjection.apiContract",
         "scopeRule": "Apply only the listed API contract requirements whose appliesToTaskIds include this task; do not create new API requirements inside TaskResult.",
         "implementationRules": [
             "Before editing API or client binding code, compare sourceContext.apiContractRequirements with the task-owned AAC interfaces.",
@@ -1066,6 +1067,15 @@ fn task_execution_read_groups(
     }
     if projection_array_has_items(architecture_projection, "interfaces") {
         architecture_fields.push("sourceContext.architectureArtifactProjection.interfaces");
+        architecture_fields.push("sourceContext.architectureArtifactProjection.apiContract");
+    }
+    if architecture_projection
+        .get("apiContract")
+        .is_some_and(|value| !value.is_null())
+        && !architecture_fields
+            .contains(&"sourceContext.architectureArtifactProjection.apiContract")
+    {
+        architecture_fields.push("sourceContext.architectureArtifactProjection.apiContract");
     }
     if projection_array_has_items(architecture_projection, "userFlows") {
         architecture_fields.push("sourceContext.architectureArtifactProjection.userFlows");
@@ -1534,6 +1544,9 @@ fn task_scoped_architecture_projection(
                 .collect::<Vec<_>>()
         }
     });
+    if !interface_refs.is_empty() {
+        projection["apiContract"] = aac.api_contract.clone().unwrap_or(Value::Null);
+    }
     if runtime_delivery_evidence_applies(task) {
         projection["runtimeDelivery"] = aac.runtime_delivery.clone().unwrap_or(Value::Null);
     }

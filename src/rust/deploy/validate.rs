@@ -230,12 +230,15 @@ pub fn validate_generated_assets(
                 public_path,
                 target_service_id,
                 target_port,
-                ..
+                preserve_path,
             } = route
             {
-                let proxy_index = nginx.find(&format!(
-                    "proxy_pass http://{target_service_id}:{target_port};"
-                ));
+                let proxy_pass = if *preserve_path {
+                    format!("http://{target_service_id}:{target_port};")
+                } else {
+                    format!("http://{target_service_id}:{target_port}/;")
+                };
+                let proxy_index = nginx.find(&format!("proxy_pass {proxy_pass}"));
                 if proxy_index.is_none() {
                     issues.push(format!("nginx config for {service_id} is missing proxy to {target_service_id}:{target_port}."));
                 }

@@ -96,3 +96,6 @@ If logs mention missing env, missing secret, invalid config, app key, secret key
 If logs mention missing tables, pending migrations, schema drift, Prisma migration errors, Django/Rails/Laravel migration errors, Flyway, or Liquibase, compare the log with `DeploymentSpec.bootstrap`. Treat bootstrap commands as diagnostic guidance only; ask before running them.
 
 Do not turn every boot error into a user confirmation. If the failure can be fixed inside generated Compose/Dockerfile with safe local defaults and the affected files are editable, repair the generated deployment assets. Ask the user only for real credentials, destructive state changes, or edits to protected user-owned assets.
+## Frontend API Environment
+
+Frontend API environment variables are not global deploy defaults. Loom injects only the environment key that repository source actually uses and only when source-level request construction proves that the key supplies a relative suffix's public base. When source code already sends a complete accepted interface path, the injected value is empty so a fallback such as `/api` cannot produce `/api/api/...`. Conflicting or unproven bindings for detected request construction are blocked before image generation; a frontend with no detectable API request remains deployable without an injection.

@@ -1,4 +1,5 @@
 mod active_operation;
+mod api_binding;
 mod bootstrap;
 mod code_evidence;
 mod down;

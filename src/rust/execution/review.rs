@@ -283,7 +283,8 @@ fn build_review_request(
             "taskPlanRunId": run.run_id,
             "groupSummaries": compact_group_summaries(&task_plan.groups),
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
-            "taskResultSummaries": compact_task_result_summaries(task_results)
+            "taskResultSummaries": compact_task_result_summaries(task_results),
+            "apiContractContext": compact_api_contract_context(task_plan, architecture_contract)
         },
         "changeSet": change_set,
         "changeContext": change_context,
@@ -420,7 +421,8 @@ fn build_review_request(
                         "reviewPacket.taskPlanRunId",
                         "reviewPacket.groupSummaries",
                         "reviewPacket.taskSummaries",
-                        "reviewPacket.taskResultSummaries"
+                        "reviewPacket.taskResultSummaries",
+                        "reviewPacket.apiContractContext"
                     ])
                 },
                 {
@@ -3699,6 +3701,55 @@ fn build_api_contract_review_matrix(
             })
         })
         .collect()
+}
+
+fn compact_api_contract_context(
+    task_plan: &TaskPlan,
+    architecture_contract: Option<&ArchitectureArtifactContract>,
+) -> Value {
+    let Some(aac) = architecture_contract else {
+        return Value::Null;
+    };
+    let interface_refs = task_plan
+        .api_contract_requirements
+        .iter()
+        .flat_map(|requirement| requirement.interface_refs.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    json!({
+        "contract": aac.api_contract.clone().unwrap_or(Value::Null),
+        "interfaces": aac
+            .interfaces
+            .iter()
+            .filter(|interface| {
+                interface
+                    .get("interfaceId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|interface_id| interface_refs.contains(interface_id))
+            })
+            .map(compact_api_interface_for_review)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn compact_api_interface_for_review(interface: &Value) -> Value {
+    json!({
+        "interfaceId": interface.get("interfaceId").cloned().unwrap_or(Value::Null),
+        "method": interface.get("method").cloned().unwrap_or(Value::Null),
+        "path": interface.get("path").cloned().unwrap_or(Value::Null),
+        "operationKind": interface.get("operationKind").cloned().unwrap_or(Value::Null),
+        "statusCodes": interface.get("statusCodes").cloned().unwrap_or(Value::Null),
+        "requestFieldCount": interface
+            .get("requestSchema")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "responseFieldCount": interface
+            .get("responseSchema")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+    })
 }
 
 fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {

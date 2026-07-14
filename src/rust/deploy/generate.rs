@@ -99,7 +99,7 @@ fn generate_dockerfile(service: &DeploymentSourceService, spec: &DeploymentSpec)
     }
     match service.runtime_kind {
         RuntimeKind::Node => generate_node_dockerfile(service),
-        RuntimeKind::Java => generate_java_dockerfile(service),
+        RuntimeKind::Java => generate_java_dockerfile(service, spec),
         RuntimeKind::Python => generate_python_dockerfile(service),
         RuntimeKind::Go => generate_go_dockerfile(service),
         RuntimeKind::Dotnet => generate_dotnet_dockerfile(service),
@@ -138,7 +138,7 @@ fn generate_static_frontend_dockerfile(
         })
         .into_iter()
         .collect::<Vec<_>>();
-    let frontend_build_env = frontend_proxy_build_env(service, spec);
+    let frontend_build_env = frontend_api_binding_env(service, spec);
     let workdir = workspace_workdir(service);
     let manifest_sources = node_manifest_copy_sources(service);
     let source_copy = if service.root == "." {
@@ -169,39 +169,34 @@ fn generate_static_frontend_dockerfile(
     lines.join("\n")
 }
 
-fn frontend_proxy_build_env(
+fn frontend_api_binding_env(
     service: &DeploymentSourceService,
     spec: &DeploymentSpec,
 ) -> Vec<String> {
-    let Some(api_base) = public_proxy_path_for_frontend(service, spec) else {
+    if service.role != SourceServiceRole::Frontend {
         return vec![];
-    };
-    [
-        "VITE_API_BASE_URL",
-        "FRONTEND_API_BASE_URL",
-        "REACT_APP_API_BASE_URL",
-        "NEXT_PUBLIC_API_BASE_URL",
-    ]
-    .into_iter()
-    .map(|name| format!("ENV {name}={api_base}"))
-    .collect()
+    }
+    frontend_api_binding_env_for_spec(spec)
 }
 
-fn public_proxy_path_for_frontend(
-    service: &DeploymentSourceService,
-    spec: &DeploymentSpec,
-) -> Option<String> {
-    if service.service_id != spec.topology.public_entry_service_id {
-        return None;
+fn frontend_api_binding_env_for_spec(spec: &DeploymentSpec) -> Vec<String> {
+    if spec.frontend_api_binding.status != "resolved"
+        || spec.frontend_api_binding.environment_key.is_none()
+        || spec.frontend_api_binding.injected_value.is_none()
+    {
+        return vec![];
     }
-    spec.topology.routes.iter().find_map(|route| match route {
-        DeploymentRoute::HttpProxy {
-            public_path,
-            preserve_path: true,
-            ..
-        } => Some(public_path.clone()),
-        _ => None,
-    })
+    let key = spec
+        .frontend_api_binding
+        .environment_key
+        .as_deref()
+        .expect("checked environment key");
+    let value = spec
+        .frontend_api_binding
+        .injected_value
+        .as_deref()
+        .expect("checked injected value");
+    vec![format!("ENV {key}={value}")]
 }
 
 fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
@@ -245,9 +240,9 @@ fn generate_node_dockerfile(service: &DeploymentSourceService) -> String {
     lines.join("\n")
 }
 
-fn generate_java_dockerfile(service: &DeploymentSourceService) -> String {
+fn generate_java_dockerfile(service: &DeploymentSourceService, spec: &DeploymentSpec) -> String {
     if java_service_needs_static_asset_overlay(service) {
-        return generate_java_dockerfile_with_static_asset_overlay(service);
+        return generate_java_dockerfile_with_static_asset_overlay(service, spec);
     }
     let build_command = java_build_command(service);
     let start_command = service
@@ -336,7 +331,10 @@ fn normalize_maven_build_command(command: &str) -> String {
     }
 }
 
-fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSourceService) -> String {
+fn generate_java_dockerfile_with_static_asset_overlay(
+    service: &DeploymentSourceService,
+    spec: &DeploymentSpec,
+) -> String {
     let frontend_root =
         frontend_root_from_package_refs(service).unwrap_or_else(|| "web".to_string());
     let frontend_output = service
@@ -353,6 +351,7 @@ fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSource
     } else {
         format!("COPY {frontend_root}/ ./")
     };
+    let frontend_build_env = frontend_api_binding_env_for_spec(spec);
     let build_command = java_build_command(service);
     let builder_image = java_builder_image(service);
     [
@@ -360,6 +359,7 @@ fn generate_java_dockerfile_with_static_asset_overlay(service: &DeploymentSource
         format!("WORKDIR {frontend_workdir}"),
         frontend_copy,
         format!("RUN {}", install_command(PackageManager::Npm, service.has_lockfile)),
+        frontend_build_env.join("\n"),
         format!("RUN {}", package_manager_run(PackageManager::Npm, "build")),
         "".to_string(),
         format!("FROM {builder_image} AS service-builder"),
@@ -761,13 +761,14 @@ fn generate_nginx_config(spec: &DeploymentSpec) -> String {
             public_path,
             target_service_id,
             target_port,
-            ..
+            preserve_path,
         } = route
         {
             lines.extend(nginx_proxy_location_lines(
                 public_path,
                 target_service_id,
                 *target_port,
+                *preserve_path,
             ));
         }
     }
@@ -785,6 +786,7 @@ fn nginx_proxy_location_lines(
     public_path: &str,
     target_service_id: &str,
     target_port: u16,
+    preserve_path: bool,
 ) -> Vec<String> {
     let prefix = normalize_nginx_public_path(public_path);
     let slash_path = if prefix == "/" {
@@ -795,20 +797,37 @@ fn nginx_proxy_location_lines(
     let mut lines = Vec::new();
     if prefix != "/" {
         lines.push(format!("  location = {prefix} {{"));
-        lines.extend(nginx_proxy_pass_lines(target_service_id, target_port));
+        lines.extend(nginx_proxy_pass_lines(
+            target_service_id,
+            target_port,
+            preserve_path,
+        ));
         lines.push("  }".to_string());
         lines.push(String::new());
     }
     lines.push(format!("  location {slash_path} {{"));
-    lines.extend(nginx_proxy_pass_lines(target_service_id, target_port));
+    lines.extend(nginx_proxy_pass_lines(
+        target_service_id,
+        target_port,
+        preserve_path,
+    ));
     lines.push("  }".to_string());
     lines.push(String::new());
     lines
 }
 
-fn nginx_proxy_pass_lines(target_service_id: &str, target_port: u16) -> Vec<String> {
+fn nginx_proxy_pass_lines(
+    target_service_id: &str,
+    target_port: u16,
+    preserve_path: bool,
+) -> Vec<String> {
+    let proxy_pass = if preserve_path {
+        format!("http://{target_service_id}:{target_port};")
+    } else {
+        format!("http://{target_service_id}:{target_port}/;")
+    };
     vec![
-        format!("    proxy_pass http://{target_service_id}:{target_port};"),
+        format!("    proxy_pass {proxy_pass}"),
         "    proxy_http_version 1.1;".to_string(),
         "    proxy_set_header Host $host;".to_string(),
         "    proxy_set_header X-Real-IP $remote_addr;".to_string(),

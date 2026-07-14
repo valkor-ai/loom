@@ -655,20 +655,15 @@ fn derived_runtime_deployment_shape(runtime: &Value) -> &'static str {
     if runtime_frontend_is_served_by_integrated_app(runtime) {
         return "single-service";
     }
-    let api_paths = runtime
-        .pointer("/httpProbes/apiPaths")
-        .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
     let has_frontend_endpoint = runtime_endpoint_present(runtime, "frontend");
     let has_api_endpoint = runtime_endpoint_present(runtime, "api");
     let has_frontend_surface = runtime_has_surface_kind(runtime, &["frontend", "web", "ui"]);
     let has_api_surface = runtime_has_surface_kind(runtime, &["api", "backend"]);
 
-    if (has_frontend_endpoint && (has_api_endpoint || api_paths))
+    if (has_frontend_endpoint && has_api_endpoint)
         || (has_api_endpoint && has_frontend_surface)
         || (has_frontend_surface && has_api_surface)
-        || (api_paths && runtime_labeled_commands_declare_frontend_and_backend(runtime))
+        || runtime_labeled_commands_declare_frontend_and_backend(runtime)
     {
         "frontend-and-backend"
     } else {
@@ -879,12 +874,6 @@ fn validate_runtime_rules(
             "content.runtimeDelivery.httpProbes.previewPath",
             &mut issues,
         );
-        require_runtime_array(
-            runtime,
-            "/httpProbes/apiPaths",
-            "content.runtimeDelivery.httpProbes.apiPaths",
-            &mut issues,
-        );
         if runtime
             .pointer("/httpProbes/expectedStatus")
             .and_then(Value::as_str)
@@ -938,24 +927,6 @@ fn validate_runtime_rules(
                 "content.runtimeDelivery.frontend.servedBy",
                 &mut issues,
             );
-        }
-        if runtime.pointer("/api/required").and_then(Value::as_bool) == Some(true)
-            && runtime
-                .pointer("/api/entry")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default()
-                .is_empty()
-            && runtime
-                .pointer("/api/probePaths")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty)
-        {
-            issues.push(issue(
-                "RUNTIME_API_ENTRY_REQUIRED",
-                "content.runtimeDelivery.api",
-                "runtime_delivery api.required=true requires api.entry or at least one api.probePaths entry.",
-            ));
         }
         if runtime.pointer("/deliveryMechanics/codegen").is_some() {
             require_runtime_array(
@@ -2189,6 +2160,20 @@ fn assemble_architecture_contract(
             .unwrap_or_else(|| json!({ "decisions": [], "nfrs": [], "risks": [] })),
     )
     .map_err(state::store::StateError::Json)?;
+    let mut interfaces = domain
+        .content
+        .get("interfaces")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    normalize_http_interface_paths(&mut interfaces);
+    let mut runtime_delivery = runtime.content.get("runtimeDelivery").cloned();
+    normalize_runtime_api_probe_paths(&mut runtime_delivery, &interfaces);
+    let api_contract = normalize_api_contract(
+        domain.content.get("apiContract"),
+        &interfaces,
+        runtime_delivery.as_ref(),
+    );
     Ok(ArchitectureArtifactContract {
         schema_version: "1.0".to_string(),
         architecture_artifact_contract_id: format!(
@@ -2220,12 +2205,8 @@ fn assemble_architecture_contract(
             .get("dataModel")
             .cloned()
             .unwrap_or_else(|| json!({})),
-        interfaces: domain
-            .content
-            .get("interfaces")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+        interfaces,
+        api_contract,
         user_flows: behavior
             .content
             .get("userFlows")
@@ -2239,7 +2220,7 @@ fn assemble_architecture_contract(
             .cloned()
             .unwrap_or_default(),
         frontend_experience: frontend.content.get("frontendExperience").cloned(),
-        runtime_delivery: runtime.content.get("runtimeDelivery").cloned(),
+        runtime_delivery,
         acceptance_matrix,
         detail_coverage,
         architecture_quality,
@@ -2247,6 +2228,142 @@ fn assemble_architecture_contract(
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
     })
+}
+
+fn normalize_api_contract(
+    candidate: Option<&Value>,
+    interfaces: &[Value],
+    runtime_delivery: Option<&Value>,
+) -> Option<Value> {
+    let has_http_interface = interfaces
+        .iter()
+        .any(|interface| interface.get("type").and_then(Value::as_str) == Some("http_api"));
+    if !has_http_interface {
+        return None;
+    }
+    let candidate_base = candidate
+        .and_then(|value| value.pointer("/publicExposure/basePath"))
+        .and_then(Value::as_str);
+    let runtime_base = runtime_delivery
+        .and_then(|value| value.pointer("/api/basePath"))
+        .and_then(Value::as_str);
+    let base_path = candidate_base
+        .or(runtime_base)
+        .map(normalize_api_path)
+        .filter(|value| value != "/")
+        .or_else(|| {
+            interfaces
+                .iter()
+                .filter(|interface| {
+                    interface.get("type").and_then(Value::as_str) == Some("http_api")
+                })
+                .filter_map(|interface| interface.get("path").and_then(Value::as_str))
+                .find_map(first_api_path_segment)
+        })
+        .unwrap_or_else(|| "/api".to_string());
+    let preserve_path = candidate
+        .and_then(|value| value.pointer("/publicExposure/preservePath"))
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            runtime_delivery
+                .and_then(|value| value.pointer("/api/preservePath"))
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(true);
+    let browser_mode = candidate
+        .and_then(|value| value.pointer("/browserBinding/mode"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            runtime_delivery
+                .and_then(|value| value.pointer("/api/browserBinding/mode"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("same_origin");
+    let browser_base_url = candidate
+        .and_then(|value| value.pointer("/browserBinding/baseUrl"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            runtime_delivery
+                .and_then(|value| value.pointer("/api/browserBinding/baseUrl"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("");
+    Some(json!({
+        "publicExposure": {
+            "basePath": base_path,
+            "preservePath": preserve_path
+        },
+        "browserBinding": {
+            "mode": browser_mode,
+            "baseUrl": browser_base_url,
+            "pathOwnership": "interface_path"
+        }
+    }))
+}
+
+fn normalize_http_interface_paths(interfaces: &mut [Value]) {
+    for interface in interfaces {
+        if interface.get("type").and_then(Value::as_str) != Some("http_api") {
+            continue;
+        }
+        let Some(path) = interface.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = normalize_api_path(path);
+        if let Some(object) = interface.as_object_mut() {
+            object.insert("path".to_string(), Value::String(normalized));
+        }
+    }
+}
+
+fn normalize_runtime_api_probe_paths(runtime_delivery: &mut Option<Value>, interfaces: &[Value]) {
+    let api_paths = interfaces
+        .iter()
+        .filter(|interface| interface.get("type").and_then(Value::as_str) == Some("http_api"))
+        .filter_map(|interface| interface.get("path").and_then(Value::as_str))
+        .map(normalize_api_path)
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    if api_paths.is_empty() {
+        return;
+    }
+    let Some(runtime) = runtime_delivery.as_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    if let Some(api) = runtime.get_mut("api").and_then(Value::as_object_mut) {
+        api.remove("probePaths");
+    }
+    let probes = runtime
+        .entry("httpProbes")
+        .or_insert_with(|| json!({}))
+        .as_object_mut();
+    let Some(probes) = probes else {
+        return;
+    };
+    probes.insert("apiPaths".to_string(), json!(api_paths));
+}
+
+fn normalize_api_path(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        return "/".to_string();
+    }
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    if path.len() == 1 {
+        path
+    } else {
+        path.trim_end_matches('/').to_string()
+    }
+}
+
+fn first_api_path_segment(path: &str) -> Option<String> {
+    path.split('/')
+        .find(|segment| !segment.is_empty() && !segment.starts_with('{'))
+        .map(|segment| format!("/{segment}"))
 }
 
 fn parse_handoff(value: Option<Value>) -> Result<ArchitectureHandoff, state::store::StateError> {

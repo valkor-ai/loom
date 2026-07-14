@@ -14,6 +14,7 @@ use contracts::{
     DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
     DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentRuntimePort,
     DeploymentShape, DeploymentSpec, PackageManager, RuntimeKind, SourceModelSource,
+    SourceServiceRole,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -162,13 +163,10 @@ fn prepare_uses_runtime_delivery_source_model_topology_without_single_node_colla
     )
     .expect("frontend dockerfile");
     assert!(
-        frontend_dockerfile.contains("ENV VITE_API_BASE_URL=/api"),
+        !frontend_dockerfile.contains("API_BASE_URL"),
         "{frontend_dockerfile}"
     );
-    assert!(
-        frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
-        "{frontend_dockerfile}"
-    );
+    assert_eq!(spec.frontend_api_binding.status, "not_applicable");
 }
 
 #[test]
@@ -297,6 +295,222 @@ dependencies = ["fastapi", "uvicorn"]
         validate_value["details"]["assetIssues"],
         json!([]),
         "{validate_value:#}"
+    );
+}
+
+#[test]
+fn deploy_binds_frontend_requests_to_accepted_api_interface_paths() {
+    let fixture = Fixture::new("deploy-api-contract-binding");
+    let mut runtime = runtime_delivery();
+    runtime["api"]["preservePath"] = json!(false);
+    fixture.write_runtime_delivery_with_interfaces(
+        runtime,
+        json!([{
+            "interfaceId": "api.accounts.list",
+            "name": "List accounts",
+            "type": "http_api",
+            "method": "GET",
+            "path": "/api/accounts"
+        }]),
+    );
+    fixture.write_text(
+        "apps/frontend/package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text(
+        "apps/frontend/src/lib/api.js",
+        r#"const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+export function loadAccounts() {
+  return fetch(`${API_BASE_URL}/api/accounts`);
+}
+"#,
+    );
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.runtime_contract.api_paths, vec!["/api/accounts"]);
+    assert_eq!(
+        spec.runtime_contract
+            .api_contract
+            .as_ref()
+            .expect("api contract")
+            .interfaces[0]
+            .path,
+        "/api/accounts"
+    );
+    assert_eq!(spec.frontend_api_binding.status, "resolved");
+    assert_eq!(
+        spec.frontend_api_binding.environment_key.as_deref(),
+        Some("VITE_API_BASE_URL")
+    );
+    assert_eq!(
+        spec.frontend_api_binding.injected_value.as_deref(),
+        Some("")
+    );
+    assert!(serde_json::to_string(&spec.topology)
+        .expect("topology json")
+        .contains("\"preservePath\":false"));
+    let nginx = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/nginx.frontend.conf"),
+    )
+    .expect("frontend nginx config");
+    assert!(
+        nginx.contains("proxy_pass http://backend:8080/;"),
+        "{nginx}"
+    );
+
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("frontend dockerfile");
+    assert!(
+        dockerfile.contains("ENV VITE_API_BASE_URL=\n"),
+        "{dockerfile}"
+    );
+    assert!(
+        !dockerfile.contains("ENV FRONTEND_API_BASE_URL"),
+        "{dockerfile}"
+    );
+    assert!(
+        !dockerfile.contains("ENV REACT_APP_API_BASE_URL"),
+        "{dockerfile}"
+    );
+    assert!(
+        !dockerfile.contains("ENV NEXT_PUBLIC_API_BASE_URL"),
+        "{dockerfile}"
+    );
+
+    fixture.write_text(
+        "apps/frontend/src/lib/api.js",
+        r#"const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
+export function loadAccounts() {
+  return fetch(`${API_BASE_URL}/accounts`);
+}
+"#,
+    );
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("relative prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+    let spec = fixture.read_spec();
+    assert_eq!(spec.frontend_api_binding.mode, "relative_to_public_base");
+    assert_eq!(
+        spec.frontend_api_binding.injected_value.as_deref(),
+        Some("/api")
+    );
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.frontend"),
+    )
+    .expect("relative frontend dockerfile");
+    assert!(
+        dockerfile.contains("ENV VITE_API_BASE_URL=/api\n"),
+        "{dockerfile}"
+    );
+    assert!(
+        !dockerfile.contains("ENV FRONTEND_API_BASE_URL"),
+        "{dockerfile}"
+    );
+}
+
+#[test]
+fn deploy_binds_integrated_frontend_source_without_assuming_a_framework_env_name() {
+    let fixture = Fixture::new("deploy-integrated-api-contract-binding");
+    fixture.write_runtime_delivery_with_interfaces(
+        json!({
+            "status": "modified",
+            "runtimeKind": "spring-boot-served-static-frontend",
+            "deploymentShape": "single-service",
+            "build": { "command": "./mvnw -DskipTests package" },
+            "start": { "command": "java -jar target/app.jar", "port": 8080 },
+            "httpProbes": { "previewPath": "/", "expectedStatus": "2xx_or_3xx" },
+            "frontend": {
+                "required": true,
+                "kind": "vite-react",
+                "sourceRoot": ".",
+                "outputDir": "dist",
+                "buildCommand": "npm run build",
+                "servedBy": "springboot-static"
+            },
+        "api": {
+            "required": true,
+            "kind": "spring-boot",
+            "entry": "pom.xml",
+            "basePath": "/api"
+            }
+        }),
+        json!([{
+            "interfaceId": "api.tickets.list",
+            "type": "http_api",
+            "method": "GET",
+            "path": "/api/tickets"
+        }]),
+    );
+    fixture.write_text(
+        "package.json",
+        r#"{"scripts":{"build":"vite build"},"dependencies":{"vite":"latest","react":"latest"}}"#,
+    );
+    fixture.write_text("package-lock.json", "{}\n");
+    fixture.write_text("vite.config.js", "export default {}\n");
+    fixture.write_text(
+        "src/lib/api.js",
+        r#"const base = import.meta.env.CUSTOM_API_URL || "";
+export function loadTickets() { return fetch(`${base}/tickets`); }
+"#,
+    );
+    fixture.write_text(
+        "pom.xml",
+        "<project><artifactId>tickets</artifactId></project>\n",
+    );
+    fixture.write_text("mvnw", "#!/bin/sh\n");
+
+    let result = deploy_prepare(DeployToolInput {
+        project_root: fixture.root_str(),
+        app_path: None,
+        healthcheck: None,
+        provider_policy: None,
+    });
+    let value = serde_json::to_value(result).expect("prepare json");
+    assert_eq!(value["state"], "done", "{value:#}");
+
+    let spec = fixture.read_spec();
+    assert_eq!(spec.source_model.services.len(), 1);
+    assert_eq!(spec.source_model.services[0].role, SourceServiceRole::App);
+    assert_eq!(spec.frontend_api_binding.status, "resolved");
+    assert_eq!(
+        spec.frontend_api_binding.environment_key.as_deref(),
+        Some("CUSTOM_API_URL")
+    );
+    assert_eq!(
+        spec.frontend_api_binding.injected_value.as_deref(),
+        Some("/api")
+    );
+    let dockerfile = read_text(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/Dockerfile.app"),
+    )
+    .expect("integrated app dockerfile");
+    assert!(
+        dockerfile.contains("ENV CUSTOM_API_URL=/api\n"),
+        "{dockerfile}"
     );
 }
 
@@ -923,13 +1137,10 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     )
     .expect("frontend dockerfile");
     assert!(
-        frontend_dockerfile.contains("ENV VITE_API_BASE_URL=/api"),
+        !frontend_dockerfile.contains("API_BASE_URL"),
         "{frontend_dockerfile}"
     );
-    assert!(
-        frontend_dockerfile.contains("ENV FRONTEND_API_BASE_URL=/api"),
-        "{frontend_dockerfile}"
-    );
+    assert_eq!(spec.frontend_api_binding.status, "not_applicable");
 }
 
 #[test]
@@ -4103,6 +4314,16 @@ impl Fixture {
             },
         )
         .expect("write status");
+    }
+
+    fn write_runtime_delivery_with_interfaces(&self, runtime_delivery: Value, interfaces: Value) {
+        self.write_runtime_delivery(runtime_delivery);
+        let aac_path = self
+            .root
+            .join(".loom/deliveries/delivery-1/contracts/architecture/phase-1/aac.json");
+        let mut aac: Value = read_json(&aac_path).expect("aac");
+        aac["interfaces"] = interfaces;
+        write_json_atomic(&aac_path, &aac).expect("write api contract interfaces");
     }
 
     fn read_spec(&self) -> DeploymentSpec {

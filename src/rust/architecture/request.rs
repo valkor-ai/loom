@@ -883,7 +883,8 @@ fn section_content_shape(
                 "relationships": ["object"],
                 "constraints": ["object"]
             },
-            "interfaces": domain_contract_interfaces_shape(api_quality_seed)
+            "interfaces": domain_contract_interfaces_shape(api_quality_seed),
+            "apiContract": api_contract_shape(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": ["object"],
@@ -1098,7 +1099,6 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
             "runtimeSurfaces": ["object"],
             "httpProbes": {
                 "previewPath": "string",
-                "apiPaths": ["string"],
                 "expectedStatus": "2xx_or_3xx"
             },
             "frontend": "optional object when a separate frontend surface exists",
@@ -1223,7 +1223,8 @@ fn section_content_template(
                 "relationships": [],
                 "constraints": []
             },
-            "interfaces": domain_contract_interfaces_template(api_quality_seed)
+            "interfaces": domain_contract_interfaces_template(api_quality_seed),
+            "apiContract": api_contract_template(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": [{
@@ -1521,7 +1522,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
             }],
             "httpProbes": {
                 "previewPath": "/",
-                "apiPaths": [],
                 "expectedStatus": "2xx_or_3xx"
             },
             "environment": {
@@ -1662,6 +1662,40 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
     }])
 }
 
+fn api_contract_shape(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "publicExposure": {
+            "basePath": "string",
+            "preservePath": "boolean"
+        },
+        "browserBinding": {
+            "mode": "same_origin | external_origin",
+            "baseUrl": "string",
+            "pathOwnership": "interface_path"
+        }
+    })
+}
+
+fn api_contract_template(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "publicExposure": {
+            "basePath": "/api",
+            "preservePath": true
+        },
+        "browserBinding": {
+            "mode": "same_origin",
+            "baseUrl": "",
+            "pathOwnership": "interface_path"
+        }
+    })
+}
+
 fn section_enum_refs(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
@@ -1719,6 +1753,7 @@ fn section_generation_rules(
                 rules.extend([
                     "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
                     "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
+                    "Write content.apiContract.publicExposure and content.apiContract.browserBinding once for the current API surface. publicExposure.basePath is the externally served prefix, preservePath must describe proxy behavior, and browserBinding.pathOwnership must remain interface_path. Do not repeat these fields inside every interface.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);
             }
@@ -1750,7 +1785,8 @@ fn section_generation_rules(
             runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
             "For status=modified, fill build.command, runtimeSurfaces, httpProbes.previewPath, httpProbes.expectedStatus, and taskPlanningGuidance so TaskPlan and Deploy do not guess runtime facts."
                 .to_string(),
-            "Do not choose deploymentShape manually. MCP derives it during submit from frontend/api endpoint objects, runtimeSurfaces, apiPaths, servedBy, and role-labeled commands.".to_string(),
+            "Do not choose deploymentShape manually. MCP derives it during submit from frontend/api endpoint objects, runtimeSurfaces, servedBy, and role-labeled commands.".to_string(),
+            "Do not author httpProbes.apiPaths or api.probePaths. Loom derives accepted API probe paths from DomainContract HTTP interfaces and carries them into runtime, integration, browser, and deploy projections.".to_string(),
             "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
                 .to_string(),
             "Omit unknown optional runtime fields instead of writing null; include start.port only when a fixed port is known."

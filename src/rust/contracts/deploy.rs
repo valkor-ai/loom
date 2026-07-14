@@ -120,6 +120,29 @@ pub struct RuntimeContractApi {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct DeploymentApiInterface {
+    pub interface_id: String,
+    pub method: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentApiContract {
+    pub source_ref: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<DeploymentApiInterface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_base_path: Option<String>,
+    pub preserve_path: bool,
+    pub browser_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeEnvironmentContract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required: Vec<String>,
@@ -158,6 +181,8 @@ pub struct DeploymentRuntimeContract {
     pub frontend: Option<RuntimeContractEndpoint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api: Option<RuntimeContractApi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_contract: Option<DeploymentApiContract>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependency_services: Vec<DependencyService>,
 }
@@ -313,6 +338,24 @@ pub struct DeploymentFacts {
     pub generated_asset_policy: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendApiBinding {
+    pub status: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub injected_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_base_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_files: Vec<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -513,6 +556,8 @@ pub struct DeploymentSpec {
     pub source_model: DeploymentSourceModel,
     pub topology: DeploymentTopology,
     pub facts: DeploymentFacts,
+    #[serde(default)]
+    pub frontend_api_binding: FrontendApiBinding,
     pub environment: DeploymentEnvDiagnostics,
     pub bootstrap: DeploymentBootstrapDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -2619,7 +2619,6 @@ fn architecture_repair_section_content_template(
                 }],
                 "httpProbes": {
                     "previewPath": "/",
-                    "apiPaths": [],
                     "expectedStatus": "2xx_or_3xx"
                 },
                 "environment": {

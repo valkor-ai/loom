@@ -51,6 +51,7 @@ pub fn deploy_inspect(input: DeployToolInput) -> LoomMcpActionResult {
                 "previewPaths": spec.topology.validation.preview_paths,
                 "apiPaths": spec.topology.validation.api_paths
             })),
+            "frontendApiBinding": spec.as_ref().map(|spec| spec.frontend_api_binding.clone()),
             "composeSummary": spec.as_ref().and_then(|spec| spec.compose.as_ref().map(|compose| json!({
                 "selectedService": compose.selected_service.clone(),
                 "serviceReason": compose.service_reason.clone(),

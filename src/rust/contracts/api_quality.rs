@@ -166,6 +166,13 @@ pub fn build_api_quality_seed(
                 "scopeRefs",
                 "acceptanceRefs"
             ],
+            "apiSurfaceFields": [
+                "publicExposure.basePath",
+                "publicExposure.preservePath",
+                "browserBinding.mode",
+                "browserBinding.baseUrl",
+                "browserBinding.pathOwnership"
+            ],
             "conditionalFields": [
                 "paginationPolicy",
                 "filterFields",
@@ -184,6 +191,8 @@ pub fn build_api_quality_seed(
         "generationRules": [
             "Use apiQualitySeed only for current-phase API/interface work; do not add API work for deferred scope.",
             "Represent API contracts in Architecture interfaces and downstream apiContractRequirements; do not paste API reference prose into candidates.",
+            "Declare publicExposure and browserBinding once at the accepted API contract level. RuntimeDelivery, TaskPlan, Execution, Review, and Deploy consume that contract; they must not invent a second API base prefix.",
+            "Do not author runtime httpProbes.apiPaths or api.probePaths. Loom derives probe paths from accepted HTTP interface paths after architecture acceptance.",
             "Read only files listed in techReferenceProfile.referenceLoadPlan; selected API groups are semantic evidence labels, not path maps.",
             "Do not add versioned paths or deprecation policy unless techReferenceProfile.referenceLoadPlan selects tech/api/evolution.md.",
             "Do not require OpenAPI files unless techReferenceProfile.referenceLoadPlan selects tech/api/contract.md or the repository already owns one.",
