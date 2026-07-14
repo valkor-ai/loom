@@ -7,7 +7,7 @@ description: Use when the user invokes /loom deploy or /loom-deploy to prepare, 
 
 Deployment is controlled by Loom MCP deploy tools. Use the matching `loom.deploy*` tool and follow its structured action result.
 
-During `active_operation`, call only the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it. During asset repair, edit only the returned generated deployment assets, then call the returned `retryTool`; do not retry asset repair through `loom.deployRun`. During deploy execution repair, edit only the returned application/runtime files and submit through the returned repair submit tool.
+During `active_operation`, call only the observation tools named by the result, obey `observationPolicy`, obey `forbiddenActions`, and do not report completion while `finalResponsePolicy` forbids it. During asset repair, edit only the returned generated deployment assets or the returned `modelRepairRef`, then call the returned `retryTool`; never edit generated source-model/topology/facts snapshots directly. Do not retry asset repair through `loom.deployRun`. During deploy execution repair, edit only the returned application/runtime files and submit through the returned repair submit tool.
 
 Do not infer stack topology, generated file paths, preview URLs, ports, or repair scope outside the current MCP result.
 

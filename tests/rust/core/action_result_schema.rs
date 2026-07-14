@@ -333,6 +333,7 @@ fn sample_deploy_repair_assets_next() -> LoomMcpNextAction {
         protected_files: vec!["src".to_string()],
         source_model_ref: Some(".loom/deployment/specs/generated/source-model.json".to_string()),
         topology_ref: Some(".loom/deployment/specs/generated/topology.json".to_string()),
+        model_repair_ref: Some(".loom/deployment/specs/generated/model-repair.json".to_string()),
         generated_file_refs: vec![".loom/deployment/specs/generated/compose.yaml".to_string()],
         diagnostics_ref: None,
         error_window: None,

@@ -32,6 +32,7 @@ use state::{
     write_targets::AuthorizedWriteSet,
 };
 
+use crate::api_contract::{exposure_projection, interfaces_for_refs, load_project_api_contract};
 use crate::browser::{
     derive_browser_verification_profiles, scan_browser_automation_facts,
     task_requires_browser_verification,
@@ -185,6 +186,7 @@ fn materialize_request_inner(
     let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    let project_api_contract = load_project_api_contract(root, &aac)?;
 
     let request_id = format!("taskplan_{}", state::store::now_millis());
     let outline_file =
@@ -204,6 +206,7 @@ fn materialize_request_inner(
         &baseline,
         &pgc,
         &aac,
+        project_api_contract.as_ref(),
         &outline_file,
         &group_file_pattern,
     );
@@ -248,6 +251,7 @@ fn build_request_root(
     baseline: &contracts::TechnicalBaselineContract,
     pgc: &contracts::PlanningGenerationContract,
     aac: &ArchitectureArtifactContract,
+    project_api_contract: Option<&Value>,
     outline_file: &str,
     group_file_pattern: &str,
 ) -> Value {
@@ -262,10 +266,15 @@ fn build_request_root(
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
     let architecture_quality_template = architecture_quality_requirement_template(aac);
-    let api_contract_template = api_contract_requirement_template(aac);
+    let phase_api_interfaces =
+        interfaces_for_refs(project_api_contract, &aac.current_phase_interface_refs);
+    let api_contract_template = api_contract_requirement_template(&phase_api_interfaces);
     let code_quality_seed = build_code_quality_seed(baseline);
     let code_quality_template = code_quality_requirement_template(&code_quality_seed);
-    let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
+    let mut source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
+    if let Some(api_contract_ref) = &aac.api_contract_ref {
+        source_refs["apiContractRef"] = json!(api_contract_ref);
+    }
     let outline_result_template = taskplan_outline_result_template();
     let group_result_template = taskplan_group_result_template();
     let mut output_contract = json!({
@@ -338,14 +347,12 @@ fn build_request_root(
         if let Some(object) = context_projection.as_object_mut() {
             object.insert(
                 "apiContract".to_string(),
-                aac.api_contract.clone().unwrap_or_else(|| json!({})),
+                exposure_projection(aac.api_contract_ref.as_deref(), project_api_contract),
             );
             object.insert(
                 "apiInterfaces".to_string(),
-                json!(aac
-                    .interfaces
+                json!(phase_api_interfaces
                     .iter()
-                    .filter(|interface| is_http_api_interface(interface))
                     .map(compact_api_interface_for_task_plan)
                     .collect::<Vec<_>>()),
             );
@@ -432,6 +439,9 @@ fn taskplan_read_groups(
     }
     if has_non_null_key(source_refs, "repositoryContextRef") {
         core_fields.push("sourceRefs.repositoryContextRef");
+    }
+    if has_non_null_key(source_refs, "apiContractRef") {
+        core_fields.push("sourceRefs.apiContractRef");
     }
     core_fields.extend([
         "contextProjection.phaseId",
@@ -861,6 +871,7 @@ where
             planning_generation_contract_id: pgc.planning_contract_id.clone(),
             architecture_artifact_contract_id: aac.architecture_artifact_contract_id.clone(),
             technical_baseline_id: baseline.technical_baseline_id.clone(),
+            api_contract_ref: aac.api_contract_ref.clone(),
         },
         scope_snapshot: TaskPlanScopeSnapshot {
             included_scope_refs: pgc
@@ -3939,11 +3950,9 @@ fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract)
     })
 }
 
-fn api_contract_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
-    let interface_refs = aac
-        .interfaces
+fn api_contract_requirement_template(interfaces: &[Value]) -> Value {
+    let interface_refs = interfaces
         .iter()
-        .filter(|interface| is_http_api_interface(interface))
         .filter_map(|interface| string_at(interface, "interfaceId"))
         .collect::<Vec<_>>();
     if interface_refs.is_empty() {

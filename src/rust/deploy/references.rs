@@ -182,7 +182,7 @@ fn topology_reference_needed(spec: &DeploymentSpec) -> bool {
             | DeploymentTopologyClass::ExistingCompose
             | DeploymentTopologyClass::ExistingDockerfileWrapper
     ) || !spec.topology.routes.is_empty()
-        || !spec.topology.validation.api_paths.is_empty()
+        || !spec.topology.validation.api_probes.is_empty()
         || spec.source_model.services.len() > 1
 }
 

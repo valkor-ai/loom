@@ -388,6 +388,8 @@ pub struct TaskPlanSource {
     pub planning_generation_contract_id: String,
     pub architecture_artifact_contract_id: String,
     pub technical_baseline_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_contract_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

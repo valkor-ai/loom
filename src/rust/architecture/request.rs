@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
-    ui_surface_decision_candidate_shape, ui_surface_decision_candidate_template,
-    ui_surface_decision_enum_refs, ArchitectureSectionGroup, PlanningGenerationContract,
-    TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
+    ui_quality_enum_refs, ui_surface_decision_candidate_shape,
+    ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
+    ArchitectureSectionGroup, PlanningGenerationContract, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
@@ -126,7 +127,8 @@ fn materialize_request_inner(
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
     let frontend_experience_source = build_frontend_experience_source(phase);
-    let api_quality_seed = build_api_quality_seed(&planning_contract, &technical_baseline);
+    // API applicability is produced after Foundation declares structured application interactions.
+    let api_quality_seed = Value::Null;
     let section_outputs = build_section_outputs(
         root,
         &request_id,
@@ -378,18 +380,6 @@ pub(crate) fn architecture_read_groups(
         "architectureQualitySeed.techReferenceProfile.groups.arch",
         "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
     ]);
-    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
-        core_fields.extend([
-            "apiQualitySeed.required",
-            "apiQualitySeed.qualityLevel",
-            "apiQualitySeed.selectionReason",
-            "apiQualitySeed.techReferenceProfile.loadMode",
-            "apiQualitySeed.techReferenceProfile.groups.api",
-            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
-            "apiQualitySeed.interfaceContract",
-            "apiQualitySeed.generationRules",
-        ]);
-    }
     if matches!(
         section,
         ArchitectureSectionGroup::Foundation
@@ -461,6 +451,15 @@ pub(crate) fn architecture_read_groups(
             "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
+    if !api_quality_seed.is_null() {
+        groups.push(json!({
+            "groupId": "architecture_api_quality_context",
+            "required": matches!(section, ArchitectureSectionGroup::DomainContract),
+            "purpose": "Read the MCP-derived API quality seed only when generating or repairing the current HTTP interface section.",
+            "whenToRead": "Read when sectionState.currentSection is domain_contract, or when Loom is rebuilding a repair request that must preserve API applicability.",
+            "selectors": read_selectors_value_from_paths(api_quality_seed_read_fields())
+        }));
+    }
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
         let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
         for ref_key in [
@@ -847,7 +846,7 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
     }
 }
 
-fn section_schema_shape(
+pub(crate) fn section_schema_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -873,7 +872,24 @@ fn section_content_shape(
             "engineeringBoundary": {
                 "summary": "string",
                 "applications": ["object"],
-                "modules": ["object"]
+                "modules": ["object"],
+                "applicationInteractions": [{
+                    "interactionId": "string",
+                    "providerApplicationRef": "string",
+                    "consumerApplicationRefs": ["string"],
+                    "providerModuleRef": "string",
+                    "interactionType": "http_api | service_method | external_adapter | event | job | cli_command",
+                    "protocol": "string",
+                    "interfaceRefs": ["string for an existing project API contract interface"],
+                    "qualityTraits": {
+                        "paginationRequired": "boolean",
+                        "contractArtifactRequired": "boolean",
+                        "compatibilityRequired": "boolean",
+                        "operationalPolicies": ["idempotency | cache | retry | rate_limit | request_id"]
+                    },
+                    "scopeRefs": ["string"],
+                    "acceptanceRefs": ["string"]
+                }]
             },
             "modules": ["object"]
         }),
@@ -1157,7 +1173,7 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
     }])
 }
 
-fn section_result_template(
+pub(crate) fn section_result_template(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
@@ -1200,7 +1216,8 @@ fn section_content_template(
                     "scopeRefs": [],
                     "acceptanceRefs": [],
                     "summary": ""
-                }]
+                }],
+                "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module_1",
@@ -1696,7 +1713,7 @@ fn api_contract_template(api_quality_seed: &Value) -> Value {
     })
 }
 
-fn section_enum_refs(
+pub(crate) fn section_enum_refs(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -1722,7 +1739,7 @@ fn section_enum_refs(
     }
 }
 
-fn section_generation_rules(
+pub(crate) fn section_generation_rules(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -1731,6 +1748,8 @@ fn section_generation_rules(
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only.".to_string(),
+            "Declare every current-phase cross-application or cross-module communication boundary in engineeringBoundary.applicationInteractions. Choose interactionType from the structured protocol kinds; do not rely on API, backend, or framework words in business prose to activate later interface design.".to_string(),
+            "For an existing accepted interface, use interfaceRefs. For a new boundary, leave interfaceRefs empty and provide provider/consumer ownership plus qualityTraits so MCP can generate the precise DomainContract reference plan.".to_string(),
             "Read only files listed in architectureQualitySeed.techReferenceProfile.referenceLoadPlan; selected architecture groups are evidence labels only and do not copy reference prose into the candidate.".to_string(),
             "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
@@ -1905,6 +1924,35 @@ mod tests {
         assert!(
             rules.iter().any(|rule| rule.contains("MCP owns reference")),
             "reference and rule derivation must stay MCP-owned"
+        );
+    }
+
+    #[test]
+    fn api_quality_seed_has_a_stable_read_group_after_domain_contract() {
+        let seed = json!({
+            "required": true,
+            "techReferenceProfile": {"groups": {"api": ["core"]}}
+        });
+        let groups = architecture_read_groups(
+            ArchitectureSectionGroup::Coverage,
+            true,
+            false,
+            &json!({}),
+            &json!({}),
+            &seed,
+        );
+        let group = groups
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("groupId").and_then(Value::as_str)
+                        == Some("architecture_api_quality_context")
+                })
+            })
+            .expect("API quality read group");
+        assert!(
+            group["selectors"].to_string().contains("apiQualitySeed"),
+            "the dedicated group must expose the seed fields to MCP repair logic"
         );
     }
 }

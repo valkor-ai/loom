@@ -12101,7 +12101,8 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
             "engineeringBoundary": {
                 "summary": "Current phase stays inside the confirmed account-delivery boundary.",
                 "applications": [],
-                "modules": []
+                "modules": [],
+                "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module.account-service",

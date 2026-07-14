@@ -171,6 +171,7 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
                     protected_files: request.protected_files.clone(),
                     source_model_ref: spec.as_ref().map(|spec| spec.source_model_ref.clone()),
                     topology_ref: spec.as_ref().map(|spec| spec.topology_ref.clone()),
+                    model_repair_ref: spec.as_ref().map(|spec| spec.model_repair_ref.clone()),
                     generated_file_refs: spec
                         .as_ref()
                         .map(deployment_generated_file_refs)
@@ -1180,7 +1181,22 @@ fn editable_files_for(spec: &DeploymentSpec, failure_kind: DeploymentFailureKind
         | DeploymentFailureKind::HttpProbeFailed
         | DeploymentFailureKind::PreviewNotVerified => vec![],
         _ if spec.provider == DeployProvider::ComposeExisting => vec![],
-        _ => deployment_generated_file_refs(spec),
+        _ => {
+            let mut refs = deployment_generated_file_refs(spec)
+                .into_iter()
+                .filter(|item| {
+                    item != &spec.source_model_ref
+                        && item != &spec.topology_ref
+                        && item != &spec.facts_ref
+                })
+                .collect::<Vec<_>>();
+            if !spec.model_repair_ref.is_empty() {
+                refs.push(spec.model_repair_ref.clone());
+            }
+            refs.sort();
+            refs.dedup();
+            refs
+        }
     }
 }
 
@@ -1407,9 +1423,9 @@ fn instruction_for(failure_kind: DeploymentFailureKind, owner: DeploymentFailure
     match owner {
         DeploymentFailureOwner::DeploymentAssets => {
             if failure_kind == DeploymentFailureKind::ApiRouteNotVerified {
-                "Repair only generated deployment assets. Preserve public frontend entry and API proxy route; do not delete apiPaths or bypass validation.".to_string()
+                "Repair generated deployment assets or the controlled model-repair file. Preserve the accepted API route contract; do not invent business probes or bypass validation.".to_string()
             } else {
-                "Repair only generated deployment assets listed in editableFiles. Do not edit application code or Loom contracts.".to_string()
+                "Repair only generated deployment assets listed in editableFiles. Use model-repair.json for source-model or topology corrections; do not edit source-model.json, topology.json, facts.json, application code, or Loom contracts.".to_string()
             }
         }
         DeploymentFailureOwner::ApplicationCode => {

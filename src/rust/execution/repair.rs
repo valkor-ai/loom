@@ -4,8 +4,8 @@ use std::{
 };
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
-    ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
+    api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
+    ui_quality_enum_refs, ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
     ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
     TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
     TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
@@ -1699,11 +1699,16 @@ fn materialize_architecture_repair_action(
             technical_baseline.as_ref(),
         )
     });
-    let api_quality_seed = planning_contract
-        .as_ref()
-        .zip(technical_baseline.as_ref())
-        .map(|(planning, baseline)| build_api_quality_seed(planning, baseline))
-        .unwrap_or(Value::Null);
+    // Preserve the accepted request's derived API seed for repairs. A replacement Foundation can
+    // still change applicability; the Architecture submitter rebuilds this seed after acceptance.
+    let api_quality_fields = state::read_field_group_flat(ReadFieldGroupInput {
+        project_root: project_root.to_string(),
+        request_ref: original_request_ref.clone(),
+        group_id: "architecture_api_quality_context".to_string(),
+    })
+    .map(|result| result.fields)
+    .unwrap_or_default();
+    let api_quality_seed = api_quality_seed_from_fields(&api_quality_fields);
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
         .and_then(Value::as_str)
@@ -1753,6 +1758,7 @@ fn materialize_architecture_repair_action(
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
         "uiQualitySeed": ui_quality_seed,
+        "apiQualitySeed": api_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": ARCHITECTURE_SECTION_ORDER,
@@ -1821,7 +1827,6 @@ fn materialize_architecture_repair_action(
         }
     });
     if !api_quality_seed.is_null() {
-        request_root["apiQualitySeed"] = api_quality_seed;
         request_root["enumRefs"]["apiQuality"] = api_quality_enum_refs();
     }
     let stored = state::write_native_request(
@@ -1911,6 +1916,29 @@ fn value_field(fields: &BTreeMap<String, delivery_core::FieldReadResult>, field:
         .get(field)
         .map(|result| result.value.clone())
         .unwrap_or(Value::Null)
+}
+
+fn api_quality_seed_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    let required = value_field(fields, "apiQualitySeed.required");
+    if required.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "required": required,
+        "qualityLevel": value_field(fields, "apiQualitySeed.qualityLevel"),
+        "selectionReason": value_field(fields, "apiQualitySeed.selectionReason"),
+        "techReferenceProfile": {
+            "loadMode": value_field(fields, "apiQualitySeed.techReferenceProfile.loadMode"),
+            "groups": {
+                "api": value_field(fields, "apiQualitySeed.techReferenceProfile.groups.api")
+            },
+            "referenceLoadPlan": value_field(fields, "apiQualitySeed.techReferenceProfile.referenceLoadPlan")
+        },
+        "interfaceContract": value_field(fields, "apiQualitySeed.interfaceContract"),
+        "generationRules": value_field(fields, "apiQualitySeed.generationRules")
+    })
 }
 
 fn repair_source_refs_from_fields(
@@ -2079,18 +2107,6 @@ fn architecture_repair_read_groups(
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
     ]);
-    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
-        core_fields.extend([
-            "apiQualitySeed.required",
-            "apiQualitySeed.qualityLevel",
-            "apiQualitySeed.selectionReason",
-            "apiQualitySeed.techReferenceProfile.loadMode",
-            "apiQualitySeed.techReferenceProfile.groups.api",
-            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
-            "apiQualitySeed.interfaceContract",
-            "apiQualitySeed.generationRules",
-        ]);
-    }
     if include_source_ref {
         core_fields.insert(9, "repairContext.sourceRef");
     }
@@ -2146,6 +2162,15 @@ fn architecture_repair_read_groups(
             "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
+    if !api_quality_seed.is_null() {
+        groups.push(json!({
+            "groupId": "architecture_api_quality_context",
+            "required": matches!(section, ArchitectureSectionGroup::DomainContract),
+            "purpose": "Read the MCP-derived API quality seed only when generating or repairing the current HTTP interface section.",
+            "whenToRead": "Read when sectionState.currentSection is domain_contract, or when Loom is rebuilding a repair request that must preserve API applicability.",
+            "selectors": read_selectors_value_from_paths(api_quality_seed_read_fields())
+        }));
+    }
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
         let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
         for ref_key in [
@@ -2421,7 +2446,8 @@ fn architecture_repair_section_content_template(
                     "scopeRefs": [],
                     "acceptanceRefs": [],
                     "summary": ""
-                }]
+                }],
+                "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module_1",

@@ -1,3 +1,4 @@
+mod api_contract;
 mod browser;
 mod paths;
 mod repair;

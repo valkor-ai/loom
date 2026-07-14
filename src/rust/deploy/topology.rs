@@ -47,22 +47,18 @@ pub fn build_topology(
     if preview_paths.is_empty() {
         preview_paths.push("/".to_string());
     }
-    let mut api_paths = runtime.api_paths.clone();
-    if runtime.deployment_shape == Some(DeploymentShape::FrontendAndBackend) {
-        if let Some(path) = &health_path {
-            let base_path = api_base_path(runtime);
-            if path_is_under_base(path, &base_path) {
-                api_paths.push(path.clone());
-            }
-        }
-    }
     DeploymentTopology {
         schema_version: 1,
         public_entry_service_id: public_entry,
         routes,
         validation: DeploymentTopologyValidation {
             preview_paths: dedupe_paths(preview_paths),
-            api_paths: dedupe_paths(api_paths),
+            api_probes: runtime
+                .safe_http_probes
+                .iter()
+                .filter(|probe| probe.source == "accepted_api_contract")
+                .cloned()
+                .collect(),
         },
     }
 }
@@ -123,25 +119,16 @@ fn api_base_path(runtime: &DeploymentRuntimeContract) -> String {
         }
     }
     runtime
-        .api_paths
+        .safe_http_probes
         .iter()
-        .find(|path| normalize_path(path) != "/")
-        .and_then(|path| {
-            normalize_path(path)
+        .find(|probe| normalize_path(&probe.path) != "/")
+        .and_then(|probe| {
+            normalize_path(&probe.path)
                 .split('/')
                 .nth(1)
                 .map(|segment| format!("/{segment}"))
         })
         .unwrap_or_else(|| "/api".to_string())
-}
-
-fn path_is_under_base(path: &str, base: &str) -> bool {
-    let path = normalize_path(path);
-    let base = normalize_path(base);
-    if base == "/" {
-        return true;
-    }
-    path == base || path.starts_with(&format!("{base}/"))
 }
 
 fn dedupe_paths(paths: Vec<String>) -> Vec<String> {

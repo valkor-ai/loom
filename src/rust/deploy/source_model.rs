@@ -13,7 +13,10 @@ pub fn source_model_from_runtime_contract(
     let shape = runtime
         .deployment_shape
         .unwrap_or(DeploymentShape::SingleService);
-    if runtime.source == "heuristic" {
+    if matches!(
+        runtime.authority,
+        contracts::DeploymentContractAuthority::RepositoryHeuristic
+    ) {
         return source_model_from_probe(fallback_probe, build_context_path);
     }
     if shape == DeploymentShape::FrontendAndBackend {
@@ -660,15 +663,18 @@ fn backend_healthcheck_path(
 }
 
 fn preferred_api_probe_path(runtime: &DeploymentRuntimeContract) -> Option<String> {
-    let mut paths = runtime.api_paths.clone();
-    if let Some(api) = &runtime.api {
-        paths.extend(api.probe_paths.clone());
-    }
-    paths
+    runtime
+        .safe_http_probes
         .iter()
-        .find(|path| path.to_ascii_lowercase().contains("health"))
-        .cloned()
-        .or_else(|| paths.into_iter().find(|path| path.starts_with('/')))
+        .find(|probe| probe.path.to_ascii_lowercase().contains("health"))
+        .map(|probe| probe.path.clone())
+        .or_else(|| {
+            runtime
+                .safe_http_probes
+                .iter()
+                .find(|probe| probe.path.starts_with('/'))
+                .map(|probe| probe.path.clone())
+        })
 }
 
 fn command_is_usable(command: &str) -> bool {

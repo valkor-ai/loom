@@ -109,11 +109,11 @@ pub fn deploy_validate_inner(project_root: &Path) -> StateResult<DeploymentValid
     let api_routes = spec
         .topology
         .validation
-        .api_paths
+        .api_probes
         .iter()
-        .map(|path| match public_port {
-            Some(port) => probe_http(port, path, true),
-            None => missing_public_port_probe(path),
+        .map(|probe| match public_port {
+            Some(port) => probe_http(port, &probe.path, true),
+            None => missing_public_port_probe(&probe.path),
         })
         .collect::<Vec<_>>();
     let compose_valid = asset_issues.iter().all(|issue| !issue.contains("compose"));
@@ -259,7 +259,7 @@ pub fn validate_generated_assets(
             }
         }
     }
-    if !spec.topology.validation.api_paths.is_empty()
+    if !spec.topology.validation.api_probes.is_empty()
         && !spec
             .topology
             .routes
@@ -267,7 +267,7 @@ pub fn validate_generated_assets(
             .any(|route| matches!(route, DeploymentRoute::HttpProxy { .. }))
         && topology_requires_api_proxy(spec)
     {
-        issues.push("topology has apiPaths but no http-proxy route.".to_string());
+        issues.push("topology has API probes but no http-proxy route.".to_string());
     }
     validate_deployment_facts(&mut issues, spec);
     Ok(issues)
@@ -328,7 +328,7 @@ fn validate_deployment_facts(issues: &mut Vec<String>, spec: &DeploymentSpec) {
             }
         }
         DeploymentTopologyClass::StaticSite => {
-            if !spec.topology.validation.api_paths.is_empty() {
+            if !spec.topology.validation.api_probes.is_empty() {
                 issues.push(
                     "deploy facts classify this as static_site but topology still validates API paths."
                         .to_string(),

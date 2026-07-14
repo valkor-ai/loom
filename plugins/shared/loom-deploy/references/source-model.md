@@ -16,7 +16,7 @@ Required closure:
 - `services[].packageManager`, `hasLockfile`, `manifestRefs`, and `lockfileRefs` drive dependency install commands.
 - `services[].buildCommand`, `startCommand`, `outputDirectory`, `port`, and `healthcheckPath` must agree with Dockerfile, Compose, and validation.
 
-Agents should not rediscover this model from logs. If the model is wrong, repair should say which fact is inconsistent instead of replacing it with an unrelated topology.
+Agents should not rediscover this model from logs. If the model is wrong, use the returned `modelRepairRef` and state which source fact is inconsistent. Do not edit `source-model.json` directly or replace it with an unrelated topology; Loom validates the base fingerprint, recalculates dependent facts, and regenerates assets after an accepted model repair.
 
 ## Layout Rules
 

@@ -2,7 +2,7 @@
 
 ## Role In Loom
 
-Loom's primary API contract lives in the accepted architecture/API contract. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.
+Loom's primary API contract lives in the project-level current API contract referenced by the accepted Architecture artifact. The Architecture artifact records `apiContractRef` plus current-phase interface refs; downstream requests receive only the projection needed by their task. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.
 
 ## When To Create Or Update OpenAPI
 

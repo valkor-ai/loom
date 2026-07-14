@@ -49,7 +49,7 @@ pub fn deploy_inspect(input: DeployToolInput) -> LoomMcpActionResult {
                 "publicEntryServiceId": spec.topology.public_entry_service_id,
                 "routeCount": spec.topology.routes.len(),
                 "previewPaths": spec.topology.validation.preview_paths,
-                "apiPaths": spec.topology.validation.api_paths
+                "apiProbes": spec.topology.validation.api_probes
             })),
             "frontendApiBinding": spec.as_ref().map(|spec| spec.frontend_api_binding.clone()),
             "composeSummary": spec.as_ref().and_then(|spec| spec.compose.as_ref().map(|compose| json!({

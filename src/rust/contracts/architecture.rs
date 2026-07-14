@@ -302,7 +302,9 @@ pub struct ArchitectureArtifactContract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_contract: Option<Value>,
+    pub api_contract_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_phase_interface_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_flows: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

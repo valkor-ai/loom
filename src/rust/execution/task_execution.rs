@@ -21,6 +21,7 @@ use state::{
 };
 
 use crate::{
+    api_contract::{exposure_projection, interfaces_for_refs, load_project_api_contract},
     paths::{
         task_execution_request_file, task_execution_result_candidate_file, task_plan_file,
         task_plan_latest_file, task_plan_run_file, task_plan_run_latest_file, task_result_file,
@@ -484,6 +485,7 @@ fn build_execution_request(
     let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    let project_api_contract = load_project_api_contract(root, &aac)?;
     let task_plan_ref = to_project_relative(
         root,
         &task_plan_file(root, locator, &task_plan.task_plan_id),
@@ -504,7 +506,8 @@ fn build_execution_request(
         browser_verification_profile_for_task(task_plan, &request_task);
     let browser_verification_context = browser_verification_profile
         .map(|profile| browser_verification_context(root, task_plan, profile));
-    let architecture_projection = task_scoped_architecture_projection(&aac, &request_task);
+    let architecture_projection =
+        task_scoped_architecture_projection(&aac, project_api_contract.as_ref(), &request_task);
     let schema_shape = task_result_schema_shape(&request_task, browser_verification_profile);
     let dependency_results = dependency_results(run, task);
     let read_groups = task_execution_read_groups(
@@ -1488,6 +1491,7 @@ pub(crate) fn task_with_execution_guidance(
 
 fn task_scoped_architecture_projection(
     aac: &ArchitectureArtifactContract,
+    project_api_contract: Option<&Value>,
     task: &TaskDefinition,
 ) -> Value {
     let refs = &task.write_boundary.artifact_refs;
@@ -1519,6 +1523,17 @@ fn task_scoped_architecture_projection(
             .chain(state_machine_refs_from_flows)
             .collect(),
     );
+    let mut selected_interfaces =
+        selected_values(&aac.interfaces, "interfaceId", &interface_refs, task, true);
+    for interface in interfaces_for_refs(project_api_contract, &interface_refs) {
+        let interface_id = interface.get("interfaceId").and_then(Value::as_str);
+        if !selected_interfaces
+            .iter()
+            .any(|existing| existing.get("interfaceId").and_then(Value::as_str) == interface_id)
+        {
+            selected_interfaces.push(interface);
+        }
+    }
     let mut projection = json!({
         "compaction": {
             "mode": "task_scoped_artifact_projection",
@@ -1526,7 +1541,7 @@ fn task_scoped_architecture_projection(
         },
         "modules": selected_values(&aac.modules, "moduleId", &refs.modules, task, true),
         "entities": selected_entities(&aac.data_model, &refs.entities, task),
-        "interfaces": selected_values(&aac.interfaces, "interfaceId", &interface_refs, task, true),
+        "interfaces": selected_interfaces,
         "userFlows": selected_user_flows,
         "stateMachines": selected_values(&aac.state_machines, "machineId", &state_machine_refs, task, true),
         "architectureQuality": {
@@ -1545,7 +1560,8 @@ fn task_scoped_architecture_projection(
         }
     });
     if !interface_refs.is_empty() {
-        projection["apiContract"] = aac.api_contract.clone().unwrap_or(Value::Null);
+        projection["apiContract"] =
+            exposure_projection(aac.api_contract_ref.as_deref(), project_api_contract);
     }
     if runtime_delivery_evidence_applies(task) {
         projection["runtimeDelivery"] = aac.runtime_delivery.clone().unwrap_or(Value::Null);

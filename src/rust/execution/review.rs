@@ -26,6 +26,7 @@ use state::{
 };
 
 use crate::{
+    api_contract::{exposure_projection, interfaces_for_refs, load_project_api_contract},
     paths::{
         manual_review_request_file, manual_review_resolution_candidate_file,
         manual_review_resolution_file, review_latest_file, review_request_file,
@@ -127,6 +128,11 @@ fn materialize_review_request_inner(
         .and_then(|architecture_path| {
             state::store::read_json::<ArchitectureArtifactContract>(&architecture_path).ok()
         });
+    let project_api_contract = architecture_contract
+        .as_ref()
+        .map(|architecture| load_project_api_contract(root, architecture))
+        .transpose()?
+        .flatten();
     let next_phase_handoff =
         brainstorm::next_phase_handoff_from_preview(project_root, delivery_id, phase_id, None)?;
     let request_root = build_review_request(
@@ -139,6 +145,7 @@ fn materialize_review_request_inner(
         &run,
         &task_results,
         architecture_contract.as_ref(),
+        project_api_contract.as_ref(),
         next_phase_handoff.as_ref(),
     )?;
     let stored = state::write_native_request(
@@ -218,6 +225,7 @@ fn build_review_request(
     run: &TaskPlanRun,
     task_results: &[TaskResult],
     architecture_contract: Option<&ArchitectureArtifactContract>,
+    project_api_contract: Option<&Value>,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Result<Value, state::store::StateError> {
     let schema_shape = review_result_schema_shape();
@@ -284,7 +292,11 @@ fn build_review_request(
             "groupSummaries": compact_group_summaries(&task_plan.groups),
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
             "taskResultSummaries": compact_task_result_summaries(task_results),
-            "apiContractContext": compact_api_contract_context(task_plan, architecture_contract)
+            "apiContractContext": compact_api_contract_context(
+                task_plan,
+                architecture_contract,
+                project_api_contract,
+            )
         },
         "changeSet": change_set,
         "changeContext": change_context,
@@ -3706,6 +3718,7 @@ fn build_api_contract_review_matrix(
 fn compact_api_contract_context(
     task_plan: &TaskPlan,
     architecture_contract: Option<&ArchitectureArtifactContract>,
+    project_api_contract: Option<&Value>,
 ) -> Value {
     let Some(aac) = architecture_contract else {
         return Value::Null;
@@ -3716,17 +3729,11 @@ fn compact_api_contract_context(
         .flat_map(|requirement| requirement.interface_refs.iter())
         .cloned()
         .collect::<BTreeSet<_>>();
+    let interface_refs = interface_refs.into_iter().collect::<Vec<_>>();
     json!({
-        "contract": aac.api_contract.clone().unwrap_or(Value::Null),
-        "interfaces": aac
-            .interfaces
+        "contract": exposure_projection(aac.api_contract_ref.as_deref(), project_api_contract),
+        "interfaces": interfaces_for_refs(project_api_contract, &interface_refs)
             .iter()
-            .filter(|interface| {
-                interface
-                    .get("interfaceId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|interface_id| interface_refs.contains(interface_id))
-            })
             .map(compact_api_interface_for_review)
             .collect::<Vec<_>>()
     })

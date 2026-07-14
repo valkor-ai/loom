@@ -11,7 +11,7 @@ Fields:
 - `publicEntryServiceId`: service that owns the preview URL and published host port.
 - `routes`: public routing rules such as static SPA serving or HTTP proxy paths.
 - `validation.previewPaths`: paths probed against the public entry URL.
-- `validation.apiPaths`: interface paths copied from the accepted API contract and probed without changing their public prefix. Runtime-only probe paths are a restricted external-project fallback, not a replacement for an accepted API contract.
+- `validation.apiProbes`: safe `GET`/`HEAD` probes derived only from read-safe interfaces in the accepted API contract. Route contracts still include every declared method; write interfaces are never executed as deploy probes.
 
 ## Frontend Gateway + Backend API
 
@@ -72,4 +72,4 @@ Repair should fix generated gateway files when they contradict topology. If the 
 
 ## API Contract Boundary
 
-Deploy consumes the accepted API contract from the architecture artifact. It does not infer a public API prefix from a string such as `/api`, and it does not let a generated frontend environment variable redefine an interface path. Before generated assets are written, Loom checks that the declared interface paths fit the public exposure base and that frontend request construction can be bound to those paths. An unresolved or conflicting binding blocks generated deployment assets with the source files and contract reference in the diagnostic.
+Deploy consumes the project-level current API contract referenced by the accepted Architecture artifact. It does not infer a public API prefix from a string such as `/api`, and it does not let a generated frontend environment variable redefine an interface path. Before generated assets are written, Loom checks that every declared interface path fits the public exposure base and derives safe read probes separately. An unresolved or conflicting binding blocks generated deployment assets with the source files and contract reference in the diagnostic.

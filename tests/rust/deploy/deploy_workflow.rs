@@ -10,11 +10,11 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 use contracts::{
-    DeployProvider, DeploymentErrorWindow, DeploymentFailedContract, DeploymentFailureDiagnostic,
-    DeploymentFailureKind, DeploymentFailureOwner, DeploymentFailureReport,
-    DeploymentProviderPolicy, DeploymentRepairAction, DeploymentRepairRoute, DeploymentRuntimePort,
-    DeploymentShape, DeploymentSpec, PackageManager, RuntimeKind, SourceModelSource,
-    SourceServiceRole,
+    DeployProvider, DeploymentContractAuthority, DeploymentErrorWindow, DeploymentFailedContract,
+    DeploymentFailureDiagnostic, DeploymentFailureKind, DeploymentFailureOwner,
+    DeploymentFailureReport, DeploymentProviderPolicy, DeploymentRepairAction,
+    DeploymentRepairRoute, DeploymentRuntimePort, DeploymentShape, DeploymentSpec, PackageManager,
+    RuntimeKind, SourceModelSource, SourceServiceRole,
 };
 use delivery_core::{
     DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState, DeliveryStatusEntry,
@@ -336,7 +336,11 @@ export function loadAccounts() {
     assert_eq!(value["state"], "done", "{value:#}");
 
     let spec = fixture.read_spec();
-    assert_eq!(spec.runtime_contract.api_paths, vec!["/api/accounts"]);
+    assert!(spec
+        .runtime_contract
+        .safe_http_probes
+        .iter()
+        .any(|probe| probe.path == "/api/accounts"));
     assert_eq!(
         spec.runtime_contract
             .api_contract
@@ -515,7 +519,7 @@ export function loadTickets() { return fetch(`${base}/tickets`); }
 }
 
 #[test]
-fn deploy_validate_uses_generated_source_model_sidecar_over_local_snapshot() {
+fn deploy_validate_applies_controlled_model_repair_over_local_snapshot() {
     let fixture = Fixture::new("deploy-source-model-sidecar-overlay");
     fixture.write_runtime_delivery(json!({
         "status": "modified",
@@ -574,10 +578,17 @@ dependencies = ["fastapi", "uvicorn"]
     write_json_atomic(
         &fixture
             .root
-            .join(".loom/deployment/specs/generated/source-model.json"),
-        &source_model,
+            .join(".loom/deployment/specs/generated/model-repair.json"),
+        &json!({
+            "schemaVersion": "1.0",
+            "status": "accepted",
+            "baseFingerprint": fixture.read_spec().input_fingerprint,
+            "reason": "test controlled source model correction",
+            "sourceModel": source_model,
+            "topology": null
+        }),
     )
-    .expect("write bad source model sidecar");
+    .expect("write bad model repair");
 
     let bad_validate = deploy_validate(DeployToolInput {
         project_root: fixture.root_str(),
@@ -598,14 +609,28 @@ dependencies = ["fastapi", "uvicorn"]
         ),
         "{bad_value:#}"
     );
+    let applied_repair: Value = read_json(
+        &fixture
+            .root
+            .join(".loom/deployment/specs/generated/model-repair.json"),
+    )
+    .expect("applied model repair");
+    assert_eq!(applied_repair["status"], "applied");
 
     write_json_atomic(
         &fixture
             .root
-            .join(".loom/deployment/specs/generated/source-model.json"),
-        &correct_source_model,
+            .join(".loom/deployment/specs/generated/model-repair.json"),
+        &json!({
+            "schemaVersion": "1.0",
+            "status": "accepted",
+            "baseFingerprint": fixture.read_spec().input_fingerprint,
+            "reason": "test controlled source model correction",
+            "sourceModel": correct_source_model,
+            "topology": null
+        }),
     )
-    .expect("write corrected source model sidecar");
+    .expect("write corrected model repair");
     let good_validate = deploy_validate(DeployToolInput {
         project_root: fixture.root_str(),
         app_path: None,
@@ -644,10 +669,17 @@ fn deploy_up_asset_repair_exposes_generated_sidecars_as_editable() {
     write_json_atomic(
         &fixture
             .root
-            .join(".loom/deployment/specs/generated/source-model.json"),
-        &source_model,
+            .join(".loom/deployment/specs/generated/model-repair.json"),
+        &json!({
+            "schemaVersion": "1.0",
+            "status": "accepted",
+            "baseFingerprint": fixture.read_spec().input_fingerprint,
+            "reason": "test controlled source model correction",
+            "sourceModel": source_model,
+            "topology": null
+        }),
     )
-    .expect("write bad source model sidecar");
+    .expect("write bad model repair");
     fixture.write_mock_docker(
         r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo "Docker version 25.0.0"; exit 0; fi
@@ -671,7 +703,7 @@ exit 0
         .iter()
         .filter_map(Value::as_str)
         .collect::<std::collections::BTreeSet<_>>();
-    for expected in ["source-model.json", "topology.json", "facts.json"] {
+    for expected in ["model-repair.json"] {
         assert!(
             editable.iter().any(|item| item.ends_with(expected)),
             "deploy asset repair must allow generated sidecar {expected}: {value:#}"
@@ -857,9 +889,9 @@ fn deploy_prepare_applies_backend_healthcheck_without_inventing_public_gateway_p
     assert!(!spec
         .topology
         .validation
-        .api_paths
+        .api_probes
         .iter()
-        .any(|path| path == "/actuator/health"));
+        .any(|probe| probe.path == "/actuator/health"));
 
     let compose = read_text(
         &fixture
@@ -1037,7 +1069,10 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
     assert_eq!(value["state"], "done", "{value:#}");
 
     let spec = fixture.read_spec();
-    assert_eq!(spec.runtime_contract.source, "accepted_aac");
+    assert_eq!(
+        spec.runtime_contract.authority,
+        DeploymentContractAuthority::AcceptedContract
+    );
     assert!(spec
         .runtime_contract
         .r#ref
@@ -1146,32 +1181,48 @@ fn prepare_uses_previous_phase_runtime_delivery_when_active_phase_has_no_aac() {
 #[test]
 fn prepare_promotes_single_service_frontend_api_contract_to_proxy_topology() {
     let fixture = Fixture::new("deploy-root-composite-single-shape");
-    fixture.write_runtime_delivery(json!({
-        "status": "modified",
-        "runtimeKind": "web_frontend_plus_api",
-        "deploymentShape": "single-service",
-        "build": {
-            "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package",
-            "workingDirectory": "."
-        },
-        "start": {
-            "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run",
-            "workingDirectory": "."
-        },
-        "httpProbes": {
-            "previewPath": "/",
-            "apiPaths": ["/api/health", "/api/purchase-requests"],
-            "expectedStatus": "2xx_or_3xx"
-        },
-        "runtimeSurfaces": [
-            { "surfaceId": "runtime_surface_frontend", "kind": "frontend", "urlPath": "/" },
-            { "surfaceId": "runtime_surface_api", "kind": "api", "urlPath": "/api" }
-        ],
-        "environment": {
-            "required": ["DATABASE_URL"],
-            "optional": ["SERVER_PORT", "SPRING_PROFILES_ACTIVE"]
-        }
-    }));
+    fixture.write_runtime_delivery_with_interfaces(
+        json!({
+            "status": "modified",
+            "runtimeKind": "web_frontend_plus_api",
+            "deploymentShape": "single-service",
+            "build": {
+                "command": "frontend: npm run build ; backend: ./mvnw -DskipTests package",
+                "workingDirectory": "."
+            },
+            "start": {
+                "command": "frontend: npm run dev ; backend: ./mvnw spring-boot:run",
+                "workingDirectory": "."
+            },
+            "httpProbes": {
+                "previewPath": "/",
+                "apiPaths": ["/api/health", "/api/purchase-requests"],
+                "expectedStatus": "2xx_or_3xx"
+            },
+            "runtimeSurfaces": [
+                { "surfaceId": "runtime_surface_frontend", "kind": "frontend", "urlPath": "/" },
+                { "surfaceId": "runtime_surface_api", "kind": "api", "urlPath": "/api" }
+            ],
+            "environment": {
+                "required": ["DATABASE_URL"],
+                "optional": ["SERVER_PORT", "SPRING_PROFILES_ACTIVE"]
+            }
+        }),
+        json!([
+            {
+                "interfaceId": "api.purchase.health",
+                "type": "http_api",
+                "method": "GET",
+                "path": "/api/health"
+            },
+            {
+                "interfaceId": "api.purchase.list",
+                "type": "http_api",
+                "method": "GET",
+                "path": "/api/purchase-requests"
+            }
+        ]),
+    );
     fixture.write_text(
         "package.json",
         r#"{"scripts":{"build":"vite build","dev":"vite --host 0.0.0.0"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","react":"latest"}}"#,
@@ -1359,7 +1410,7 @@ fn deploy_validate_allows_single_app_api_paths_without_proxy_topology() {
             .any(|issue| issue
                 .as_str()
                 .unwrap_or_default()
-                .contains("topology has apiPaths but no http-proxy route")),
+                .contains("topology has API probes but no http-proxy route")),
         "{validate_value:#}"
     );
 }
@@ -1643,7 +1694,10 @@ fn prepare_without_loom_delivery_uses_repository_code_probe() {
     assert_eq!(value["state"], "done", "{value:#}");
 
     let spec = fixture.read_spec();
-    assert_eq!(spec.runtime_contract.source, "heuristic");
+    assert_eq!(
+        spec.runtime_contract.authority,
+        DeploymentContractAuthority::RepositoryHeuristic
+    );
     assert_eq!(spec.runtime_contract.r#ref, None);
     assert_eq!(spec.source_model.source, SourceModelSource::CodeProbe);
     let service = spec
@@ -4271,15 +4325,59 @@ impl Fixture {
         let aac_ref = ".loom/deliveries/delivery-1/contracts/architecture/phase-1/aac.json";
         let aac_file = self.root.join(aac_ref);
         ensure_dir(aac_file.parent().unwrap()).expect("aac dir");
-        write_json_atomic(
-            &aac_file,
-            &json!({
-                "schemaVersion": "1.0",
-                "architectureArtifactContractId": "aac-1",
-                "runtimeDelivery": runtime_delivery
-            }),
-        )
-        .expect("write aac");
+        let api_paths = runtime_delivery
+            .pointer("/httpProbes/apiPaths")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let api_interfaces = api_paths
+            .iter()
+            .enumerate()
+            .filter_map(|(index, path)| {
+                path.as_str().map(|path| {
+                    json!({
+                        "interfaceId": format!("api.test.{index}"),
+                        "type": "http_api",
+                        "method": "GET",
+                        "path": path
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut aac = json!({
+            "schemaVersion": "1.0",
+            "architectureArtifactContractId": "aac-1",
+            "runtimeDelivery": runtime_delivery
+        });
+        if !api_interfaces.is_empty() {
+            let api_contract_ref = ".loom/deliveries/delivery-1/contracts/api/current.json";
+            aac["interfaces"] = json!(api_interfaces.clone());
+            aac["apiContractRef"] = json!(api_contract_ref);
+            aac["currentPhaseInterfaceRefs"] = json!(api_interfaces
+                .iter()
+                .filter_map(|interface| interface["interfaceId"].as_str())
+                .collect::<Vec<_>>());
+            let runtime = aac["runtimeDelivery"].clone();
+            let base_path = runtime
+                .pointer("/api/basePath")
+                .cloned()
+                .unwrap_or_else(|| json!("/api"));
+            ensure_dir(self.root.join(api_contract_ref).parent().unwrap()).expect("api dir");
+            write_json_atomic(
+                &self.root.join(api_contract_ref),
+                &json!({
+                    "schemaVersion": "1.0",
+                    "apiContractId": "api-1",
+                    "deliveryId": delivery_id,
+                    "currentPhaseId": phase_id,
+                    "interfaces": api_interfaces,
+                    "publicExposure": { "basePath": base_path, "preservePath": true },
+                    "browserBinding": { "mode": "same_origin", "baseUrl": "" }
+                }),
+            )
+            .expect("write api contract");
+        }
+        write_json_atomic(&aac_file, &aac).expect("write aac");
         write_json_atomic(
             &self.root.join(".loom/deliveries/delivery-1/index.json"),
             &DeliveryIndex {
@@ -4322,7 +4420,45 @@ impl Fixture {
             .root
             .join(".loom/deliveries/delivery-1/contracts/architecture/phase-1/aac.json");
         let mut aac: Value = read_json(&aac_path).expect("aac");
-        aac["interfaces"] = interfaces;
+        aac["interfaces"] = interfaces.clone();
+        let http_interfaces = interfaces
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|interface| interface["type"] == "http_api")
+            .cloned()
+            .collect::<Vec<_>>();
+        if !http_interfaces.is_empty() {
+            let api_contract_ref = ".loom/deliveries/delivery-1/contracts/api/current.json";
+            let runtime = aac.get("runtimeDelivery").cloned().unwrap_or_default();
+            let base_path = runtime
+                .pointer("/api/basePath")
+                .cloned()
+                .unwrap_or_else(|| json!("/api"));
+            let preserve_path = runtime
+                .pointer("/api/preservePath")
+                .cloned()
+                .unwrap_or_else(|| json!(true));
+            let api_contract = json!({
+                "schemaVersion": "1.0",
+                "apiContractId": "api-1",
+                "deliveryId": "delivery-1",
+                "currentPhaseId": "phase-1",
+                "interfaces": http_interfaces,
+                "publicExposure": { "basePath": base_path, "preservePath": preserve_path },
+                "browserBinding": { "mode": "same_origin", "baseUrl": "" }
+            });
+            ensure_dir(self.root.join(api_contract_ref).parent().unwrap()).expect("api dir");
+            write_json_atomic(&self.root.join(api_contract_ref), &api_contract)
+                .expect("write api contract");
+            aac["apiContractRef"] = json!(api_contract_ref);
+            aac["currentPhaseInterfaceRefs"] = json!(interfaces
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|interface| interface["interfaceId"].as_str())
+                .collect::<Vec<_>>());
+        }
         write_json_atomic(&aac_path, &aac).expect("write api contract interfaces");
     }
 

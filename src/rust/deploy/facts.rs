@@ -111,7 +111,7 @@ fn topology_class(
     if backend_serves_frontend(runtime) {
         return DeploymentTopologyClass::BackendServedFrontendApi;
     }
-    if !topology.validation.api_paths.is_empty() {
+    if !topology.validation.api_probes.is_empty() {
         return DeploymentTopologyClass::ApiOnlySingleService;
     }
     DeploymentTopologyClass::SingleServiceApp
@@ -210,9 +210,9 @@ fn fact_notes(
     provider: DeployProvider,
     topology_class: DeploymentTopologyClass,
     layout_kind: DeploymentLayoutKind,
-    runtime: &DeploymentRuntimeContract,
+    _runtime: &DeploymentRuntimeContract,
     source_model: &DeploymentSourceModel,
-    topology: &DeploymentTopology,
+    _topology: &DeploymentTopology,
 ) -> Vec<String> {
     let mut notes = vec![format!(
         "Deploy facts were derived by Loom from RuntimeDelivery, repository probes, source model, and topology; agent-submitted topology fields are not authoritative."
@@ -228,9 +228,6 @@ fn fact_notes(
     }
     if layout_kind == DeploymentLayoutKind::WorkspaceApp {
         notes.push("Build context and Dockerfile COPY paths must preserve workspace root manifests and the selected app working directory.".to_string());
-    }
-    if !runtime.api_paths.is_empty() && topology.validation.api_paths.is_empty() {
-        notes.push("Runtime contract declared API paths, but topology validation did not carry them forward.".to_string());
     }
     if source_model.services.is_empty() {
         notes.push("No deployable source services were modeled.".to_string());

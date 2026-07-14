@@ -4,11 +4,11 @@ use std::{
 };
 
 use contracts::{
-    normalize_ui_surface_decision_contract_for_persist, validate_ui_surface_decision_contract,
-    AcceptanceMatrixEntry, ArchitectureArtifactContract, ArchitectureArtifactSource,
-    ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry, ArchitectureHandoff,
-    ArchitectureQuality, ArchitectureSectionCandidateAgentWritable, ArchitectureSectionGroup,
-    ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
+    build_api_quality_seed_from_foundation, normalize_ui_surface_decision_contract_for_persist,
+    validate_ui_surface_decision_contract, AcceptanceMatrixEntry, ArchitectureArtifactContract,
+    ArchitectureArtifactSource, ArchitectureArtifactStatus, ArchitectureDetailCoverageEntry,
+    ArchitectureHandoff, ArchitectureQuality, ArchitectureSectionCandidateAgentWritable,
+    ArchitectureSectionGroup, ArchitectureSectionStatus, COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     DomainDispatcher, FileSubmitInput, LoomMcpActionResult, LoomMcpBlockedResult, LoomMcpFailure,
@@ -26,9 +26,12 @@ use state::{
 use crate::{
     paths::{
         architecture_contract_file, architecture_latest_file, architecture_section_snapshot_file,
-        section_name,
+        project_api_contract_file, section_name,
     },
-    request::{architecture_read_groups, required_content_keys, section_order},
+    request::{
+        architecture_read_groups, required_content_keys, section_enum_refs,
+        section_generation_rules, section_order, section_result_template, section_schema_shape,
+    },
 };
 
 pub fn accept_architecture_section_file<D>(
@@ -234,7 +237,7 @@ where
     }
 
     let source_refs = read_source_refs(&input.project_root, &input.request_ref, &request_root)?;
-    let section_outputs =
+    let mut section_outputs =
         parse_section_outputs(&input.project_root, &authorized.request_id, &request_root)?;
     let allowed_refs = if section_uses_allowed_refs(current_section) {
         let allowed_ref_fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -279,6 +282,8 @@ where
 
     let mut issues = Vec::new();
     issues.extend(validate_section_content(&candidate));
+    issues.extend(validate_structured_communication_boundaries(&candidate));
+    issues.extend(validate_http_interfaces(&candidate, &request_root));
     if section_uses_allowed_refs(current_section) {
         issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
     }
@@ -314,7 +319,8 @@ where
 
     let next_section = next_section(candidate.section);
     if let Some(next_section) = next_section {
-        let next_output = section_outputs
+        let mut request_root = request_root;
+        let mut next_output = section_outputs
             .iter()
             .find(|output| output.section == next_section)
             .cloned()
@@ -325,6 +331,23 @@ where
                     section_name(next_section)
                 ))
             })?;
+        if matches!(candidate.section, ArchitectureSectionGroup::Foundation)
+            && matches!(next_section, ArchitectureSectionGroup::DomainContract)
+        {
+            let existing_api_contract = load_project_api_contract(project_root, &delivery_id)?;
+            let api_quality_seed = build_api_quality_seed_from_foundation(
+                &candidate.content,
+                existing_api_contract.as_ref(),
+            );
+            apply_api_quality_seed(&mut request_root, &api_quality_seed);
+            rebuild_domain_contract_output(
+                project_root,
+                &source_refs,
+                &request_root,
+                &api_quality_seed,
+                &mut next_output,
+            )?;
+        }
         let include_repair_context = matches!(mode, ArchitectureSubmitMode::Repair);
         let include_repair_source_ref = include_repair_context
             && repair_context_has_source_ref(
@@ -333,12 +356,15 @@ where
                 &request_root,
             )?;
         let updated_root = update_request_for_next_section(
+            &input.project_root,
+            &authorized.request_id,
             request_root,
             next_section,
             &next_output,
             include_repair_context,
             include_repair_source_ref,
             &source_refs,
+            &mut section_outputs,
         )?;
         update_output_contract_ref(
             &input.project_root,
@@ -379,13 +405,36 @@ where
             .map_err(to_state_error);
     }
 
-    let contract = assemble_architecture_contract(
+    let mut contract = assemble_architecture_contract(
         &input.project_root,
         &delivery_id,
         &phase_id,
         &section_outputs,
         &source_refs,
     )?;
+    let api_contract = materialize_project_api_contract(
+        project_root,
+        &delivery_id,
+        &phase_id,
+        &contract.interfaces,
+        &section_outputs,
+    )?;
+    contract.api_contract_ref = api_contract
+        .as_ref()
+        .map(|(contract_ref, _)| contract_ref.clone());
+    contract.current_phase_interface_refs = contract
+        .interfaces
+        .iter()
+        .filter(|interface| interface.get("type").and_then(Value::as_str) == Some("http_api"))
+        .filter_map(|interface| interface.get("interfaceId").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    if let Some((_, value)) = api_contract {
+        state::store::write_json_atomic(
+            &project_api_contract_file(project_root, &delivery_id),
+            &value,
+        )?;
+    }
     let contract_file = architecture_contract_file(project_root, &locator);
     state::store::write_json_atomic(&contract_file, &contract)?;
     let contract_ref = to_project_relative(project_root, &contract_file)?;
@@ -522,6 +571,164 @@ fn section_uses_allowed_refs(section: ArchitectureSectionGroup) -> bool {
             | ArchitectureSectionGroup::Behavior
             | ArchitectureSectionGroup::Coverage
     )
+}
+
+fn validate_structured_communication_boundaries(
+    candidate: &ArchitectureSectionCandidateAgentWritable,
+) -> Vec<delivery_core::RepairIssue> {
+    if !matches!(candidate.section, ArchitectureSectionGroup::Foundation) {
+        return vec![];
+    }
+    let Some(interactions) = candidate
+        .content
+        .pointer("/engineeringBoundary/applicationInteractions")
+        .and_then(Value::as_array)
+    else {
+        return vec![issue(
+            "APPLICATION_INTERACTIONS_REQUIRED",
+            "content.engineeringBoundary.applicationInteractions",
+            "Foundation must declare applicationInteractions as structured objects, including an empty array when there are no cross-boundary interactions.",
+        )];
+    };
+    let allowed = BTreeSet::from([
+        "http_api",
+        "service_method",
+        "external_adapter",
+        "event",
+        "job",
+        "cli_command",
+    ]);
+    let mut issues = Vec::new();
+    for (index, interaction) in interactions.iter().enumerate() {
+        let path = format!("content.engineeringBoundary.applicationInteractions[{index}]");
+        let Some(object) = interaction.as_object() else {
+            issues.push(issue(
+                "APPLICATION_INTERACTION_OBJECT_REQUIRED",
+                &path,
+                "Each application interaction must be an object; prose does not activate API applicability.",
+            ));
+            continue;
+        };
+        let interaction_type = object
+            .get("interactionType")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !allowed.contains(interaction_type) {
+            issues.push(issue(
+                "APPLICATION_INTERACTION_TYPE_INVALID",
+                &format!("{path}.interactionType"),
+                "interactionType must use the declared structured communication enum.",
+            ));
+        }
+        for key in [
+            "interactionId",
+            "providerApplicationRef",
+            "providerModuleRef",
+        ] {
+            if object
+                .get(key)
+                .and_then(Value::as_str)
+                .is_none_or(|value| value.trim().is_empty())
+            {
+                issues.push(issue(
+                    "APPLICATION_INTERACTION_FIELD_REQUIRED",
+                    &format!("{path}.{key}"),
+                    "Structured application interactions must identify their owner and stable id.",
+                ));
+            }
+        }
+        if interaction_type == "http_api"
+            && object
+                .get("qualityTraits")
+                .and_then(Value::as_object)
+                .is_none()
+        {
+            issues.push(issue(
+                "HTTP_INTERACTION_QUALITY_TRAITS_REQUIRED",
+                &format!("{path}.qualityTraits"),
+                "HTTP interactions must declare structured qualityTraits for API contract generation.",
+            ));
+        }
+    }
+    issues
+}
+
+fn validate_http_interfaces(
+    candidate: &ArchitectureSectionCandidateAgentWritable,
+    request_root: &Value,
+) -> Vec<delivery_core::RepairIssue> {
+    if !matches!(candidate.section, ArchitectureSectionGroup::DomainContract)
+        || request_root
+            .get("apiQualitySeed")
+            .is_none_or(Value::is_null)
+    {
+        return vec![];
+    }
+    let Some(interfaces) = candidate
+        .content
+        .get("interfaces")
+        .and_then(Value::as_array)
+    else {
+        return vec![issue(
+            "HTTP_INTERFACE_ARRAY_REQUIRED",
+            "content.interfaces",
+            "API-enabled DomainContract interfaces must be an array of interface objects.",
+        )];
+    };
+    let allowed_types = BTreeSet::from([
+        "http_api",
+        "service_method",
+        "external_adapter",
+        "event",
+        "job",
+        "cli_command",
+    ]);
+    let mut issues = Vec::new();
+    for (index, interface) in interfaces.iter().enumerate() {
+        let path = format!("content.interfaces[{index}]");
+        let Some(object) = interface.as_object() else {
+            issues.push(issue(
+                "HTTP_INTERFACE_OBJECT_REQUIRED",
+                &path,
+                "HTTP interface entries must be objects; strings cannot represent the API contract.",
+            ));
+            continue;
+        };
+        let Some(interface_type) = object.get("type").and_then(Value::as_str) else {
+            issues.push(issue(
+                "HTTP_INTERFACE_TYPE_REQUIRED",
+                &format!("{path}.type"),
+                "Every interface entry must declare its structured type.",
+            ));
+            continue;
+        };
+        if !allowed_types.contains(interface_type) {
+            issues.push(issue(
+                "HTTP_INTERFACE_TYPE_INVALID",
+                &format!("{path}.type"),
+                "Interface type must use the declared structured communication enum.",
+            ));
+            continue;
+        }
+        if interface_type == "http_api" {
+            for key in [
+                "interfaceId",
+                "method",
+                "path",
+                "requestSchema",
+                "responseSchema",
+            ] {
+                if !object.contains_key(key) {
+                    issues.push(issue(
+                        "HTTP_INTERFACE_FIELD_REQUIRED",
+                        &format!("{path}.{key}"),
+                        "Every HTTP interface must carry its contract fields in the current DomainContract.",
+                    ));
+                }
+            }
+        }
+    }
+    issues
 }
 
 fn validate_allowed_refs(content: &Value, allowed_refs: &Value) -> Vec<delivery_core::RepairIssue> {
@@ -1861,6 +2068,23 @@ fn parse_section_outputs(
     serde_json::from_value(value).map_err(state::store::StateError::Json)
 }
 
+fn write_private_section_outputs(
+    project_root: &str,
+    request_id: &str,
+    section_outputs: &[SectionStateOutput],
+) -> Result<(), state::store::StateError> {
+    let paths = state::paths::project_paths(project_root)?;
+    let relative =
+        state::request_manifest::request_storage_ref(&paths.root, request_id, "sectionOutputs")?
+            .ok_or_else(|| {
+                state::store::StateError::StateCorrupted(format!(
+                    "request {request_id} is missing private sectionOutputs storage"
+                ))
+            })?;
+    let file = state::paths::from_project_relative(&paths.root, &relative)?;
+    state::store::write_json_atomic(&file, &section_outputs)
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SectionStateOutput {
@@ -1880,12 +2104,15 @@ fn next_section(section: ArchitectureSectionGroup) -> Option<ArchitectureSection
 }
 
 fn update_request_for_next_section(
+    project_root: &str,
+    request_id: &str,
     mut root: Value,
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
     include_repair_context: bool,
     include_repair_source_ref: bool,
     source_refs: &Value,
+    section_outputs: &mut [SectionStateOutput],
 ) -> Result<Value, state::store::StateError> {
     let completed_section = parse_section(&root, "/sectionState/currentSection")?;
     root["sectionState"]["currentSection"] =
@@ -1899,8 +2126,37 @@ fn update_request_for_next_section(
         })?;
     completed
         .push(serde_json::to_value(completed_section).map_err(state::store::StateError::Json)?);
-    root["currentSectionContract"] =
+    let next_output_value =
         serde_json::to_value(next_output).map_err(state::store::StateError::Json)?;
+    let section_output = section_outputs
+        .iter_mut()
+        .find(|output| output.section == next_section)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(format!(
+                "architecture request sectionOutputs is missing {}",
+                section_name(next_section)
+            ))
+        })?;
+    *section_output = next_output.clone();
+    if let Some(inline_section_outputs) =
+        root.get_mut("sectionOutputs").and_then(Value::as_array_mut)
+    {
+        let next_section_value =
+            serde_json::to_value(next_section).map_err(state::store::StateError::Json)?;
+        let inline_output = inline_section_outputs
+            .iter_mut()
+            .find(|output| output.get("section") == Some(&next_section_value))
+            .ok_or_else(|| {
+                state::store::StateError::StateCorrupted(format!(
+                    "architecture request sectionOutputs is missing {}",
+                    section_name(next_section)
+                ))
+            })?;
+        *inline_output = next_output_value.clone();
+    } else {
+        write_private_section_outputs(project_root, request_id, section_outputs)?;
+    }
+    root["currentSectionContract"] = next_output_value;
     let write_targets = json!([{
         "targetId": section_name(next_section),
         "path": next_output.candidate_file.clone(),
@@ -1929,6 +2185,83 @@ fn update_request_for_next_section(
         &api_quality_seed,
     );
     Ok(root)
+}
+
+fn apply_api_quality_seed(root: &mut Value, seed: &Value) {
+    let Some(object) = root.as_object_mut() else {
+        return;
+    };
+    if seed.is_null() {
+        object.remove("apiQualitySeed");
+        if let Some(enum_refs) = object.get_mut("enumRefs").and_then(Value::as_object_mut) {
+            enum_refs.remove("apiQuality");
+        }
+        return;
+    }
+    object.insert("apiQualitySeed".to_string(), seed.clone());
+    if let Some(enum_refs) = object.get_mut("enumRefs").and_then(Value::as_object_mut) {
+        enum_refs.insert("apiQuality".to_string(), contracts::api_quality_enum_refs());
+    }
+}
+
+fn rebuild_domain_contract_output(
+    project_root: &Path,
+    source_refs: &Value,
+    request_root: &Value,
+    api_quality_seed: &Value,
+    output: &mut SectionStateOutput,
+) -> Result<(), state::store::StateError> {
+    let planning_ref = source_refs
+        .get("planningContractRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "architecture request is missing sourceRefs.planningContractRef".to_string(),
+            )
+        })?;
+    let planning_contract: contracts::PlanningGenerationContract =
+        read_project_json(project_root, planning_ref)?;
+    let has_previous_runtime_delivery = source_refs
+        .get("previousRuntimeDeliveryRef")
+        .is_some_and(|value| !value.is_null());
+    let frontend_experience_source = request_root
+        .get("frontendExperienceSource")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    output.schema_shape = section_schema_shape(
+        ArchitectureSectionGroup::DomainContract,
+        has_previous_runtime_delivery,
+        api_quality_seed,
+    );
+    output.result_template = section_result_template(
+        ArchitectureSectionGroup::DomainContract,
+        has_previous_runtime_delivery,
+        &frontend_experience_source,
+        &planning_contract,
+        api_quality_seed,
+    );
+    output.enum_refs = section_enum_refs(
+        ArchitectureSectionGroup::DomainContract,
+        has_previous_runtime_delivery,
+        api_quality_seed,
+    );
+    output.generation_rules = section_generation_rules(
+        ArchitectureSectionGroup::DomainContract,
+        has_previous_runtime_delivery,
+        api_quality_seed,
+    );
+    Ok(())
+}
+
+fn load_project_api_contract(
+    project_root: &Path,
+    delivery_id: &str,
+) -> Result<Option<Value>, state::store::StateError> {
+    let path = project_api_contract_file(project_root, delivery_id);
+    if !path.exists() {
+        return Ok(None);
+    }
+    state::store::read_json_value(&path).map(Some)
 }
 
 fn repair_context_has_source_ref(
@@ -2022,6 +2355,69 @@ mod tests {
         assert!(
             issues.is_empty(),
             "derived surface decision contract should validate cleanly: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn advancing_architecture_sections_updates_the_private_section_output() {
+        let next_output = SectionStateOutput {
+            section: ArchitectureSectionGroup::DomainContract,
+            candidate_file: ".loom/agent-writable/domain.json".to_string(),
+            schema_ref: "domain-schema".to_string(),
+            schema_shape: json!({"apiEnabled": true}),
+            result_template: json!({"content": {"interfaces": []}}),
+            enum_refs: json!({"apiQuality": {"httpMethod": ["GET"]}}),
+            generation_rules: vec!["Use the current API contract.".to_string()],
+        };
+        let root = json!({
+            "sectionState": {
+                "currentSection": "foundation",
+                "completedSections": []
+            },
+            "sectionOutputs": [
+                {"section": "foundation", "schemaShape": {"apiEnabled": false}},
+                {"section": "domain_contract", "schemaShape": {"apiEnabled": false}}
+            ],
+            "currentSectionContract": {},
+            "outputContract": {
+                "schemaProjection": {"requiredContentKeys": []}
+            },
+            "frontendExperienceSource": {},
+            "apiQualitySeed": null,
+            "requestReadPlan": {"groups": []}
+        });
+        let mut section_outputs = vec![
+            SectionStateOutput {
+                section: ArchitectureSectionGroup::Foundation,
+                candidate_file: ".loom/agent-writable/foundation.json".to_string(),
+                schema_ref: "foundation-schema".to_string(),
+                schema_shape: json!({"apiEnabled": false}),
+                result_template: json!({}),
+                enum_refs: json!({}),
+                generation_rules: vec![],
+            },
+            next_output.clone(),
+        ];
+        let updated = update_request_for_next_section(
+            "/tmp/project",
+            "arch_test",
+            root,
+            ArchitectureSectionGroup::DomainContract,
+            &next_output,
+            false,
+            false,
+            &json!({}),
+            &mut section_outputs,
+        )
+        .expect("advance architecture section");
+
+        assert_eq!(
+            updated["sectionOutputs"][1]["schemaShape"],
+            json!({"apiEnabled": true})
+        );
+        assert_eq!(
+            updated["currentSectionContract"]["schemaShape"],
+            json!({"apiEnabled": true})
         );
     }
 }
@@ -2167,13 +2563,7 @@ fn assemble_architecture_contract(
         .cloned()
         .unwrap_or_default();
     normalize_http_interface_paths(&mut interfaces);
-    let mut runtime_delivery = runtime.content.get("runtimeDelivery").cloned();
-    normalize_runtime_api_probe_paths(&mut runtime_delivery, &interfaces);
-    let api_contract = normalize_api_contract(
-        domain.content.get("apiContract"),
-        &interfaces,
-        runtime_delivery.as_ref(),
-    );
+    let runtime_delivery = runtime.content.get("runtimeDelivery").cloned();
     Ok(ArchitectureArtifactContract {
         schema_version: "1.0".to_string(),
         architecture_artifact_contract_id: format!(
@@ -2206,7 +2596,8 @@ fn assemble_architecture_contract(
             .cloned()
             .unwrap_or_else(|| json!({})),
         interfaces,
-        api_contract,
+        api_contract_ref: None,
+        current_phase_interface_refs: vec![],
         user_flows: behavior
             .content
             .get("userFlows")
@@ -2228,6 +2619,105 @@ fn assemble_architecture_contract(
         created_at: state::store::now_string(),
         updated_at: state::store::now_string(),
     })
+}
+
+fn materialize_project_api_contract(
+    project_root: &Path,
+    delivery_id: &str,
+    phase_id: &str,
+    phase_interfaces: &[Value],
+    outputs: &[SectionStateOutput],
+) -> Result<Option<(String, Value)>, state::store::StateError> {
+    let current_http_interfaces = phase_interfaces
+        .iter()
+        .filter(|interface| interface.get("type").and_then(Value::as_str) == Some("http_api"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let existing = load_project_api_contract(project_root, delivery_id)?;
+    if current_http_interfaces.is_empty() && existing.is_none() {
+        return Ok(None);
+    }
+
+    let domain_output = outputs
+        .iter()
+        .find(|output| output.section == ArchitectureSectionGroup::DomainContract)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "architecture request is missing domain_contract output".to_string(),
+            )
+        })?;
+    let domain_file = from_project_relative(project_root, &domain_output.candidate_file)?;
+    let domain: ArchitectureSectionCandidateAgentWritable = state::store::read_json(&domain_file)?;
+    let runtime_output = outputs
+        .iter()
+        .find(|output| output.section == ArchitectureSectionGroup::RuntimeDelivery)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "architecture request is missing runtime_delivery output".to_string(),
+            )
+        })?;
+    let runtime_file = from_project_relative(project_root, &runtime_output.candidate_file)?;
+    let runtime: ArchitectureSectionCandidateAgentWritable =
+        state::store::read_json(&runtime_file)?;
+    let current_exposure = normalize_api_contract(
+        domain.content.get("apiContract"),
+        &current_http_interfaces,
+        runtime.content.get("runtimeDelivery"),
+    );
+
+    let mut interfaces_by_id = BTreeMap::<String, Value>::new();
+    if let Some(existing_interfaces) = existing
+        .as_ref()
+        .and_then(|value| value.get("interfaces"))
+        .and_then(Value::as_array)
+    {
+        for interface in existing_interfaces {
+            if let Some(interface_id) = interface.get("interfaceId").and_then(Value::as_str) {
+                interfaces_by_id.insert(interface_id.to_string(), interface.clone());
+            }
+        }
+    }
+    for interface in current_http_interfaces {
+        let Some(interface_id) = interface.get("interfaceId").and_then(Value::as_str) else {
+            continue;
+        };
+        interfaces_by_id.insert(interface_id.to_string(), interface);
+    }
+    let public_exposure = current_exposure
+        .as_ref()
+        .and_then(|value| value.get("publicExposure"))
+        .cloned()
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|value| value.get("publicExposure"))
+                .cloned()
+        })
+        .unwrap_or_else(|| json!({}));
+    let browser_binding = current_exposure
+        .as_ref()
+        .and_then(|value| value.get("browserBinding"))
+        .cloned()
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|value| value.get("browserBinding"))
+                .cloned()
+        })
+        .unwrap_or_else(|| json!({}));
+    let path = project_api_contract_file(project_root, delivery_id);
+    let contract_ref = to_project_relative(project_root, &path)?;
+    let contract = json!({
+        "schemaVersion": "1.0",
+        "apiContractId": format!("api_{}_{}", delivery_id, state::store::now_millis()),
+        "deliveryId": delivery_id,
+        "currentPhaseId": phase_id,
+        "interfaces": interfaces_by_id.into_values().collect::<Vec<_>>(),
+        "publicExposure": public_exposure,
+        "browserBinding": browser_binding,
+        "updatedAt": state::store::now_string()
+    });
+    Ok(Some((contract_ref, contract)))
 }
 
 fn normalize_api_contract(
@@ -2314,33 +2804,6 @@ fn normalize_http_interface_paths(interfaces: &mut [Value]) {
             object.insert("path".to_string(), Value::String(normalized));
         }
     }
-}
-
-fn normalize_runtime_api_probe_paths(runtime_delivery: &mut Option<Value>, interfaces: &[Value]) {
-    let api_paths = interfaces
-        .iter()
-        .filter(|interface| interface.get("type").and_then(Value::as_str) == Some("http_api"))
-        .filter_map(|interface| interface.get("path").and_then(Value::as_str))
-        .map(normalize_api_path)
-        .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>();
-    if api_paths.is_empty() {
-        return;
-    }
-    let Some(runtime) = runtime_delivery.as_mut().and_then(Value::as_object_mut) else {
-        return;
-    };
-    if let Some(api) = runtime.get_mut("api").and_then(Value::as_object_mut) {
-        api.remove("probePaths");
-    }
-    let probes = runtime
-        .entry("httpProbes")
-        .or_insert_with(|| json!({}))
-        .as_object_mut();
-    let Some(probes) = probes else {
-        return;
-    };
-    probes.insert("apiPaths".to_string(), json!(api_paths));
 }
 
 fn normalize_api_path(path: &str) -> String {
