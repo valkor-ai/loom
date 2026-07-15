@@ -338,7 +338,7 @@ fn build_review_request(
             "commonRules": [
                 "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, outputContract.reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
-                "For code-quality findings, use the task-scoped referenceLoadPlan and referenceGroups in codeQualityReviewMatrix. Load only those selected technical references; do not scan the full tech tree or substitute a different database provider reference.",
+                "When reviewMatrixSummary.codeQuality or a code_quality signal needs investigation, read the optional review_code_quality_context group. Use its task-scoped referenceLoadPlan and referenceGroups only; do not scan the full tech tree or substitute a different database provider reference.",
                 "Every finding must include non-empty readRefs.",
                 "Write finding observations and evidence only. Loom derives findingId, pendingActions.findingRefs, nextAction.findingRefs, nextAction.targetTaskIds, and approved phase linkage from the current review signals.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
@@ -462,8 +462,16 @@ fn build_review_request(
                         "reviewMatrixSummary.apiContract",
                         "reviewMatrixSummary.codeQuality",
                         "reviewMatrixSummary.frontendQuality",
-                        "codeQualityReviewMatrix",
                         "outputContract.reviewSignals.items"
+                    ])
+                },
+                {
+                    "groupId": "review_code_quality_context",
+                    "required": false,
+                    "purpose": "Read task-scoped language, framework, and database reference evidence only when code quality requires investigation.",
+                    "whenToRead": "Read when reviewMatrixSummary.codeQuality or a code_quality review signal is unsatisfied or ambiguous.",
+                    "selectors": read_selectors_value_from_paths([
+                        "codeQualityReviewMatrix"
                     ])
                 },
                 review_quality_read_group(),

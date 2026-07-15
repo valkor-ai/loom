@@ -8,6 +8,9 @@ use delivery_core::{
     ValidatedPlanInput,
 };
 
+pub use request::{
+    section_enum_refs, section_generation_rules, section_result_template, section_schema_shape,
+};
 pub use submit::{accept_architecture_repair_file, accept_architecture_section_file};
 
 #[derive(Debug, Default, Clone, Copy)]

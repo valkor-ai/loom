@@ -431,6 +431,7 @@ dependencies = [
 name = "execution"
 version = "0.2.5"
 dependencies = [
+ "architecture",
  "brainstorm",
  "contracts",
  "delivery-core",

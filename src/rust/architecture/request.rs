@@ -228,7 +228,7 @@ fn build_request_root(
             .as_ref(),
         Some(technical_baseline),
     );
-    let architecture_quality_seed = build_architecture_quality_seed();
+    let architecture_quality_seed = build_architecture_quality_seed(current_output.section, None);
     let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -376,10 +376,14 @@ pub(crate) fn architecture_read_groups(
         "contextProjection.technicalBaseline.mustFollow",
         "architectureQualitySeed.required",
         "architectureQualitySeed.qualityLevel",
+        "architectureQualitySeed.section",
         "architectureQualitySeed.techReferenceProfile.loadMode",
         "architectureQualitySeed.techReferenceProfile.groups.arch",
         "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
     ]);
+    if matches!(section, ArchitectureSectionGroup::Coverage) {
+        core_fields.push("architectureQualitySeed.candidatePlan");
+    }
     if matches!(
         section,
         ArchitectureSectionGroup::Foundation
@@ -579,13 +583,15 @@ fn build_frontend_experience_source(phase: &delivery_core::DeliveryPhaseState) -
     value
 }
 
-fn build_architecture_quality_seed() -> Value {
-    let arch_groups = vec![
-        "core", "patterns", "system", "data", "nfr", "adr", "failure",
-    ];
-    json!({
+pub(crate) fn build_architecture_quality_seed(
+    section: ArchitectureSectionGroup,
+    candidate_plan: Option<&Value>,
+) -> Value {
+    let arch_groups = architecture_reference_groups(section);
+    let mut seed = json!({
         "required": true,
         "qualityLevel": "production_delivery_architecture",
+        "section": section,
         "techReferenceProfile": {
             "loadMode": "mcp_reference_load_plan",
             "groups": {
@@ -595,11 +601,30 @@ fn build_architecture_quality_seed() -> Value {
                 json!({
                     "refId": format!("tech.arch.{item}"),
                     "path": format!("tech/arch/{item}.md"),
-                    "reason": format!("Selected architecture {item} quality reference for this architecture section.")
+                    "reason": format!("Selected architecture {item} guidance for the {} section.", section_name(section))
                 })
             }).collect::<Vec<_>>()
         }
-    })
+    });
+    if let Some(candidate_plan) = candidate_plan {
+        seed["candidatePlan"] = candidate_plan.clone();
+    }
+    seed
+}
+
+fn architecture_reference_groups(section: ArchitectureSectionGroup) -> Vec<&'static str> {
+    match section {
+        ArchitectureSectionGroup::Foundation => vec!["core", "patterns", "system"],
+        ArchitectureSectionGroup::DomainContract => vec!["core", "data", "system"],
+        ArchitectureSectionGroup::Behavior => vec!["core", "system", "failure"],
+        ArchitectureSectionGroup::FrontendExperience => vec!["core"],
+        ArchitectureSectionGroup::RuntimeDelivery => vec!["core", "system", "failure"],
+        ArchitectureSectionGroup::Coverage => {
+            vec![
+                "core", "patterns", "system", "data", "nfr", "adr", "failure",
+            ]
+        }
+    }
 }
 
 fn architecture_quality_enum_refs() -> Value {
@@ -624,6 +649,7 @@ fn architecture_quality_enum_refs() -> Value {
             "observability",
             "cost"
         ],
+        "nfrSource": ["confirmed_requirement", "derived_minimum"],
         "riskCategory": [
             "data_integrity",
             "integration",
@@ -846,7 +872,7 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
     }
 }
 
-pub(crate) fn section_schema_shape(
+pub fn section_schema_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -871,8 +897,16 @@ fn section_content_shape(
         ArchitectureSectionGroup::Foundation => json!({
             "engineeringBoundary": {
                 "summary": "string",
+                "patternDecision": {
+                    "classification": "known | hybrid | custom",
+                    "patternId": "stable open identifier",
+                    "patternName": "string",
+                    "composedOf": ["stable pattern identifier"],
+                    "decisionDrivers": ["current-phase structural driver"],
+                    "structuralRules": ["module, data, interaction, or runtime boundary rule"],
+                    "rationale": "string"
+                },
                 "applications": ["object"],
-                "modules": ["object"],
                 "applicationInteractions": [{
                     "interactionId": "string",
                     "providerApplicationRef": "string",
@@ -898,14 +932,115 @@ fn section_content_shape(
             "dataModel": {
                 "entities": ["object"],
                 "relationships": ["object"],
-                "constraints": ["object"]
+                "constraints": ["object"],
+                "dataArchitecture": {
+                    "persistenceMode": "selected_stack | no_persistence",
+                    "sourceOfTruth": "string",
+                    "ownership": [{
+                        "dataRef": "entity or durable data identifier",
+                        "ownerModuleRef": "module identifier",
+                        "boundary": "write and read ownership rule"
+                    }],
+                    "invariants": [{
+                        "invariantId": "string",
+                        "ownerModuleRef": "module identifier",
+                        "rule": "business or data integrity rule",
+                        "enforcementPoints": ["domain, interface, or persistence boundary"],
+                        "failureBehavior": "observable rejection or recovery behavior"
+                    }],
+                    "transactionBoundaries": [{
+                        "transactionId": "string",
+                        "ownerModuleRef": "module identifier",
+                        "operationRefs": ["flow, interface, or operation identifier"],
+                        "atomicityRule": "what commits or rolls back together",
+                        "failureBehavior": "partial-write prevention or recovery behavior"
+                    }],
+                    "consistencyRules": [{
+                        "consistencyId": "string",
+                        "dataRefs": ["entity or durable data identifier"],
+                        "mode": "strong | eventual | read_your_writes | external_source_owned",
+                        "rule": "consistency boundary",
+                        "conflictOrStaleBehavior": "observable conflict or stale-data behavior"
+                    }],
+                    "migrationImpacts": [{
+                        "migrationId": "string",
+                        "dataRefs": ["entity or durable data identifier"],
+                        "change": "schema or durable-data change",
+                        "compatibilityRule": "runtime/schema compatibility rule",
+                        "rollbackOrForwardRepair": "recovery strategy",
+                        "verification": "provider-compatible verification"
+                    }],
+                    "readModels": [{
+                        "readModelId": "string",
+                        "ownerModuleRef": "module identifier",
+                        "dataRefs": ["source data identifier"],
+                        "queryPurpose": "current-phase read use",
+                        "boundedReadRule": "pagination, limit, or bounded traversal rule",
+                        "freshnessRule": "freshness or staleness contract"
+                    }],
+                    "lifecyclePolicies": [{
+                        "policyId": "string",
+                        "dataRefs": ["entity or durable data identifier"],
+                        "lifecycleRule": "retention, archive, expiry, or deletion rule",
+                        "cleanupOrArchiveBehavior": "owned cleanup or archive behavior"
+                    }],
+                    "derivedData": [{
+                        "derivedDataId": "string",
+                        "ownerModuleRef": "module identifier",
+                        "sourceDataRefs": ["source data identifier"],
+                        "refreshTrigger": "write, event, schedule, or rebuild trigger",
+                        "freshnessRule": "allowed staleness or synchronization rule",
+                        "rebuildStrategy": "deterministic rebuild or repair behavior"
+                    }]
+                }
             },
             "interfaces": domain_contract_interfaces_shape(api_quality_seed),
             "apiContract": api_contract_shape(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
-            "userFlows": ["object"],
-            "stateMachines": ["object"]
+            "userFlows": [{
+                "flowId": "string",
+                "name": "string",
+                "trigger": "string",
+                "actorRef": "string",
+                "happyPath": [{
+                    "stepId": "string",
+                    "action": "string",
+                    "interactionRef": "interface, interaction, or internal operation identifier",
+                    "stateMachineRefs": ["state machine identifier; empty when the step does not change lifecycle state"],
+                    "stateEffects": ["state or durable-data effect; empty for read-only steps"],
+                    "observableResult": "string"
+                }],
+                "businessBlockingPaths": [{
+                    "condition": "business condition",
+                    "response": "observable blocking response",
+                    "recovery": "allowed user or system recovery"
+                }],
+                "failurePaths": [{
+                    "failure": "technical or dependency failure",
+                    "impact": "state and capability impact",
+                    "recovery": "retry, compensation, forward repair, or manual recovery",
+                    "observableResult": "caller, user, or operator signal"
+                }],
+                "successOutcome": "string",
+                "scopeRefs": ["string"],
+                "acceptanceRefs": ["string"]
+            }],
+            "stateMachines": [{
+                "machineId": "string",
+                "name": "string",
+                "states": ["object"],
+                "transitions": [{
+                    "from": "state identifier",
+                    "to": "state identifier",
+                    "trigger": "command, event, or condition",
+                    "guards": ["business precondition; empty when unconditional"],
+                    "effects": ["state or durable-data effect; empty when none"],
+                    "failureBehavior": "state retained and observable response when blocked or failed"
+                }],
+                "scopeRefs": ["string"],
+                "acceptanceRefs": ["string"]
+            }]
         }),
         ArchitectureSectionGroup::FrontendExperience => json!({
             "frontendExperience": {
@@ -1046,16 +1181,35 @@ fn section_content_shape(
                         "acceptanceRefs": ["string"],
                         "requirementDetailRefs": ["string"]
                     },
+                    "ownerArtifactRefs": {
+                        "modules": ["string"],
+                        "interfaces": ["string"]
+                    },
                     "verificationHints": ["string"]
                 }],
                 "nfrs": [{
                     "nfrId": "string",
-                    "category": "performance | reliability | security | maintainability | observability | cost",
+                    "category": "performance | scalability | availability | reliability | security | maintainability | observability | cost",
+                    "source": "confirmed_requirement | derived_minimum",
                     "target": "string",
                     "rationale": "string",
+                    "measurement": {
+                        "indicator": "string",
+                        "workloadOrCondition": "string",
+                        "evaluationBoundary": "string"
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": ["string"],
+                        "acceptanceRefs": ["string"],
+                        "requirementDetailRefs": ["string"]
+                    },
                     "architectureRefs": {
                         "decisions": ["string"],
                         "risks": ["string"]
+                    },
+                    "ownerArtifactRefs": {
+                        "modules": ["string"],
+                        "interfaces": ["string"]
                     },
                     "verificationStrategy": "string"
                 }],
@@ -1114,6 +1268,15 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
                 "codeLevelExpectations": ["string"]
             },
             "runtimeSurfaces": ["object"],
+            "runtimeDependencies": [{
+                "dependencyId": "string",
+                "kind": "service | storage | queue | filesystem | external_runtime",
+                "requiredFor": ["string"],
+                "startupRequirement": "required | optional | not_applicable",
+                "failureBehavior": "string",
+                "recoveryStrategy": "string",
+                "observability": ["string"]
+            }],
             "httpProbes": {
                 "previewPath": "string",
                 "expectedStatus": "2xx_or_3xx"
@@ -1174,7 +1337,7 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
     }])
 }
 
-pub(crate) fn section_result_template(
+pub fn section_result_template(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
@@ -1205,18 +1368,20 @@ fn section_content_template(
         ArchitectureSectionGroup::Foundation => json!({
             "engineeringBoundary": {
                 "summary": "",
+                "patternDecision": {
+                    "classification": "known",
+                    "patternId": "single_application",
+                    "patternName": "Single application",
+                    "composedOf": [],
+                    "decisionDrivers": ["replace_with_current_phase_structural_driver"],
+                    "structuralRules": ["replace_with_concrete_module_data_interaction_or_runtime_boundary"],
+                    "rationale": ""
+                },
                 "applications": [{
                     "applicationId": "app_1",
                     "name": "",
                     "kind": "",
                     "rootPath": "."
-                }],
-                "modules": [{
-                    "moduleId": "module_1",
-                    "name": "",
-                    "scopeRefs": [],
-                    "acceptanceRefs": [],
-                    "summary": ""
                 }],
                 "applicationInteractions": []
             },
@@ -1239,7 +1404,29 @@ fn section_content_template(
                     "acceptanceRefs": []
                 }],
                 "relationships": [],
-                "constraints": []
+                "constraints": [],
+                "dataArchitecture": {
+                    "persistenceMode": "selected_stack",
+                    "sourceOfTruth": "replace_with_selected_current_phase_source_of_truth",
+                    "ownership": [{
+                        "dataRef": "entity_1",
+                        "ownerModuleRef": "module_1",
+                        "boundary": "replace_with_write_and_read_ownership"
+                    }],
+                    "invariants": [{
+                        "invariantId": "invariant_1",
+                        "ownerModuleRef": "module_1",
+                        "rule": "replace_with_business_invariant",
+                        "enforcementPoints": ["domain_or_service_boundary"],
+                        "failureBehavior": "replace_with_blocking_behavior"
+                    }],
+                    "transactionBoundaries": [],
+                    "consistencyRules": [],
+                    "migrationImpacts": [],
+                    "readModels": [],
+                    "lifecyclePolicies": [],
+                    "derivedData": []
+                }
             },
             "interfaces": domain_contract_interfaces_template(api_quality_seed),
             "apiContract": api_contract_template(api_quality_seed)
@@ -1248,7 +1435,28 @@ fn section_content_template(
             "userFlows": [{
                 "flowId": "flow_1",
                 "name": "",
-                "steps": [],
+                "trigger": "",
+                "actorRef": "",
+                "happyPath": [{
+                    "stepId": "step_1",
+                    "action": "",
+                    "interactionRef": "",
+                    "stateMachineRefs": [],
+                    "stateEffects": [],
+                    "observableResult": ""
+                }],
+                "businessBlockingPaths": [{
+                    "condition": "",
+                    "response": "",
+                    "recovery": ""
+                }],
+                "failurePaths": [{
+                    "failure": "",
+                    "impact": "",
+                    "recovery": "",
+                    "observableResult": ""
+                }],
+                "successOutcome": "",
                 "scopeRefs": [],
                 "acceptanceRefs": []
             }],
@@ -1256,7 +1464,14 @@ fn section_content_template(
                 "machineId": "state_machine_1",
                 "name": "",
                 "states": [],
-                "transitions": [],
+                "transitions": [{
+                    "from": "",
+                    "to": "",
+                    "trigger": "",
+                    "guards": [],
+                    "effects": [],
+                    "failureBehavior": ""
+                }],
                 "scopeRefs": [],
                 "acceptanceRefs": []
             }]
@@ -1465,16 +1680,35 @@ fn architecture_quality_template() -> Value {
                 "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
                 "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
             },
+            "ownerArtifactRefs": {
+                "modules": ["module_1"],
+                "interfaces": []
+            },
             "verificationHints": ["How later tasks or review can prove this decision was respected."]
         }],
         "nfrs": [{
             "nfrId": "nfr-current-001",
             "category": "maintainability",
+            "source": "derived_minimum",
             "target": "Concrete quality target for this phase.",
             "rationale": "Why this target matters for the current phase.",
+            "measurement": {
+                "indicator": "Observable indicator used to evaluate the target.",
+                "workloadOrCondition": "Current-phase workload or failure condition.",
+                "evaluationBoundary": "Test, static-check, review, or runtime boundary where it is evaluated."
+            },
+            "sourceRefs": {
+                "scopeRefs": ["allowedRefs.scopeRefs item"],
+                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
+                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
+            },
             "architectureRefs": {
                 "decisions": ["adr-current-001"],
                 "risks": ["risk-current-001"]
+            },
+            "ownerArtifactRefs": {
+                "modules": ["module_1"],
+                "interfaces": []
             },
             "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
         }],
@@ -1493,6 +1727,114 @@ fn architecture_quality_template() -> Value {
             },
             "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
         }]
+    })
+}
+
+pub(crate) fn architecture_quality_template_from_candidate_plan(plan: &Value) -> Value {
+    let decisions = plan
+        .get("decisionCandidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|candidate| {
+            json!({
+                "decisionId": candidate.get("decisionId").cloned().unwrap_or(Value::Null),
+                "category": candidate.get("category").cloned().unwrap_or(Value::Null),
+                "title": "Replace with the concrete current-phase decision title.",
+                "status": "accepted",
+                "context": candidate.get("reason").cloned().unwrap_or(Value::Null),
+                "decision": "Replace with the selected architecture decision.",
+                "alternativesConsidered": [{
+                    "name": "Replace with a realistic alternative.",
+                    "tradeoff": "State the concrete trade-off against the selected decision.",
+                    "rejectedBecause": "Explain why the alternative does not fit current-phase facts."
+                }],
+                "consequences": {
+                    "positive": ["State an implementation or verification benefit."],
+                    "negative": ["State a real implementation, runtime, or maintenance cost."],
+                    "neutral": []
+                },
+                "sourceRefs": candidate.get("sourceRefs").cloned().unwrap_or_else(|| json!({
+                    "scopeRefs": [], "acceptanceRefs": [], "requirementDetailRefs": []
+                })),
+                "ownerArtifactRefs": candidate.get("ownerArtifactRefs").cloned().unwrap_or_else(|| json!({
+                    "modules": [], "interfaces": []
+                })),
+                "verificationHints": ["State how an owning task or review can prove this decision was respected."]
+            })
+        })
+        .collect::<Vec<_>>();
+    let nfrs = plan
+        .get("nfrCandidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|candidate| {
+            let nfr_id = candidate.get("nfrId").cloned().unwrap_or(Value::Null);
+            let risk_refs = plan
+                .get("riskCandidates")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|risk| {
+                    risk.get("nfrRefs")
+                        .and_then(Value::as_array)
+                        .is_some_and(|refs| refs.contains(&nfr_id))
+                })
+                .filter_map(|risk| risk.get("riskId").cloned())
+                .collect::<Vec<_>>();
+            json!({
+                "nfrId": nfr_id,
+                "category": candidate.get("category").cloned().unwrap_or(Value::Null),
+                "source": candidate.get("source").cloned().unwrap_or_else(|| json!("derived_minimum")),
+                "target": "Replace with a concrete current-phase quality target.",
+                "rationale": candidate.get("reason").cloned().unwrap_or(Value::Null),
+                "measurement": {
+                    "indicator": "Replace with the observable indicator.",
+                    "workloadOrCondition": "Replace with the current-phase workload or failure condition.",
+                    "evaluationBoundary": "Replace with the test, static-check, review, or runtime boundary."
+                },
+                "sourceRefs": candidate.get("sourceRefs").cloned().unwrap_or_else(|| json!({
+                    "scopeRefs": [], "acceptanceRefs": [], "requirementDetailRefs": []
+                })),
+                "architectureRefs": {
+                    "decisions": candidate.get("decisionRefs").cloned().unwrap_or_else(|| json!([])),
+                    "risks": risk_refs
+                },
+                "ownerArtifactRefs": candidate.get("ownerArtifactRefs").cloned().unwrap_or_else(|| json!({
+                    "modules": [], "interfaces": []
+                })),
+                "verificationStrategy": "Replace with executable or reviewable evidence for the indicator."
+            })
+        })
+        .collect::<Vec<_>>();
+    let risks = plan
+        .get("riskCandidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|candidate| {
+            json!({
+                "riskId": candidate.get("riskId").cloned().unwrap_or(Value::Null),
+                "category": candidate.get("category").cloned().unwrap_or(Value::Null),
+                "severity": "medium",
+                "likelihood": "medium",
+                "impact": candidate.get("reason").cloned().unwrap_or(Value::Null),
+                "mitigation": "Replace with a concrete design or task-owned mitigation.",
+                "ownerArtifactRefs": {
+                    "modules": candidate.pointer("/ownerArtifactRefs/modules").cloned().unwrap_or_else(|| json!([])),
+                    "interfaces": candidate.pointer("/ownerArtifactRefs/interfaces").cloned().unwrap_or_else(|| json!([])),
+                    "decisions": candidate.get("decisionRefs").cloned().unwrap_or_else(|| json!([])),
+                    "nfrs": candidate.get("nfrRefs").cloned().unwrap_or_else(|| json!([]))
+                },
+                "verificationHints": ["State how an owning task or review can prove the mitigation was implemented."]
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "decisions": decisions,
+        "nfrs": nfrs,
+        "risks": risks
     })
 }
 
@@ -1538,6 +1880,7 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
                 "urlPath": "",
                 "purpose": ""
             }],
+            "runtimeDependencies": [],
             "httpProbes": {
                 "previewPath": "/",
                 "expectedStatus": "2xx_or_3xx"
@@ -1714,7 +2057,7 @@ fn api_contract_template(api_quality_seed: &Value) -> Value {
     })
 }
 
-pub(crate) fn section_enum_refs(
+pub fn section_enum_refs(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -1740,7 +2083,7 @@ pub(crate) fn section_enum_refs(
     }
 }
 
-pub(crate) fn section_generation_rules(
+pub fn section_generation_rules(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -1748,7 +2091,9 @@ pub(crate) fn section_generation_rules(
     match section {
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
-            "Define the engineering boundary and current-phase modules only.".to_string(),
+            "Define the engineering boundary and current-phase modules only. Write modules once in content.modules; every module needs stable ownership, responsibility, and current-phase scope or acceptance refs.".to_string(),
+            "Write engineeringBoundary.patternDecision from current-phase business boundaries, consistency needs, state complexity, interaction pressure, runtime boundaries, and failure recovery. patternId is open-ended: use classification=custom with concrete structuralRules when no known pattern fits; custom never relaxes ownership or verification obligations.".to_string(),
+            "Keep patternDecision.decisionDrivers, structuralRules, and rationale concrete. Do not use organization size, prestige, hypothetical scale, or an unrelated example as a structural driver.".to_string(),
             "Declare every current-phase cross-application or cross-module communication boundary in engineeringBoundary.applicationInteractions. Choose interactionType from the structured protocol kinds; do not rely on API, backend, or framework words in business prose to activate later interface design.".to_string(),
             "For an existing accepted interface, use interfaceRefs. For a new boundary, leave interfaceRefs empty and provide provider/consumer ownership plus qualityTraits so MCP can generate the precise DomainContract reference plan.".to_string(),
             "For each http_api interaction, write the complete qualityTraits object. Set authRequirement from current actor/permission requirements or an existing interface policy; use not_applicable only when the current interface is intentionally unauthenticated, and use deferred_with_risk when protection is required but deferred.".to_string(),
@@ -1769,6 +2114,8 @@ pub(crate) fn section_generation_rules(
                     .to_string(),
                 "Consume the confirmed technical baseline stack as input; do not redo database or framework selection in architecture.".to_string(),
                 "Describe data ownership, transaction boundaries, invariant enforcement, migration impact, and read/write consistency for the selected current-phase storage stack.".to_string(),
+                "Write dataModel.dataArchitecture as the implementation-facing storage-use contract. Use persistenceMode=no_persistence only when current state is intentionally derived or in-memory; otherwise identify source of truth and complete the declared structured fields for each applicable ownership, invariant, transaction, consistency, migration, read-model, lifecycle, and derived-data entry. Keep non-applicable collections empty.".to_string(),
+                "Do not reselect a database in dataArchitecture. Derive its rules from the accepted Technical Baseline and current phase behavior, including provider-safe migration and failure boundaries where they apply.".to_string(),
                 "Preserve confirmed business terminology; record conflicts instead of casually renaming domain concepts."
                     .to_string(),
             ];
@@ -1785,6 +2132,8 @@ pub(crate) fn section_generation_rules(
         ArchitectureSectionGroup::Behavior => vec![
             "Represent current-phase user flows, state machines, blockers, and success outcomes."
                 .to_string(),
+            "For every userFlow, separate happyPath, businessBlockingPaths, and technical failurePaths. State trigger, actor, state effects, observable results, and a concrete recovery path; do not hide failures inside an undifferentiated steps array.".to_string(),
+            "For every state transition, state guards, effects, and failureBehavior when the transition mutates state or depends on another component.".to_string(),
             "Include failure paths, recovery behavior, consistency expectations, and business-blocking outcomes for stateful flows.".to_string(),
             "Do not reference future or deferred scope as if it were current-phase behavior."
                 .to_string(),
@@ -1818,6 +2167,7 @@ pub(crate) fn section_generation_rules(
                 .to_string(),
             "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
                 .to_string(),
+            "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state startup requirement, affected capability, failure behavior, recovery strategy, and observable signal. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -1832,9 +2182,11 @@ pub(crate) fn section_generation_rules(
                 .to_string(),
             "Write content.architectureQuality with non-empty decisions, nfrs, and risks arrays using currentSectionContract.resultTemplate shape."
                 .to_string(),
-            "Each architectureQuality decision must include alternativesConsidered, consequences, sourceRefs, and verificationHints."
+            "Use architectureQualitySeed.candidatePlan as the required minimum decision, NFR, and risk authority. Complete each candidate's semantic decision, trade-off, measurement, mitigation, and verification fields. MCP owns and normalizes candidate ids, categories, source refs, owner refs, and decision/NFR/risk links; do not derive or rewrite them.".to_string(),
+            "Add another decision, NFR, or risk only when accepted requirement or section facts provide independently valid source refs and ownership beyond the MCP-derived minimum.".to_string(),
+            "Each architectureQuality decision must include alternativesConsidered, consequences, sourceRefs, ownerArtifactRefs, and verificationHints."
                 .to_string(),
-            "Each architectureQuality nfr must be concrete enough for TaskPlan or Review to verify; do not write vague quality words without a verificationStrategy."
+            "Each architectureQuality nfr must preserve its candidate sourceRefs, state whether it comes from a confirmed requirement or a derived minimum, identify owner artifacts, and define indicator, workload/condition, evaluation boundary, and verificationStrategy. confirmed_requirement requires an acceptance or requirement-detail ref; do not write vague quality words or invent unsupported numeric targets."
                 .to_string(),
             "Each architectureQuality risk must include severity, likelihood, impact, mitigation, ownerArtifactRefs, and verificationHints."
                 .to_string(),
@@ -2001,5 +2353,116 @@ mod tests {
         }
         assert!(rules.contains("use an empty array otherwise"));
         assert!(rules.contains("existing or separately deployed consumer"));
+    }
+
+    #[test]
+    fn architecture_reference_profiles_are_section_scoped() {
+        let foundation =
+            build_architecture_quality_seed(ArchitectureSectionGroup::Foundation, None);
+        let frontend =
+            build_architecture_quality_seed(ArchitectureSectionGroup::FrontendExperience, None);
+        let coverage = build_architecture_quality_seed(ArchitectureSectionGroup::Coverage, None);
+
+        assert_eq!(
+            foundation["techReferenceProfile"]["groups"]["arch"],
+            json!(["core", "patterns", "system"])
+        );
+        assert_eq!(
+            frontend["techReferenceProfile"]["groups"]["arch"],
+            json!(["core"])
+        );
+        assert_eq!(
+            coverage["techReferenceProfile"]["groups"]["arch"],
+            json!(["core", "patterns", "system", "data", "nfr", "adr", "failure"])
+        );
+        assert!(!foundation["techReferenceProfile"]["referenceLoadPlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == "tech/arch/data.md"));
+        assert!(!frontend["techReferenceProfile"]["referenceLoadPlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"] == "tech/arch/patterns.md"));
+    }
+
+    #[test]
+    fn architecture_sections_expose_structured_reference_landing_fields() {
+        let foundation =
+            section_content_shape(ArchitectureSectionGroup::Foundation, false, &Value::Null);
+        let domain = section_content_shape(
+            ArchitectureSectionGroup::DomainContract,
+            false,
+            &Value::Null,
+        );
+        let behavior =
+            section_content_shape(ArchitectureSectionGroup::Behavior, false, &Value::Null);
+        let runtime = section_content_shape(
+            ArchitectureSectionGroup::RuntimeDelivery,
+            false,
+            &Value::Null,
+        );
+
+        assert!(foundation
+            .pointer("/engineeringBoundary/patternDecision/structuralRules")
+            .is_some());
+        assert!(domain
+            .pointer("/dataModel/dataArchitecture/transactionBoundaries")
+            .is_some());
+        assert!(behavior.pointer("/userFlows/0/failurePaths").is_some());
+        assert!(runtime
+            .pointer("/runtimeDelivery/runtimeDependencies/0/failureBehavior")
+            .is_some());
+    }
+
+    #[test]
+    fn coverage_template_is_materialized_from_architecture_candidates() {
+        let plan = json!({
+            "decisionCandidates": [{
+                "decisionId": "adr-custom-boundary",
+                "category": "architecture_style",
+                "reason": "Current structured boundary facts require a decision.",
+                "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }],
+            "nfrCandidates": [{
+                "nfrId": "nfr-availability",
+                "category": "availability",
+                "source": "derived_minimum",
+                "reason": "A runtime dependency can be unavailable.",
+                "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                "decisionRefs": ["adr-custom-boundary"],
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }],
+            "riskCandidates": [{
+                "riskId": "risk-runtime",
+                "category": "runtime",
+                "reason": "The runtime surface can become unreachable.",
+                "decisionRefs": ["adr-custom-boundary"],
+                "nfrRefs": ["nfr-availability"],
+                "ownerArtifactRefs": {"modules": ["module-1"], "interfaces": []}
+            }]
+        });
+        let template = architecture_quality_template_from_candidate_plan(&plan);
+
+        assert_eq!(
+            template["decisions"][0]["decisionId"],
+            "adr-custom-boundary"
+        );
+        assert_eq!(template["nfrs"][0]["category"], "availability");
+        assert_eq!(
+            template["nfrs"][0]["sourceRefs"]["scopeRefs"],
+            json!(["scope-1"])
+        );
+        assert_eq!(
+            template["nfrs"][0]["measurement"]["evaluationBoundary"],
+            "Replace with the test, static-check, review, or runtime boundary."
+        );
+        assert_eq!(
+            template["nfrs"][0]["architectureRefs"]["risks"],
+            json!(["risk-runtime"])
+        );
+        assert_eq!(template["risks"][0]["riskId"], "risk-runtime");
     }
 }

@@ -2768,6 +2768,14 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
     assert!(taskplan_rules_text.contains("smallest stable verification signal"));
     let compact_taskplan_root = read_request_root_value(fixture.root_str(), taskplan_request_ref);
     assert_no_root_submit_metadata(&compact_taskplan_root);
+    assert!(compact_taskplan_root
+        .pointer("/outputContract/architectureQualityRequirementTemplate")
+        .is_none());
+    assert!(inspected
+        .read_groups
+        .iter()
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
+        .all(|field| field != "outputContract.architectureQualityRequirementTemplate"));
     let taskplan_core_group = inspected
         .read_groups
         .iter()
@@ -2784,6 +2792,21 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .iter()
         .filter(|(field, _)| field.starts_with("sourceRefs."))
         .all(|(_, field)| !field.value.is_null()));
+    let architecture_quality = &taskplan_core_fields
+        ["contextProjection.requirementDetailTransfer.architectureDetails"]
+        .value["architectureQuality"];
+    assert!(architecture_quality["decisions"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
+    assert!(architecture_quality["nfrs"][0]["target"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(architecture_quality["risks"][0]["mitigation"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(architecture_quality["decisions"][0]
+        .get("alternativesConsidered")
+        .is_none());
     for field in [
         "sourceRefs.repositoryContextRef",
         "sourceRefs.phaseConceptGroundingRef",
@@ -5263,6 +5286,16 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(!review_quality_fields
         .iter()
         .any(|field| field == "reviewQualityProfile"));
+    let code_quality_context_group = review_inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "review_code_quality_context")
+        .expect("review_code_quality_context group");
+    assert!(!code_quality_context_group.required);
+    assert_eq!(
+        code_quality_context_group.expanded_fields(),
+        vec!["codeQualityReviewMatrix".to_string()]
+    );
     let review_quality = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: review_request_ref.to_string(),
@@ -5354,6 +5387,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
             "review_packets",
             "change_context",
             "review_matrices",
+            "review_code_quality_context",
             "review_quality_profile",
             "review_rules",
             "review_write_contract"
@@ -7459,11 +7493,17 @@ fn review_flags_missing_workflow_closure_assignment_as_taskplan_repair() {
             "acceptanceRefs": ["acc_1"],
             "interfaceRefs": ["api.account.reissue"],
             "entry": {},
-            "steps": [{
+            "happyPath": [{
                 "stepId": "step.submit-reissue",
-                "interfaceRefs": ["api.account.reissue"],
-                "stateMachineRefs": []
-            }]
+                "action": "Submit account reissue.",
+                "interactionRef": "api.account.reissue",
+                "stateMachineRefs": [],
+                "stateEffects": ["The reissue request is persisted."],
+                "observableResult": "The reissue request is acknowledged."
+            }],
+            "businessBlockingPaths": [],
+            "failurePaths": [],
+            "successOutcome": "The reissue request is accepted."
         }));
     architecture["frontendExperience"]["surfaces"]
         .as_array_mut()
@@ -8938,6 +8978,34 @@ fn architecture_repair_submit_rebuilds_aac_and_recreates_taskplan_request() {
         .fields
         .get("contextProjection.requirementDetailTransfer.capabilityGroups")
         .is_some());
+    let repair_foundation_contract =
+        architecture_section_contract(&fixture, &repair_action_ref, "foundation");
+    assert!(repair_foundation_contract["resultTemplate"]["content"]
+        .pointer("/engineeringBoundary/patternDecision/structuralRules")
+        .and_then(Value::as_array)
+        .is_some());
+    assert!(repair_foundation_contract["generationRules"]
+        .as_array()
+        .is_some_and(|rules| rules.iter().any(|rule| {
+            rule.as_str()
+                .is_some_and(|rule| rule.contains("patternDecision"))
+        })));
+    advance_architecture_to_section(&fixture, &repair_action_ref, "domain_contract");
+    let repair_domain_contract =
+        architecture_section_contract(&fixture, &repair_action_ref, "domain_contract");
+    assert!(repair_domain_contract["resultTemplate"]["content"]
+        .pointer("/dataModel/dataArchitecture/transactionBoundaries")
+        .and_then(Value::as_array)
+        .is_some());
+    advance_architecture_to_section(&fixture, &repair_action_ref, "behavior");
+    let repair_behavior_contract =
+        architecture_section_contract(&fixture, &repair_action_ref, "behavior");
+    assert!(repair_behavior_contract["resultTemplate"]["content"]
+        .pointer("/userFlows/0/happyPath/0/interactionRef")
+        .is_some());
+    assert!(repair_behavior_contract["resultTemplate"]["content"]
+        .pointer("/userFlows/0/steps")
+        .is_none());
     advance_architecture_to_section(&fixture, &repair_action_ref, "frontend_experience");
     assert_architecture_group_ids(
         &fixture,
@@ -11488,6 +11556,8 @@ fn start_frontend_quality_task_execution_without_architecture_quality(fixture: &
     group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["decisions"] = json!([]);
     group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["nfrs"] = json!([]);
     group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["risks"] = json!([]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["modules"] = json!([]);
+    group_value["tasks"][0]["writeBoundary"]["artifactRefs"]["interfaces"] = json!([]);
     write_json_atomic(&group_path, &group_value).expect("write frontend-only group file");
 
     let execution_result = call_submit(
@@ -12022,6 +12092,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         "contextProjection.technicalBaseline.technicalBaselineId",
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
         "contextProjection.requirementDetailTransfer.requirementDetails",
+        "currentSectionContract.resultTemplate",
         "frontendExperienceSource.confirmedFrontendExperienceRef",
         "frontendExperienceSource.currentFrontendExperienceRef",
     ]
@@ -12092,6 +12163,12 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         .map(|field| &field.value)
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let architecture_quality = complete_architecture_quality_template(
+        field_value(&fields, "currentSectionContract.resultTemplate")
+            .pointer("/content/architectureQuality")
+            .cloned()
+            .unwrap_or_else(|| json!({"decisions": [], "nfrs": [], "risks": []})),
+    );
     let content = match section {
         "foundation" => json!({
             "source": {
@@ -12100,14 +12177,24 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
             },
             "engineeringBoundary": {
                 "summary": "Current phase stays inside the confirmed account-delivery boundary.",
+                "patternDecision": {
+                    "classification": "known",
+                    "patternId": "single_application",
+                    "patternName": "Single application",
+                    "composedOf": [],
+                    "decisionDrivers": ["The current account slice uses one transaction and runtime boundary."],
+                    "structuralRules": ["The account module owns account behavior, state, and exposed interfaces."],
+                    "rationale": "A separate runtime boundary would add consistency and delivery cost without current-phase value."
+                },
                 "applications": [],
-                "modules": [],
                 "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module.account-service",
                 "name": "account-service",
-                "summary": "Handles the current phase account workflow."
+                "summary": "Handles the current phase account workflow.",
+                "scopeRefs": [scope_id.clone()],
+                "acceptanceRefs": [acceptance_id.clone()]
             }]
         }),
         "domain_contract" => json!({
@@ -12117,7 +12204,19 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                     "name": "Account"
                 }],
                 "relationships": [],
-                "constraints": []
+                "constraints": [],
+                "dataArchitecture": {
+                    "persistenceMode": "selected_stack",
+                    "sourceOfTruth": "account-store",
+                    "ownership": [{"dataRef": "entity.account", "ownerModuleRef": "module.account-service", "boundary": "The account module owns writes and reads."}],
+                    "invariants": [{"invariantId": "invariant.account", "ownerModuleRef": "module.account-service", "rule": "Account state changes follow the accepted lifecycle.", "enforcementPoints": ["account service"], "failureBehavior": "Reject invalid state changes."}],
+                    "transactionBoundaries": [],
+                    "consistencyRules": [],
+                    "migrationImpacts": [],
+                    "readModels": [],
+                    "lifecyclePolicies": [],
+                    "derivedData": []
+                }
             },
             "interfaces": [{
                 "interfaceId": "api.account",
@@ -12127,11 +12226,19 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         "behavior" => json!({
             "userFlows": [{
                 "flowId": "flow.account-lifecycle",
-                "name": "Account lifecycle"
+                "name": "Account lifecycle",
+                "trigger": "A staff member starts an account operation.",
+                "actorRef": "staff",
+                "happyPath": [{"stepId": "step.account", "action": "Apply the account operation.", "interactionRef": "api.account", "stateMachineRefs": ["machine.account-status"], "stateEffects": ["Account status changes."], "observableResult": "The updated account is visible."}],
+                "businessBlockingPaths": [{"condition": "The state transition is not allowed.", "response": "Return the blocking reason.", "recovery": "Choose an allowed operation."}],
+                "failurePaths": [{"failure": "Account persistence fails.", "impact": "The operation is not committed.", "recovery": "Retry after storage recovers.", "observableResult": "The caller receives an unavailable response."}],
+                "successOutcome": "The account state and readback match."
             }],
             "stateMachines": [{
                 "machineId": "machine.account-status",
-                "name": "Account status"
+                "name": "Account status",
+                "states": [],
+                "transitions": [{"from": "pending", "to": "active", "trigger": "activate", "guards": ["account is eligible"], "effects": ["persist active state"], "failureBehavior": "Keep pending state."}]
             }]
         }),
         "frontend_experience" => json!({
@@ -12177,6 +12284,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                     "urlPath": "/",
                     "purpose": "Preview the staff-facing account workflow."
                 }],
+                "runtimeDependencies": [],
                 "httpProbes": {
                     "previewPath": "/",
                     "apiPaths": ["/api/securities-accounts/runtime-info"],
@@ -12269,58 +12377,7 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
                     "acceptanceMatrix": [acceptance_id.clone()]
                 }
             }],
-            "architectureQuality": {
-                "decisions": [{
-                    "decisionId": "adr-current-001",
-                    "category": "architecture_style",
-                    "title": "Keep the account slice inside the declared module boundary",
-                    "status": "accepted",
-                    "context": "The current phase needs a coherent architecture handoff for task planning without expanding beyond the accepted account capability.",
-                    "decision": "Implement the phase through the account-service module and expose only the declared account interface surface.",
-                    "alternativesConsidered": [{
-                        "name": "Split the current account slice across unrelated modules",
-                        "tradeoff": "Could look more layered in tests but would duplicate ownership for one phase.",
-                        "rejectedBecause": "The accepted architecture module boundary is sufficient for this phase."
-                    }],
-                    "consequences": {
-                        "positive": ["Task planning can assign one coherent module owner."],
-                        "negative": ["Future phases must add new modules deliberately instead of by accident."],
-                        "neutral": ["The decision can be revisited when a later phase adds a separate runtime boundary."]
-                    },
-                    "sourceRefs": {
-                        "scopeRefs": [scope_id.clone()],
-                        "acceptanceRefs": [acceptance_id.clone()],
-                        "requirementDetailRefs": [detail_id.clone()]
-                    },
-                    "verificationHints": ["TaskPlan must assign this decision to the implementation task that owns module.account-service."]
-                }],
-                "nfrs": [{
-                    "nfrId": "nfr-current-001",
-                    "category": "maintainability",
-                    "target": "Account workflow code remains traceable from accepted requirement detail to module, interface, and verification task.",
-                    "rationale": "The execution chain needs architecture evidence without repeating full architecture prose in every task.",
-                    "architectureRefs": {
-                        "decisions": ["adr-current-001"],
-                        "risks": ["risk-current-001"]
-                    },
-                    "verificationStrategy": "TaskResult architectureQualityEvidence cites the generated requirement and the task verification id."
-                }],
-                "risks": [{
-                    "riskId": "risk-current-001",
-                    "category": "maintainability",
-                    "severity": "medium",
-                    "likelihood": "medium",
-                    "impact": "A task could expand beyond the current account boundary and make review unable to distinguish owned architecture work.",
-                    "mitigation": "Assign the decision, NFR, and risk refs to the task write boundary and require task-level evidence.",
-                    "ownerArtifactRefs": {
-                        "modules": ["module.account-service"],
-                        "interfaces": ["api.account"],
-                        "decisions": ["adr-current-001"],
-                        "nfrs": ["nfr-current-001"]
-                    },
-                    "verificationHints": ["Review should fail approval if the architecture quality refs are not assigned to a task and evidenced."]
-                }]
-            },
+            "architectureQuality": architecture_quality,
             "handoff": {
                 "readyForTaskPlan": true,
                 "blockingReasons": [],
@@ -12340,6 +12397,76 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
         "content": content,
         "createdAt": "2026-06-24T10:00:00+08:00"
     })
+}
+
+fn complete_architecture_quality_template(mut quality: Value) -> Value {
+    for decision in quality
+        .get_mut("decisions")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let category = decision
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or("architecture_style")
+            .to_string();
+        decision["title"] = json!(format!("Current-phase {category} decision"));
+        decision["decision"] = json!(format!(
+            "Apply the accepted {category} boundary to its owning modules and interfaces."
+        ));
+        decision["alternativesConsidered"] = json!([{
+            "name": "Keep the boundary implicit",
+            "tradeoff": "Less explicit architecture work but weaker ownership and verification.",
+            "rejectedBecause": "The current-phase candidate facts require an implementation-facing boundary."
+        }]);
+        decision["consequences"] = json!({
+            "positive": ["Owning tasks can preserve and verify the boundary."],
+            "negative": ["Changes crossing the boundary require explicit coordination."],
+            "neutral": []
+        });
+        decision["verificationHints"] = json!([
+            "Verify changed files and tests against the owning module or interface boundary."
+        ]);
+    }
+    for nfr in quality
+        .get_mut("nfrs")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let category = nfr
+            .get("category")
+            .and_then(Value::as_str)
+            .unwrap_or("maintainability")
+            .to_string();
+        nfr["target"] = json!(format!(
+            "The current-phase {category} behavior remains bounded and observable under its declared condition."
+        ));
+        nfr["measurement"] = json!({
+            "indicator": format!("Observable {category} behavior matches the accepted architecture."),
+            "workloadOrCondition": "The current-phase owning module or interface is exercised.",
+            "evaluationBoundary": "Task verification and phase review."
+        });
+        nfr["verificationStrategy"] = json!(
+            "Use the owning task's verification evidence to evaluate the declared indicator."
+        );
+    }
+    for risk in quality
+        .get_mut("risks")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        risk["severity"] = json!("medium");
+        risk["likelihood"] = json!("medium");
+        risk["mitigation"] = json!(
+            "Implement the accepted owner boundary and verify the declared failure behavior."
+        );
+        risk["verificationHints"] =
+            json!(["Exercise or review the owned failure path and its observable result."]);
+    }
+    quality
 }
 
 fn frontend_surface_decision_candidate_json() -> Value {
@@ -12496,21 +12623,23 @@ fn architecture_section_candidate_with_workflow_closure_json(
                 "entityRefs": ["entity.account"],
                 "scopeRefs": ["scope_1"],
                 "acceptanceRefs": ["acc_1"],
+                "trigger": "工作人员提交开户操作。",
+                "actorRef": "audience_staff",
                 "entry": {
                     "type": "frontend_action",
                     "ref": "action_open_account"
                 },
-                "steps": [{
+                "happyPath": [{
                     "stepId": "step.submit-open-account",
-                    "actor": "工作人员",
                     "action": "提交开户表单",
-                    "interfaceRefs": ["api.account.open"],
-                    "stateMachineRefs": ["machine.account-status"]
+                    "interactionRef": "api.account.open",
+                    "stateMachineRefs": ["machine.account-status"],
+                    "stateEffects": ["账户状态变为正常"],
+                    "observableResult": "返回开户成功反馈并刷新账户列表。"
                 }],
-                "outcomes": [{
-                    "type": "success",
-                    "description": "返回开户成功反馈并刷新账户列表。"
-                }]
+                "businessBlockingPaths": [{"condition": "开户条件不满足", "response": "返回业务阻断原因", "recovery": "修正开户资料后重试"}],
+                "failurePaths": [{"failure": "账户保存失败", "impact": "开户不提交", "recovery": "存储恢复后重试", "observableResult": "返回不可用错误"}],
+                "successOutcome": "账户创建成功且列表显示新账户。"
             }]);
             candidate["content"]["stateMachines"] = json!([{
                 "machineId": "machine.account-status",

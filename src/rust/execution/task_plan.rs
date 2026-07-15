@@ -270,7 +270,6 @@ fn build_request_root(
     let runtime_closure_template = runtime_delivery_closure_task_template(aac);
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
-    let architecture_quality_template = architecture_quality_requirement_template(aac);
     let phase_api_interfaces =
         interfaces_for_refs(project_api_contract, &aac.current_phase_interface_refs);
     let api_contract_template = api_contract_requirement_template(&phase_api_interfaces);
@@ -327,10 +326,6 @@ fn build_request_root(
         output_contract["engineeringQualityRequirementTemplate"] =
             engineering_quality_template.clone();
     }
-    if !architecture_quality_template.is_null() {
-        output_contract["architectureQualityRequirementTemplate"] =
-            architecture_quality_template.clone();
-    }
     if !api_contract_template.is_null() {
         output_contract["apiContractRequirementTemplate"] = api_contract_template.clone();
     }
@@ -384,7 +379,6 @@ fn build_request_root(
                 &runtime_requirement_template,
                 &runtime_closure_template,
                 &engineering_quality_template,
-                &architecture_quality_template,
                 &api_contract_template,
                 &code_quality_template,
                 &code_quality_seed
@@ -426,7 +420,6 @@ fn taskplan_read_groups(
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
-    architecture_quality_template: &Value,
     api_contract_template: &Value,
     code_quality_template: &Value,
     code_quality_seed: &Value,
@@ -533,7 +526,6 @@ fn taskplan_read_groups(
                 runtime_requirement_template,
                 runtime_closure_template,
                 engineering_quality_template,
-                architecture_quality_template,
                 api_contract_template,
                 code_quality_template
             ))
@@ -547,7 +539,6 @@ fn taskplan_candidate_contract_fields(
     runtime_requirement_template: &Value,
     runtime_closure_template: &Value,
     engineering_quality_template: &Value,
-    architecture_quality_template: &Value,
     api_contract_template: &Value,
     code_quality_template: &Value,
 ) -> Vec<&'static str> {
@@ -573,9 +564,6 @@ fn taskplan_candidate_contract_fields(
     }
     if !engineering_quality_template.is_null() {
         fields.push("outputContract.engineeringQualityRequirementTemplate");
-    }
-    if !architecture_quality_template.is_null() {
-        fields.push("outputContract.architectureQualityRequirementTemplate");
     }
     if !api_contract_template.is_null() {
         fields.push("outputContract.apiContractRequirementTemplate");
@@ -829,6 +817,7 @@ where
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
     normalize_runtime_delivery_requirements(&mut tasks, &aac);
+    normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
     let engineering_quality_requirements =
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
     let architecture_quality_requirements =
@@ -3246,7 +3235,8 @@ fn requirement_detail_transfer(
             "interfaces": aac.interfaces,
             "userFlows": aac.user_flows,
             "stateMachines": aac.state_machines,
-            "frontendOperationPathDetails": frontend_operation_path_details(aac)
+            "frontendOperationPathDetails": frontend_operation_path_details(aac),
+            "architectureQuality": compact_architecture_quality(aac)
         },
         "workflowClosureRequirements": workflow_closure_requirements(aac),
         "conceptRefs": {
@@ -3259,6 +3249,34 @@ fn requirement_detail_transfer(
             "frontendExperienceRequirement": "Use when the task owns UI surfaces, workflows, states, bindings, or operation paths.",
             "runtimeDeliveryRequirement": "Use when the task touches build, start, runtime entry, static serving, generated artifacts, or runtime surface."
         }
+    })
+}
+
+fn compact_architecture_quality(aac: &ArchitectureArtifactContract) -> Value {
+    json!({
+        "decisions": aac.architecture_quality.decisions.iter().map(|decision| json!({
+            "decisionId": &decision.decision_id,
+            "category": &decision.category,
+            "decision": &decision.decision,
+            "ownerArtifactRefs": &decision.owner_artifact_refs,
+            "verificationHints": &decision.verification_hints
+        })).collect::<Vec<_>>(),
+        "nfrs": aac.architecture_quality.nfrs.iter().map(|nfr| json!({
+            "nfrId": &nfr.nfr_id,
+            "category": &nfr.category,
+            "target": &nfr.target,
+            "measurement": &nfr.measurement,
+            "ownerArtifactRefs": &nfr.owner_artifact_refs,
+            "verificationStrategy": &nfr.verification_strategy
+        })).collect::<Vec<_>>(),
+        "risks": aac.architecture_quality.risks.iter().map(|risk| json!({
+            "riskId": &risk.risk_id,
+            "category": &risk.category,
+            "impact": &risk.impact,
+            "mitigation": &risk.mitigation,
+            "ownerArtifactRefs": &risk.owner_artifact_refs,
+            "verificationHints": &risk.verification_hints
+        })).collect::<Vec<_>>()
     })
 }
 
@@ -3588,7 +3606,7 @@ pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) 
                 continue;
             }
         }
-        let steps = array_at(flow, "steps");
+        let steps = array_at(flow, "happyPath");
         if steps.is_empty() {
             continue;
         }
@@ -3622,10 +3640,9 @@ pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) 
         );
 
         for step in steps {
-            let mut candidate_interface_refs = string_array_at(step, "interfaceRefs");
-            if candidate_interface_refs.is_empty() {
-                candidate_interface_refs = string_array_at(flow, "interfaceRefs");
-            }
+            let candidate_interface_refs = string_at(step, "interactionRef")
+                .into_iter()
+                .collect::<Vec<_>>();
             let executable_interfaces = candidate_interface_refs
                 .iter()
                 .filter_map(|interface_ref| interface_by_id.get(interface_ref.as_str()).copied())
@@ -3659,7 +3676,7 @@ pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) 
                 "entry": flow.get("entry").cloned().unwrap_or(Value::Null),
                 "derivation": {
                     "source": "aac_frontend_surface_userflow_interface",
-                    "rule": "Generated from AAC frontendExperience surfaces or operationPaths, user interaction flow steps, and executable interfaces with request/response shape."
+                    "rule": "Generated from AAC frontendExperience surfaces or operationPaths, structured user-flow happy-path steps, and executable interfaces with request/response shape."
                 },
                 "requiredDataBindingMode": "wired",
                 "satisfiedDataBindingModes": ["wired"],
@@ -3873,11 +3890,11 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "nonSelectionRule": "Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
         },
         "architectureQualityRules": {
-            "requirementSource": "outputContract.architectureQualityRequirementTemplate",
-            "architectureQualitySource": "sourceRefs.architectureArtifactContractRef#/architectureQuality",
-            "referenceRule": "Use task.writeBoundary.artifactRefs.decisions, nfrs, and risks to assign current-phase architecture quality obligations. Do not inline full ADR, NFR, or risk objects inside tasks.",
-            "assignmentRule": "Every current-phase decision, NFR, and risk that affects implementation or verification should be assigned to at least one task that owns the related module, interface, data model, runtime surface, or workflow.",
-            "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level architectureQualityRequirements and task architectureQualityRequirementRefs from task artifact refs.",
+            "requirementSource": "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality plus task-owned modules and interfaces",
+            "architectureQualitySource": "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality",
+            "referenceRule": "Do not write task.writeBoundary.artifactRefs.decisions, nfrs, or risks and do not inline full ADR, NFR, or risk objects inside tasks. Loom derives those refs from the accepted architecture ownerArtifactRefs and the task-owned modules/interfaces.",
+            "assignmentRule": "Tasks must identify the modules and interfaces they own. Loom uses those artifact refs to assign every applicable architecture decision, NFR, and risk deterministically.",
+            "acceptNormalization": "loom.taskPlanAcceptFile derives architecture quality artifact refs, top-level architectureQualityRequirements, and task architectureQualityRequirementRefs from accepted architecture ownership.",
             "verificationRule": "Assigned tasks must include verificationIntents whose summaries can prove the referenced architecture decision, NFR, or risk mitigation was respected."
         },
         "apiContractRules": {
@@ -3938,33 +3955,6 @@ fn engineering_quality_requirement_template(
         "riskFieldKinds": persistence_risk_field_kinds(),
         "verificationObligations": persistence_verification_obligations(),
         "taskRefRule": "Loom attaches this generated requirement through engineeringQualityRequirementRefs during accept; agents must not write that field or duplicate the full object in each task."
-    })
-}
-
-fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
-    if aac.architecture_quality.decisions.is_empty()
-        && aac.architecture_quality.nfrs.is_empty()
-        && aac.architecture_quality.risks.is_empty()
-    {
-        return Value::Null;
-    }
-    json!({
-        "requirementId": "aqr-current-001",
-        "kind": "architecture_quality",
-        "decisionRefs": aac.architecture_quality.decisions.iter().map(|item| item.decision_id.clone()).collect::<Vec<_>>(),
-        "nfrRefs": aac.architecture_quality.nfrs.iter().map(|item| item.nfr_id.clone()).collect::<Vec<_>>(),
-        "riskRefs": aac.architecture_quality.risks.iter().map(|item| item.risk_id.clone()).collect::<Vec<_>>(),
-        "implementationObligations": [
-            "Respect the referenced architecture decision in changed modules, interfaces, data model, runtime, and workflow code.",
-            "Implement the referenced risk mitigation when the task owns the affected artifact.",
-            "Keep the referenced NFR verifiable through task verification evidence when it applies to changed code."
-        ],
-        "verificationObligations": [
-            "Use task.verificationIntents as the verification id source.",
-            "TaskResult architectureQualityEvidence must cite requirementId and verificationIds for the task-owned architecture quality refs.",
-            "Verification summaries should state how implementation respected the referenced decision, NFR, or risk mitigation."
-        ],
-        "taskRefRule": "Loom attaches generated requirements through architectureQualityRequirementRefs during accept; agents must not write that field or duplicate full decisions, NFRs, or risks inside every task."
     })
 }
 
@@ -4076,6 +4066,109 @@ fn normalize_architecture_quality_requirements(
     requirements
 }
 
+fn normalize_architecture_quality_artifact_refs(
+    aac: &ArchitectureArtifactContract,
+    tasks: &mut [TaskDefinition],
+) {
+    for task in tasks {
+        let task_modules = task
+            .write_boundary
+            .artifact_refs
+            .modules
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let task_interfaces = task
+            .write_boundary
+            .artifact_refs
+            .interfaces
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        task.write_boundary.artifact_refs.decisions = aac
+            .architecture_quality
+            .decisions
+            .iter()
+            .filter(|decision| {
+                owner_refs_intersect(
+                    &decision.owner_artifact_refs.modules,
+                    &decision.owner_artifact_refs.interfaces,
+                    &task_modules,
+                    &task_interfaces,
+                )
+            })
+            .map(|decision| decision.decision_id.clone())
+            .collect();
+        task.write_boundary.artifact_refs.nfrs = aac
+            .architecture_quality
+            .nfrs
+            .iter()
+            .filter(|nfr| {
+                owner_refs_intersect(
+                    &nfr.owner_artifact_refs.modules,
+                    &nfr.owner_artifact_refs.interfaces,
+                    &task_modules,
+                    &task_interfaces,
+                )
+            })
+            .map(|nfr| nfr.nfr_id.clone())
+            .collect();
+        task.write_boundary.artifact_refs.risks = aac
+            .architecture_quality
+            .risks
+            .iter()
+            .filter(|risk| {
+                owner_refs_intersect(
+                    &risk.owner_artifact_refs.modules,
+                    &risk.owner_artifact_refs.interfaces,
+                    &task_modules,
+                    &task_interfaces,
+                ) || risk
+                    .owner_artifact_refs
+                    .decisions
+                    .iter()
+                    .any(|decision_id| {
+                        aac.architecture_quality.decisions.iter().any(|decision| {
+                            decision.decision_id == *decision_id
+                                && owner_refs_intersect(
+                                    &decision.owner_artifact_refs.modules,
+                                    &decision.owner_artifact_refs.interfaces,
+                                    &task_modules,
+                                    &task_interfaces,
+                                )
+                        })
+                    })
+                    || risk.owner_artifact_refs.nfrs.iter().any(|nfr_id| {
+                        aac.architecture_quality.nfrs.iter().any(|nfr| {
+                            nfr.nfr_id == *nfr_id
+                                && owner_refs_intersect(
+                                    &nfr.owner_artifact_refs.modules,
+                                    &nfr.owner_artifact_refs.interfaces,
+                                    &task_modules,
+                                    &task_interfaces,
+                                )
+                        })
+                    })
+            })
+            .map(|risk| risk.risk_id.clone())
+            .collect();
+    }
+}
+
+fn owner_refs_intersect(
+    owner_modules: &[String],
+    owner_interfaces: &[String],
+    task_modules: &BTreeSet<String>,
+    task_interfaces: &BTreeSet<String>,
+) -> bool {
+    owner_modules
+        .iter()
+        .any(|owner| task_modules.contains(owner))
+        || owner_interfaces
+            .iter()
+            .any(|owner| task_interfaces.contains(owner))
+}
+
 fn normalize_api_contract_requirements(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
@@ -4118,7 +4211,11 @@ fn normalize_api_contract_requirements(
                             string_at(flow, "flowId").as_deref() == Some(flow_ref.as_str())
                         })
                 })
-                .flat_map(|flow| string_array_at(flow, "interfaceRefs"))
+                .flat_map(|flow| {
+                    array_at(flow, "happyPath")
+                        .into_iter()
+                        .filter_map(|step| string_at(step, "interactionRef"))
+                })
                 .filter(|interface_ref| {
                     http_api_refs.contains(interface_ref)
                         && allowed_interface_refs.contains(interface_ref)
@@ -5035,6 +5132,101 @@ mod tests {
             "codeQualityRequirementRefs": []
         }))
         .expect("browser task")
+    }
+
+    #[test]
+    fn architecture_quality_refs_are_derived_from_owner_artifacts() {
+        let aac: ArchitectureArtifactContract = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "architectureArtifactContractId": "aac-1",
+            "deliveryId": "delivery-1",
+            "phaseId": "phase-1",
+            "status": "ready",
+            "source": {"planningGenerationContractId": "pgc-1", "technicalBaselineId": "tbr-1"},
+            "engineeringBoundary": {},
+            "modules": [{"moduleId": "module-orders"}],
+            "dataModel": {},
+            "interfaces": [],
+            "userFlows": [],
+            "stateMachines": [],
+            "acceptanceMatrix": [],
+            "detailCoverage": [],
+            "architectureQuality": {
+                "decisions": [{
+                    "decisionId": "adr-orders",
+                    "category": "module_boundary",
+                    "title": "Own order behavior in one module",
+                    "status": "accepted",
+                    "context": "The current phase changes order behavior.",
+                    "decision": "The order module owns its behavior.",
+                    "alternativesConsidered": [{"name": "shared service", "tradeoff": "less ownership", "rejectedBecause": "it weakens invariants"}],
+                    "consequences": {"positive": ["clear ownership"], "negative": ["explicit mapping"], "neutral": []},
+                    "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                    "ownerArtifactRefs": {"modules": ["module-orders"], "interfaces": []},
+                    "verificationHints": ["review module ownership"]
+                }],
+                "nfrs": [{
+                    "nfrId": "nfr-orders",
+                    "category": "maintainability",
+                    "source": "derived_minimum",
+                    "target": "Order rules remain in the order module.",
+                    "rationale": "Ownership prevents drift.",
+                    "measurement": {"indicator": "rule location", "workloadOrCondition": "order writes", "evaluationBoundary": "review"},
+                    "sourceRefs": {"scopeRefs": ["scope-1"], "acceptanceRefs": [], "requirementDetailRefs": []},
+                    "architectureRefs": {"decisions": ["adr-orders"], "risks": ["risk-orders"]},
+                    "ownerArtifactRefs": {"modules": ["module-orders"], "interfaces": []},
+                    "verificationStrategy": "Review changed order files."
+                }],
+                "risks": [{
+                    "riskId": "risk-orders",
+                    "category": "maintainability",
+                    "severity": "medium",
+                    "likelihood": "medium",
+                    "impact": "Rules can drift.",
+                    "mitigation": "Keep one owner.",
+                    "ownerArtifactRefs": {"modules": [], "interfaces": [], "decisions": ["adr-orders"], "nfrs": ["nfr-orders"]},
+                    "verificationHints": ["review ownership"]
+                }]
+            },
+            "handoff": {"readyForTaskPlan": true, "blockingReasons": [], "nextNode": "task_plan"},
+            "createdAt": "2026-07-15T00:00:00Z",
+            "updatedAt": "2026-07-15T00:00:00Z"
+        }))
+        .expect("architecture artifact");
+        let compact_quality = compact_architecture_quality(&aac);
+        assert_eq!(
+            compact_quality["decisions"][0]["decision"],
+            json!("The order module owns its behavior.")
+        );
+        assert_eq!(
+            compact_quality["nfrs"][0]["measurement"]["evaluationBoundary"],
+            json!("review")
+        );
+        assert_eq!(
+            compact_quality["risks"][0]["mitigation"],
+            json!("Keep one owner.")
+        );
+        assert!(compact_quality["decisions"][0]
+            .get("alternativesConsidered")
+            .is_none());
+        let mut owned = browser_task(1);
+        owned.write_boundary.artifact_refs.modules = vec!["module-orders".to_string()];
+        let mut unrelated = browser_task(1);
+        unrelated.task_id = "task-unrelated".to_string();
+        unrelated.write_boundary.artifact_refs.modules = vec!["module-other".to_string()];
+        let mut tasks = vec![owned, unrelated];
+
+        normalize_architecture_quality_artifact_refs(&aac, &mut tasks);
+
+        assert_eq!(
+            tasks[0].write_boundary.artifact_refs.decisions,
+            ["adr-orders"]
+        );
+        assert_eq!(tasks[0].write_boundary.artifact_refs.nfrs, ["nfr-orders"]);
+        assert_eq!(tasks[0].write_boundary.artifact_refs.risks, ["risk-orders"]);
+        assert!(tasks[1].write_boundary.artifact_refs.decisions.is_empty());
+        assert!(tasks[1].write_boundary.artifact_refs.nfrs.is_empty());
+        assert!(tasks[1].write_boundary.artifact_refs.risks.is_empty());
     }
 
     #[test]

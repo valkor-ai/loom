@@ -87,10 +87,13 @@ pub struct TaskArtifactRefs {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state_machines: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub decisions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub nfrs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
     pub risks: Vec<String>,
 }
 

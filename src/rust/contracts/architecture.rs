@@ -211,6 +211,15 @@ pub struct ArchitectureQualitySourceRefs {
     pub requirement_detail_refs: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchitectureDecisionOwnerRefs {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchitectureDecision {
@@ -224,6 +233,7 @@ pub struct ArchitectureDecision {
     pub alternatives_considered: Vec<ArchitectureDecisionAlternative>,
     pub consequences: ArchitectureDecisionConsequences,
     pub source_refs: ArchitectureQualitySourceRefs,
+    pub owner_artifact_refs: ArchitectureDecisionOwnerRefs,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_hints: Vec<String>,
 }
@@ -239,12 +249,33 @@ pub struct ArchitectureNfrRefs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct ArchitectureNfrMeasurement {
+    pub indicator: String,
+    pub workload_or_condition: String,
+    pub evaluation_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchitectureNfrOwnerRefs {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureNfr {
     pub nfr_id: String,
     pub category: String,
+    pub source: String,
     pub target: String,
     pub rationale: String,
+    pub measurement: ArchitectureNfrMeasurement,
+    pub source_refs: ArchitectureQualitySourceRefs,
     pub architecture_refs: ArchitectureNfrRefs,
+    pub owner_artifact_refs: ArchitectureNfrOwnerRefs,
     pub verification_strategy: String,
 }
 

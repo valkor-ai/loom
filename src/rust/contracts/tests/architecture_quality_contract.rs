@@ -2,7 +2,8 @@ use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use contracts::{
     ArchitectureArtifactContract, ArchitectureDecision, ArchitectureDecisionAlternative,
-    ArchitectureDecisionConsequences, ArchitectureNfr, ArchitectureNfrRefs, ArchitectureQuality,
+    ArchitectureDecisionConsequences, ArchitectureDecisionOwnerRefs, ArchitectureNfr,
+    ArchitectureNfrMeasurement, ArchitectureNfrOwnerRefs, ArchitectureNfrRefs, ArchitectureQuality,
     ArchitectureQualitySourceRefs, ArchitectureRisk, ArchitectureRiskOwnerRefs,
 };
 
@@ -63,6 +64,60 @@ fn tech_architecture_references_do_not_use_org_capacity_as_decision_factor() {
 }
 
 #[test]
+fn tech_architecture_references_cover_structural_landing_without_mcp_workflow_duplication() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("plugins/shared/loom/references/tech/arch");
+    let expected = [
+        ("core.md", ["Architecture Judgment", "Decision Discipline"]),
+        (
+            "patterns.md",
+            ["Hybrid Or Custom Structure", "Pattern Decision Evidence"],
+        ),
+        (
+            "system.md",
+            [
+                "Context And Trust Boundaries",
+                "Capacity And Growth Triggers",
+            ],
+        ),
+        (
+            "data.md",
+            ["Concurrency And Evolution", "Verification Evidence"],
+        ),
+        ("nfr.md", ["measurement context", "workload or condition"]),
+        (
+            "adr.md",
+            ["Decision Quality", "At least one positive and one negative"],
+        ),
+        (
+            "failure.md",
+            ["state before the failure", "correlation evidence"],
+        ),
+    ];
+    for (file, required) in expected {
+        let content = fs::read_to_string(root.join(file)).unwrap();
+        for phrase in required {
+            assert!(content.contains(phrase), "{file} missing {phrase}");
+        }
+        for forbidden in [
+            "## Repair Ownership",
+            "## Output Expectations",
+            "MCP",
+            "TaskPlan",
+            "task plan",
+            "read group",
+            "repair ownership",
+        ] {
+            assert!(
+                !content.contains(forbidden),
+                "{file} duplicates MCP workflow section {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
 fn architecture_quality_contract_serializes_required_decision_nfr_and_risk_ids() {
     let quality = ArchitectureQuality {
         decisions: vec![ArchitectureDecision {
@@ -89,16 +144,35 @@ fn architecture_quality_contract_serializes_required_decision_nfr_and_risk_ids()
                 acceptance_refs: vec!["acc_1".to_string()],
                 requirement_detail_refs: vec!["detail_1".to_string()],
             },
+            owner_artifact_refs: ArchitectureDecisionOwnerRefs {
+                modules: vec!["module_1".to_string()],
+                interfaces: vec!["interface_1".to_string()],
+            },
             verification_hints: vec!["TaskPlan should assign module-boundary tasks.".to_string()],
         }],
         nfrs: vec![ArchitectureNfr {
             nfr_id: "nfr-current-001".to_string(),
             category: "maintainability".to_string(),
+            source: "derived_minimum".to_string(),
             target: "Current phase code keeps domain validation in the owning module.".to_string(),
             rationale: "Later tasks need stable boundaries.".to_string(),
+            measurement: ArchitectureNfrMeasurement {
+                indicator: "Business validation remains in the owning module.".to_string(),
+                workload_or_condition: "Current-phase write operations.".to_string(),
+                evaluation_boundary: "Static review and task verification.".to_string(),
+            },
+            source_refs: ArchitectureQualitySourceRefs {
+                scope_refs: vec!["scope_1".to_string()],
+                acceptance_refs: vec!["acc_1".to_string()],
+                requirement_detail_refs: vec!["detail_1".to_string()],
+            },
             architecture_refs: ArchitectureNfrRefs {
                 decisions: vec!["adr-current-001".to_string()],
                 risks: vec!["risk-current-001".to_string()],
+            },
+            owner_artifact_refs: ArchitectureNfrOwnerRefs {
+                modules: vec!["module_1".to_string()],
+                interfaces: vec!["interface_1".to_string()],
             },
             verification_strategy: "Review changed files for boundary ownership.".to_string(),
         }],

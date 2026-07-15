@@ -2,37 +2,37 @@
 
 Use this file when Loom architecture work needs to turn confirmed scope, technical baseline, and repository context into implementation-facing decisions.
 
-Loom architecture work is not a standalone design essay. It is a delivery contract that must be carried into planning, implementation, evidence, review, and repair.
+Loom architecture work is not a standalone design essay. It is an implementation-facing design contract whose ownership, behavior, data, runtime, and failure boundaries must remain observable in the delivered system.
 
-## Operating Model
+## Architecture Judgment
 
-1. Use the confirmed requirement scope, technical baseline, and repository context as source facts.
-2. Convert those source facts into implementation-facing architecture constraints.
-3. Keep Architecture section artifacts compact, decision-oriented, and consumable by planning and implementation.
-4. Use references to make concrete decisions rather than copying reference prose into delivery artifacts.
+1. Start from confirmed current-phase behavior, constraints, and existing repository boundaries.
+2. Select the smallest structure that preserves ownership, invariants, failure recovery, and runtime closure.
+3. Make every boundary observable in code ownership, an interface, a state transition, a data rule, or a runtime surface.
+4. Treat future extensibility as a consequence of a current decision, not as permission to implement speculative layers.
 
 ## Required Architecture Assets
 
 Production-grade Loom architecture output must produce implementation-facing assets:
 
-| Asset | Purpose | Used By |
+| Asset | Purpose | Engineering Effect |
 |---|---|---|
-| Architecture style | Explains the selected structural approach for the current phase. | Task grouping and implementation boundaries. |
-| Module boundary | Defines responsibilities and ownership for code changes. | Task write boundaries and review scope. |
-| Data architecture | Defines ownership, invariants, transaction boundaries, and migration impact for the already selected stack. | Persistence tasks and engineering quality checks. |
-| Behavior model | Defines workflows, state transitions, blocking paths, and success outcomes. | Implementation and runtime/UI verification. |
-| Runtime boundary | Defines build/start/probe/environment expectations. | Runtime delivery tasks and deploy. |
-| ADR decision | Captures context, decision, alternatives, consequences, and verification hints. | Planning and implementation quality requirements. |
-| NFR target | Captures concrete quality targets and verification strategy. | Task verification and review. |
-| Risk/failure mode | Captures impact, mitigation, owner artifacts, and verification hints. | Task assignment and review. |
+| Architecture style | Explains the selected structural approach for the current phase. | Establishes the composition and dependency rules implementation must preserve. |
+| Module boundary | Defines responsibilities and ownership for code changes. | Keeps behavior, state, and dependencies inside explicit owners. |
+| Data architecture | Defines ownership, invariants, transaction boundaries, and migration impact for the already selected stack. | Governs persistence mappings, writes, reads, and schema evolution. |
+| Behavior model | Defines workflows, state transitions, blocking paths, and success outcomes. | Makes success, rejection, failure, and state effects implementable. |
+| Runtime boundary | Defines build/start/probe/environment expectations. | Makes runtime entry points and dependency behavior explicit. |
+| ADR decision | Captures context, decision, alternatives, consequences, and verification hints. | Preserves the selected trade-off and its observable consequences. |
+| NFR target | Captures concrete quality targets and verification strategy. | Turns quality claims into measurable implementation obligations. |
+| Risk/failure mode | Captures impact, mitigation, owner artifacts, and verification hints. | Connects failure exposure to an owned mitigation and evidence signal. |
 
-## Contract Discipline
+## Decision Discipline
 
-- Architecture sections should use compact ids and references, not long prose repeated across tasks.
-- Coverage should include decision, NFR, and risk records with stable ids.
-- Task planning should reference architecture quality items by id. Do not inline full ADR, NFR, or risk records inside every task.
-- Implementation evidence should mention only the architecture quality items that task owned.
-- Review should identify whether a gap belongs to architecture structure, task assignment, or implementation evidence.
+- A decision must change implementation ownership, behavior, data consistency, runtime shape, security, operability, or verification.
+- Name the forces that distinguish the selected structure from realistic alternatives.
+- Define where the rule is enforced and what observable evidence proves it.
+- Keep related decisions coherent: a service split without data ownership, failure behavior, and runtime independence is not a complete decision.
+- Do not create an ADR merely to restate a framework or database already selected by the technical baseline.
 
 ## Decision Inputs
 
@@ -50,19 +50,19 @@ Use these inputs. Ignore unselected or unavailable context.
 ## Must Not
 
 - Do not select a database, language, or framework in Architecture when Technical Baseline already owns that decision.
-- Do not produce generic "scalable, maintainable, secure" claims without a task-verifiable target.
+- Do not produce generic "scalable, maintainable, secure" claims without an observable target and evaluation boundary.
 - Do not write future phase capabilities as current-phase modules.
 - Do not create abstraction layers unless they support current behavior, verification, or isolation.
 - Do not leave decisions, NFRs, or risks empty just because the phase looks small.
 
 ## Minimum Quality Bar
 
-A usable Architecture section lets a later agent answer:
+A usable Architecture section lets an implementation reader answer:
 
-- Which module or boundary should this task edit?
-- Which data invariants must this task preserve?
+- Which module or boundary owns the implementation?
+- Which data invariants must the implementation preserve?
 - Which interface or workflow proves the behavior?
-- Which architecture decision or risk is this task responsible for?
+- Which architecture decision or risk governs that owner?
 - Which verification evidence proves the architecture constraint is respected?
 
-If those answers are missing, repair the architecture output instead of pushing ambiguity into implementation.
+If those answers are missing, the architecture is incomplete; do not displace the ambiguity into implementation.

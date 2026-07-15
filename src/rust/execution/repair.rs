@@ -5,10 +5,10 @@ use std::{
 
 use contracts::{
     api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
-    ui_quality_enum_refs, ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
-    ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
-    TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    ui_quality_enum_refs, ui_surface_decision_enum_refs, ArchitectureSectionGroup,
+    PlanningGenerationContract, TaskDefinition, TaskPlan, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanOutlineCandidateAgentWritable, TaskPlanRun, TaskRunStatus, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, DomainDispatcher, ExecuteEditBoundary,
@@ -1222,10 +1222,6 @@ fn materialize_taskplan_repair_action(
         &contract_fields,
         "outputContract.engineeringQualityRequirementTemplate",
     );
-    let architecture_quality_template = value_field(
-        &contract_fields,
-        "outputContract.architectureQualityRequirementTemplate",
-    );
     let api_contract_template = value_field(
         &contract_fields,
         "outputContract.apiContractRequirementTemplate",
@@ -1319,10 +1315,6 @@ fn materialize_taskplan_repair_action(
     if !engineering_quality_template.is_null() {
         taskplan_repair_write_contract_fields
             .push("outputContract.engineeringQualityRequirementTemplate");
-    }
-    if !architecture_quality_template.is_null() {
-        taskplan_repair_write_contract_fields
-            .push("outputContract.architectureQualityRequirementTemplate");
     }
     if !api_contract_template.is_null() {
         taskplan_repair_write_contract_fields.push("outputContract.apiContractRequirementTemplate");
@@ -1448,16 +1440,6 @@ fn materialize_taskplan_repair_action(
             .insert(
                 "engineeringQualityRequirementTemplate".to_string(),
                 engineering_quality_template,
-            );
-    }
-    if !architecture_quality_template.is_null() {
-        request_root
-            .pointer_mut("/outputContract")
-            .and_then(Value::as_object_mut)
-            .expect("taskplan repair outputContract")
-            .insert(
-                "architectureQualityRequirementTemplate".to_string(),
-                architecture_quality_template,
             );
     }
     if !api_contract_template.is_null() {
@@ -1722,7 +1704,15 @@ fn materialize_architecture_repair_action(
         root,
         &request_id,
         &frontend_experience_source,
-        &context_projection,
+        planning_contract.as_ref().ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "architecture repair source is missing its planning contract".to_string(),
+            )
+        })?,
+        source_refs
+            .get("previousRuntimeDeliveryRef")
+            .and_then(Value::as_str)
+            .is_some(),
         &api_quality_seed,
     )?;
     let candidate_files = section_outputs
@@ -2032,21 +2022,6 @@ fn ui_quality_seed_from_fields(
     }))
 }
 
-fn frontend_source_refs_template(frontend_experience_source: &Value) -> Value {
-    let authority_ref = frontend_experience_source
-        .get("confirmedFrontendExperienceRef")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            frontend_experience_source
-                .get("currentFrontendExperienceRef")
-                .and_then(Value::as_str)
-        })
-        .unwrap_or_default();
-    json!({
-        "brainstormFrontendExperienceRef": authority_ref
-    })
-}
-
 fn read_project_json_value(
     project_root: &Path,
     relative: &str,
@@ -2256,7 +2231,8 @@ fn build_architecture_repair_section_outputs(
     project_root: &Path,
     request_id: &str,
     frontend_experience_source: &Value,
-    context_projection: &Value,
+    planning_contract: &PlanningGenerationContract,
+    has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
 ) -> Result<Vec<Value>, state::store::StateError> {
     Ok(ARCHITECTURE_SECTION_ORDER
@@ -2267,540 +2243,37 @@ fn build_architecture_repair_section_outputs(
                 .join("agent-writable")
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
-            let result_template = architecture_repair_section_result_template(
+            let result_template = architecture::section_result_template(
                 *section,
+                has_previous_runtime_delivery,
                 frontend_experience_source,
-                context_projection,
-                api_quality_seed
+                planning_contract,
+                api_quality_seed,
             );
-            let schema_shape = architecture_repair_section_schema_shape(&result_template["content"]);
-            let mut output = json!({
+            let output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
                 "schemaRef": format!("architecture-section-{}-v1", section_name(*section)),
-                "schemaShape": schema_shape,
+                "schemaShape": architecture::section_schema_shape(
+                    *section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
                 "resultTemplate": result_template,
-                "enumRefs": {
-                    "section": ARCHITECTURE_SECTION_ORDER,
-                    "status": ["ready", "blocked"],
-                    "coverageStatus": ["covered", "partial", "not_applicable", "deferred", "uncovered"],
-                    "acceptancePriority": ["must", "should", "could"],
-                    "coverageArtifactType": COVERAGE_ARTIFACT_TYPES,
-                    "uiQuality": ui_quality_enum_refs(),
-                    "uiSurfaceDecision": ui_surface_decision_enum_refs()
-                },
-                "generationRules": [
-                    format!("Write only the {} section candidate for this request.", section_name(*section)),
-                    "Do not write the final AAC JSON; Rust assembles it after coverage submit."
-                ]
+                "enumRefs": architecture::section_enum_refs(
+                    *section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
+                "generationRules": architecture::section_generation_rules(
+                    *section,
+                    has_previous_runtime_delivery,
+                    api_quality_seed,
+                ),
             });
-            if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
-                output["enumRefs"]["apiQuality"] = api_quality_enum_refs();
-            }
-            if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
-                output["generationRules"] = json!([
-                    "Write only the frontend_experience section candidate for this repair request.",
-                    "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.",
-                    "For custom mode, fill nearestKnownPatterns plus complete semanticFacts, layoutModel, regionModel, actionModel, stateModel, compositionConstraints, and contentBoundary. Custom is stricter than known/hybrid, not a relaxed fallback.",
-                    "Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside surfaceDecisionCandidate. MCP owns reference planning and uiSurfaceDecisionContract.qualityRules derivation during submit.",
-                    "Do not write old UI quality contract fields or legacy UI self-check fields. uiSurfaceDecisionContract is MCP-derived from surfaceDecisionCandidate.",
-                    "Do not write the final AAC JSON; Rust assembles it after coverage submit."
-                ]);
-            }
             Ok(output)
         })
         .collect::<Result<Vec<_>, state::store::StateError>>()?)
-}
-
-fn architecture_repair_section_result_template(
-    section: ArchitectureSectionGroup,
-    frontend_experience_source: &Value,
-    context_projection: &Value,
-    api_quality_seed: &Value,
-) -> Value {
-    json!({
-        "status": "ready",
-        "content": architecture_repair_section_content_template(
-            section,
-            frontend_experience_source,
-            context_projection,
-            api_quality_seed
-        ),
-        "blockedReasons": []
-    })
-}
-
-fn architecture_repair_section_schema_shape(content_shape: &Value) -> Value {
-    json!({
-        "status": "ready | blocked",
-        "content": content_shape,
-        "blockedReasons": [{
-            "code": "string",
-            "message": "string",
-            "nextNode": "string"
-        }]
-    })
-}
-
-fn architecture_repair_domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
-    if api_quality_seed.is_null() {
-        return json!([]);
-    }
-    json!([{
-        "interfaceId": "api_current_001",
-        "name": "Current phase API or service interface",
-        "type": "http_api",
-        "resource": "",
-        "operationKind": "create",
-        "method": "POST",
-        "path": "/api/current-resources",
-        "requestSchema": [{
-            "field": "replace_with_request_field",
-            "required": true,
-            "kind": "string",
-            "validation": "business validation rule"
-        }],
-        "responseSchema": [{
-            "field": "id",
-            "required": true,
-            "kind": "identifier",
-            "meaning": "Created or affected resource id"
-        }],
-        "statusCodes": {
-            "success": [201],
-            "validation": [400, 422],
-            "businessConflict": [409],
-            "notFound": [404],
-            "auth": [],
-            "rateLimit": [],
-            "serviceUnavailable": [],
-            "serverError": [500]
-        },
-        "errorSchema": [{
-            "field": "message",
-            "required": true,
-            "kind": "user_actionable_message"
-        }],
-        "paginationPolicy": {
-            "strategy": "not_applicable",
-            "requestFields": [],
-            "responseFields": []
-        },
-        "authPolicy": {
-            "required": "not_applicable",
-            "actorRefs": [],
-            "permissionRefs": []
-        },
-        "contractFileRefs": [],
-        "idempotencyPolicy": {
-            "required": false,
-            "keyHeader": "",
-            "duplicateBehavior": ""
-        },
-        "cachePolicy": {
-            "strategy": "not_applicable",
-            "validators": []
-        },
-        "conditionalRequestPolicy": {
-            "required": false,
-            "staleUpdateStatus": null
-        },
-        "rateLimitPolicy": {
-            "applies": false,
-            "status": null,
-            "headers": []
-        },
-        "retryPolicy": {
-            "retryableStatuses": [],
-            "retryAfterHeader": false
-        },
-        "requestIdPolicy": {
-            "header": "",
-            "includedInErrorBody": false
-        },
-        "scopeRefs": [],
-        "acceptanceRefs": [],
-        "requirementDetailRefs": []
-    }])
-}
-
-fn architecture_repair_section_content_template(
-    section: ArchitectureSectionGroup,
-    frontend_experience_source: &Value,
-    context_projection: &Value,
-    api_quality_seed: &Value,
-) -> Value {
-    match section {
-        ArchitectureSectionGroup::Foundation => json!({
-            "engineeringBoundary": {
-                "summary": "",
-                "applications": [{
-                    "applicationId": "app_1",
-                    "name": "",
-                    "kind": "",
-                    "rootPath": "."
-                }],
-                "modules": [{
-                    "moduleId": "module_1",
-                    "name": "",
-                    "scopeRefs": [],
-                    "acceptanceRefs": [],
-                    "summary": ""
-                }],
-                "applicationInteractions": []
-            },
-            "modules": [{
-                "moduleId": "module_1",
-                "name": "",
-                "responsibility": "",
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
-        }),
-        ArchitectureSectionGroup::DomainContract => json!({
-            "dataModel": {
-                "entities": [{
-                    "entityId": "entity_1",
-                    "name": "",
-                    "fields": [],
-                    "constraints": [],
-                    "scopeRefs": [],
-                    "acceptanceRefs": []
-                }],
-                "relationships": [],
-                "constraints": []
-            },
-            "interfaces": architecture_repair_domain_contract_interfaces_template(api_quality_seed)
-        }),
-        ArchitectureSectionGroup::Behavior => json!({
-            "userFlows": [{
-                "flowId": "flow_1",
-                "name": "",
-                "steps": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }],
-            "stateMachines": [{
-                "machineId": "state_machine_1",
-                "name": "",
-                "states": [],
-                "transitions": [],
-                "scopeRefs": [],
-                "acceptanceRefs": []
-            }]
-        }),
-        ArchitectureSectionGroup::FrontendExperience => json!({
-            "frontendExperience": {
-                "required": true,
-                "experienceLevel": "usable_internal_product",
-                "surfaces": [{
-                    "surfaceId": "surface_1",
-                    "name": "",
-                    "purpose": "",
-                    "audienceRefs": []
-                }],
-                "dataViews": [{
-                    "viewId": "view_1",
-                    "name": "",
-                    "fields": [],
-                    "sourceRefs": []
-                }],
-                "actions": [{
-                    "actionId": "action_1",
-                    "label": "",
-                    "entryPoint": "",
-                    "sourceRefs": []
-                }],
-                "operationPaths": [{
-                    "pathId": "path_1",
-                    "name": "",
-                    "surfaceRef": "surface_1",
-                    "dataViewRefs": ["view_1"],
-                    "actionRefs": ["action_1"],
-                    "sourceRefs": []
-                }],
-                "uiSurfaceRegistry": {
-                    "registryId": "ui-registry-1",
-                    "selectionRule": "Use this registry as the source for TaskPlan frontendExperienceRequirement execution guidance. Each frontend task should receive only the surfaces, data views, actions, operation paths, states, and bindings it owns.",
-                    "surfaces": [{
-                        "surfaceId": "surface_1",
-                        "surfaceRole": "page",
-                        "businessPurpose": "",
-                        "productIntent": {
-                            "userRole": "",
-                            "businessObject": "",
-                            "primaryJob": "",
-                            "successOutcome": ""
-                        },
-                        "compositionModel": {
-                            "requiredRegions": [
-                                "business navigation or local context",
-                                "task-relevant data region",
-                                "task-relevant action region",
-                                "scoped feedback region"
-                            ],
-                            "forbiddenRegions": [
-                                "decorative or explanatory region that displaces the task workflow"
-                            ],
-                            "primaryRegion": "task-relevant data or form region",
-                            "supportingRegions": [
-                                "navigation/context",
-                                "detail/summary",
-                                "feedback"
-                            ]
-                        },
-                        "informationModel": {
-                            "mustShow": [
-                                "business object identity",
-                                "business object status",
-                                "fields required to complete the task"
-                            ],
-                            "scanPriority": [
-                                "identity",
-                                "status",
-                                "decision fields",
-                                "available actions"
-                            ],
-                            "identityFields": [],
-                            "statusFields": [],
-                            "longContentPolicy": "Preserve scanability with truncation, wrapping, drill-down, or responsive reflow based on the selected scenario."
-                        },
-                        "actionModel": {
-                            "primaryActions": ["task-owned primary action"],
-                            "contextualActions": [],
-                            "dangerousActions": [],
-                            "placementRule": "Place actions where the user makes the decision, keeping affected object identity visible.",
-                            "postSuccessUpdate": "Update the affected row, detail, count, state, or route; do not rely only on a toast."
-                        },
-                        "statePlacementModel": {
-                            "loading": "Near the region or control waiting for data or mutation.",
-                            "empty": "In the data/form region with business next action when applicable.",
-                            "error": "Near the affected region with recovery path.",
-                            "success": "Inline object update plus short confirmation when useful.",
-                            "business_blocking": "Near the blocked field, row, detail, or action.",
-                            "validation": "Near the field and summary for longer forms.",
-                            "disabled": "On or near disabled controls with unlock reason when actionable."
-                        },
-                        "visualModel": {
-                            "layoutBaseline": "custom_product_layout",
-                            "density": "balanced",
-                            "tokenPolicy": "Use existing or planned semantic tokens before page-local styling.",
-                            "componentPolicy": "Use task-fit components instead of decorative cards or explainer sections.",
-                            "antiDemoRules": [
-                                "no runtime commands or delivery notes in product UI",
-                                "no marketing hero for operational surfaces",
-                                "no decorative filler before required workflow content"
-                            ]
-                        },
-                        "responsiveModel": {
-                            "desktop": "Keep primary task surface and action path visible without layout shift.",
-                            "tablet": "Preserve task order while reducing secondary regions.",
-                            "mobile": "Use drill-down, cards, or stacked regions when dense comparison is not required."
-                        },
-                        "requiredComposition": [
-                            "business navigation or context",
-                            "task-relevant data view",
-                            "task-relevant action area",
-                            "local loading, empty, error, success, and business-blocking feedback"
-                        ],
-                        "forbiddenComposition": [
-                            "surface composition unrelated to the task-owned business workflow",
-                            "decorative or explanatory sections that displace required data, actions, states, or feedback"
-                        ],
-                        "stateRefs": ["loading", "success", "error", "empty", "business_blocking"],
-                        "dataViewRefs": ["view_1"],
-                        "actionRefs": ["action_1"],
-                        "operationPathRefs": ["path_1"],
-                        "workflowRefs": [],
-                        "interfaceRefs": []
-                    }]
-                },
-                "surfaceDecisionCandidate": ui_surface_decision_candidate_template(),
-                "sourceRefs": frontend_source_refs_template(frontend_experience_source)
-            }
-        }),
-        ArchitectureSectionGroup::RuntimeDelivery => json!({
-            "runtimeDelivery": {
-                "status": "modified",
-                "runtimeKind": "",
-                "basis": {
-                    "technicalBaselineRef": ""
-                },
-                "build": {
-                    "command": "",
-                    "workingDirectory": ".",
-                    "outputs": [],
-                    "codeLevelExpectations": [""]
-                },
-                "start": {
-                    "command": "",
-                    "workingDirectory": ".",
-                    "codeLevelExpectations": [""]
-                },
-                "runtimeSurfaces": [{
-                    "surfaceId": "runtime_surface_1",
-                    "kind": "",
-                    "urlPath": "",
-                    "purpose": ""
-                }],
-                "httpProbes": {
-                    "previewPath": "/",
-                    "expectedStatus": "2xx_or_3xx"
-                },
-                "environment": {
-                    "required": [],
-                    "optional": []
-                },
-                "taskPlanningGuidance": {
-                    "requireRuntimeDeliveryRequirementWhenTaskTouches": [
-                        "build_or_packaging",
-                        "runtime_entry",
-                        "serving_or_routing",
-                        "configuration_or_environment",
-                        "generated_artifacts",
-                        "runtime_surface"
-                    ],
-                    "doNotRequireForTaskKinds": [
-                        "domain_only_validation",
-                        "pure_unit_test_additions"
-                    ],
-                    "verificationBoundary": "code_level_only",
-                    "doNotRequireCleanInstallOrContainerBuild": true
-                }
-            }
-        }),
-        ArchitectureSectionGroup::Coverage => coverage_content_template(context_projection),
-    }
-}
-
-fn coverage_content_template(context_projection: &Value) -> Value {
-    let acceptance_matrix = context_projection
-        .pointer("/requirementDetailTransfer/acceptanceDetails")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|acceptance| {
-                    json!({
-                        "acceptanceId": acceptance.get("id").cloned().unwrap_or(Value::Null),
-                        "priority": acceptance.get("priority").cloned().unwrap_or_else(|| json!("must")),
-                        "statement": acceptance.get("statement").cloned().unwrap_or(Value::Null),
-                        "coverageStatus": "covered",
-                        "coverage": [acceptance_coverage_artifact_template()],
-                        "verificationHints": [{
-                            "kind": "manual",
-                            "description": ""
-                        }]
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let detail_coverage = context_projection
-        .pointer("/requirementDetailTransfer/requirementDetails/items")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|detail| {
-                    json!({
-                        "detailId": detail.get("detailId").cloned().unwrap_or(Value::Null),
-                        "coverageStatus": "covered",
-                        "artifactRefs": detail_coverage_artifact_refs_template()
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    json!({
-        "acceptanceMatrix": acceptance_matrix,
-        "detailCoverage": detail_coverage,
-        "architectureQuality": architecture_quality_repair_template(),
-        "handoff": {
-            "readyForTaskPlan": true,
-            "blockingReasons": [],
-            "nextNode": "task_plan"
-        }
-    })
-}
-
-fn architecture_quality_repair_template() -> Value {
-    json!({
-        "decisions": [{
-            "decisionId": "adr-current-001",
-            "category": "architecture_style",
-            "title": "Current phase architecture decision",
-            "status": "accepted",
-            "context": "State the current-phase forces from the repair request and accepted planning contract.",
-            "decision": "State the selected architecture approach for this phase.",
-            "alternativesConsidered": [{
-                "name": "alternative architecture approach",
-                "tradeoff": "Concrete trade-off compared with the selected approach.",
-                "rejectedBecause": "Why this alternative is not the best fit for the current phase."
-            }],
-            "consequences": {
-                "positive": ["Implementation or verification benefit."],
-                "negative": ["Implementation or operation cost to watch."],
-                "neutral": ["Known side effect that does not block delivery."]
-            },
-            "sourceRefs": {
-                "scopeRefs": ["allowedRefs.scopeRefs item"],
-                "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
-                "requirementDetailRefs": ["allowedRefs.requirementDetailIds item"]
-            },
-            "verificationHints": ["How later tasks or review can prove this decision was respected."]
-        }],
-        "nfrs": [{
-            "nfrId": "nfr-current-001",
-            "category": "maintainability",
-            "target": "Concrete quality target for this phase.",
-            "rationale": "Why this target matters for the current phase.",
-            "architectureRefs": {
-                "decisions": ["adr-current-001"],
-                "risks": ["risk-current-001"]
-            },
-            "verificationStrategy": "How TaskPlan, tests, static checks, or review can verify this quality target."
-        }],
-        "risks": [{
-            "riskId": "risk-current-001",
-            "category": "data_integrity",
-            "severity": "medium",
-            "likelihood": "medium",
-            "impact": "Concrete implementation or operation impact if this risk occurs.",
-            "mitigation": "Concrete design or task-plan mitigation.",
-            "ownerArtifactRefs": {
-                "modules": ["module_1"],
-                "interfaces": ["interface_1"],
-                "decisions": ["adr-current-001"],
-                "nfrs": ["nfr-current-001"]
-            },
-            "verificationHints": ["How later tasks or review can prove mitigation was implemented."]
-        }]
-    })
-}
-
-fn acceptance_coverage_artifact_template() -> Value {
-    json!({
-        "type": "module",
-        "refs": [],
-        "description": ""
-    })
-}
-
-fn detail_coverage_artifact_refs_template() -> Value {
-    json!({
-        "modules": [],
-        "entities": [],
-        "fields": [],
-        "constraints": [],
-        "interfaces": [],
-        "userFlows": [],
-        "stateMachines": [],
-        "frontendDataViews": [],
-        "frontendActions": [],
-        "frontendOperationPaths": [],
-        "acceptanceMatrix": []
-    })
 }
 
 fn section_name(section: ArchitectureSectionGroup) -> &'static str {
