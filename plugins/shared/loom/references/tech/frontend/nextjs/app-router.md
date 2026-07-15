@@ -1,31 +1,90 @@
-# Next.js App Router Quality
+# Next.js App Router
 
-This file applies App Router structure rules to task-owned route segments, layouts, pages, route groups, dynamic routes, loading states, and error boundaries.
+Apply this reference only when TechnicalBaseline selects App Router and the task owns route definitions, segments, layouts, navigation, boundaries, route handlers, or metadata. Generic Next.js and component-only tasks must not receive it.
 
-## When To Use
+## Segment Ownership
 
-- The task changes `app/` route files, `layout.tsx`, `page.tsx`, `template.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx`, route groups, dynamic segments, parallel routes, intercepting routes, or route handlers.
-- Use this when route organization, segment state, navigation behavior, metadata, or boundary files affect the delivered workflow.
-- If the task only changes an internal component used by a stable route, keep this file out of scope unless route behavior also changes.
+Map product surfaces to clear segments. Use route groups for code/layout organization without URL changes, not to hide unrelated workflows.
 
-## Implementation Focus
+```text
+app/
+  (workspace)/
+    layout.tsx
+    orders/
+      page.tsx
+      loading.tsx
+      error.tsx
+      [orderId]/
+        page.tsx
+        not-found.tsx
+```
 
-- Keep each route segment responsible for a clear product surface. Use route groups for organization without URL changes, not to hide unrelated workflows in one segment.
-- Put persistent shell UI in `layout.tsx`; use `template.tsx` only when remount-on-navigation behavior is actually needed.
-- Add `loading.tsx` for async route segments where the user otherwise sees a blank wait. Add `error.tsx` where the route can fail independently and recover with reset behavior.
-- Add `not-found.tsx` or call `notFound()` when missing domain records have a first-class not-found state.
-- Keep dynamic params typed and validated before using them in queries, actions, or route handlers.
-- Use `redirect()` for server-known navigation decisions such as missing auth or completed mutations; do not bounce through fragile client-only effects.
-- Keep route handlers thin: parse request input, validate, call owned application logic, map status/response shape, and avoid duplicating API design already owned elsewhere.
-- Keep Metadata API usage close to the route data needed for SEO. Do not fetch the same domain record twice when the repository has an accepted shared helper.
+The root layout owns required document shell/providers. Nested layouts persist across child navigation; `template.tsx` remounts and should be used only when reset-on-navigation is intended.
 
-## Verification Focus
+Keep route-specific UI/data near the segment and shared product components outside route folders according to repository convention. Avoid circular imports between layout and feature modules.
 
-- Run build/typecheck to catch App Router file-contract and server/client boundary errors.
-- Probe route navigation, dynamic params, loading fallback, error reset, not-found behavior, and redirects touched by the task.
-- For route handlers, prove success, validation failure, not found, conflict, and auth denial when those outcomes are in scope.
-- Verify generated metadata for changed public/detail routes when SEO is part of the route surface.
+## Dynamic, Catch-All, And Search Params
 
-## Evidence Focus
+Type and validate params/search params before data/actions. Account for the selected Next version's async params API. Missing/malformed/unauthorized/not-found states require explicit outcomes.
 
-- In the evidence summary, name the route decision: layout ownership, route group, dynamic param validation, loading boundary, error boundary, not-found handling, redirect, metadata, or route handler proof.
+Use catch-all/optional catch-all only for real hierarchical content. Do not create broad dynamic routes that swallow static paths or internal assets.
+
+Query/search params are suitable for shareable filters, sort, page, tab, and return context. Parse/allowlist them server-side and preserve/clear intentionally during navigation.
+
+## Loading, Error, And Not Found
+
+Place `loading.tsx` at an async segment boundary where fallback helps; avoid replacing the full working shell for a small slow region. Use Suspense for independently streamable regions.
+
+`error.tsx` is a Client Component and owns unexpected segment failures plus reset/retry. It should log through the selected boundary without exposing stack/provider data.
+
+Call `notFound()`/provide `not-found.tsx` for genuine missing records. Do not convert forbidden/unavailable/validation outcomes into not found unless the disclosure contract says so.
+
+Expected business errors should render task-owned states rather than throw into a generic error boundary.
+
+## Parallel And Intercepting Routes
+
+Use parallel routes for independently navigable/rendered slots with explicit defaults and refresh behavior. Use intercepting routes for product-approved modal/detail navigation that also has a direct full-page URL.
+
+These patterns add back-stack, default, refresh, and accessibility complexity. Provide close/back/focus behavior and direct deep-link fallback; do not use them for ordinary layout columns.
+
+## Navigation And Redirects
+
+Use links for navigable destinations and router methods for event-driven transitions. Preserve list/filter/scroll context for detail-return workflows.
+
+Use server `redirect` for server-known outcomes and client router navigation only at interactive boundaries. Avoid mount effects that redirect after flashing protected/wrong content.
+
+Define middleware/auth redirects without loops and retain a safe intended destination. Navigation checks do not replace server authorization.
+
+## Route Handlers
+
+Route handlers are server HTTP interfaces. Implement only AAC-owned method/path/schemas/status/errors/auth/exposure. Validate inputs, scope identity/tenant, map failures, and keep persistence/business logic in the accepted application boundary.
+
+Avoid creating route handlers solely to proxy an existing same-origin backend unless architecture requires a BFF. Preserve cookies, streaming, caching, headers, and body limits deliberately.
+
+## Metadata
+
+Use static metadata for stable pages and `generateMetadata` for dynamic accepted content. Deduplicate data reads safely and provide canonical/OpenGraph/robots only where product/SEO owns them.
+
+Never expose private record details, internal IDs, or failed lookup messages in metadata. Metadata failures need bounded behavior.
+
+## Verification
+
+- Run production build for changed route file contracts and server/client boundaries.
+- Exercise exact static/dynamic/catch-all/query paths, redirects, and not-found/forbidden outcomes.
+- Verify loading streaming, error reset, and expected business state placement.
+- Test layout persistence versus template remount and list-detail-return context.
+- Exercise parallel/intercepting direct refresh, back/close, and focus when owned.
+- For route handlers, assert exact HTTP contract and auth/failure branches.
+
+## Delivery Evidence
+
+Name the segment/effective URL and build/route/browser assertion proving activation, persistence, boundary, redirect, metadata, or handler behavior. File presence alone cannot prove matching precedence, deep-link refresh, streaming, back stack, or deployment fallback.
+
+## Unsafe Defaults
+
+- App Router reference selected without an accepted App Router signal and navigation task.
+- Route groups/dynamic catch-alls used to hide unclear ownership.
+- Full-shell loading fallback for one slow region.
+- Every failure converted to `notFound()` or generic `error.tsx`.
+- Parallel/intercepting routes used for ordinary page layout.
+- Route handlers duplicating an accepted backend contract.

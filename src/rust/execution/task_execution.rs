@@ -1396,6 +1396,8 @@ fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })

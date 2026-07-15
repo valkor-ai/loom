@@ -603,6 +603,12 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
             ImplementationAction::OptimizeFrontendPerformance => {
                 push_unique(&mut tags, "performance")
             }
+            ImplementationAction::ImplementServerRenderedComponent => {
+                push_unique(&mut tags, "server_components")
+            }
+            ImplementationAction::ImplementServerMutation => {
+                push_unique(&mut tags, "server_actions")
+            }
             ImplementationAction::ImplementAuthenticationOrAuthorization => {
                 push_unique(&mut tags, "security")
             }
@@ -1689,24 +1695,42 @@ fn frontend_reference_items_for_signal(
         return groups;
     }
     if signal.frameworks.iter().any(|item| item == "nextjs") {
-        let items = groups.entry("nextjs".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("app-router".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if signal.frameworks.iter().any(|item| item == "app_router")
+            && task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation)
+        {
+            items.insert("app-router".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("data_fetching") || has_focus("performance") || has_focus("persistence") {
+        if task_uses_api_client_binding(task)
+            || task_owns_persistence(task)
+            || task_has_action(task, ImplementationAction::ImplementReactiveClientFlow)
+        {
             items.insert("data".to_string());
         }
-        if has_focus("server_actions") {
+        if signal.frameworks.iter().any(|item| item == "app_router")
+            && task_has_action(task, ImplementationAction::ImplementServerMutation)
+        {
             items.insert("actions".to_string());
         }
-        if has_focus("server_components") {
+        if signal.frameworks.iter().any(|item| item == "app_router")
+            && task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+        {
             items.insert("server-components".to_string());
         }
-        if has_focus("runtime") || has_focus("configuration") || has_focus("performance") {
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::ImplementRuntimeDeliveryContract)
+            || task_has_action(task, ImplementationAction::OptimizeFrontendPerformance)
+        {
             items.insert("runtime".to_string());
         }
+        groups.insert("nextjs".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "react") {
         let items = groups.entry("react".to_string()).or_default();
@@ -1912,6 +1936,8 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -1930,6 +1956,8 @@ fn task_owns_frontend_implementation(task: &TaskDefinition) -> bool {
                 | ImplementationAction::ImplementReactiveClientFlow
                 | ImplementationAction::ImplementSharedClientState
                 | ImplementationAction::OptimizeFrontendPerformance
+                | ImplementationAction::ImplementServerRenderedComponent
+                | ImplementationAction::ImplementServerMutation
                 | ImplementationAction::WireReferenceInApiOrUi
                 | ImplementationAction::CreateEntityAdminPage
                 | ImplementationAction::ImplementFrontendExperienceContract
@@ -2233,6 +2261,7 @@ fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<S
         "nextjs",
         &["next", "nextjs", "next js", "app router"],
     );
+    push_if_contains(haystack, frameworks, "app_router", &["app router"]);
     if !react_native {
         push_if_contains(
             haystack,
@@ -2635,17 +2664,18 @@ mod tests {
     fn maps_nextjs_typescript_to_nextjs_react_and_typescript_refs() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Next.js + TypeScript"}
+                "web": {"selection": "Next.js App Router + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective =
-            "Create an App Router dashboard page with loading.tsx and error.tsx boundaries."
-                .to_string();
+        task.objective = "Implement the accepted dashboard route surface.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("nextjs"));
         assert!(selection.reference_groups["nextjs"].contains(&"core".to_string()));
@@ -2670,15 +2700,21 @@ mod tests {
     fn nextjs_specialized_refs_are_task_scoped() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Next.js + TypeScript"}
+                "web": {"selection": "Next.js App Router + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementServerMutation,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::ImplementReactiveClientFlow,
+                ImplementationAction::OptimizeFrontendPerformance,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Add Server Actions with revalidatePath, no-store data fetching, Suspense server components, runtime config, and next build validation.".to_string();
+        task.objective = "Implement the accepted server-backed Next.js workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let next_refs = &selection.reference_groups["nextjs"];
         assert!(next_refs.contains(&"actions".to_string()));
@@ -2695,6 +2731,58 @@ mod tests {
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.next.runtime" && item.path == "tech/frontend/nextjs/runtime.md"
         }));
+    }
+
+    #[test]
+    fn nextjs_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let app_router_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Next.js App Router + TypeScript"}}
+        }));
+        let generic_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Next.js + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Add App Router layouts, Server Components, Server Actions, cached fetch, runtime config, and tests.".to_string();
+        let mut unsupported_server = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::ImplementServerMutation,
+            ],
+        );
+        unsupported_server.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&app_router_baseline, &prose_only).unwrap();
+        let unsupported =
+            code_reference_selection_for_task(&generic_baseline, &unsupported_server).unwrap();
+        let tests = code_reference_selection_for_task(&generic_baseline, &testing).unwrap();
+
+        for specialized in [
+            "app-router",
+            "actions",
+            "server-components",
+            "data",
+            "runtime",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["nextjs"].contains(&specialized.to_string()));
+        }
+        assert!(!unsupported.reference_groups["nextjs"].contains(&"app-router".to_string()));
+        assert!(!unsupported.reference_groups["nextjs"].contains(&"actions".to_string()));
+        assert!(!unsupported.reference_groups["nextjs"].contains(&"server-components".to_string()));
+        assert!(tests.reference_groups["nextjs"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["nextjs"].contains(&"core".to_string()));
     }
 
     #[test]

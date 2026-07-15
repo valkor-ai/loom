@@ -1740,6 +1740,22 @@ fn derived_ui_ownership_dimensions(
     {
         dimensions.push("layout".to_string());
     }
+    if implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::ImplementServerRenderedComponent
+        )
+    }) {
+        dimensions.push("surface".to_string());
+        dimensions.push("state".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementServerMutation))
+    {
+        dimensions.push("action".to_string());
+        dimensions.push("integration_feedback".to_string());
+    }
     if task_kind_is_frontend(task_kind)
         || implementation_actions.iter().any(|action| {
             matches!(
@@ -1749,6 +1765,8 @@ fn derived_ui_ownership_dimensions(
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
@@ -3951,6 +3969,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "reactiveClientFlow": ["implement_reactive_client_flow"],
                 "sharedClientState": ["implement_shared_client_state"],
                 "frontendPerformance": ["optimize_frontend_performance"],
+                "serverRenderedComponent": ["implement_server_rendered_component"],
+                "serverMutation": ["implement_server_mutation"],
                 "security": ["implement_authentication_or_authorization"],
                 "async": ["implement_async_processing"],
                 "cache": ["implement_cache_policy"],
@@ -3966,6 +3986,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "reactiveClientFlow": "Use implement_reactive_client_flow only for a task that owns stream cancellation, ordering, fan-out, subscription lifecycle, or other reactive client behavior beyond a simple one-shot binding.",
                 "sharedClientState": "Use implement_shared_client_state only for the task that owns a selected shared state container, reducer/store, effects, selectors, or a cross-surface client state lifecycle. Local component state does not use this action.",
                 "frontendPerformance": "Use optimize_frontend_performance only for a task that owns a measurable client rendering, rebuild, list, image, animation, memory, startup, or interaction-latency risk and its verification evidence.",
+                "serverRenderedComponent": "Use implement_server_rendered_component only for a task that owns a framework server-rendered component boundary, server/client composition, streaming, hydration, or serializable handoff.",
+                "serverMutation": "Use implement_server_mutation only for a task that owns a framework server-side form/action mutation, its authorization and validation, result state, and cache/readback reconciliation.",
                 "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
@@ -4877,6 +4899,8 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::OptimizeFrontendPerformance
+                    | ImplementationAction::ImplementServerRenderedComponent
+                    | ImplementationAction::ImplementServerMutation
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -5678,6 +5702,14 @@ mod tests {
         assert_eq!(
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["frontendPerformance"],
             json!(["optimize_frontend_performance"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["serverRenderedComponent"],
+            json!(["implement_server_rendered_component"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["serverMutation"],
+            json!(["implement_server_mutation"])
         );
     }
 

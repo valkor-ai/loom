@@ -43,6 +43,8 @@ pub enum ImplementationAction {
     ImplementReactiveClientFlow,
     ImplementSharedClientState,
     OptimizeFrontendPerformance,
+    ImplementServerRenderedComponent,
+    ImplementServerMutation,
     CreateOrUpdateStateMachine,
     CreateOrUpdateBusinessRule,
     AddReferenceField,

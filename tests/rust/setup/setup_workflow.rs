@@ -1466,7 +1466,8 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .and_then(|name| name.to_str());
         let is_angular = frontend_profile == Some("angular");
         let is_flutter = frontend_profile == Some("flutter");
-        let is_enhanced_frontend = is_angular || is_flutter;
+        let is_nextjs = frontend_profile == Some("nextjs");
+        let is_enhanced_frontend = is_angular || is_flutter || is_nextjs;
         let minimum_lines = if is_enhanced_frontend { 65 } else { 25 };
         assert!(
             line_count >= minimum_lines,
@@ -1565,6 +1566,28 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let flutter_testing = fs::read_to_string(frontend_root.join("flutter/testing.md")).unwrap();
     assert!(flutter_testing.contains("ProviderContainer"));
     assert!(flutter_testing.contains("pumpAndSettle"));
+    let next_core = fs::read_to_string(frontend_root.join("nextjs/core.md")).unwrap();
+    assert!(next_core.contains("NEXT_PUBLIC_*"));
+    assert!(next_core.contains("server-only"));
+    let next_router = fs::read_to_string(frontend_root.join("nextjs/app-router.md")).unwrap();
+    assert!(next_router.contains("intercepting routes"));
+    assert!(next_router.contains("notFound()"));
+    let next_server_components =
+        fs::read_to_string(frontend_root.join("nextjs/server-components.md")).unwrap();
+    assert!(next_server_components.contains("Serializable Handoff"));
+    assert!(next_server_components.contains("suppressHydrationWarning"));
+    let next_actions = fs::read_to_string(frontend_root.join("nextjs/actions.md")).unwrap();
+    assert!(next_actions.contains("useActionState"));
+    assert!(next_actions.contains("revalidateTag"));
+    let next_data = fs::read_to_string(frontend_root.join("nextjs/data.md")).unwrap();
+    assert!(next_data.contains("React `cache()`"));
+    assert!(next_data.contains("cross-user/tenant"));
+    let next_runtime = fs::read_to_string(frontend_root.join("nextjs/runtime.md")).unwrap();
+    assert!(next_runtime.contains("output: 'standalone'"));
+    assert!(next_runtime.contains("Edge"));
+    let next_testing = fs::read_to_string(frontend_root.join("nextjs/testing.md")).unwrap();
+    assert!(next_testing.contains("production `next build`"));
+    assert!(next_testing.contains("Server Action"));
 }
 
 #[test]
