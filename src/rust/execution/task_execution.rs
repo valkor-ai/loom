@@ -861,7 +861,7 @@ fn task_result_rules(task: &TaskDefinition, has_browser_verification: bool) -> V
         rules.push("For referenced apiContractRequirements, provide one apiContractEvidence entry per assigned requirement in task order; Loom derives requirementId, interfaceRefs, and verificationIds. Summaries must state how changed files implemented or preserved the referenced API interfaces.".to_string());
     }
     if !task.code_quality_requirement_refs.is_empty() {
-        rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language/framework references and existing repository style.".to_string());
+        rules.push("For referenced codeQualityExecutionContext entries, provide one codeQualityEvidence entry per assigned requirement in task order; Loom derives requirementId and verificationIds. referenceFilesChecked must list exactly the files read from sourceContext.codeQualityExecutionContext[].referenceLoadPlan, and summaries must state how changed files followed selected language, framework, SQL dialect, and existing repository references.".to_string());
         rules.push("referenceLoadPlan paths are Loom installed reference paths, not project source paths; resolve them under the current Loom skill reference root before editing or writing codeQualityEvidence.".to_string());
     }
     json!(rules)
@@ -880,6 +880,7 @@ fn engineering_quality_execution_rules(task: &TaskDefinition) -> Value {
         "verificationRules": [
             "Use task.verificationIntents as the verification id source.",
             "When implementation touches persistence, prefer same-provider tests or runtime checks over mock-only evidence.",
+            "When a MySQL or PostgreSQL dialect reference is selected, verify provider-specific behavior against that provider or record the exact unavailable provider behavior; do not claim dialect support from SQLite, H2, or another database.",
             "Record concise alignment evidence in verificationResults[].summary and requirementDetailEvidence[].summary."
         ]
     })

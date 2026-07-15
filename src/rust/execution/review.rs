@@ -338,6 +338,7 @@ fn build_review_request(
             "commonRules": [
                 "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, outputContract.reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
+                "For code-quality findings, use the task-scoped referenceLoadPlan and referenceGroups in codeQualityReviewMatrix. Load only those selected technical references; do not scan the full tech tree or substitute a different database provider reference.",
                 "Every finding must include non-empty readRefs.",
                 "Write finding observations and evidence only. Loom derives findingId, pendingActions.findingRefs, nextAction.findingRefs, nextAction.targetTaskIds, and approved phase linkage from the current review signals.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
@@ -461,6 +462,7 @@ fn build_review_request(
                         "reviewMatrixSummary.apiContract",
                         "reviewMatrixSummary.codeQuality",
                         "reviewMatrixSummary.frontendQuality",
+                        "codeQualityReviewMatrix",
                         "outputContract.reviewSignals.items"
                     ])
                 },
