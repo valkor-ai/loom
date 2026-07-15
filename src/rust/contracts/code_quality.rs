@@ -86,7 +86,7 @@ pub fn code_quality_enum_refs() -> Value {
                 "javascript": ["core", "async", "modules", "node", "browser", "testing"],
                 "python": ["core", "typing", "async", "packaging", "testing"],
                 "go": ["core", "concurrency", "interfaces", "structure", "generics", "testing"],
-                "csharp": ["core", "aspnet", "persistence", "blazor", "performance", "testing"],
+                "csharp": ["core", "modern", "persistence", "blazor", "performance", "testing"],
                 "cpp": ["core", "modern", "templates", "performance", "concurrency", "build", "testing"],
                 "kotlin": ["core", "coroutines", "ktor", "compose", "multiplatform", "testing"],
                 "php": ["core", "laravel", "symfony", "async", "testing"],
@@ -142,7 +142,7 @@ pub fn code_reference_selection_for_task_with_context(
             continue;
         }
         let items = if signal.language.is_some() {
-            reference_items_for_signal(&signal, &focus_tags, task)
+            reference_items_for_signal(&signal, &focus_tags, task, &stack_frameworks)
         } else {
             BTreeSet::new()
         };
@@ -363,6 +363,9 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         );
         push_if_contains(&haystack, &mut frameworks, "blazor", &["blazor"]);
         push_backend_unless_persistence_track(&mut roles);
+        if frameworks.iter().any(|item| item == "blazor") {
+            push_unique(&mut roles, "frontend");
+        }
     } else if contains_any(
         &haystack,
         &["golang", " go ", "gin", "gofiber", "fiber", "grpc"],
@@ -1198,10 +1201,9 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     && (has_focus("api") || has_focus("backend") || has_focus("testing")))
         }
         Some(_) => {
-            if roles.contains("frontend") {
-                has_focus("frontend")
-            } else if roles.contains("backend") {
-                has_focus("backend")
+            let frontend_applies = roles.contains("frontend") && has_focus("frontend");
+            let backend_applies = roles.contains("backend")
+                && (has_focus("backend")
                     || has_focus("api")
                     || has_focus("persistence")
                     || has_focus("security")
@@ -1210,17 +1212,16 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     || has_focus("integration")
                     || has_focus("migration")
                     || has_focus("architecture")
-                    || has_focus("testing")
-            } else if roles.contains("persistence") {
-                has_focus("persistence")
-            } else {
-                has_focus("api")
+                    || has_focus("testing"));
+            let persistence_applies = roles.contains("persistence") && has_focus("persistence");
+            let unclassified_applies = roles.is_empty()
+                && (has_focus("api")
                     || has_focus("backend")
                     || has_focus("persistence")
                     || has_focus("security")
                     || has_focus("configuration")
-                    || has_focus("runtime")
-            }
+                    || has_focus("runtime"));
+            frontend_applies || backend_applies || persistence_applies || unclassified_applies
         }
         None => roles.contains("frontend") && has_focus("frontend"),
     }
@@ -1230,6 +1231,7 @@ fn reference_items_for_signal(
     signal: &CodeStackSignal,
     focus_tags: &[String],
     task: &TaskDefinition,
+    stack_frameworks: &BTreeSet<String>,
 ) -> BTreeSet<String> {
     let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut items = BTreeSet::new();
@@ -1313,20 +1315,35 @@ fn reference_items_for_signal(
             }
         }
         Some("csharp") => {
-            items.insert("core".to_string());
-            if has_focus("testing") {
+            if matches!(
+                task.task_kind,
+                TaskKind::FeatureIncrement
+                    | TaskKind::DataModelIncrement
+                    | TaskKind::InterfaceIncrement
+                    | TaskKind::IntegrationIncrement
+                    | TaskKind::RefactorSupport
+            ) || (stack_frameworks.contains("blazor") && task_owns_frontend_implementation(task))
+            {
+                items.insert("core".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature) {
+                items.insert("modern".to_string());
+            }
+            if task_owns_test_implementation(task)
+                && (!stack_frameworks.contains("aspnet_core") || task_is_frontend_task(task))
+            {
                 items.insert("testing".to_string());
             }
-            if has_focus("api") || signal.frameworks.iter().any(|item| item == "aspnet_core") {
-                items.insert("aspnet".to_string());
-            }
-            if has_focus("persistence") {
+            if task_owns_persistence(task)
+                && stack_frameworks.contains("entity_framework")
+                && !stack_frameworks.contains("aspnet_core")
+            {
                 items.insert("persistence".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "blazor") {
+            if stack_frameworks.contains("blazor") && task_owns_frontend_implementation(task) {
                 items.insert("blazor".to_string());
             }
-            if has_focus("performance") {
+            if task_has_action(task, ImplementationAction::OptimizeRuntimePerformance) {
                 items.insert("performance".to_string());
             }
         }
@@ -1562,7 +1579,7 @@ fn backend_reference_items_for_signal(
     }
     if signal.frameworks.iter().any(|item| item == "aspnet_core") {
         let mut items = BTreeSet::new();
-        if task_owns_test_implementation(task) {
+        if task_owns_test_implementation(task) && !task_is_frontend_task(task) {
             items.insert("testing".to_string());
         }
         if task_owns_api_contract(task) && stack_frameworks.contains("minimal_api") {
@@ -3525,6 +3542,105 @@ mod tests {
     }
 
     #[test]
+    fn csharp_references_are_capability_scoped_without_aspnet_duplication() {
+        let aspnet_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": ".NET 8 + ASP.NET Core Minimal APIs"},
+                "dataAccess": {"selection": "Entity Framework Core"}
+            }
+        }));
+        let worker_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": ".NET 8 C# worker"},
+                "dataAccess": {"selection": "Entity Framework Core"}
+            }
+        }));
+        let blazor_baseline = baseline(json!({
+            "tracks": {"web": {"selection": ".NET 8 + ASP.NET Core + Blazor WebAssembly + C#"}}
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let persistence_task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistence],
+        );
+        let mut blazor_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        blazor_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut blazor_testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        blazor_testing_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let api = code_reference_selection_for_task(&aspnet_baseline, &api_task).unwrap();
+        let aspnet_data =
+            code_reference_selection_for_task(&aspnet_baseline, &persistence_task).unwrap();
+        let worker_data =
+            code_reference_selection_for_task(&worker_baseline, &persistence_task).unwrap();
+        let blazor = code_reference_selection_for_task(&blazor_baseline, &blazor_task).unwrap();
+        let blazor_testing =
+            code_reference_selection_for_task(&blazor_baseline, &blazor_testing_task).unwrap();
+
+        assert!(api.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(!api.reference_groups["csharp"].contains(&"aspnet".to_string()));
+        assert!(api.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
+        assert!(aspnet_data.reference_groups["aspnetcore"].contains(&"data".to_string()));
+        assert!(!aspnet_data.reference_groups["csharp"].contains(&"persistence".to_string()));
+        assert!(worker_data.reference_groups["csharp"].contains(&"persistence".to_string()));
+        assert!(!worker_data.reference_groups.contains_key("aspnetcore"));
+        assert!(blazor.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(blazor.reference_groups["csharp"].contains(&"blazor".to_string()));
+        assert!(blazor_testing.reference_groups["csharp"].contains(&"testing".to_string()));
+        assert!(!blazor_testing
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"testing".to_string())));
+    }
+
+    #[test]
+    fn csharp_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": ".NET 8 + C# 12"}}
+        }));
+        let owned = task(
+            TaskKind::RefactorSupport,
+            vec![
+                ImplementationAction::ImplementLanguageVersionFeature,
+                ImplementationAction::OptimizeRuntimePerformance,
+            ],
+        );
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective =
+            "Use C# 12 primary constructors, Span, ArrayPool, BenchmarkDotNet, and tests."
+                .to_string();
+        let testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+
+        let selected = code_reference_selection_for_task(&baseline, &owned).unwrap();
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+
+        assert!(selected.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(selected.reference_groups["csharp"].contains(&"modern".to_string()));
+        assert!(selected.reference_groups["csharp"].contains(&"performance".to_string()));
+        assert_eq!(prose.reference_groups["csharp"], vec!["core".to_string()]);
+        assert_eq!(
+            tests.reference_groups["csharp"],
+            vec!["testing".to_string()]
+        );
+    }
+
+    #[test]
     fn maps_cpp_without_losing_plus_signs() {
         let baseline = baseline(json!({"tracks": {"backend": {"selection": "C++20 + CMake"}}}));
         let task = task(
@@ -4324,7 +4440,8 @@ mod tests {
             vec![ImplementationAction::CreateOrUpdateInterface],
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
-        assert!(selection.reference_groups["csharp"].contains(&"aspnet".to_string()));
+        assert!(selection.reference_groups["csharp"].contains(&"core".to_string()));
+        assert!(!selection.reference_groups["csharp"].contains(&"aspnet".to_string()));
         assert!(selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"data".to_string()));
@@ -4466,6 +4583,10 @@ mod tests {
         assert!(!security.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(testing.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!testing.reference_groups["aspnetcore"].contains(&"security".to_string()));
+        assert!(!testing
+            .reference_groups
+            .get("csharp")
+            .is_some_and(|items| items.contains(&"testing".to_string())));
         assert!(runtime.reference_groups["aspnetcore"].contains(&"runtime".to_string()));
         assert!(!runtime.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(capability.reference_groups["aspnetcore"].contains(&"runtime".to_string()));

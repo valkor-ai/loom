@@ -18,9 +18,9 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "cpp/performance",
     "cpp/templates",
     "cpp/testing",
-    "csharp/aspnet",
     "csharp/blazor",
     "csharp/core",
+    "csharp/modern",
     "csharp/performance",
     "csharp/persistence",
     "csharp/testing",
@@ -1239,7 +1239,11 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .parent()
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str());
-        let minimum_lines = if code_profile == Some("cpp") { 65 } else { 25 };
+        let minimum_lines = if matches!(code_profile, Some("cpp" | "csharp")) {
+            65
+        } else {
+            25
+        };
         assert!(
             line_count >= minimum_lines,
             "{} is too thin to act as a topic code reference: {line_count} lines",
@@ -1257,10 +1261,10 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
                 path.display()
             );
         }
-        if code_profile == Some("cpp") {
+        if matches!(code_profile, Some("cpp" | "csharp")) {
             assert!(
                 content.contains("## Unsafe Defaults"),
-                "{} missing enhanced C++ unsafe-default guidance",
+                "{} missing enhanced code-profile unsafe-default guidance",
                 path.display()
             );
         }
@@ -1314,6 +1318,25 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let cpp_testing = fs::read_to_string(code_root.join("cpp/testing.md")).unwrap();
     assert!(cpp_testing.contains("ASan"));
     assert!(cpp_testing.contains("Fuzz targets"));
+    assert!(!code_root.join("csharp/aspnet.md").exists());
+    let csharp_core = fs::read_to_string(code_root.join("csharp/core.md")).unwrap();
+    assert!(csharp_core.contains("OperationCanceledException"));
+    assert!(csharp_core.contains("IServiceProvider"));
+    let csharp_modern = fs::read_to_string(code_root.join("csharp/modern.md")).unwrap();
+    assert!(csharp_modern.contains("LangVersion"));
+    assert!(csharp_modern.contains("Native AOT"));
+    let csharp_persistence = fs::read_to_string(code_root.join("csharp/persistence.md")).unwrap();
+    assert!(csharp_persistence.contains("IDbContextFactory"));
+    assert!(csharp_persistence.contains("DbUpdateConcurrencyException"));
+    let csharp_blazor = fs::read_to_string(code_root.join("csharp/blazor.md")).unwrap();
+    assert!(csharp_blazor.contains("JSDisconnectedException"));
+    assert!(csharp_blazor.contains("persistent component state"));
+    let csharp_performance = fs::read_to_string(code_root.join("csharp/performance.md")).unwrap();
+    assert!(csharp_performance.contains("BenchmarkDotNet"));
+    assert!(csharp_performance.contains("ArrayPool"));
+    let csharp_testing = fs::read_to_string(code_root.join("csharp/testing.md")).unwrap();
+    assert!(csharp_testing.contains("HttpMessageHandler"));
+    assert!(csharp_testing.contains("Mutation testing"));
     let spring_runtime = fs::read_to_string(backend_root.join("springboot/runtime.md")).unwrap();
     assert!(spring_runtime.contains("@ConfigurationProperties"));
     assert!(spring_runtime.contains("graceful shutdown"));
