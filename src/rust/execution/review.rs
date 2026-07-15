@@ -560,7 +560,7 @@ fn review_quality_profile() -> Value {
             {
                 "refId": "rv.core",
                 "path": "tech/review/core.md",
-                "reason": "Review gate posture, order, decision discipline, and route selection."
+                "reason": "Risk-based review posture, scope reconstruction, inspection order, and repository-fit method."
             },
             {
                 "refId": "rv.spec",
@@ -580,7 +580,7 @@ fn review_quality_profile() -> Value {
             {
                 "refId": "rv.findings",
                 "path": "tech/review/finding-quality.md",
-                "reason": "Actionable ReviewFinding severity, category, evidence, and repair route guidance."
+                "reason": "Actionable finding impact, evidence, root-cause, repair ownership, and consistency guidance."
             }
         ]
     })
@@ -5481,6 +5481,33 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_quality_profile_routes_only_review_method_references() {
+        let profile = review_quality_profile();
+        let items = profile["referenceLoadPlan"].as_array().unwrap();
+        let paths = items
+            .iter()
+            .filter_map(|item| item.get("path").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec![
+                "tech/review/core.md",
+                "tech/review/spec-compliance.md",
+                "tech/review/defect-patterns.md",
+                "tech/review/test-evidence.md",
+                "tech/review/finding-quality.md",
+            ]
+        );
+        assert!(items.iter().all(|item| {
+            !item["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("route selection")
+        }));
+    }
 
     fn task_result_with_browser_check(attempts: u32) -> TaskResult {
         serde_json::from_value(json!({

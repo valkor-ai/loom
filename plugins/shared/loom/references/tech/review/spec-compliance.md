@@ -1,47 +1,85 @@
-# Loom Review Spec Compliance
+# Specification Compliance Review
 
-Use this reference before implementation quality review. The question is: did the current phase build the right behavior for the accepted Loom contract?
+Use this reference before implementation-quality review to determine whether the change delivers the accepted behavior, constraints, and boundaries. Exact workflow field names remain outside this reference.
 
-## Compliance Inputs
+## Compliance Frame
 
-- Accepted acceptance refs and requirement detail refs.
-- Task scope, task objectives, dependencies, and write boundaries.
-- Review matrices for concept coverage, detail coverage, architecture quality, API contract, code quality, frontend quality, and runtime signals.
-- Changed files and task result evidence.
-- Deferred and excluded scope when it appears in current phase handoff or summaries.
+Convert accepted requirements into observable obligations: actor, trigger, preconditions, inputs, decisions/rules, state transition, durable/external effects, user/API feedback, readback, and failure behavior.
+
+Distinguish mandatory behavior, conditional behavior, deferred/excluded scope, and assumptions. Do not silently promote an implementation assumption into a requirement or treat deferred work as a current defect.
+
+Use confirmed business language and existing repository behavior to resolve terms. Personal conventions and “typical UX” cannot override an explicit decision.
 
 ## Missing Requirement Checks
 
-- Every must-level acceptance ref has supporting task result evidence or an explicit limitation.
-- Every required business rule has a code path, validation path, state transition, UI path, API contract, or runtime behavior that can be inspected.
-- Negative paths are implemented when the requirement says an action must be blocked, rejected, frozen, audited, retried, or surfaced to the user.
-- Readback behavior exists when the requirement expects state changes to be observable.
-- Persistence and integration behavior are present when the requirement depends on durable state or cross-surface behavior.
+Trace each important obligation to implementation and evidence. Presence of a file, endpoint, model, or button does not prove the workflow completes.
+
+Check primary behavior plus explicitly required negative paths: blocked transitions, validation, permission denial, duplicate action, stale data, conflict, not-found, unavailable dependency, and retry/recovery.
+
+Confirm durable/external effects when the behavior depends on persistence, events, files, messages, payments, notifications, or another service.
+
+Confirm readback when users or callers must observe a changed status, identifier, version, total, assignment, or generated output.
+
+Check cross-surface closure: UI command to accepted interface, interface to application/domain behavior, persistence/integration effect, response/error mapping, and visible refresh/reconciliation.
 
 ## Scope Creep Checks
 
-- New workflows, permissions, integrations, background jobs, caches, abstractions, or infrastructure are justified by current-phase requirements.
-- Future-phase entities do not become current-phase behavior unless they are required as a minimal boundary or stub.
-- Generated UI, API, or runtime surfaces do not expose delivery notes, technical explanations, or scaffolding that users did not ask for.
-- Extra dependencies do not create a new platform direction outside the accepted technical baseline.
+Identify user-visible workflows, permissions, entities, integrations, jobs, caches, abstractions, dependencies, infrastructure, and migrations not required by current scope.
+
+Extra code is a finding only when it changes behavior, increases risk/maintenance, conflicts with architecture, or consumes an ownership boundary the change did not receive.
+
+Necessary supporting code is not scope creep when it is the smallest way to make accepted behavior build, run, or remain safe.
+
+Generated product UI must not display delivery progress, runtime commands, stack explanations, verification instructions, placeholders, or internal process language.
 
 ## Interpretation Gap Checks
 
-- Ambiguous terms are resolved consistently with confirmed concept grounding and existing repository behavior.
-- Similar existing features use the same status model, error model, ownership boundary, and naming language.
-- Assumptions in implementation evidence are not silently promoted to accepted requirements.
-- User-facing behavior matches the confirmed actor workflow, not only the database or API shape.
+Compare ambiguous implementation choices with confirmed decisions, accepted examples, existing analogous features, and domain invariants.
+
+Inspect default ordering, timezone/date boundary, money/rounding, status semantics, empty/null meaning, identifier format, ownership/tenant scope, and retry/idempotency because these are common silent interpretation gaps.
+
+If two interpretations remain valid and user-owned, report the exact unresolved choice. Do not invent a preferred answer and call the implementation defective.
+
+## Contract Pair Checks
+
+Review contracts that must stay aligned:
+
+- API method/path/input/output/status/error/auth with client calls and tests.
+- Entity/domain rules with database constraints and migration shape.
+- State transitions with UI eligibility, API enforcement, and audit/history.
+- Configuration variables with local/runtime/deploy consumption.
+- Event/job payloads with producer, consumer, idempotency, and retry policy.
+- UI action target with displayed record identity and returned readback.
+
+A mismatch can violate scope even when each side compiles independently.
+
+## Existing Behavior And Compatibility
+
+Determine whether the accepted change preserves or intentionally changes existing public behavior, persisted data, URLs, API consumers, file formats, configuration, and deployment/runtime assumptions.
+
+Do not demand compatibility when a confirmed breaking migration replaces the old contract. Do require migration/cutover evidence when old data or consumers continue to exist.
+
+## Evidence Mapping
+
+For each important obligation, identify source and verification evidence that proves the branch. A single broad test name or result summary is insufficient when it does not reveal the exercised behavior.
+
+Missing evidence is not automatically missing implementation. Classify whether code is absent/wrong or behavior is merely unproved so the repair targets the right boundary.
 
 ## Compliance Finding Shape
 
-A spec compliance finding should name:
+A strong compliance finding states the accepted obligation, actual behavior, concrete source/evidence, user/system impact, and smallest correction.
 
-- The accepted requirement or acceptance ref.
-- What the implementation actually does.
-- The evidence source: changed file, task result, verification result, or review matrix signal.
-- Why this is missing, extra, or misinterpreted for the current phase.
-- The smallest repair owner that can fix it.
+Avoid “does not match spec” without naming the requirement and mismatch. Avoid bundling separate missing behaviors with unrelated scope creep.
 
 ## Approval Bar
 
-Approval requires the current phase to do the right thing before the review praises architecture, test style, naming, or implementation polish. If spec compliance fails, code quality comments can be included only when they help the same repair; they should not distract from the blocking contract miss.
+The delivered behavior matches mandatory current scope, important negative paths are present, cross-boundary contracts close, deferred/excluded work stays out, and available evidence supports those conclusions.
+
+## Unsafe Review Defaults
+
+- Checking files or endpoints instead of complete behavior.
+- Reviewing only the happy path when rejection/blocking is required.
+- Treating all extra code as scope creep regardless of necessity/impact.
+- Filling ambiguity with reviewer preference.
+- Assuming compilation proves cross-surface contract alignment.
+- Confusing missing evidence with confirmed missing implementation.

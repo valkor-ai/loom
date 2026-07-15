@@ -1683,7 +1683,7 @@ fn loom_review_references_are_operational_without_protocol_duplication() {
             .unwrap_or_else(|error| panic!("read review reference {}: {error}", path.display()));
         let line_count = content.lines().count();
         assert!(
-            line_count >= 30,
+            line_count >= 65,
             "{} is too thin to guide review decisions: {line_count} lines",
             path.display()
         );
@@ -1715,6 +1715,20 @@ fn loom_review_references_are_operational_without_protocol_duplication() {
     let defect_patterns = fs::read_to_string(review_root.join("defect-patterns.md")).unwrap();
     assert!(defect_patterns.contains("placeholder namespaces"));
     assert!(defect_patterns.contains("com.example"));
+    assert!(defect_patterns.contains("Mass assignment"));
+    assert!(defect_patterns.contains("idempotency scope"));
+    let core = fs::read_to_string(review_root.join("core.md")).unwrap();
+    assert!(core.contains("Risk-Based Depth"));
+    assert!(core.contains("Change Interaction"));
+    let spec = fs::read_to_string(review_root.join("spec-compliance.md")).unwrap();
+    assert!(spec.contains("Contract Pair Checks"));
+    assert!(spec.contains("cross-surface closure"));
+    let evidence = fs::read_to_string(review_root.join("test-evidence.md")).unwrap();
+    assert!(evidence.contains("Claim Mapping"));
+    assert!(evidence.contains("stale evidence"));
+    let findings = fs::read_to_string(review_root.join("finding-quality.md")).unwrap();
+    assert!(findings.contains("Severity By Impact"));
+    assert!(findings.contains("Root Cause"));
 }
 
 #[test]

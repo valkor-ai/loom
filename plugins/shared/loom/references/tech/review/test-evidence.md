@@ -1,42 +1,91 @@
-# Loom Review Test And Evidence Quality
+# Test And Evidence Review
 
-Use this reference to judge whether the implementation evidence is strong enough for approval. Evidence quality is not measured by command count; it is measured by whether the executed checks prove the changed behavior and the accepted contract.
+Use this reference to judge whether submitted evidence proves the changed behavior at a depth proportional to risk. Evidence quality depends on the claim-to-check mapping, not command count or suite size.
 
-## Evidence Sources
+## Evidence Inventory
 
-- Automated tests: unit, integration, component, API, contract, migration, or end-to-end tests.
-- Static checks: compiler, type checker, linter, formatter check, schema validation, migration validation, security scan.
-- Runtime probes: API calls, page rendering, health checks, smoke flows, CLI commands, deployment probes.
-- Manual inspection: screenshots, diff refs, source reads, or reviewer-observed behavior when automation is unavailable.
-- Known gaps: explicit limitations with impact and a reason the gap is acceptable or blocking.
+Classify available evidence as source inspection, compiler/type/static analysis, unit/component tests, integration/contract tests, migration/database checks, runtime/API/browser/device probes, deployment checks, or manual observation.
+
+Record what environment/backend/provider/browser/device/config the check actually used. Do not generalize beyond that boundary.
+
+Distinguish executed evidence from planned commands, copied output, fixture-only behavior, and author narrative.
 
 ## Strong Evidence
 
-- A new or changed business branch has a test or probe that exercises the branch.
-- A blocking validation rule has both success and rejection coverage when practical.
-- Persistence behavior is proven with durable write and readback when the task changes stored state.
-- API contracts are checked for status, response shape, and error shape, not only server startup.
-- UI work is rendered or inspected for required states, not only compiled.
-- Migration or schema work is verified against the selected database or the repository's migration validation path.
+- The check exercises the changed branch through its public/owned boundary and asserts an observable result.
+- Success plus a meaningful blocking/failure/concurrency path is covered when those outcomes drive different behavior.
+- Durable writes are read back from the selected persistence integration where persistence correctness changed.
+- Interface checks assert method/path/input/status/output/error/auth behavior, not only server startup or an empty list.
+- UI checks prove relevant loading/empty/ready/error/disabled/submitting/readback states and stable action targets.
+- Migrations are applied/validated against representative existing schema/data and selected provider behavior.
+- Security evidence checks deny/cross-user/tenant/ownership behavior, not only an authenticated happy path.
+- Performance evidence states workload, build/runtime mode, baseline, measurement, and correctness guard.
 
 ## Weak Evidence
 
-- Only a build command is run for a behavioral change.
-- Only an empty-list API response is checked for a CRUD workflow.
-- Tests assert implementation details while the accepted business behavior remains untested.
-- Implementation evidence claims a command passed without naming the command or outcome.
-- Verification ids exist but are not linked to requirement detail evidence.
-- Known gaps are hidden in prose instead of recorded as limitations or pending actions.
+- Build, formatter, linter, or typecheck is the only evidence for changed runtime behavior.
+- Tests assert private calls/state/snapshots while public behavior could remain wrong.
+- A mocked collaborator bypasses the authorization, transaction, serialization, or integration behavior being claimed.
+- Runtime probe checks health or first empty response for a multi-step workflow.
+- Test name/summary claims a branch but assertions do not distinguish it.
+- Browser screenshot proves appearance but not action, state, responsive, accessibility, or API binding.
+- Command/outcome/environment is missing or the result predates the latest repair.
 
-## Evidence Review Steps
+## Claim Mapping
 
-1. Map each important requirement detail to the task result evidence that claims it.
-2. Confirm verification ids referenced by detail evidence actually exist.
-3. Inspect changed files or diff refs when evidence is too broad or optimistic.
-4. Downgrade approval when evidence cannot prove a must-level requirement.
-5. Treat missing evidence as an implementation repair when tests or small code changes can produce it.
-6. Escalate for human review only when the environment prevents reliable automated or source-based verification.
+For each important changed obligation, map implementation location, evidence check, assertion/result, and remaining limitation.
+
+Verify that an evidence identifier points to an actual executed result and that the result belongs to the current task/change version. Stale pre-repair evidence must not approve post-repair code automatically.
+
+One focused check can prove several tightly coupled obligations; one broad suite name cannot prove everything without visible assertions/results.
+
+## Test Quality
+
+Review determinism, isolation, representative fixtures, assertion specificity, cleanup, and failure sensitivity.
+
+Look for tests that cannot fail because mocks return the implementation's desired value, expected values are derived by the same code, exceptions are ignored, assertions are absent, or retries hide flaky outcomes.
+
+Check state/time/random/order/global environment cleanup and parallel safety. Arbitrary sleeps signal synchronization uncertainty.
+
+For regression fixes, evidence should reproduce the old failure or assert the exact invariant that was broken.
+
+## Layer Selection
+
+Use unit tests for local logic, integration tests for boundary contracts, provider/runtime checks for infrastructure semantics, and browser/device tests for rendering/interaction/platform behavior.
+
+Do not require the highest layer for every change. Select the cheapest layer that can actually prove the risk, then add higher-layer evidence for cross-module closure or environment-specific semantics.
+
+Compiler/type/lint/build evidence remains valuable for public type, import, code generation, and production-bundle constraints but cannot replace behavior checks.
+
+## Environment Limitations
+
+Separate product failure from unavailable toolchain/browser/device/service/credentials. Preserve any source/static/lower-layer evidence still possible and state the exact unproved risk.
+
+An environment gap blocks approval only when the required risk cannot be established at another credible layer and current policy requires that evidence.
+
+Do not rerun the same unavailable command through generic code repair without an environment change.
+
+## Scope And Cost
+
+Focused tests are appropriate for isolated changes; shared contracts, migrations, authorization, runtime routing, framework configuration, and cross-surface workflows justify broader affected-lane checks.
+
+Do not demand a full suite when a targeted regression plus affected package checks close the risk. Do not accept a tiny target when shared behavior has a wide blast radius.
+
+## Evidence Finding Shape
+
+State the unproved behavior, why current evidence cannot prove it, the risk, and the smallest additional check or correction. Avoid “needs more tests” without a concrete assertion and layer.
+
+If source inspection confirms an actual defect, report the product defect rather than only an evidence gap.
 
 ## Approval Bar
 
-Approval is allowed when evidence is sufficient for the risk of the changed behavior. Small isolated changes can pass with focused checks. Cross-module workflow, persistence, security, payment, authorization, or deployment changes require broader evidence because the failure impact is higher.
+Important changed behavior has current, credible, risk-proportionate evidence; negative/deny/recovery paths are covered where meaningful; provider/runtime limits are explicit; and no known gap contradicts completion.
+
+## Unsafe Review Defaults
+
+- Counting tests/commands instead of mapping claims.
+- Treating green build/typecheck as runtime proof.
+- Accepting stale evidence after repair.
+- Demanding full end-to-end coverage for every local change.
+- Routing environment unavailability as a source defect.
+- Reporting “more tests” without naming behavior and assertion.
