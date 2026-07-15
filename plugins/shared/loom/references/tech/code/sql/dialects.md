@@ -15,7 +15,7 @@ Use this reference to keep portable SQL rules separate from provider-specific im
 - Do not infer a provider from a task title or business prose. The MCP selection uses structured stack signals and task ownership.
 - If the provider version, extension, migration tool, or ORM mapping is unknown, use the portable subset and record the exact compatibility gap.
 
-## Common Compatibility Rules
+## Implementation Focus
 
 - Use the target provider's identity, type, timestamp, decimal, JSON, enum, quoting, parameter, and collation semantics.
 - Keep schema or migration SQL, ORM mappings, serialized API fields, and persistence tests aligned.
@@ -45,7 +45,7 @@ MariaDB remains a separate provider signal. It must not silently load the MySQL 
 
 Name the selected provider and decision proved: type mapping, identity, time semantics, pagination, JSON, upsert, index behavior, transaction behavior, or target-provider proof.
 
-## Anti-Patterns
+## Risks To Avoid
 
 - Loading every provider overlay for every persistence task.
 - Treating a provider name as permission to add provider-only features.

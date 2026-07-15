@@ -35,7 +35,7 @@ This file applies to portable hand-written SQL and query-builder logic. Load the
 
 - In the evidence summary, name the query decision: result shape, join cardinality, CTE, recursive guard, aggregation, EXISTS, NULL handling, pagination, parameterization, or mutation readback.
 
-## Anti-Patterns
+## Risks To Avoid
 
 - Selecting SQL references for every backend or API task.
 - Replacing a provider-specific query with a different dialect and calling it compatible.

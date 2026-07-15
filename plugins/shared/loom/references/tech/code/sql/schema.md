@@ -35,7 +35,7 @@ This file applies to portable relational schema and migration work. Load the sel
 
 - In the evidence summary, name the schema decision: normalization, key strategy, constraint, data type, cascade behavior, index, soft delete, audit/history, migration compatibility, or ORM alignment.
 
-## Anti-Patterns
+## Risks To Avoid
 
 - Relying on ORM auto-DDL when the project has a migration contract.
 - Adding a provider-specific column type without target-provider verification.

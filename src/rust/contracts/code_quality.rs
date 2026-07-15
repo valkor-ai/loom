@@ -2076,6 +2076,8 @@ pub fn forbidden_jvm_package_prefixes() -> Vec<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
     use crate::{
         ConfidenceLevel, ProjectKind, TaskArtifactRefs, TaskWriteBoundary,
@@ -3249,5 +3251,62 @@ mod tests {
                 .and_then(Value::as_str)
                 .is_some_and(|path| path.contains("/mysql/") || path.contains("/postgresql/"))
         }));
+    }
+
+    #[test]
+    fn sql_dialect_references_are_complete_and_non_operational() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let files = [
+            "plugins/shared/loom/references/tech/code/sql/mysql/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/mysql/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/mysql/transactions.md",
+            "plugins/shared/loom/references/tech/code/sql/postgresql/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/postgresql/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/postgresql/transactions.md",
+        ];
+        let excluded_operations = [
+            "replication",
+            "backup",
+            "pitr",
+            "wal",
+            "vacuum",
+            "pgbouncer",
+            "pgpool",
+            "pg_stat",
+            "my.cnf",
+            "max_connections",
+            "innodb_buffer_pool",
+            "create user",
+        ];
+        for relative in files {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 55,
+                "{} is too thin",
+                path.display()
+            );
+            for section in [
+                "## When To Use",
+                "## Implementation Focus",
+                "## Verification Focus",
+                "## Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+            let lower = content.to_ascii_lowercase();
+            for term in excluded_operations {
+                assert!(
+                    !lower.contains(term),
+                    "{} contains excluded operation {term}",
+                    path.display()
+                );
+            }
+        }
     }
 }
