@@ -3985,6 +3985,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "clientStorage": ["implement_client_storage"],
                 "languageVersionFeature": ["implement_language_version_feature"],
                 "genericTypeAbstraction": ["implement_generic_type_abstraction"],
+                "dependencyAbstraction": ["implement_dependency_abstraction"],
+                "moduleStructure": ["refactor_module_structure"],
                 "runtimePerformance": ["optimize_runtime_performance"],
                 "security": ["implement_authentication_or_authorization"],
                 "async": ["implement_async_processing"],
@@ -4008,6 +4010,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "clientStorage": "Use implement_client_storage only for a task that owns client-side persistence, secure device storage, persisted drafts/preferences/session state, hydration, migration, expiry, or identity-scoped cleanup.",
                 "languageVersionFeature": "Use implement_language_version_feature only for a task that intentionally owns language-standard/version APIs whose implementation or fallback differs from the repository baseline; include build configuration ownership when the declared compiler/language target changes.",
                 "genericTypeAbstraction": "Use implement_generic_type_abstraction only for a task that owns a reusable generic/template/type-parameter contract with real consumers, constraints, and verification; do not infer it from prose examples or ordinary collection use.",
+                "dependencyAbstraction": "Use implement_dependency_abstraction only for a task that owns a consumer-facing interface/protocol/trait/adapter seam with concrete consumers, implementations, lifecycle/error semantics, and verification; do not create it only to mirror one implementation.",
+                "moduleStructure": "Use refactor_module_structure only for a task that owns module/package/project boundaries, entry-point placement, import visibility, workspace/module files, build tags, generated-code ownership, or dependency direction and verifies affected build targets.",
                 "runtimePerformance": "Use optimize_runtime_performance only for a task that owns a measured CPU, allocation, memory-layout, throughput, latency, binary-size, or runtime resource bottleneck and its benchmark/profile plus correctness evidence.",
                 "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
@@ -5753,6 +5757,14 @@ mod tests {
         assert_eq!(
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["genericTypeAbstraction"],
             json!(["implement_generic_type_abstraction"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["dependencyAbstraction"],
+            json!(["implement_dependency_abstraction"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["moduleStructure"],
+            json!(["refactor_module_structure"])
         );
         assert_eq!(
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["runtimePerformance"],

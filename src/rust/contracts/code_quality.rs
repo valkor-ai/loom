@@ -1303,15 +1303,34 @@ fn reference_items_for_signal(
             }
         }
         Some("go") => {
-            items.extend(["core", "interfaces", "structure"].map(str::to_string));
-            if has_focus("testing") {
+            if matches!(
+                task.task_kind,
+                TaskKind::FeatureIncrement
+                    | TaskKind::DataModelIncrement
+                    | TaskKind::InterfaceIncrement
+                    | TaskKind::IntegrationIncrement
+                    | TaskKind::RefactorSupport
+            ) {
+                items.insert("core".to_string());
+            }
+            if task_owns_test_implementation(task) {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") || has_focus("api") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("concurrency".to_string());
             }
-            if has_focus("generics") {
+            if task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction) {
                 items.insert("generics".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementDependencyAbstraction) {
+                items.insert("interfaces".to_string());
+            }
+            if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+                || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+                || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+                || task_has_action(task, ImplementationAction::RefactorModuleStructure)
+            {
+                items.insert("structure".to_string());
             }
         }
         Some("csharp") => {
@@ -3641,6 +3660,59 @@ mod tests {
     }
 
     #[test]
+    fn go_references_are_task_scoped_without_api_or_prose_defaults() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Go 1.23 + Gin"}}
+        }));
+        let api = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let owned = task(
+            TaskKind::RefactorSupport,
+            vec![
+                ImplementationAction::ImplementAsyncProcessing,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+                ImplementationAction::ImplementDependencyAbstraction,
+                ImplementationAction::RefactorModuleStructure,
+            ],
+        );
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective = "Add goroutines, channels, worker pools, interfaces, generics, cmd/internal structure, fuzzing, and tests.".to_string();
+        let testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let config = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+
+        let api_selection = code_reference_selection_for_task(&baseline, &api).unwrap();
+        let selected = code_reference_selection_for_task(&baseline, &owned).unwrap();
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+        let structure = code_reference_selection_for_task(&baseline, &config).unwrap();
+
+        assert_eq!(
+            api_selection.reference_groups["go"],
+            vec!["core".to_string()]
+        );
+        for expected in ["core", "concurrency", "generics", "interfaces", "structure"] {
+            assert!(selected.reference_groups["go"].contains(&expected.to_string()));
+        }
+        assert_eq!(prose.reference_groups["go"], vec!["core".to_string()]);
+        assert_eq!(tests.reference_groups["go"], vec!["testing".to_string()]);
+        assert_eq!(
+            structure.reference_groups["go"],
+            vec!["structure".to_string()]
+        );
+    }
+
+    #[test]
     fn maps_cpp_without_losing_plus_signs() {
         let baseline = baseline(json!({"tracks": {"backend": {"selection": "C++20 + CMake"}}}));
         let task = task(
@@ -3721,9 +3793,12 @@ mod tests {
         let go_baseline = baseline(json!({"tracks": {"backend": {"selection": "Go + Gin"}}}));
         let mut go_task = task(
             TaskKind::FeatureIncrement,
-            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+            vec![
+                ImplementationAction::CreateOrUpdateBusinessRule,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+            ],
         );
-        go_task.objective = "Create generic collection helpers with type parameters.".to_string();
+        go_task.objective = "Implement the accepted collection helper contract.".to_string();
         let go_selection = code_reference_selection_for_task(&go_baseline, &go_task).unwrap();
         assert!(go_selection.reference_groups["go"].contains(&"generics".to_string()));
 

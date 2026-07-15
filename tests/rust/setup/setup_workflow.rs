@@ -1239,7 +1239,7 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .parent()
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str());
-        let minimum_lines = if matches!(code_profile, Some("cpp" | "csharp")) {
+        let minimum_lines = if matches!(code_profile, Some("cpp" | "csharp" | "go")) {
             65
         } else {
             25
@@ -1261,7 +1261,7 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
                 path.display()
             );
         }
-        if matches!(code_profile, Some("cpp" | "csharp")) {
+        if matches!(code_profile, Some("cpp" | "csharp" | "go")) {
             assert!(
                 content.contains("## Unsafe Defaults"),
                 "{} missing enhanced code-profile unsafe-default guidance",
@@ -1337,6 +1337,24 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let csharp_testing = fs::read_to_string(code_root.join("csharp/testing.md")).unwrap();
     assert!(csharp_testing.contains("HttpMessageHandler"));
     assert!(csharp_testing.contains("Mutation testing"));
+    let go_core = fs::read_to_string(code_root.join("go/core.md")).unwrap();
+    assert!(go_core.contains("errors.Join"));
+    assert!(go_core.contains("rows.Err"));
+    let go_concurrency = fs::read_to_string(code_root.join("go/concurrency.md")).unwrap();
+    assert!(go_concurrency.contains("errgroup.WithContext"));
+    assert!(go_concurrency.contains("SetLimit"));
+    let go_interfaces = fs::read_to_string(code_root.join("go/interfaces.md")).unwrap();
+    assert!(go_interfaces.contains("typed nil"));
+    assert!(go_interfaces.contains("pointer-to-interface"));
+    let go_generics = fs::read_to_string(code_root.join("go/generics.md")).unwrap();
+    assert!(go_generics.contains("~T"));
+    assert!(go_generics.contains("Methods cannot introduce"));
+    let go_structure = fs::read_to_string(code_root.join("go/structure.md")).unwrap();
+    assert!(go_structure.contains("go.work"));
+    assert!(go_structure.contains("//go:build"));
+    let go_testing = fs::read_to_string(code_root.join("go/testing.md")).unwrap();
+    assert!(go_testing.contains("httptest.Server"));
+    assert!(go_testing.contains("t.Setenv"));
     let spring_runtime = fs::read_to_string(backend_root.join("springboot/runtime.md")).unwrap();
     assert!(spring_runtime.contains("@ConfigurationProperties"));
     assert!(spring_runtime.contains("graceful shutdown"));

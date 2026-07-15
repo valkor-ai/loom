@@ -50,6 +50,8 @@ pub enum ImplementationAction {
     ImplementClientStorage,
     ImplementLanguageVersionFeature,
     ImplementGenericTypeAbstraction,
+    ImplementDependencyAbstraction,
+    RefactorModuleStructure,
     OptimizeRuntimePerformance,
     CreateOrUpdateStateMachine,
     CreateOrUpdateBusinessRule,
