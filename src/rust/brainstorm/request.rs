@@ -230,7 +230,6 @@ pub fn build_brainstorm_candidate_write_request_root(
                     "whenToRead": "Read before writing the Brainstorm candidate.",
                     "selectors": read_selectors_value_from_paths([
                         "confirmedClarificationState.blocks",
-                        "confirmedClarificationState.skippedBlocks",
                         "confirmedClarificationState.finalSummaryConfirmed"
                     ])
                 },
@@ -286,17 +285,19 @@ fn schema_projection() -> Value {
             "scope",
             "roadmap",
             "phasePlan",
-            "acceptance",
-            "userConfirmation"
+            "acceptance"
         ],
         "phaseScopeFields": [
             "scope.included",
             "scope.excluded",
             "scope.deferred",
             "scope.assumptions",
-            "roadmap.currentPhaseId",
             "roadmap.phases",
-            "phasePlan.current",
+            "phasePlan.current.title",
+            "phasePlan.current.goal",
+            "phasePlan.current.scopeRefs",
+            "phasePlan.current.acceptanceRefs",
+            "phasePlan.current.status",
             "phasePlan.nextPhasePreview"
         ],
         "conceptGroundingFields": [
@@ -335,9 +336,6 @@ fn schema_projection() -> Value {
             "conceptGrounding.phaseConceptGrounding.concepts[].priority": "enumRefs.conceptPriority",
             "conceptGrounding.phaseConceptGrounding.concepts[].riskFactors[]": "enumRefs.conceptRiskFactor",
             "conceptGrounding.glossaryUpdates[].operation": "enumRefs.glossaryUpdateOperation",
-            "clarificationProgress.mode": "enumRefs.clarificationMode",
-            "clarificationProgress.confirmedBlocks[].block": "enumRefs.clarificationBlockName",
-            "clarificationProgress.skippedBlocks[].block": "enumRefs.clarificationBlockName",
             "frontendExperience.experienceLevel": "enumRefs.frontendExperienceLevel",
             "frontendExperience.dataViews[].selectionMode": "enumRefs.frontendTargetSelectionMode",
             "frontendExperience.actions[].entryPoint": "enumRefs.frontendActionEntryPoint",
@@ -346,34 +344,12 @@ fn schema_projection() -> Value {
             "frontendExperience.operationPaths[].requiredStates[]": "enumRefs.frontendInteractionState"
         },
         "objectShapeRules": {
+            "conceptGrounding.glossaryUpdates[]": "This array is optional. Use [] when the delivery glossary does not change. Loom generates updateId during accept; do not write updateId. Every item writes operation and reason. add writes concept using the exact phaseConceptGrounding.concepts[] object shape; replace writes conceptRef plus that same concept object shape; remove writes conceptRef and no concept. Do not flatten concept fields such as term, normalizedName, or explanation onto the update item.",
             "frontendExperience.actions[].resultObservation[]": "Use only frontendResultObservationMode values: list_refresh, detail_refresh, inline_status_update, response_message, not_applicable. Do not use frontendInteractionState values here: loading, success, error, empty, business_blocking. empty is not a result observation; it is a page/list state.",
             "frontendExperience.operationPaths[].requiredStates[]": "Use only frontendInteractionState values: loading, success, error, empty, business_blocking. Do not use frontendResultObservationMode values here: list_refresh, detail_refresh, inline_status_update, response_message, not_applicable. empty is valid only here for empty-list/page states."
         },
-        "clarificationFields": [
-            "userConfirmation.confirmed",
-            "userConfirmation.confirmationSummary",
-            "userConfirmation.confirmationBasis",
-            "clarificationProgress"
-        ],
-        "clarificationProgressShape": {
-            "mode": "progressive_blocks",
-            "confirmedBlocks": [{
-                "block": "phase_scope|concept_grounding|frontend_experience",
-                "summary": "what the user confirmed in that user-facing block",
-                "confirmedByUser": true
-            }],
-            "skippedBlocks": [{
-                "block": "frontend_experience",
-                "reason": "only when UI/page confirmation is explicitly not applicable"
-            }],
-            "finalSummaryConfirmed": true
-        },
-        "forbiddenClarificationProgressFields": [
-            "completedBlocks",
-            "currentBlock"
-        ],
         "notes": [
-            "Machine-owned ids, request binding, accepted status, and handoff routing are added by Loom on accept.",
+            "Machine-owned ids, request binding, confirmation metadata, accepted status, and handoff routing are added by Loom on accept.",
             "final_summary is the gate before write, not the source of requirement detail."
         ]
     })
@@ -411,7 +387,6 @@ fn candidate_result_template(phase_id: &str) -> Value {
         },
         "roadmap": {
             "required": true,
-            "currentPhaseId": phase_id,
             "phases": [{
                 "phaseId": phase_id,
                 "title": "",
@@ -422,7 +397,6 @@ fn candidate_result_template(phase_id: &str) -> Value {
         },
         "phasePlan": {
             "current": {
-                "phaseId": phase_id,
                 "title": "",
                 "goal": "",
                 "scopeRefs": ["scope_1"],
@@ -549,44 +523,6 @@ fn candidate_result_template(phase_id: &str) -> Value {
             }],
             "mustNot": [],
             "confirmationSummary": ""
-        },
-        "userConfirmation": {
-            "confirmed": true,
-            "confirmedAt": "",
-            "confirmationSummary": "",
-            "confirmationBasis": {
-                "initialRequestOnly": false,
-                "summaryPresentedToUser": true,
-                "confirmedAfterSummary": true,
-                "presentedItems": [
-                    "阶段范围确认",
-                    "业务理解与规则确认",
-                    "页面办理路径确认",
-                    "提交前确认"
-                ]
-            }
-        },
-        "clarificationProgress": {
-            "mode": "progressive_blocks",
-            "confirmedBlocks": [
-                {
-                    "block": "phase_scope",
-                    "summary": "",
-                    "confirmedByUser": true
-                },
-                {
-                    "block": "concept_grounding",
-                    "summary": "",
-                    "confirmedByUser": true
-                },
-                {
-                    "block": "frontend_experience",
-                    "summary": "",
-                    "confirmedByUser": true
-                }
-            ],
-            "skippedBlocks": [],
-            "finalSummaryConfirmed": true
         }
     })
 }
@@ -1116,7 +1052,6 @@ fn candidate_write_rules() -> Value {
         "Use outputContract.resultTemplate as the concrete field shape when writing the candidate.",
         "Arrays in outputContract.resultTemplate show object shapes. Keep arrays empty only when the confirmed requirement has no item for that field; never replace typed object arrays with string arrays.",
         "When scope.deferred is non-empty, phasePlan.nextPhasePreview must use kind=candidate with suggestedPhaseId, title, goal, scopePreview, and reason. Use kind=none only when scope.deferred is empty.",
-        "clarificationProgress must use confirmedBlocks/skippedBlocks/finalSummaryConfirmed. Do not write completedBlocks or currentBlock.",
         "In user-facing summaries and confirmation text, use user-visible block names rather than internal block ids.",
         "Keep knowledge metadata out of candidate sourceRefs and summary fields.",
         "Preserve all confirmed block details in scope, acceptance, domainModel.businessFlows, conceptGrounding, and frontendExperience instead of relying on final_summary text.",

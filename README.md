@@ -75,14 +75,20 @@ Capability | What it changes
 --- | ---
 Stateful delivery protocol | Turns a one-shot coding session into a resumable delivery loop backed by `.loom/` state, request refs, result files, review records, repair requests, and handoff evidence.
 Requirement intelligence | Converts loose prompts into confirmed scope, business rules, lifecycle coverage, UI operation paths, and acceptance details that planning, execution, and review must preserve.
-Engineering contracts | Carries architecture, API, runtime, code-quality, and task ownership decisions as structured contracts instead of relying on repeated prompt reminders.
+Architecture and system design | Turns the accepted technical baseline and repository facts into implementation-facing decisions for boundaries, behavior, data ownership, runtime responsibilities, NFR targets, ADRs, and failure modes. These decisions become compact ids that planning, execution, review, and repair can carry forward.
+API contracts | Defines structured interfaces, request and response models, validation, error behavior, collection policies, and compatibility rules when they are actually in scope. Frontend tasks, integration checks, runtime probes, and deploy consume the accepted API contract instead of guessing paths or prefixes.
+Stack-aware implementation guidance | Selects only the language, framework, persistence, and frontend references owned by the current task from the accepted Technical Baseline. The code and framework references provide repository adaptation, implementation patterns, verification expectations, and anti-patterns without loading unrelated stacks or reselecting technology.
+Engineering contracts | Carries runtime, code-quality, and task ownership decisions as structured contracts instead of relying on repeated prompt reminders.
 Production UI guidance | Pushes UI quality to the generation side with surface decisions, scenario references, layout density, style asset plans, token expectations, forbidden content rules, and desktop/mobile evidence.
 Targeted context routing | Lets agents read field groups, reference profiles, task contracts, and repair context instead of repeatedly loading broad files or entire artifacts.
 Task-scoped execution | Splits delivery into bounded tasks with source refs, write boundaries, verification intent, result templates, and continuation rules.
+Verification and review discipline | Applies language/framework-specific testing guidance only when the task owns the evidence, uses review references to assess specification and implementation quality, and adds Playwright browser closure only for explicitly assigned browser behavior. Runtime failures remain environment evidence rather than being misreported as code defects.
 Review and repair loop | Separates implementation from validation through review signals, TaskResult evidence, repair contracts, multi-target repair routing, and re-verification.
 Runtime and deploy readiness | Prepares local Docker Compose previews with topology-aware services, build contexts, environment rules, ports, health checks, logs, and repair boundaries.
 Knowledge-guided clarification | Lets teams register local domain docs as named knowledge sources, build searchable local indexes, and pull only matching chunks into the right clarification step.
 Multi-agent MCP protocol | Runs the same delivery state machine through Codex, Claude Code, OpenCode, and future MCP-capable agents.
+
+The technical guidance behind this path is organized under `plugins/shared/loom/references/tech/`: architecture (`arch`), API design (`api`), language and SQL implementation (`code`), backend and frontend frameworks (`backend` and `frontend`), review (`review`), and Playwright verification (`test/playwright`). These are not loaded as one large skill. Loom derives a task-scoped selection from accepted technical facts and task ownership, then passes only the selected references into the relevant architecture, planning, execution, review, or browser-closure request.
 
 ## Context Routing
 

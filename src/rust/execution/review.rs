@@ -26,12 +26,14 @@ use state::{
 };
 
 use crate::{
+    api_contract::{exposure_projection, interfaces_for_refs, load_project_api_contract},
     paths::{
         manual_review_request_file, manual_review_resolution_candidate_file,
         manual_review_resolution_file, review_latest_file, review_request_file,
         review_result_candidate_file, review_result_file, task_result_file,
     },
-    task_execution::load_current_plan_and_run,
+    task_execution::{load_current_plan_and_run, save_run},
+    task_plan::update_run_summary,
 };
 
 const REVIEW_ACTIONS: &[&str] = &[
@@ -126,6 +128,11 @@ fn materialize_review_request_inner(
         .and_then(|architecture_path| {
             state::store::read_json::<ArchitectureArtifactContract>(&architecture_path).ok()
         });
+    let project_api_contract = architecture_contract
+        .as_ref()
+        .map(|architecture| load_project_api_contract(root, architecture))
+        .transpose()?
+        .flatten();
     let next_phase_handoff =
         brainstorm::next_phase_handoff_from_preview(project_root, delivery_id, phase_id, None)?;
     let request_root = build_review_request(
@@ -138,6 +145,7 @@ fn materialize_review_request_inner(
         &run,
         &task_results,
         architecture_contract.as_ref(),
+        project_api_contract.as_ref(),
         next_phase_handoff.as_ref(),
     )?;
     let stored = state::write_native_request(
@@ -217,6 +225,7 @@ fn build_review_request(
     run: &TaskPlanRun,
     task_results: &[TaskResult],
     architecture_contract: Option<&ArchitectureArtifactContract>,
+    project_api_contract: Option<&Value>,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
 ) -> Result<Value, state::store::StateError> {
     let schema_shape = review_result_schema_shape();
@@ -282,7 +291,12 @@ fn build_review_request(
             "taskPlanRunId": run.run_id,
             "groupSummaries": compact_group_summaries(&task_plan.groups),
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
-            "taskResultSummaries": compact_task_result_summaries(task_results)
+            "taskResultSummaries": compact_task_result_summaries(task_results),
+            "apiContractContext": compact_api_contract_context(
+                task_plan,
+                architecture_contract,
+                project_api_contract,
+            )
         },
         "changeSet": change_set,
         "changeContext": change_context,
@@ -325,8 +339,10 @@ fn build_review_request(
                 "Read reviewPacket compact groupSummaries, taskSummaries, taskResultSummaries, changeContext, review matrices, outputContract.reviewSignals, and outputContract before writing ReviewResult.",
                 "Review spec fidelity and project standards as separate axes; a clean implementation can still be wrong for the confirmed contract.",
                 "Every finding must include non-empty readRefs.",
+                "Write finding observations and evidence only. Loom derives findingId, pendingActions.findingRefs, nextAction.findingRefs, nextAction.targetTaskIds, and approved phase linkage from the current review signals.",
                 "Every blocking finding must describe the smallest repair that satisfies the current Loom contract.",
                 "Do not modify project files during review.",
+                "Use compact browser check status, attempts, command, and observed outcome first. Read a referenced Playwright trace, report, or screenshot only when a failed, blocked, retried, or ambiguous check cannot be judged from the compact evidence.",
                 "Do not convert environment blockers into execution_repair unless another product defect finding justifies execution repair.",
                 "Do not approve when outputContract.reviewSignals contains unsatisfied requirement detail evidence, engineering quality, architecture quality, API contract, code quality, frontend workflow closure, or frontend UI quality.",
                 "If outputContract.reviewSignals contains frontend_workflow_closure with missingTaskAssignment=true, route taskplan_repair unless a higher-priority blocking finding applies.",
@@ -358,9 +374,9 @@ fn build_review_request(
                 "description": "Write the ReviewResult JSON for this phase run."
             }],
             "schemaShape": schema_shape,
-            "resultTemplate": review_result_template(review_id, phase_id, task_plan, run, next_phase_handoff),
+            "resultTemplate": review_result_template(task_plan, run, next_phase_handoff),
             "allowedRefs": allowed_refs,
-            "requiredFields": ["reviewId", "source", "decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
+            "requiredFields": ["decision", "findings", "coverageAssessment", "limitations", "pendingActions", "nextAction"],
             "reviewSignals": {
                 "items": review_signals
             },
@@ -417,7 +433,8 @@ fn build_review_request(
                         "reviewPacket.taskPlanRunId",
                         "reviewPacket.groupSummaries",
                         "reviewPacket.taskSummaries",
-                        "reviewPacket.taskResultSummaries"
+                        "reviewPacket.taskResultSummaries",
+                        "reviewPacket.apiContractContext"
                     ])
                 },
                 {
@@ -489,7 +506,6 @@ fn build_review_request(
                         "outputContract.allowedRefs.readRefs",
                         "outputContract.requiredFields",
                         "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.source",
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.findings",
                         "outputContract.schemaShape.properties.coverageAssessment",
@@ -564,30 +580,16 @@ fn review_result_schema_shape() -> Value {
     json!({
         "type": "object",
         "required": [
-            "schemaVersion",
-            "reviewId",
-            "source",
             "decision",
             "findings",
             "coverageAssessment",
             "limitations",
             "pendingActions",
-            "nextAction",
-            "createdAt",
-            "updatedAt"
+            "nextAction"
         ],
         "properties": {
-            "schemaVersion": "1.0",
-            "reviewId": "outputContract.resultTemplate.reviewId",
-            "source": {
-                "requestId": "active review request id",
-                "phaseId": "source.phaseId",
-                "taskPlanId": "source.taskPlanId",
-                "taskPlanRunId": "source.taskPlanRunId"
-            },
             "decision": "approved | approved_with_notes | changes_requested | blocked | needs_user_decision",
             "findings": [{
-                "findingId": "string",
                 "findingType": "defect | note | limitation | contract_gap",
                 "severity": "critical | major | minor | note",
                 "severityClass": "blocking | warning | info",
@@ -639,28 +641,19 @@ fn review_result_schema_shape() -> Value {
             }],
             "pendingActions": [{
                 "type": "enumRefs.nextAction item other than top-level nextAction.type",
-                "findingRefs": ["findings[].findingId"],
                 "reason": "string"
             }],
             "nextAction": {
                 "type": "enumRefs.nextAction item",
                 "reason": "string",
-                "targetNode": "string or null",
-                "targetPhaseId": "string or null",
-                "targetTaskIds": ["task id"],
-                "findingRefs": ["findings[].findingId"],
                 "userVisibleState": "string or null"
-            },
-            "createdAt": "ISO-8601 datetime",
-            "updatedAt": "ISO-8601 datetime"
+            }
         },
         "additionalProperties": false
     })
 }
 
 fn review_result_template(
-    review_id: &str,
-    phase_id: &str,
     task_plan: &TaskPlan,
     run: &TaskPlanRun,
     next_phase_handoff: Option<&brainstorm::NextPhaseHandoff>,
@@ -687,31 +680,17 @@ fn review_result_template(
     let next_action = if let Some(handoff) = next_phase_handoff {
         json!({
             "type": "continue_to_next_phase",
-            "reason": handoff.reason,
-            "targetPhaseId": handoff.phase_id,
-            "targetTaskIds": [],
-            "findingRefs": []
+            "reason": handoff.reason
         })
     } else {
         json!({
             "type": "done",
-            "reason": "",
-            "targetTaskIds": [],
-            "findingRefs": []
+            "reason": ""
         })
     };
     json!({
-        "schemaVersion": "1.0",
-        "reviewId": review_id,
-        "source": {
-            "requestId": review_id,
-            "phaseId": phase_id,
-            "taskPlanId": task_plan.task_plan_id,
-            "taskPlanRunId": run.run_id
-        },
         "decision": "approved",
         "findings": [{
-            "findingId": "finding_1",
             "findingType": "note",
             "severity": "note",
             "severityClass": "info",
@@ -752,9 +731,7 @@ fn review_result_template(
         },
         "limitations": [],
         "pendingActions": [],
-        "nextAction": next_action,
-        "createdAt": "ISO-8601 datetime",
-        "updatedAt": "ISO-8601 datetime"
+        "nextAction": next_action
     })
 }
 
@@ -1010,12 +987,7 @@ fn review_validator_rules(mode: &str) -> Value {
     })
 }
 
-fn manual_review_resolution_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
-    result: &ReviewResult,
-) -> Value {
+fn manual_review_resolution_template(result: &ReviewResult) -> Value {
     let route = match result.next_action.r#type.as_str() {
         "execution_repair" | "taskplan_repair" | "architecture_artifact_repair" => {
             result.next_action.r#type.as_str()
@@ -1023,11 +995,6 @@ fn manual_review_resolution_template(
         _ => "needs_user_decision",
     };
     json!({
-        "schemaVersion": "1.0",
-        "manualReviewResolutionId": format!("manual-review-resolution-{request_id}"),
-        "manualReviewRequestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
         "userAnswer": {
             "text": "",
             "selectedShortReply": "request_changes"
@@ -1041,11 +1008,8 @@ fn manual_review_resolution_template(
         },
         "nextAction": {
             "type": route,
-            "reason": "",
-            "targetTaskIds": result.next_action.target_task_ids.clone(),
-            "findingRefs": result.next_action.finding_refs.clone()
-        },
-        "createdAt": "ISO-8601 datetime"
+            "reason": ""
+        }
     })
 }
 
@@ -1115,8 +1079,9 @@ where
         return Ok(stale);
     }
     let root = Path::new(&input.project_root);
+    let fields = read_review_submit_fields(input)?;
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id);
+    let normalized = normalize_review_result_machine_fields(raw, &authorized.request_id, &fields);
     let mut result: ReviewResult = match serde_json::from_value(normalized) {
         Ok(result) => result,
         Err(error) => {
@@ -1132,29 +1097,6 @@ where
             )
         }
     };
-    let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
-        project_root: input.project_root.clone(),
-        request_ref: input.request_ref.clone(),
-        fields: vec![
-            "source.phaseId".to_string(),
-            "source.taskPlanId".to_string(),
-            "source.taskPlanRunId".to_string(),
-            "outputContract.allowedRefs.taskIds".to_string(),
-            "outputContract.allowedRefs.groupIds".to_string(),
-            "outputContract.allowedRefs.acceptanceRefs".to_string(),
-            "outputContract.allowedRefs.taskResultIds".to_string(),
-            "outputContract.allowedRefs.changedFilePaths".to_string(),
-            "outputContract.allowedRefs.diffRefs".to_string(),
-            "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
-            "outputContract.allowedRefs.readRefs".to_string(),
-            "enumRefs.readRefType".to_string(),
-            "enumRefs.evidenceRefType".to_string(),
-            "outputContract.changeContextMode".to_string(),
-            "outputContract.reviewSignals.items".to_string(),
-            "reviewScope.nextPhasePreview.kind".to_string(),
-        ],
-    })?
-    .fields;
     if let Some(handoff) =
         normalize_approved_next_phase(&input.project_root, &delivery_id, &phase_id, &result)?
     {
@@ -1162,8 +1104,10 @@ where
         result.next_action.target_phase_id = Some(handoff.phase_id);
         result.next_action.reason = handoff.reason;
     }
+    normalize_browser_environment_review_route(&mut result, &fields);
     normalize_review_signal_targets(&mut result, &fields);
-    let issues = validate_review_result(&result, &authorized.request_id, &fields);
+    normalize_review_linkage_fields(&mut result, &fields);
+    let issues = validate_review_result(&result, &fields);
     if !issues.is_empty() {
         return repairable_or_fallback_manual_review(
             input,
@@ -1206,30 +1150,79 @@ where
     )
 }
 
-fn normalize_review_result_machine_fields(mut raw: Value, request_id: &str) -> Value {
+fn read_review_submit_fields(
+    input: &FileSubmitInput,
+) -> Result<
+    std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    state::store::StateError,
+> {
+    Ok(
+        state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+            project_root: input.project_root.clone(),
+            request_ref: input.request_ref.clone(),
+            fields: vec![
+                "source.phaseId".to_string(),
+                "source.taskPlanId".to_string(),
+                "source.taskPlanRunId".to_string(),
+                "outputContract.allowedRefs.taskIds".to_string(),
+                "outputContract.allowedRefs.groupIds".to_string(),
+                "outputContract.allowedRefs.acceptanceRefs".to_string(),
+                "outputContract.allowedRefs.taskResultIds".to_string(),
+                "outputContract.allowedRefs.changedFilePaths".to_string(),
+                "outputContract.allowedRefs.diffRefs".to_string(),
+                "outputContract.allowedRefs.verificationEvidenceRefs".to_string(),
+                "outputContract.allowedRefs.readRefs".to_string(),
+                "enumRefs.readRefType".to_string(),
+                "enumRefs.evidenceRefType".to_string(),
+                "outputContract.changeContextMode".to_string(),
+                "outputContract.reviewSignals.items".to_string(),
+                "reviewScope.nextPhasePreview.kind".to_string(),
+                "reviewScope.nextPhasePreview.suggestedPhaseId".to_string(),
+            ],
+        })?
+        .fields,
+    )
+}
+
+fn normalize_review_result_machine_fields(
+    mut raw: Value,
+    request_id: &str,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
     let Some(object) = raw.as_object_mut() else {
         return raw;
     };
     object.insert("schemaVersion".to_string(), json!("1.0"));
-    if let Some(source) = object.get_mut("source").and_then(Value::as_object_mut) {
-        source.insert("requestId".to_string(), json!(request_id));
-    }
+    object.insert("reviewId".to_string(), json!(request_id));
+    object.insert(
+        "source".to_string(),
+        json!({
+            "requestId": request_id,
+            "phaseId": review_field_value(fields, "source.phaseId"),
+            "taskPlanId": review_field_value(fields, "source.taskPlanId"),
+            "taskPlanRunId": review_field_value(fields, "source.taskPlanRunId")
+        }),
+    );
     let now = state::store::now_string();
-    if !object
-        .get("createdAt")
-        .and_then(Value::as_str)
-        .is_some_and(is_iso_datetime_string)
-    {
-        object.insert("createdAt".to_string(), json!(now.clone()));
-    }
-    if !object
-        .get("updatedAt")
-        .and_then(Value::as_str)
-        .is_some_and(is_iso_datetime_string)
-    {
-        object.insert("updatedAt".to_string(), json!(now));
+    object.insert("createdAt".to_string(), json!(now.clone()));
+    object.insert("updatedAt".to_string(), json!(now));
+    if let Some(findings) = object.get_mut("findings").and_then(Value::as_array_mut) {
+        for (index, finding) in findings.iter_mut().enumerate() {
+            if let Some(finding) = finding.as_object_mut() {
+                finding.insert(
+                    "findingId".to_string(),
+                    json!(format!("finding-{}", index + 1)),
+                );
+            }
+        }
     }
     normalize_review_pending_actions(object);
+    if let Some(next_action) = object.get_mut("nextAction").and_then(Value::as_object_mut) {
+        next_action.remove("targetTaskIds");
+        next_action.remove("findingRefs");
+        next_action.remove("targetPhaseId");
+        next_action.remove("targetNode");
+    }
     raw
 }
 
@@ -1249,7 +1242,6 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
         object.insert("pendingActions".to_string(), json!([]));
         return;
     };
-    let mut duplicate_finding_refs = BTreeSet::new();
     let actions = raw_items
         .into_iter()
         .filter_map(|item| {
@@ -1261,14 +1253,10 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
                 .filter(|value| !value.is_empty())?
                 .to_string();
             if next_action_type.as_deref() == Some(action_type.as_str()) {
-                duplicate_finding_refs
-                    .extend(value_string_array(&Value::Object(action), "findingRefs"));
                 return None;
             }
             action.insert("type".to_string(), json!(action_type));
-            if !action.get("findingRefs").is_some_and(Value::is_array) {
-                action.insert("findingRefs".to_string(), json!([]));
-            }
+            action.remove("findingRefs");
             if !action
                 .get("reason")
                 .and_then(Value::as_str)
@@ -1283,76 +1271,181 @@ fn normalize_review_pending_actions(object: &mut serde_json::Map<String, Value>)
         })
         .collect::<Vec<_>>();
     object.insert("pendingActions".to_string(), Value::Array(actions));
-    if !duplicate_finding_refs.is_empty() {
-        let Some(next_action) = object.get_mut("nextAction").and_then(Value::as_object_mut) else {
-            return;
-        };
-        let mut refs = next_action
-            .get("findingRefs")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect::<BTreeSet<_>>();
-        refs.extend(duplicate_finding_refs);
-        next_action.insert(
-            "findingRefs".to_string(),
-            Value::Array(refs.into_iter().map(Value::String).collect()),
-        );
-    }
 }
 
 fn normalize_review_signal_targets(
     result: &mut ReviewResult,
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) {
-    if result.next_action.r#type != "execution_repair" {
-        return;
-    }
     let signals = array_field(fields, "outputContract.reviewSignals.items");
-    let mut target_task_ids = result.next_action.target_task_ids.clone();
+    let action_type = result.next_action.r#type.as_str();
+    let mut target_task_ids = Vec::new();
     for signal in signals.as_array().into_iter().flatten() {
-        if signal.get("recommendedNextAction").and_then(Value::as_str) != Some("execution_repair") {
+        if signal.get("recommendedNextAction").and_then(Value::as_str) != Some(action_type) {
             continue;
         }
         target_task_ids.extend(value_string_array(signal, "taskRefs"));
     }
-    result.next_action.target_task_ids = dedupe_non_empty(target_task_ids);
+    target_task_ids.extend(
+        result
+            .findings
+            .iter()
+            .filter(|finding| finding.recommended_next_action == action_type)
+            .flat_map(|finding| finding.task_refs.clone()),
+    );
+    result.next_action.target_task_ids = if matches!(
+        action_type,
+        "done" | "continue_to_next_phase" | "review" | "retry_browser_environment"
+    ) {
+        Vec::new()
+    } else {
+        dedupe_non_empty(target_task_ids)
+    };
 }
 
-fn is_iso_datetime_string(value: &str) -> bool {
-    value.contains('T')
-        && (value.ends_with('Z') || value.contains('+') || value.rsplit_once('-').is_some())
-        && !value.contains("ISO-8601")
+fn normalize_review_linkage_fields(
+    result: &mut ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    if result.next_action.r#type == "continue_to_next_phase" {
+        result.next_action.target_phase_id =
+            review_field_value(fields, "reviewScope.nextPhasePreview.suggestedPhaseId")
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| result.next_action.target_phase_id.clone());
+    } else {
+        result.next_action.target_phase_id = None;
+    }
+    let next_action_type = result.next_action.r#type.clone();
+    result.next_action.finding_refs =
+        if matches!(next_action_type.as_str(), "done" | "continue_to_next_phase") {
+            Vec::new()
+        } else {
+            result
+                .findings
+                .iter()
+                .filter(|finding| finding.recommended_next_action == next_action_type)
+                .map(|finding| finding.finding_id.clone())
+                .collect()
+        };
+    for action in &mut result.pending_actions {
+        action.finding_refs = result
+            .findings
+            .iter()
+            .filter(|finding| finding.recommended_next_action == action.r#type)
+            .map(|finding| finding.finding_id.clone())
+            .collect();
+    }
+}
+
+fn normalize_browser_environment_review_route(
+    result: &mut ReviewResult,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    let signals = array_field(fields, "outputContract.reviewSignals.items");
+    let blocked_signals = signals
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|signal| {
+            signal.get("kind").and_then(Value::as_str) == Some("frontend_ui_quality")
+                && signal.get("recommendedNextAction").and_then(Value::as_str)
+                    == Some("manual_review")
+                && signal
+                    .pointer("/browserVerification/environmentBlocked")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+        })
+        .collect::<Vec<_>>();
+    if blocked_signals.is_empty() {
+        return;
+    }
+    let task_refs = blocked_signals
+        .iter()
+        .flat_map(|signal| value_string_array(signal, "taskRefs"))
+        .chain(blocked_signals.iter().filter_map(|signal| {
+            signal
+                .pointer("/browserVerification/closureTaskId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }))
+        .collect::<Vec<_>>();
+    let evidence_refs = blocked_signals
+        .iter()
+        .filter_map(|signal| {
+            signal
+                .pointer("/browserVerification/closureTaskResultId")
+                .and_then(Value::as_str)
+                .map(|result_id| contracts::ReviewEvidenceRef {
+                    r#type: "task_result".to_string(),
+                    r#ref: result_id.to_string(),
+                    reason: "MCP-generated browser environment closure result.".to_string(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let finding_id = "finding-browser-environment-unavailable".to_string();
+    result
+        .findings
+        .retain(|finding| finding.finding_id != finding_id);
+    result.findings.push(ReviewFinding {
+        finding_id: finding_id.clone(),
+        finding_type: Some("limitation".to_string()),
+        concept_ref: None,
+        severity: "minor".to_string(),
+        severity_class: Some("blocking".to_string()),
+        evidence_kind: Some("runtime".to_string()),
+        failure_class: Some("environment_blocker".to_string()),
+        category: "environment_or_dependency".to_string(),
+        summary: "Required browser evidence is unavailable in supported execution environments."
+            .to_string(),
+        evidence: "Host launch doctor and managed Playwright container smoke both failed; project code was not classified as defective."
+            .to_string(),
+        read_refs: vec![contracts::ReviewReadRef {
+            r#type: "review_packet".to_string(),
+            r#ref: "reviewPacket".to_string(),
+            reason: "Compact browser closure status and environment diagnostics.".to_string(),
+        }],
+        evidence_refs,
+        group_refs: Vec::new(),
+        task_refs: dedupe_non_empty(task_refs),
+        acceptance_refs: Vec::new(),
+        artifact_refs: json!({}),
+        location: json!({}),
+        task_relevance: "indirect".to_string(),
+        scope_relation: "current_phase".to_string(),
+        introduced_by_current_task: "no".to_string(),
+        recommended_next_action: "manual_review".to_string(),
+    });
+    result.decision = "blocked".to_string();
+    result.next_action.r#type = "manual_review".to_string();
+    result.next_action.reason =
+        "Required browser evidence needs an environment retry, external evidence, or explicit waiver."
+            .to_string();
+    result.next_action.target_task_ids = result
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == finding_id)
+        .map(|finding| finding.task_refs.clone())
+        .unwrap_or_default();
+    result.next_action.finding_refs = vec![finding_id];
+}
+
+fn review_field_value(
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+    name: &str,
+) -> Value {
+    fields
+        .get(name)
+        .map(|field| field.value.clone())
+        .unwrap_or(Value::Null)
 }
 
 fn validate_review_result(
     result: &ReviewResult,
-    request_id: &str,
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if result.source.request_id != request_id
-        || fields
-            .get("source.phaseId")
-            .and_then(|field| field.value.as_str())
-            != Some(result.source.phase_id.as_str())
-        || fields
-            .get("source.taskPlanId")
-            .and_then(|field| field.value.as_str())
-            != Some(result.source.task_plan_id.as_str())
-        || fields
-            .get("source.taskPlanRunId")
-            .and_then(|field| field.value.as_str())
-            != Some(result.source.task_plan_run_id.as_str())
-    {
-        issues.push(issue(
-            "REVIEW_RESULT_REF_INVALID",
-            "source",
-            "ReviewResult source must match the active ReviewRequest.",
-        ));
-    }
     validate_review_enums(result, &mut issues);
     let allowed = json!({
         "taskIds": array_field(fields, "outputContract.allowedRefs.taskIds"),
@@ -2000,6 +2093,32 @@ fn materialize_manual_review_request(
         root,
         &manual_review_request_file(root, &locator, &request_id),
     )?;
+    let browser_quality_gate = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
+        project_root: input.project_root.clone(),
+        request_ref: input.request_ref.clone(),
+        fields: vec!["outputContract.reviewSignals.items".to_string()],
+    })
+    .ok()
+    .and_then(|read| {
+        read.fields
+            .get("outputContract.reviewSignals.items")
+            .cloned()
+    })
+    .and_then(|field| {
+        field.value.as_array().and_then(|signals| {
+            signals
+                .iter()
+                .find(|signal| {
+                    signal.get("recommendedNextAction").and_then(Value::as_str)
+                        == Some("manual_review")
+                        && signal
+                            .pointer("/browserVerification/environmentBlocked")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                })
+                .cloned()
+        })
+    });
     let request_root = build_manual_review_request(
         &request_id,
         &delivery_id,
@@ -2007,6 +2126,7 @@ fn materialize_manual_review_request(
         &result_file,
         result,
         &result_ref,
+        browser_quality_gate.as_ref(),
     );
     let stored = state::write_native_request(
         &input.project_root,
@@ -2030,13 +2150,28 @@ fn materialize_manual_review_request(
         result,
         &result_ref,
     )?;
+    let browser_environment_gate = browser_quality_gate.is_some();
     Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
         project_root: input.project_root.clone(),
-        prompt: "Review requires user decision. Reply approve_override to continue with notes, or request_changes with the repair route and change summary.".to_string(),
-        accepted_responses: vec![
-            "approve_override".to_string(),
-            "request_changes".to_string(),
-        ],
+        prompt: if browser_environment_gate {
+            "Required browser evidence is unavailable. Retry the browser environment, submit external browser evidence, or approve a quality waiver."
+                .to_string()
+        } else {
+            "Review requires user decision. Reply approve_override to continue with notes, or request_changes with the repair route and change summary."
+                .to_string()
+        },
+        accepted_responses: if browser_environment_gate {
+            vec![
+                "retry_browser_environment".to_string(),
+                "submit_external_browser_evidence".to_string(),
+                "approve_quality_waiver".to_string(),
+            ]
+        } else {
+            vec![
+                "approve_override".to_string(),
+                "request_changes".to_string(),
+            ]
+        },
         request_ref: Some(stored.request_ref),
         delivery_id: Some(delivery_id),
         phase_id: Some(phase_id),
@@ -2067,9 +2202,135 @@ fn build_manual_review_request(
     result_file: &str,
     result: &ReviewResult,
     result_ref: &str,
+    browser_quality_gate: Option<&Value>,
 ) -> Value {
     let schema_shape = serde_json::to_value(schema_for!(ManualReviewResolution))
         .unwrap_or_else(|_| json!({ "type": "object" }));
+    if let Some(browser_quality_gate) = browser_quality_gate {
+        let required_check_ids = browser_quality_gate
+            .pointer("/browserVerification/requiredCheckIds")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let completion_type = if result.next_action.target_phase_id.is_some() {
+            "continue_to_next_phase"
+        } else {
+            "done"
+        };
+        let common = json!({
+            "userAnswer": {"text": "", "selectedShortReply": ""}
+        });
+        let template = |decision: &str, browser_resolution: Value, next_type: &str| {
+            let mut value = common.clone();
+            value["userAnswer"]["selectedShortReply"] = json!(decision);
+            value["decision"] = json!(decision);
+            value["changeRequest"] = Value::Null;
+            if !browser_resolution.is_null() {
+                value["browserQualityResolution"] = browser_resolution;
+            }
+            value["nextAction"] = json!({
+                "type": next_type,
+                "reason": "",
+            });
+            value
+        };
+        return json!({
+            "schemaVersion": "1.0",
+            "requestType": "manual_review_resolution",
+            "requestId": request_id,
+            "deliveryId": delivery_id,
+            "phaseId": phase_id,
+            "artifactKind": ArtifactKind::ManualReviewResolution,
+            "source": {
+                "reviewId": result.review_id,
+                "reviewResultRef": result_ref,
+                "decision": result.decision,
+                "reviewNextAction": result.next_action,
+                "browserQualityGate": browser_quality_gate
+            },
+            "manualReviewProtocol": {
+                "acceptedDecisions": [
+                    "retry_browser_environment",
+                    "submit_external_browser_evidence",
+                    "approve_quality_waiver"
+                ],
+                "retryRule": "Re-run MCP browser preparation after the environment or dependencies have changed; do not route through execution repair.",
+                "externalEvidenceRule": "Provide one concrete evidence item for every required check id in source.browserQualityGate.browserVerification.requiredCheckIds order. Loom binds each item to its check id; evidence may cite project-relative artifacts or HTTPS CI/report URLs.",
+                "waiverRule": "A quality waiver requires an explicit user reason and records the missing browser evidence as an accepted limitation."
+            },
+            "enumRefs": {
+                "decision": ["retry_browser_environment", "submit_external_browser_evidence", "approve_quality_waiver"],
+                "nextActionType": ["retry_browser_environment", "review", "done", "continue_to_next_phase"]
+            },
+            "outputContract": {
+                "artifactKind": ArtifactKind::ManualReviewResolution,
+                "writeMode": "single_json",
+                "submitTool": "loom.reviewResolveFile",
+                "resultFile": result_file,
+                "writeTargets": [{
+                    "targetId": "resolution",
+                    "path": result_file,
+                    "required": true,
+                    "description": "Write the selected browser quality resolution."
+                }],
+                "requiredFields": [
+                    "userAnswer", "decision", "nextAction"
+                ],
+                "schemaShape": schema_shape,
+                "resultTemplatesByDecision": {
+                    "retry_browser_environment": template("retry_browser_environment", Value::Null, "retry_browser_environment"),
+                    "submit_external_browser_evidence": template(
+                        "submit_external_browser_evidence",
+                        json!({
+                            "externalEvidence": required_check_ids.iter().map(|_| json!({
+                                "evidenceRefs": [],
+                                "observedOutcome": "",
+                                "source": ""
+                            })).collect::<Vec<_>>()
+                        }),
+                        "review"
+                    ),
+                    "approve_quality_waiver": template(
+                        "approve_quality_waiver",
+                        json!({"waiverReason": ""}),
+                        completion_type
+                    )
+                }
+            },
+            "requestReadPlan": {"groups": [
+                {
+                    "groupId": "browser_quality_resolution_context",
+                    "required": true,
+                    "purpose": "Read the blocked browser checks and selected resolution protocol.",
+                    "whenToRead": "Read after the user selects a browser quality resolution.",
+                    "selectors": read_selectors_value_from_paths([
+                        "source.reviewId",
+                        "source.reviewResultRef",
+                        "source.reviewNextAction",
+                        "source.browserQualityGate",
+                        "manualReviewProtocol.acceptedDecisions",
+                        "manualReviewProtocol.retryRule",
+                        "manualReviewProtocol.externalEvidenceRule",
+                        "manualReviewProtocol.waiverRule",
+                        "enumRefs.decision",
+                        "enumRefs.nextActionType"
+                    ])
+                },
+                {
+                    "groupId": "browser_quality_resolution_write_contract",
+                    "required": true,
+                    "purpose": "Read the exact output path and template for the selected decision.",
+                    "whenToRead": "Read before writing the resolution.",
+                    "selectors": read_selectors_value_from_paths([
+                        "outputContract.resultFile",
+                        "outputContract.writeTargets",
+                        "outputContract.requiredFields",
+                        "outputContract.resultTemplatesByDecision"
+                    ])
+                }
+            ]}
+        });
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "manual_review_resolution",
@@ -2119,15 +2380,10 @@ fn build_manual_review_request(
                 "description": "Write the ManualReviewResolution JSON after the user answers the review gate."
             }],
             "requiredFields": [
-                "schemaVersion", "manualReviewResolutionId", "manualReviewRequestId",
-                "deliveryId", "phaseId", "userAnswer", "decision", "changeRequest",
-                "nextAction", "createdAt"
+                "userAnswer", "decision", "changeRequest", "nextAction"
             ],
             "schemaShape": schema_shape,
             "resultTemplate": manual_review_resolution_template(
-                request_id,
-                delivery_id,
-                phase_id,
                 result,
             )
         },
@@ -2163,7 +2419,6 @@ fn build_manual_review_request(
                         "outputContract.writeTargets",
                         "outputContract.requiredFields",
                         "outputContract.resultTemplate",
-                        "outputContract.schemaShape.properties.manualReviewRequestId",
                         "outputContract.schemaShape.properties.decision",
                         "outputContract.schemaShape.properties.changeRequest",
                         "outputContract.schemaShape.properties.nextAction"
@@ -2209,7 +2464,13 @@ where
     }
     let root = Path::new(&input.project_root);
     let raw = state::store::read_json_value(&from_project_relative(root, &target.path)?)?;
-    let resolution: ManualReviewResolution = match serde_json::from_value(raw) {
+    let normalized = normalize_manual_review_resolution_machine_fields(
+        raw,
+        &authorized.request_id,
+        &delivery_id,
+        &phase_id,
+    );
+    let mut resolution: ManualReviewResolution = match serde_json::from_value(normalized) {
         Ok(resolution) => resolution,
         Err(error) => {
             return Ok(repairable_with_tool(
@@ -2226,18 +2487,29 @@ where
             ))
         }
     };
+    let mut requested_fields = vec![
+        "source.reviewId".to_string(),
+        "source.reviewNextAction".to_string(),
+        "enumRefs.decision".to_string(),
+        "enumRefs.nextActionType".to_string(),
+    ];
+    let browser_quality_resolution = authorized
+        .read_groups
+        .iter()
+        .any(|group| group.group_id == "browser_quality_resolution_context");
+    if browser_quality_resolution {
+        requested_fields.push("source.browserQualityGate".to_string());
+    } else {
+        requested_fields.push("enumRefs.changeRequestRoute".to_string());
+    }
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: input.project_root.clone(),
         request_ref: input.request_ref.clone(),
-        fields: vec![
-            "source.reviewId".to_string(),
-            "enumRefs.decision".to_string(),
-            "enumRefs.changeRequestRoute".to_string(),
-            "enumRefs.nextActionType".to_string(),
-        ],
+        fields: requested_fields,
     })?
     .fields;
-    let issues = validate_manual_review_resolution(&resolution, authorized, &fields);
+    normalize_manual_review_resolution_links(&mut resolution, &fields);
+    let issues = validate_manual_review_resolution(&resolution, &fields);
     if !issues.is_empty() {
         return Ok(repairable_with_tool(
             input,
@@ -2256,6 +2528,7 @@ where
         manual_review_resolution_file(root, &locator, &resolution.manual_review_resolution_id);
     state::store::write_json_atomic(&persisted, &resolution)?;
     let resolution_ref = to_project_relative(root, &persisted)?;
+    apply_browser_quality_resolution(&input.project_root, &locator, &resolution, &fields)?;
     let effective_action = effective_manual_review_action(&resolution);
     update_delivery_after_manual_review_resolution(
         &input.project_root,
@@ -2274,26 +2547,114 @@ where
     )
 }
 
+fn normalize_manual_review_resolution_machine_fields(
+    mut raw: Value,
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) -> Value {
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert(
+        "manualReviewResolutionId".to_string(),
+        json!(format!("manual-review-resolution-{request_id}")),
+    );
+    object.insert("manualReviewRequestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+    raw
+}
+
+fn normalize_manual_review_resolution_links(
+    resolution: &mut ManualReviewResolution,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) {
+    let source_next_action = fields
+        .get("source.reviewNextAction")
+        .map(|field| &field.value)
+        .filter(|value| value.is_object());
+    let source_next_action = source_next_action.unwrap_or(&Value::Null);
+    resolution.next_action.target_task_ids =
+        value_string_array(source_next_action, "targetTaskIds");
+    resolution.next_action.finding_refs = value_string_array(source_next_action, "findingRefs");
+    if resolution.next_action.r#type == "continue_to_next_phase" {
+        resolution.next_action.target_phase_id = source_next_action
+            .get("targetPhaseId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string);
+    } else {
+        resolution.next_action.target_phase_id = None;
+    }
+    let required_check_ids = fields
+        .get("source.browserQualityGate")
+        .map(|field| &field.value)
+        .and_then(|gate| gate.pointer("/browserVerification/requiredCheckIds"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !required_check_ids.is_empty() {
+        let raw_evidence = resolution
+            .browser_quality_resolution
+            .as_ref()
+            .map(|value| value.external_evidence.clone())
+            .unwrap_or_default();
+        if let Some(browser_resolution) = resolution.browser_quality_resolution.as_mut() {
+            browser_resolution.external_evidence = required_check_ids
+                .iter()
+                .enumerate()
+                .map(|(index, check_id)| {
+                    let mut evidence = raw_evidence.get(index).cloned().unwrap_or(
+                        contracts::BrowserExternalEvidence {
+                            check_id: String::new(),
+                            evidence_refs: Vec::new(),
+                            observed_outcome: String::new(),
+                            source: String::new(),
+                        },
+                    );
+                    evidence.check_id = check_id.clone();
+                    evidence
+                })
+                .collect();
+        }
+    }
+}
+
 fn validate_manual_review_resolution(
     resolution: &ManualReviewResolution,
-    authorized: &AuthorizedWriteSet,
     fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if resolution.manual_review_request_id != authorized.request_id {
-        issues.push(issue(
-            "MANUAL_REVIEW_RESOLUTION_REF_INVALID",
-            "manualReviewRequestId",
-            "ManualReviewResolution must reference the active ManualReview requestId.",
-        ));
-    }
-    if authorized.delivery_id.as_deref() != Some(resolution.delivery_id.as_str())
-        || authorized.phase_id.as_deref() != Some(resolution.phase_id.as_str())
+    if fields
+        .get("source.reviewId")
+        .and_then(|field| field.value.as_str())
+        .is_none()
     {
         issues.push(issue(
             "MANUAL_REVIEW_RESOLUTION_REF_INVALID",
-            "deliveryId",
-            "ManualReviewResolution deliveryId and phaseId must match the active request.",
+            "source",
+            "ManualReview request source must include the reviewId.",
+        ));
+    }
+    let browser_quality_gate = fields
+        .get("source.browserQualityGate")
+        .map(|field| &field.value)
+        .filter(|value| value.is_object());
+    if let Some(browser_quality_gate) = browser_quality_gate {
+        validate_browser_quality_manual_resolution(resolution, browser_quality_gate, &mut issues);
+        return issues;
+    }
+    if resolution.browser_quality_resolution.is_some() {
+        issues.push(issue(
+            "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+            "browserQualityResolution",
+            "Generic manual review cannot include a browser quality resolution.",
         ));
     }
     match resolution.decision.as_str() {
@@ -2353,35 +2714,369 @@ fn validate_manual_review_resolution(
             "ManualReviewResolution decision is not allowed.",
         )),
     }
-    if fields
-        .get("source.reviewId")
-        .and_then(|field| field.value.as_str())
-        .is_none()
-    {
-        issues.push(issue(
-            "MANUAL_REVIEW_RESOLUTION_REF_INVALID",
-            "source",
-            "ManualReview request source must include the reviewId.",
-        ));
-    }
     issues
 }
 
+fn validate_browser_quality_manual_resolution(
+    resolution: &ManualReviewResolution,
+    gate: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    if resolution.user_answer.selected_short_reply.as_deref() != Some(resolution.decision.as_str())
+    {
+        issues.push(issue(
+            "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+            "userAnswer.selectedShortReply",
+            "Browser quality selectedShortReply must match decision.",
+        ));
+    }
+    if resolution.change_request.is_some() {
+        issues.push(issue(
+            "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+            "changeRequest",
+            "Browser quality resolution does not use generic changeRequest routing.",
+        ));
+    }
+    match resolution.decision.as_str() {
+        "retry_browser_environment" => {
+            if resolution.browser_quality_resolution.is_some() {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                    "browserQualityResolution",
+                    "retry_browser_environment does not include evidence or waiver data.",
+                ));
+            }
+            if resolution.next_action.r#type != "retry_browser_environment" {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                    "nextAction.type",
+                    "retry_browser_environment must use the dedicated environment retry route.",
+                ));
+            }
+        }
+        "submit_external_browser_evidence" => {
+            if resolution.next_action.r#type != "review" {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                    "nextAction.type",
+                    "External browser evidence must return to Review.",
+                ));
+            }
+            let expected = gate
+                .pointer("/browserVerification/requiredCheckIds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>();
+            let Some(browser_resolution) = resolution.browser_quality_resolution.as_ref() else {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                    "browserQualityResolution",
+                    "External browser evidence requires browserQualityResolution.",
+                ));
+                return;
+            };
+            let actual = browser_resolution
+                .external_evidence
+                .iter()
+                .map(|evidence| evidence.check_id.clone())
+                .collect::<BTreeSet<_>>();
+            if actual != expected || actual.len() != browser_resolution.external_evidence.len() {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_REF_INVALID",
+                    "browserQualityResolution.externalEvidence[].checkId",
+                    "External evidence must cover every required browser check exactly once.",
+                ));
+            }
+            for evidence in &browser_resolution.external_evidence {
+                if evidence.evidence_refs.is_empty()
+                    || evidence.observed_outcome.trim().is_empty()
+                    || evidence.source.trim().is_empty()
+                    || evidence
+                        .evidence_refs
+                        .iter()
+                        .any(|reference| !valid_external_browser_evidence_ref(reference))
+                {
+                    issues.push(issue(
+                        "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                        "browserQualityResolution.externalEvidence",
+                        "Each external browser evidence item requires valid evidenceRefs, observedOutcome, and source.",
+                    ));
+                }
+            }
+        }
+        "approve_quality_waiver" => {
+            if !matches!(
+                resolution.next_action.r#type.as_str(),
+                "done" | "continue_to_next_phase"
+            ) {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                    "nextAction.type",
+                    "Quality waiver can only complete the delivery or continue to the next phase.",
+                ));
+            }
+            if resolution
+                .browser_quality_resolution
+                .as_ref()
+                .and_then(|browser| browser.waiver_reason.as_deref())
+                .is_none_or(|reason| reason.trim().is_empty())
+            {
+                issues.push(issue(
+                    "MANUAL_REVIEW_RESOLUTION_STATUS_INVALID",
+                    "browserQualityResolution.waiverReason",
+                    "Quality waiver requires an explicit non-empty reason.",
+                ));
+            }
+        }
+        _ => issues.push(issue(
+            "MANUAL_REVIEW_RESOLUTION_ENUM_INVALID",
+            "decision",
+            "Browser quality manual review decision is not allowed.",
+        )),
+    }
+}
+
+fn valid_external_browser_evidence_ref(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("https://")
+        || (!value.is_empty()
+            && !value.starts_with('/')
+            && !value.starts_with('~')
+            && !value.contains('\\')
+            && !value
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..")
+            && !value.starts_with(".loom/")
+            && !value.starts_with(".git/")
+            && !value.starts_with("node_modules/"))
+}
+
+fn apply_browser_quality_resolution(
+    project_root: &str,
+    locator: &DeliveryPhaseLocator,
+    resolution: &ManualReviewResolution,
+    fields: &std::collections::BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Result<(), state::store::StateError> {
+    if !matches!(
+        resolution.decision.as_str(),
+        "retry_browser_environment" | "submit_external_browser_evidence"
+    ) {
+        return Ok(());
+    }
+    let gate = fields
+        .get("source.browserQualityGate")
+        .map(|field| &field.value)
+        .filter(|value| value.is_object())
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser quality resolution is missing source.browserQualityGate".to_string(),
+            )
+        })?;
+    let closure_task_id = gate
+        .pointer("/browserVerification/closureTaskId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser quality gate is missing closureTaskId".to_string(),
+            )
+        })?;
+    let root = Path::new(project_root);
+    let (task_plan, mut run) = load_current_plan_and_run(root, locator)?;
+    let closure_task = task_plan
+        .tasks
+        .iter()
+        .find(|task| task.task_id == closure_task_id)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser quality gate references a missing closure task".to_string(),
+            )
+        })?;
+
+    if resolution.decision == "retry_browser_environment" {
+        let _ = fs::remove_file(root.join(".loom/runtime/browser-automation/latest.json"));
+        if let Some(state) = run
+            .task_states
+            .iter_mut()
+            .find(|state| state.task_id == closure_task_id)
+        {
+            state.status = contracts::TaskRunStatus::Pending;
+            state.result_id = None;
+            state.started_at = None;
+            state.finished_at = None;
+        }
+        if let Some(group) = run
+            .group_states
+            .iter_mut()
+            .find(|group| group.group_id == closure_task.group_id)
+        {
+            group.status = contracts::TaskRunStatus::Pending;
+            group.started_at = None;
+            group.finished_at = None;
+        }
+        run.status = TaskPlanRunStatus::Running;
+        run.next_action = Some(contracts::TaskPlanRunNextAction {
+            r#type: "continue_execution".to_string(),
+            reason: "BROWSER_ENVIRONMENT_RETRY_REQUESTED".to_string(),
+            source_task_id: Some(closure_task_id.to_string()),
+            target_node: "task_execution".to_string(),
+        });
+        run.updated_at = state::store::now_string();
+        update_run_summary(&mut run);
+        return save_run(root, locator, &run);
+    }
+
+    let result_id = run
+        .task_states
+        .iter()
+        .find(|state| state.task_id == closure_task_id)
+        .and_then(|state| state.result_id.clone())
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser closure result is missing for external evidence".to_string(),
+            )
+        })?;
+    let result_path = task_result_file(root, locator, &run.run_id, closure_task_id, &result_id);
+    let mut result: TaskResult = state::store::read_json(&result_path)?;
+    let evidence = resolution
+        .browser_quality_resolution
+        .as_ref()
+        .map(|browser| {
+            browser
+                .external_evidence
+                .iter()
+                .map(|evidence| (evidence.check_id.as_str(), evidence))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    for verification in &mut result.verification_results {
+        for check in &mut verification.browser_checks {
+            let Some(external) = evidence.get(check.check_id.as_str()) else {
+                continue;
+            };
+            check.status = contracts::BrowserCheckStatus::Passed;
+            check.command = "external_browser_evidence".to_string();
+            check.attempts = 1;
+            check.artifact_refs = external.evidence_refs.clone();
+            check.observed_outcome = format!(
+                "{} (source: {})",
+                external.observed_outcome, external.source
+            );
+            check.blocked_reason = None;
+        }
+    }
+    let profile = task_plan
+        .browser_verification_profiles
+        .iter()
+        .find(|profile| profile.task_id == closure_task_id)
+        .ok_or_else(|| {
+            state::store::StateError::StateCorrupted(
+                "browser closure profile is missing for external evidence".to_string(),
+            )
+        })?;
+    for verification in &mut result.verification_results {
+        let required_passed = profile
+            .checks
+            .iter()
+            .filter(|check| {
+                check.verification_id == verification.verification_id
+                    && check.enforcement == contracts::BrowserEvidenceEnforcement::Required
+            })
+            .all(|expected| {
+                verification.browser_checks.iter().any(|actual| {
+                    actual.check_id == expected.check_id
+                        && actual.status == contracts::BrowserCheckStatus::Passed
+                })
+            });
+        if required_passed {
+            verification.status = "passed".to_string();
+            verification.summary =
+                "Required browser evidence was supplied through the external evidence gate."
+                    .to_string();
+        }
+    }
+    let has_non_passed = result
+        .verification_results
+        .iter()
+        .flat_map(|verification| verification.browser_checks.iter())
+        .any(|check| check.status != contracts::BrowserCheckStatus::Passed);
+    result.status = if has_non_passed {
+        contracts::TaskResultStatus::CompletedWithNotes
+    } else {
+        contracts::TaskResultStatus::Completed
+    };
+    result.notes = if has_non_passed {
+        vec!["Required checks use external evidence; supplemental browser checks remain unavailable."
+            .to_string()]
+    } else {
+        vec!["Browser checks were closed with user-submitted external evidence.".to_string()]
+    };
+    result.updated_at = state::store::now_string();
+    state::store::write_json_atomic(&result_path, &result)?;
+    if let Some(state) = run
+        .task_states
+        .iter_mut()
+        .find(|state| state.task_id == closure_task_id)
+    {
+        state.status = if has_non_passed {
+            contracts::TaskRunStatus::CompletedWithNotes
+        } else {
+            contracts::TaskRunStatus::Completed
+        };
+    }
+    if let Some(group) = run
+        .group_states
+        .iter_mut()
+        .find(|group| group.group_id == closure_task.group_id)
+    {
+        group.status = if has_non_passed {
+            contracts::TaskRunStatus::CompletedWithNotes
+        } else {
+            contracts::TaskRunStatus::Completed
+        };
+    }
+    run.status = if has_non_passed {
+        TaskPlanRunStatus::CompletedWithNotes
+    } else {
+        TaskPlanRunStatus::Completed
+    };
+    run.next_action = Some(contracts::TaskPlanRunNextAction {
+        r#type: "review".to_string(),
+        reason: "EXTERNAL_BROWSER_EVIDENCE_ACCEPTED".to_string(),
+        source_task_id: Some(closure_task_id.to_string()),
+        target_node: "review".to_string(),
+    });
+    run.updated_at = state::store::now_string();
+    update_run_summary(&mut run);
+    save_run(root, locator, &run)
+}
+
 fn effective_manual_review_action(resolution: &ManualReviewResolution) -> RouteAction {
-    let (kind, reason) = if resolution.decision == "approve_override" {
-        (
+    let (kind, reason) = match resolution.decision.as_str() {
+        "approve_override" | "approve_quality_waiver" => (
             route_kind_for_review_action(&resolution.next_action.r#type),
             resolution.next_action.reason.clone(),
-        )
-    } else {
-        let change = resolution
-            .change_request
-            .as_ref()
-            .expect("validated request_changes has changeRequest");
-        (
-            route_kind_for_review_action(&change.route),
-            format!("{}: {}", change.route, change.reason),
-        )
+        ),
+        "retry_browser_environment" => (
+            RouteActionKind::ContinueExecution,
+            "Retry MCP browser environment preparation.".to_string(),
+        ),
+        "submit_external_browser_evidence" => (
+            RouteActionKind::Review,
+            "Re-run Review with accepted external browser evidence.".to_string(),
+        ),
+        _ => {
+            let change = resolution
+                .change_request
+                .as_ref()
+                .expect("validated request_changes has changeRequest");
+            (
+                route_kind_for_review_action(&change.route),
+                format!("{}: {}", change.route, change.reason),
+            )
+        }
     };
     let target_task_ids = manual_review_target_task_ids(resolution);
     let next_action =
@@ -2415,19 +3110,7 @@ fn route_next_action_with_target_task_ids(
 }
 
 fn manual_review_target_task_ids(resolution: &ManualReviewResolution) -> Vec<String> {
-    let mut values = resolution.next_action.target_task_ids.clone();
-    if let Some(change_request) = &resolution.change_request {
-        values.extend(
-            change_request
-                .details
-                .get("targetTaskIds")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item.as_str().map(str::to_string)),
-        );
-    }
-    dedupe_non_empty(values)
+    dedupe_non_empty(resolution.next_action.target_task_ids.clone())
 }
 
 fn dedupe_non_empty(mut values: Vec<String>) -> Vec<String> {
@@ -2599,6 +3282,9 @@ fn update_delivery_after_manual_review_resolution(
             "manualReviewEffectiveDecision".to_string(),
             resolution.decision.clone(),
         );
+    }
+    if effective_action.kind == RouteActionKind::Done {
+        delivery.status = DeliveryLifecycleStatus::Completed;
     }
     delivery.updated_at = state::store::now_string();
     store
@@ -3029,6 +3715,50 @@ fn build_api_contract_review_matrix(
         .collect()
 }
 
+fn compact_api_contract_context(
+    task_plan: &TaskPlan,
+    architecture_contract: Option<&ArchitectureArtifactContract>,
+    project_api_contract: Option<&Value>,
+) -> Value {
+    let Some(aac) = architecture_contract else {
+        return Value::Null;
+    };
+    let interface_refs = task_plan
+        .api_contract_requirements
+        .iter()
+        .flat_map(|requirement| requirement.interface_refs.iter())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let interface_refs = interface_refs.into_iter().collect::<Vec<_>>();
+    json!({
+        "contract": exposure_projection(aac.api_contract_ref.as_deref(), project_api_contract),
+        "interfaces": interfaces_for_refs(project_api_contract, &interface_refs)
+            .iter()
+            .map(compact_api_interface_for_review)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn compact_api_interface_for_review(interface: &Value) -> Value {
+    json!({
+        "interfaceId": interface.get("interfaceId").cloned().unwrap_or(Value::Null),
+        "method": interface.get("method").cloned().unwrap_or(Value::Null),
+        "path": interface.get("path").cloned().unwrap_or(Value::Null),
+        "operationKind": interface.get("operationKind").cloned().unwrap_or(Value::Null),
+        "statusCodes": interface.get("statusCodes").cloned().unwrap_or(Value::Null),
+        "requestFieldCount": interface
+            .get("requestSchema")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "responseFieldCount": interface
+            .get("responseSchema")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+    })
+}
+
 fn passed_verification_summaries(result: &TaskResult) -> Vec<Value> {
     result
         .verification_results
@@ -3137,6 +3867,48 @@ fn build_frontend_quality_review_matrix(
                 .and_then(Value::as_array)
                 .map(Vec::len)
                 .unwrap_or(0);
+            let expected_browser_checks = task_plan
+                .browser_verification_profiles
+                .iter()
+                .flat_map(|profile| profile.checks.iter())
+                .filter(|check| check.source_task_id == task.task_id)
+                .collect::<Vec<_>>();
+            let expected_browser_check_ids = expected_browser_checks
+                .iter()
+                .map(|check| check.check_id.clone())
+                .collect::<BTreeSet<_>>();
+            let required_browser_check_ids = expected_browser_checks
+                .iter()
+                .filter(|check| check.enforcement == contracts::BrowserEvidenceEnforcement::Required)
+                .map(|check| check.check_id.clone())
+                .collect::<BTreeSet<_>>();
+            let passed_browser_check_ids = task_results
+                .iter()
+                .flat_map(|result| result.verification_results.iter())
+                .flat_map(|verification| verification.browser_checks.iter())
+                .filter(|check| check.status == contracts::BrowserCheckStatus::Passed)
+                .map(|check| check.check_id.clone())
+                .collect::<BTreeSet<_>>();
+            let blocked_browser_check_ids = task_results
+                .iter()
+                .flat_map(|result| result.verification_results.iter())
+                .flat_map(|verification| verification.browser_checks.iter())
+                .filter(|check| check.status == contracts::BrowserCheckStatus::Blocked)
+                .map(|check| check.check_id.clone())
+                .collect::<BTreeSet<_>>();
+            let browser_closure_result = task_results.iter().find(|result| {
+                result
+                    .verification_results
+                    .iter()
+                    .flat_map(|verification| verification.browser_checks.iter())
+                    .any(|check| expected_browser_check_ids.contains(&check.check_id))
+            });
+            let browser_verification_satisfied =
+                required_browser_check_ids.is_subset(&passed_browser_check_ids);
+            let required_browser_environment_blocked = required_browser_check_ids
+                .intersection(&blocked_browser_check_ids)
+                .next()
+                .is_some();
             let surface_contract_satisfied = surface_review
                 .get("satisfied")
                 .and_then(Value::as_bool)
@@ -3145,6 +3917,7 @@ fn build_frontend_quality_review_matrix(
                 == Some("satisfied")
                 && surface_contract_satisfied
                 && token_asset_satisfied
+                && browser_verification_satisfied
                 && forbidden_violation_count == 0
                 && known_gap_count == 0;
             Some(json!({
@@ -3165,9 +3938,30 @@ fn build_frontend_quality_review_matrix(
                     "parallelTokenSystemCreated": parallel_token_system_created,
                     "satisfied": token_asset_satisfied
                 },
+                "browserVerification": {
+                    "closureTaskId": browser_closure_result.map(|result| result.task_id.clone()),
+                    "closureTaskResultId": browser_closure_result.map(|result| result.task_result_id.clone()),
+                    "expectedCheckCount": expected_browser_check_ids.len(),
+                    "requiredCheckCount": required_browser_check_ids.len(),
+                    "requiredCheckIds": required_browser_check_ids.iter().cloned().collect::<Vec<_>>(),
+                    "passedCheckCount": expected_browser_check_ids
+                        .intersection(&passed_browser_check_ids)
+                        .count(),
+                    "requiredBlockedCount": required_browser_check_ids
+                        .intersection(&blocked_browser_check_ids)
+                        .count(),
+                    "environmentBlocked": required_browser_environment_blocked,
+                    "satisfied": browser_verification_satisfied
+                },
                 "forbiddenViolationCount": forbidden_violation_count,
                 "knownGapCount": known_gap_count,
-                "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" }
+                "recommendedNextAction": if quality_satisfied {
+                    "none"
+                } else if required_browser_environment_blocked {
+                    "manual_review"
+                } else {
+                    "execution_repair"
+                }
             }))
         })
         .collect()
@@ -3499,6 +4293,7 @@ fn compact_review_matrix_summary(
                 "taskId": item.get("taskId").cloned().unwrap_or(Value::Null),
                 "taskResultId": item.get("taskResultId").cloned().unwrap_or(Value::Null),
                 "qualitySatisfied": item.get("qualitySatisfied").cloned().unwrap_or(Value::Null),
+                "browserVerification": item.get("browserVerification").cloned().unwrap_or_else(|| json!({})),
                 "surfaceContractSatisfied": item
                     .pointer("/surfaceContractCoverage/satisfied")
                     .cloned()
@@ -3586,6 +4381,10 @@ fn build_review_signals(
             .get("qualitySatisfied")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let browser_environment_blocked = quality
+            .pointer("/browserVerification/environmentBlocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         signals.push(json!({
             "signalId": format!("sig-frontend-ui-quality-{}", safe_signal_id(task_id)),
             "kind": "frontend_ui_quality",
@@ -3597,9 +4396,18 @@ fn build_review_signals(
             "designTokenAsset": quality.get("designTokenAsset").cloned().unwrap_or_else(|| json!({})),
             "forbiddenViolationCount": quality.get("forbiddenViolationCount").cloned().unwrap_or_else(|| json!(0)),
             "knownGapCount": quality.get("knownGapCount").cloned().unwrap_or_else(|| json!(0)),
-            "recommendedNextAction": if quality_satisfied { "none" } else { "execution_repair" },
+            "browserVerification": quality.get("browserVerification").cloned().unwrap_or_else(|| json!({})),
+            "recommendedNextAction": if quality_satisfied {
+                "none"
+            } else if browser_environment_blocked {
+                "manual_review"
+            } else {
+                "execution_repair"
+            },
             "reason": if quality_satisfied {
                 "TaskResult frontend quality self-check satisfies the task UI surface contract."
+            } else if browser_environment_blocked {
+                "Required browser evidence is unavailable on both host and managed container; this is an environment quality gate, not a product-code repair."
             } else {
                 "TaskResult frontend quality self-check does not satisfy the task UI surface contract."
             }
@@ -4075,7 +4883,27 @@ fn compact_task_result_summaries(task_results: &[TaskResult]) -> Vec<Value> {
                     json!({
                         "verificationId": verification.verification_id,
                         "status": verification.status,
-                        "evidenceType": verification.evidence_type
+                        "evidenceType": verification.evidence_type,
+                        "browserChecks": verification.browser_checks.iter().map(|check| {
+                            let diagnostic_artifact_refs = if check.status != contracts::BrowserCheckStatus::Passed
+                                || check.attempts > 1
+                            {
+                                check.artifact_refs.clone()
+                            } else {
+                                Vec::new()
+                            };
+                            json!({
+                                "checkId": check.check_id,
+                                "status": check.status,
+                                "attempts": check.attempts,
+                                "retrySucceeded": check.status == contracts::BrowserCheckStatus::Passed && check.attempts > 1,
+                                "artifactRefCount": check.artifact_refs.len(),
+                                "diagnosticArtifactRefs": diagnostic_artifact_refs,
+                                "command": compact_summary(&check.command),
+                                "observedOutcome": compact_summary(&check.observed_outcome),
+                                "blockedReason": check.blocked_reason
+                            })
+                        }).collect::<Vec<_>>()
                     })
                 }).collect::<Vec<_>>(),
                 "requirementDetailEvidence": result.requirement_detail_evidence.iter().map(|evidence| {
@@ -4274,7 +5102,7 @@ fn allowed_refs(
                 .map(str::to_string),
         )
         .collect::<BTreeSet<_>>();
-    let verification_refs = task_results
+    let mut verification_refs = task_results
         .iter()
         .flat_map(|result| {
             result.verification_results.iter().flat_map(|verification| {
@@ -4286,6 +5114,15 @@ fn allowed_refs(
             })
         })
         .collect::<BTreeSet<_>>();
+    verification_refs.extend(task_results.iter().flat_map(|result| {
+        result
+            .verification_results
+            .iter()
+            .flat_map(|verification| verification.browser_checks.iter())
+            .flat_map(|check| {
+                std::iter::once(check.check_id.clone()).chain(check.artifact_refs.iter().cloned())
+            })
+    }));
     let mut read_refs = vec!["reviewPacket".to_string(), "changeContext".to_string()];
     read_refs.extend(
         task_results
@@ -4635,6 +5472,39 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 mod tests {
     use super::*;
 
+    fn task_result_with_browser_check(attempts: u32) -> TaskResult {
+        serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "taskResultId": "result-ui",
+            "taskId": "task-ui",
+            "taskPlanId": "taskplan",
+            "status": "completed",
+            "changedFiles": ["web/src/App.tsx"],
+            "verificationResults": [{
+                "verificationId": "verify-ui",
+                "status": "passed",
+                "evidenceType": "automated_test",
+                "summary": "Browser verification completed.",
+                "browserChecks": [{
+                    "checkId": "browser-ui-desktop",
+                    "status": "passed",
+                    "command": "pnpm playwright test --grep workflow",
+                    "attempts": attempts,
+                    "artifactRefs": ["test-results/workflow/trace.zip"],
+                    "observedOutcome": "The submitted record appears in the rendered list.",
+                    "blockedReason": null
+                }]
+            }],
+            "executionContinuity": {
+                "taskResultSubmittedAfterVerification": true,
+                "agentOwnedLongRunningWork": "none"
+            },
+            "createdAt": "2026-07-13T10:00:00+08:00",
+            "updatedAt": "2026-07-13T10:00:00+08:00"
+        }))
+        .expect("browser TaskResult")
+    }
+
     fn requirement() -> Value {
         json!({
             "uiSurfaceDecisionContractRef": "sourceRefs.architectureArtifactContractRef#/frontendExperience/uiSurfaceDecisionContract",
@@ -4721,5 +5591,187 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    #[test]
+    fn compact_browser_summary_keeps_retry_visible_without_loading_success_artifacts() {
+        let first_pass = compact_task_result_summaries(&[task_result_with_browser_check(1)]);
+        let retried = compact_task_result_summaries(&[task_result_with_browser_check(2)]);
+
+        assert_eq!(
+            first_pass[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"],
+            json!([])
+        );
+        assert_eq!(
+            retried[0]["verificationResults"][0]["browserChecks"][0]["retrySucceeded"],
+            json!(true)
+        );
+        assert_eq!(
+            retried[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"][0],
+            json!("test-results/workflow/trace.zip")
+        );
+    }
+
+    #[test]
+    fn browser_environment_signal_is_normalized_to_manual_review() {
+        let mut result: ReviewResult = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "reviewId": "review-1",
+            "source": {
+                "requestId": "request-1",
+                "phaseId": "phase-1",
+                "taskPlanId": "taskplan-1",
+                "taskPlanRunId": "run-1"
+            },
+            "decision": "approved",
+            "findings": [],
+            "coverageAssessment": {
+                "mustAcceptance": [],
+                "summary": {
+                    "totalMust": 0,
+                    "satisfied": 0,
+                    "insufficientEvidence": 0,
+                    "notSatisfied": 0,
+                    "notReviewed": 0
+                }
+            },
+            "limitations": [],
+            "pendingActions": [],
+            "nextAction": {
+                "type": "done",
+                "reason": "No issues.",
+                "targetTaskIds": [],
+                "findingRefs": []
+            },
+            "createdAt": "2026-07-13T10:00:00+08:00",
+            "updatedAt": "2026-07-13T10:00:00+08:00"
+        }))
+        .unwrap();
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "outputContract.reviewSignals.items".to_string(),
+            delivery_core::FieldReadResult {
+                value: json!([{
+                    "kind": "frontend_ui_quality",
+                    "taskRefs": ["task-ui"],
+                    "recommendedNextAction": "manual_review",
+                    "browserVerification": {
+                        "environmentBlocked": true,
+                        "closureTaskId": "task-browser-quality-closure",
+                        "closureTaskResultId": "result-browser-environment"
+                    }
+                }]),
+            },
+        );
+
+        normalize_browser_environment_review_route(&mut result, &fields);
+
+        assert_eq!(result.decision, "blocked");
+        assert_eq!(result.next_action.r#type, "manual_review");
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(
+            result.findings[0].failure_class.as_deref(),
+            Some("environment_blocker")
+        );
+        assert!(result.findings[0]
+            .task_refs
+            .contains(&"task-browser-quality-closure".to_string()));
+    }
+
+    #[test]
+    fn browser_quality_manual_request_exposes_only_dedicated_resolutions() {
+        let result: ReviewResult = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "reviewId": "review-1",
+            "source": {"requestId": "request-1", "phaseId": "phase-1", "taskPlanId": "plan-1", "taskPlanRunId": "run-1"},
+            "decision": "blocked",
+            "findings": [],
+            "coverageAssessment": {"mustAcceptance": [], "summary": {"totalMust": 0, "satisfied": 0, "insufficientEvidence": 0, "notSatisfied": 0, "notReviewed": 0}},
+            "limitations": [],
+            "pendingActions": [],
+            "nextAction": {"type": "manual_review", "reason": "Browser unavailable", "targetTaskIds": [], "findingRefs": []},
+            "createdAt": "2026-07-13T10:00:00+08:00",
+            "updatedAt": "2026-07-13T10:00:00+08:00"
+        }))
+        .unwrap();
+        let request = build_manual_review_request(
+            "manual-1",
+            "delivery-1",
+            "phase-1",
+            ".loom/agent-writable/manual-1/result.json",
+            &result,
+            ".loom/review.json",
+            Some(&json!({
+                "browserVerification": {
+                    "environmentBlocked": true,
+                    "closureTaskId": "task-browser-quality-closure",
+                    "requiredCheckIds": ["check-desktop", "check-mobile"]
+                }
+            })),
+        );
+
+        assert_eq!(
+            request["manualReviewProtocol"]["acceptedDecisions"],
+            json!([
+                "retry_browser_environment",
+                "submit_external_browser_evidence",
+                "approve_quality_waiver"
+            ])
+        );
+        assert!(request["outputContract"]
+            .get("resultTemplatesByDecision")
+            .is_some());
+        assert!(request["outputContract"].get("resultTemplate").is_none());
+    }
+
+    #[test]
+    fn external_browser_evidence_must_cover_required_checks_exactly() {
+        let gate = json!({
+            "browserVerification": {
+                "requiredCheckIds": ["check-desktop", "check-mobile"]
+            }
+        });
+        let mut resolution: ManualReviewResolution = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "manualReviewResolutionId": "resolution-1",
+            "manualReviewRequestId": "manual-1",
+            "deliveryId": "delivery-1",
+            "phaseId": "phase-1",
+            "userAnswer": {"text": "CI evidence attached", "selectedShortReply": "submit_external_browser_evidence"},
+            "decision": "submit_external_browser_evidence",
+            "browserQualityResolution": {
+                "externalEvidence": [{
+                    "checkId": "check-desktop",
+                    "evidenceRefs": ["https://ci.example.test/run/1"],
+                    "observedOutcome": "Desktop workflow passed.",
+                    "source": "CI"
+                }]
+            },
+            "nextAction": {"type": "review", "reason": "Review evidence", "targetTaskIds": [], "findingRefs": []},
+            "createdAt": "2026-07-13T10:00:00+08:00"
+        }))
+        .unwrap();
+        let mut issues = Vec::new();
+
+        validate_browser_quality_manual_resolution(&resolution, &gate, &mut issues);
+        assert!(issues.iter().any(|issue| {
+            issue.field_path.as_deref()
+                == Some("browserQualityResolution.externalEvidence[].checkId")
+        }));
+
+        resolution
+            .browser_quality_resolution
+            .as_mut()
+            .unwrap()
+            .external_evidence
+            .push(contracts::BrowserExternalEvidence {
+                check_id: "check-mobile".to_string(),
+                evidence_refs: vec!["test-results/mobile/report.html".to_string()],
+                observed_outcome: "Mobile workflow passed.".to_string(),
+                source: "QA workstation".to_string(),
+            });
+        issues.clear();
+        validate_browser_quality_manual_resolution(&resolution, &gate, &mut issues);
+        assert!(issues.is_empty(), "{issues:#?}");
     }
 }

@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::{
     active_operation::{acquire_operation, active_operation_result, update_operation_phase},
     paths::deployment_paths,
-    prepare::deploy_prepare_inner,
+    prepare::{deploy_prepare_inner, deployment_spec_is_stale},
     up::deploy_up_inner,
     DeployToolInput,
 };
@@ -26,7 +26,9 @@ pub fn deploy_run(input: DeployToolInput) -> LoomMcpActionResult {
             })
         }
     };
-    if !deployment_paths(project_root).spec_file.exists() {
+    let needs_prepare = !deployment_paths(project_root).spec_file.exists()
+        || deployment_spec_is_stale(project_root, &input).unwrap_or(true);
+    if needs_prepare {
         let _ = update_operation_phase(project_root, "preparing", "running");
         let prepare = deploy_prepare_inner(project_root, input.clone());
         match prepare {

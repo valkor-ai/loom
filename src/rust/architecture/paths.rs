@@ -40,6 +40,13 @@ pub fn architecture_latest_file(project_root: &Path, locator: &DeliveryPhaseLoca
     architecture_contract_dir(project_root, locator).join("latest.json")
 }
 
+pub fn project_api_contract_file(project_root: &Path, delivery_id: &str) -> PathBuf {
+    delivery_dir(project_root, delivery_id)
+        .join("contracts")
+        .join("api")
+        .join("current.json")
+}
+
 pub fn architecture_section_snapshot_file(
     project_root: &Path,
     locator: &DeliveryPhaseLocator,

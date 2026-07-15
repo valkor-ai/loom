@@ -79,14 +79,20 @@ Loom 就是为弥合这条鸿沟而存在的。
 --- | ---
 Stateful delivery protocol | 把一次性 coding session 变成可恢复的交付循环，并用 `.loom/` 状态、request refs、结果文件、review 记录、修复请求和交接证据承载过程。
 Requirement intelligence | 把松散 prompt 转成已确认的范围、业务规则、生命周期覆盖、页面办理路径和验收细节，让规划、执行和 review 都必须承接。
-Engineering contracts | 将架构、API、运行时、代码质量和任务归属决策作为结构化 contracts 传递，而不是依赖 agent 反复记住 prompt 提醒。
+架构与系统设计 | 将已确认的技术基线和仓库事实转成面向实现的边界、行为、数据归属、运行时职责、NFR 目标、ADR 和故障模式决策，并用紧凑 id 传递给规划、执行、评审和修复阶段。
+API 契约 | 在确实属于当前范围时，明确结构化接口、请求与响应模型、校验、错误行为、集合接口策略和兼容性规则。前端任务、联调检查、运行时探测和部署都消费已接受的 API 契约，不再自行猜测路径或前缀。
+按技术栈选择的实现指导 | 根据已确认的 Technical Baseline 和当前任务归属，只加载任务需要的语言、框架、持久化和前端 references。代码与框架 references 提供仓库适配、实现模式、验证要求和反模式约束，不加载无关技术栈，也不重新选择技术。
+Engineering contracts | 将运行时、代码质量和任务归属决策作为结构化 contracts 传递，而不是依赖 agent 反复记住 prompt 提醒。
 Production UI guidance | 将 UI 质量前置到生成端：通过 surface decision、场景 references、布局密度、style asset plan、token 期望、禁用内容规则和 desktop/mobile 证据约束页面交付。
 Targeted context routing | 让 agent 按需读取 field groups、reference profiles、任务 contracts 和 repair context，避免反复读取大文件或整份 artifact。
 Task-scoped execution | 把交付拆成有边界的任务，并携带 source refs、写入边界、验证意图、结果模板和 continuation rules。
+验证与评审纪律 | 只有任务拥有对应验证证据时才加载语言/框架测试指导；使用 review references 检查规格符合性和实现质量；只有明确分配浏览器行为时才加入 Playwright 浏览器闭环。运行时失败保留为环境证据，不误报成代码缺陷。
 Review and repair loop | 通过 review signals、TaskResult evidence、repair contracts、多目标 repair 队列和再次验证，把实现与验证分离。
 Runtime and deploy readiness | 面向本地 Docker Compose 预览准备 topology-aware services、build contexts、环境规则、端口、health checks、日志和 repair boundaries。
 Knowledge-guided clarification | 让团队把本地域文档注册成具名知识库，构建本地可检索索引，并在需求澄清时只按当前步骤读取匹配片段。
 Multi-agent MCP protocol | 让 Codex、Claude Code、OpenCode 和后续支持 MCP 的 agents 运行同一套交付状态机。
+
+这条链路背后的技术指导集中在 `plugins/shared/loom/references/tech/`：架构（`arch`）、API 设计（`api`）、语言与 SQL 实现（`code`）、后端和前端框架（`backend`、`frontend`）、评审（`review`）以及 Playwright 验证（`test/playwright`）。这些内容不会作为一整套大 skill 一次性加载，而是由 Loom 根据已接受的技术事实和任务归属生成任务级选择，再把选中的 references 传给对应的架构、规划、执行、评审或浏览器闭环 request。
 
 ## 上下文路由
 

@@ -503,17 +503,15 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             )
             .expect("read candidate write contract"),
     );
-    assert!(
-        write_contract["fields"]["outputContract"]["resultTemplate"]["clarificationProgress"]
-            ["confirmedBlocks"]
-            .is_array()
-    );
-    assert!(
-        write_contract["fields"]["outputContract"]["resultTemplate"]["clarificationProgress"]
-            .get("completedBlocks")
-            .is_none()
-    );
     let template = &write_contract["fields"]["outputContract"]["resultTemplate"];
+    assert!(
+        template.get("clarificationProgress").is_none(),
+        "clarification progress is MCP-owned and must not be in the agent template"
+    );
+    assert!(
+        template.get("userConfirmation").is_none(),
+        "confirmation metadata is MCP-owned and must not be in the agent template"
+    );
     assert!(template["scope"]["deferred"][0].is_object());
     assert!(template["scope"]["assumptions"][0].is_object());
     assert_eq!(
@@ -1160,15 +1158,6 @@ fn populate_confirmed_brainstorm_candidate(candidate: &mut Value) {
     candidate["frontendExperience"]["mustNot"] = json!(["不能只靠内部主键触发办理动作"]);
     candidate["frontendExperience"]["confirmationSummary"] =
         json!("用户已确认工作人员后台证券账户管理页面路径。");
-    candidate["userConfirmation"]["confirmedAt"] = json!("2026-06-24T10:00:00+08:00");
-    candidate["userConfirmation"]["confirmationSummary"] =
-        json!("用户已确认阶段范围、业务理解、页面办理路径和提交前核对。");
-    candidate["clarificationProgress"]["confirmedBlocks"][0]["summary"] =
-        json!("确认第一阶段为证券账户模块闭环。");
-    candidate["clarificationProgress"]["confirmedBlocks"][1]["summary"] =
-        json!("确认证券账户业务规则、状态和边界。");
-    candidate["clarificationProgress"]["confirmedBlocks"][2]["summary"] =
-        json!("确认工作人员后台证券账户管理页面路径。");
 }
 
 fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {

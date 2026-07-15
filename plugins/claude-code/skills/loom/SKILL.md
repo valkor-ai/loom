@@ -13,7 +13,7 @@ Do not replace Loom with Claude Plan Mode. Do not inspect project `.loom` state 
 
 - `auto_runnable`: keep going immediately by executing the returned `next.kind`.
 - `active_operation`: only use the observation tools named by the result.
-- `user_gate`: when `requestRef` is present, first inspect the request and read required `requestReadPlan.groups`; for Brainstorm gates, run required `knowledge_context_plan` steps before asking the visible question or presenting confirmation.
+- `user_gate`: when `requestRef` is present, first inspect the request and read required `requestReadPlan.groups`; for Brainstorm gates, run required `knowledge_context_plan` steps before asking the visible question or presenting confirmation. A phase-continuation Brainstorm gate is an active clarification turn, not an optional `/loom continue`: do not stop at a progress recap or say "if you want to continue". Complete the request reads and knowledge calls in this turn, then ask the visible current-block question and wait for the user's answer.
 - `repairable_error`: repair only the returned target and resubmit with the returned tool.
 - `done`, `blocked`, `failed`: report the returned status and stop.
 

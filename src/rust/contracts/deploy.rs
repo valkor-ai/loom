@@ -114,8 +114,46 @@ pub struct RuntimeContractApi {
     pub entry: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeploymentContractAuthority {
+    AcceptedContract,
+    RepositoryHeuristic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentApiInterface {
+    pub interface_id: String,
+    pub method: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentApiContract {
+    pub source_ref: String,
+    pub status: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub probe_paths: Vec<String>,
+    pub interfaces: Vec<DeploymentApiInterface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_base_path: Option<String>,
+    pub preserve_path: bool,
+    pub browser_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentHttpProbe {
+    pub method: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface_id: Option<String>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -130,7 +168,7 @@ pub struct RuntimeEnvironmentContract {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeploymentRuntimeContract {
-    pub source: String,
+    pub authority: DeploymentContractAuthority,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub r#ref: Option<String>,
     pub status: String,
@@ -149,7 +187,7 @@ pub struct DeploymentRuntimeContract {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub health_path: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub api_paths: Vec<String>,
+    pub safe_http_probes: Vec<DeploymentHttpProbe>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontend_output_dir: Option<String>,
     pub probe_kind: String,
@@ -158,6 +196,8 @@ pub struct DeploymentRuntimeContract {
     pub frontend: Option<RuntimeContractEndpoint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api: Option<RuntimeContractApi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_contract: Option<DeploymentApiContract>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependency_services: Vec<DependencyService>,
 }
@@ -255,7 +295,7 @@ pub struct DeploymentTopologyValidation {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub api_paths: Vec<String>,
+    pub api_probes: Vec<DeploymentHttpProbe>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -313,6 +353,24 @@ pub struct DeploymentFacts {
     pub generated_asset_policy: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendApiBinding {
+    pub status: String,
+    pub mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub injected_value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_base_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_files: Vec<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -509,10 +567,14 @@ pub struct DeploymentSpec {
     pub topology_ref: String,
     pub code_evidence_ref: String,
     pub facts_ref: String,
+    pub model_repair_ref: String,
+    pub input_fingerprint: String,
     pub runtime_contract: DeploymentRuntimeContract,
     pub source_model: DeploymentSourceModel,
     pub topology: DeploymentTopology,
     pub facts: DeploymentFacts,
+    #[serde(default)]
+    pub frontend_api_binding: FrontendApiBinding,
     pub environment: DeploymentEnvDiagnostics,
     pub bootstrap: DeploymentBootstrapDiagnostics,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -664,9 +726,15 @@ pub struct DeploymentFailureReport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployExecutionRepairTaskResult {
+    #[serde(default)]
+    #[schemars(skip)]
     pub schema_version: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub repair_id: String,
     pub status: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub deployment_failure_ref: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changed_files: Vec<String>,

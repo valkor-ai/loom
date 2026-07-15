@@ -22,7 +22,7 @@ use crate::{
     },
     paths::deployment_paths,
     port_plan::primary_url,
-    prepare::{deploy_prepare_inner, read_spec},
+    prepare::{deploy_prepare_inner, deployment_spec_is_stale, read_spec},
     repair::write_repair_action,
     runtime_state::write_success_state,
     validate::{deploy_validate_inner, validate_generated_assets, DeploymentValidationResult},
@@ -56,7 +56,9 @@ pub fn deploy_up(input: DeployToolInput) -> LoomMcpActionResult {
 
 pub fn deploy_up_inner(project_root: &Path, input: DeployToolInput) -> LoomMcpActionResult {
     let paths = deployment_paths(project_root);
-    if !path_exists(&paths.spec_file) {
+    let needs_prepare = !path_exists(&paths.spec_file)
+        || deployment_spec_is_stale(project_root, &input).unwrap_or(true);
+    if needs_prepare {
         let _ = update_operation_phase(project_root, "preparing", "running");
         match deploy_prepare_inner(project_root, input.clone()) {
             Ok(LoomMcpActionResult::Done(_)) => {}

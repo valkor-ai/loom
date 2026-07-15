@@ -1,4 +1,4 @@
-use contracts::{CodeQualityRequirement, TaskDefinition, TaskPlan};
+use contracts::{BrowserVerificationProfile, CodeQualityRequirement, TaskDefinition, TaskPlan};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
@@ -29,18 +29,9 @@ pub(crate) fn frontend_surface_contract_applies(task: &TaskDefinition) -> bool {
         })
 }
 
-pub(crate) fn taskplan_outline_result_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
-) -> Value {
+pub(crate) fn taskplan_outline_result_template() -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
         "status": "ready",
-        "taskPlanId": format!("taskplan-{phase_id}"),
         "groups": [{
             "groupId": "group-current-capability",
             "title": "Current capability group",
@@ -50,21 +41,12 @@ pub(crate) fn taskplan_outline_result_template(
             "acceptanceRefs": ["allowedRefs.acceptanceRefs item"],
             "taskIds": ["task-current-001"]
         }],
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime"
+        "blockedReasons": []
     })
 }
 
-pub(crate) fn taskplan_group_result_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
-) -> Value {
+pub(crate) fn taskplan_group_result_template() -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
         "status": "ready",
         "group": {
             "groupId": "group-current-capability",
@@ -116,13 +98,9 @@ pub(crate) fn taskplan_group_result_template(
                 "conceptRef": "contextProjection.requirementDetailTransfer.conceptRefs item",
                 "evidenceType": "static_check",
                 "intent": "How verification will prove this task preserved or implemented that concept."
-            }],
-            "architectureQualityRequirementRefs": [],
-            "apiContractRequirementRefs": [],
-            "codeQualityRequirementRefs": []
+            }]
         }],
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime"
+        "blockedReasons": []
     })
 }
 
@@ -133,11 +111,8 @@ pub(crate) fn runtime_delivery_requirement_template(runtime_delivery: Option<&Va
     json!({
         "appliesToThisTask": true,
         "reason": "Why this task changes build, start, runtime entry, static serving, generated artifacts, or runtime surface.",
-        "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
         "affectedContractFields": ["runtimeSurfaces"],
         "requiredCodeLevelChecks": [{
-            "checkId": "check-task-current-001-runtime",
-            "contractField": "runtimeSurfaces",
             "objective": "Verify this task preserves the runtime delivery contract it touches.",
             "acceptableEvidence": ["manual_command_output", "runtime_api_check", "static_check"]
         }],
@@ -187,41 +162,60 @@ pub(crate) fn code_quality_execution_context(
 }
 
 pub(crate) fn task_result_template_with_code_quality(
-    task_plan_id: &str,
     task: &TaskDefinition,
     code_quality_requirements: &[CodeQualityRequirement],
+    browser_profile: Option<&BrowserVerificationProfile>,
 ) -> Value {
     let verification_results = task
         .verification_intents
         .iter()
         .map(|intent| {
-            json!({
-                "verificationId": intent.verification_id,
-                "status": "passed",
-                "evidenceType": "automated_test",
+            let browser_checks = browser_profile
+                .map(|profile| {
+                    profile
+                        .checks
+                        .iter()
+                        .filter(|check| check.verification_id == intent.verification_id)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut result = json!({
+                "status": if browser_checks.is_empty() { "passed" } else { "not_run" },
+                "evidenceType": if browser_checks.is_empty() { "automated_test" } else { "browser_automation" },
                 "summary": ""
-            })
+            });
+            if !browser_checks.is_empty() {
+                result["browserChecks"] = Value::Array(
+                    browser_checks
+                        .into_iter()
+                        .map(|_| {
+                            json!({
+                                "status": "not_run",
+                                "command": "",
+                                "attempts": 0,
+                                "artifactRefs": [],
+                                "observedOutcome": "",
+                                "blockedReason": null
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            result
         })
         .collect::<Vec<_>>();
     let requirement_detail_evidence = task
         .requirement_detail_refs
         .iter()
-        .map(|detail_id| {
-            let verification_ids = template_verification_ids_for_detail(task, detail_id);
+        .map(|_| {
             json!({
-                "detailId": detail_id,
                 "status": "satisfied",
-                "verificationIds": verification_ids,
                 "evidenceRefs": [],
                 "summary": ""
             })
         })
         .collect::<Vec<_>>();
     let mut template = json!({
-        "schemaVersion": "1.0",
-        "taskResultId": format!("result-{}", task.task_id),
-        "taskId": task.task_id,
-        "taskPlanId": task_plan_id,
         "status": "completed",
         "changedFiles": [],
         "noChangeReason": null,
@@ -240,9 +234,7 @@ pub(crate) fn task_result_template_with_code_quality(
         },
         "notes": [],
         "requirementDetailEvidence": requirement_detail_evidence,
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime",
-        "updatedAt": "ISO-8601 datetime"
+        "blockedReasons": []
     });
     let Some(object) = template.as_object_mut() else {
         return template;
@@ -271,9 +263,8 @@ pub(crate) fn task_result_template_with_code_quality(
             Value::Array(
                 task.concept_refs
                     .iter()
-                    .map(|concept_ref| {
+                    .map(|_| {
                         json!({
-                            "conceptRef": concept_ref,
                             "evidenceType": "code",
                             "refs": [],
                             "summary": ""
@@ -304,12 +295,11 @@ pub(crate) fn task_result_template_with_code_quality(
     template
 }
 
-pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
+pub(crate) fn task_result_schema_shape(
+    task: &TaskDefinition,
+    browser_profile: Option<&BrowserVerificationProfile>,
+) -> Value {
     let mut properties = serde_json::Map::new();
-    properties.insert("schemaVersion".to_string(), json!("1.0"));
-    properties.insert("taskResultId".to_string(), json!("string"));
-    properties.insert("taskId".to_string(), json!("string"));
-    properties.insert("taskPlanId".to_string(), json!("string"));
     properties.insert(
         "status".to_string(),
         json!("completed | completed_with_notes | blocked | failed"),
@@ -323,14 +313,24 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
             "summary": "string"
         }),
     );
+    let mut verification_shape = json!({
+        "status": "passed | not_run | failed | inconclusive",
+        "evidenceType": "one of the matching verification intent acceptableEvidence values",
+        "summary": "string"
+    });
+    if browser_profile.is_some() {
+        verification_shape["browserChecks"] = json!([{
+            "status": "passed | failed | blocked | not_run",
+            "command": "exact command used for this check",
+            "attempts": "non-negative integer; passed requires at least 1",
+            "artifactRefs": ["project-relative trace, screenshot, or report ref"],
+            "observedOutcome": "concise visible or behavioral outcome",
+            "blockedReason": "concrete string when status=blocked, otherwise null"
+        }]);
+    }
     properties.insert(
         "verificationResults".to_string(),
-        json!([{
-            "verificationId": "task.verificationIntents[].verificationId",
-            "status": "passed | not_run | failed | inconclusive",
-            "evidenceType": "one of the matching verification intent acceptableEvidence values",
-            "summary": "string"
-        }]),
+        Value::Array(vec![verification_shape]),
     );
     properties.insert(
         "selfRepairSummary".to_string(),
@@ -361,9 +361,7 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
     properties.insert(
         "requirementDetailEvidence".to_string(),
         json!([{
-            "detailId": "task.requirementDetailRefs or task.verificationIntents[].requirementDetailRefs item",
             "status": "satisfied | partial | not_verified",
-            "verificationIds": ["task.verificationIntents[].verificationId"],
             "evidenceRefs": ["project-relative evidence ref"],
             "summary": "string"
         }]),
@@ -377,15 +375,12 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
             "details": {}
         }]),
     );
-    properties.insert("createdAt".to_string(), json!("ISO-8601 datetime"));
-    properties.insert("updatedAt".to_string(), json!("ISO-8601 datetime"));
 
     if frontend_self_check_applies(task) {
         properties.insert(
             "frontendExperienceSelfCheck".to_string(),
             json!({
                 "status": "satisfied | partial | blocked",
-                "closureRequirementIds": ["task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs[].closureId"],
                 "dataBinding": {
                     "mode": "wired | partial | not_applicable",
                     "knownGaps": ["string"]
@@ -400,9 +395,7 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
             "frontendQualitySelfCheck".to_string(),
             json!({
                 "status": "satisfied | partial | missing | blocked_by_environment",
-                "surfaceDecisionContractRef": "task.frontendExperienceRequirement.uiSurfaceDecisionContractRef",
                 "surfaceRegionEvidence": [{
-                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.regionsInScope[].regionId",
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file"],
                     "states": ["covered state id"],
@@ -410,7 +403,6 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
                     "evidence": "string"
                 }],
                 "surfaceActionEvidence": [{
-                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.actionsInScope[].actionId",
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file"],
                     "states": ["covered state id"],
@@ -418,7 +410,6 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
                     "evidence": "string"
                 }],
                 "surfaceStateEvidence": [{
-                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.statesInScope[].state",
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file"],
                     "states": ["covered state id"],
@@ -426,7 +417,6 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
                     "evidence": "string"
                 }],
                 "surfaceQualityRuleEvidence": [{
-                    "id": "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief.surfaceDecisionContract.qualityRulesInScope[].ruleId",
                     "status": "satisfied | partial | missing | blocked_by_environment",
                     "files": ["project-relative UI file or check"],
                     "states": ["covered state id"],
@@ -458,11 +448,7 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
         properties.insert(
             "runtimeDeliveryEvidence".to_string(),
             json!({
-                "requirementRef": "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
-                "checkedFields": ["task.runtimeDeliveryRequirement.affectedContractFields item"],
                 "codeLevelChecks": [{
-                    "checkId": "task.runtimeDeliveryRequirement.requiredCodeLevelChecks[].checkId",
-                    "contractField": "string or null",
                     "status": "passed | failed | blocked | not_applicable",
                     "evidence": "string"
                 }],
@@ -476,7 +462,6 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
         properties.insert(
             "conceptEvidence".to_string(),
             json!([{
-                "conceptRef": "task.conceptRefs item",
                 "evidenceType": "code | test | runtime | manual",
                 "refs": ["project-relative ref"],
                 "summary": "string"
@@ -487,9 +472,7 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
         properties.insert(
             "architectureQualityEvidence".to_string(),
             json!([{
-                "requirementId": "task.architectureQualityRequirementRefs item",
                 "status": "satisfied | partial | not_verified",
-                "verificationIds": ["task.verificationIntents[].verificationId"],
                 "changedFiles": ["project-relative path"],
                 "summary": "string"
             }]),
@@ -499,10 +482,7 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
         properties.insert(
             "apiContractEvidence".to_string(),
             json!([{
-                "requirementId": "task.apiContractRequirementRefs item",
                 "status": "satisfied | partial | not_verified",
-                "interfaceRefs": ["task.writeBoundary.artifactRefs.interfaces item"],
-                "verificationIds": ["task.verificationIntents[].verificationId"],
                 "changedFiles": ["project-relative path"],
                 "successPaths": ["HTTP method/path or operation id"],
                 "errorPaths": ["HTTP method/path or operation id"],
@@ -517,11 +497,9 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
         properties.insert(
             "codeQualityEvidence".to_string(),
             json!([{
-                "requirementId": "task.codeQualityRequirementRefs item",
                 "status": "satisfied | partial | not_verified",
                 "referenceGroupsChecked": {"language_or_framework": ["group"]},
                 "referenceFilesChecked": ["reference path"],
-                "verificationIds": ["task.verificationIntents[].verificationId"],
                 "changedFiles": ["project-relative path"],
                 "commandsRun": ["command"],
                 "knownGaps": ["string"],
@@ -538,33 +516,8 @@ pub(crate) fn task_result_schema_shape(task: &TaskDefinition) -> Value {
     })
 }
 
-fn template_verification_ids_for_detail(task: &TaskDefinition, detail_id: &str) -> Vec<String> {
-    let direct = task
-        .verification_intents
-        .iter()
-        .filter(|intent| {
-            intent
-                .requirement_detail_refs
-                .iter()
-                .any(|id| id == detail_id)
-        })
-        .map(|intent| intent.verification_id.clone())
-        .collect::<Vec<_>>();
-    if !direct.is_empty() {
-        return direct;
-    }
-    if task.verification_intents.len() == 1 {
-        return vec![task.verification_intents[0].verification_id.clone()];
-    }
-    Vec::new()
-}
-
 pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Vec<&'static str> {
     let mut fields = vec![
-        "schemaVersion",
-        "taskResultId",
-        "taskId",
-        "taskPlanId",
         "status",
         "changedFiles",
         "noChangeReason",
@@ -575,8 +528,6 @@ pub(crate) fn task_result_required_top_level_fields(task: &TaskDefinition) -> Ve
         "notes",
         "requirementDetailEvidence",
         "blockedReasons",
-        "createdAt",
-        "updatedAt",
     ];
     if frontend_self_check_applies(task) {
         fields.push("frontendExperienceSelfCheck");
@@ -639,18 +590,14 @@ fn runtime_delivery_evidence_template(task: &TaskDefinition) -> Value {
     let code_level_checks = requirement
         .required_code_level_checks
         .iter()
-        .map(|check| {
+        .map(|_| {
             json!({
-                "checkId": check.check_id,
-                "contractField": check.contract_field,
                 "status": "passed",
                 "evidence": ""
             })
         })
         .collect::<Vec<_>>();
     json!({
-        "requirementRef": requirement.runtime_delivery_ref,
-        "checkedFields": requirement.affected_contract_fields,
         "codeLevelChecks": code_level_checks,
         "commandsRun": [],
         "unverifiedItems": [],
@@ -662,11 +609,9 @@ fn architecture_quality_evidence_template(task: &TaskDefinition) -> Value {
     Value::Array(
         task.architecture_quality_requirement_refs
             .iter()
-            .map(|requirement_id| {
+            .map(|_| {
                 json!({
-                    "requirementId": requirement_id,
                     "status": "satisfied",
-                    "verificationIds": template_verification_ids_for_architecture_quality(task),
                     "changedFiles": [],
                     "summary": ""
                 })
@@ -679,12 +624,9 @@ fn api_contract_evidence_template(task: &TaskDefinition) -> Value {
     Value::Array(
         task.api_contract_requirement_refs
             .iter()
-            .map(|requirement_id| {
+            .map(|_| {
                 json!({
-                    "requirementId": requirement_id,
                     "status": "satisfied",
-                    "interfaceRefs": task.write_boundary.artifact_refs.interfaces.clone(),
-                    "verificationIds": template_verification_ids_for_architecture_quality(task),
                     "changedFiles": [],
                     "successPaths": [],
                     "errorPaths": [],
@@ -723,11 +665,9 @@ fn code_quality_evidence_template(
                     })
                     .unwrap_or_default();
                 json!({
-                    "requirementId": requirement_id,
                     "status": "satisfied",
                     "referenceGroupsChecked": reference_groups,
                     "referenceFilesChecked": reference_files,
-                    "verificationIds": template_verification_ids_for_architecture_quality(task),
                     "changedFiles": [],
                     "commandsRun": [],
                     "knownGaps": [],
@@ -738,42 +678,12 @@ fn code_quality_evidence_template(
     )
 }
 
-fn template_verification_ids_for_architecture_quality(task: &TaskDefinition) -> Vec<String> {
-    if task.verification_intents.len() == 1 {
-        return vec![task.verification_intents[0].verification_id.clone()];
-    }
-    task.verification_intents
-        .iter()
-        .map(|intent| intent.verification_id.clone())
-        .collect()
-}
-
 fn frontend_experience_self_check_template(task: &TaskDefinition) -> Value {
     if task.frontend_experience_requirement.is_none() {
         return Value::Null;
     }
-    let closure_requirement_ids = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("executionGuidance"))
-        .and_then(|guidance| guidance.get("closureRequirementRefs"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    item.as_str().map(str::to_string).or_else(|| {
-                        item.get("closureId")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     json!({
         "status": "satisfied",
-        "closureRequirementIds": closure_requirement_ids,
         "dataBinding": {
             "mode": "wired",
             "knownGaps": []
@@ -788,12 +698,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .frontend_experience_requirement
         .as_ref()
         .and_then(|requirement| requirement.get("executionGuidance"));
-    let surface_decision_ref = task
-        .frontend_experience_requirement
-        .as_ref()
-        .and_then(|requirement| requirement.get("uiSurfaceDecisionContractRef"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
     let surface_decision_contract = frontend_execution_guidance
         .and_then(|guidance| guidance.pointer("/uiProductionBrief/surfaceDecisionContract"))
         .unwrap_or(&Value::Null);
@@ -825,9 +729,8 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             regions
                 .iter()
                 .filter_map(|region| {
-                    region.get("regionId").and_then(Value::as_str).map(|id| {
+                    region.get("regionId").and_then(Value::as_str).map(|_| {
                         json!({
-                            "id": id,
                             "status": "satisfied",
                             "files": ["replace_with_ui_file_path_for_this_region"],
                             "states": merged_state_refs(region, &surface_state_ids),
@@ -848,7 +751,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .filter_map(|action| {
                     action.get("actionId").and_then(Value::as_str).map(|id| {
                         json!({
-                            "id": id,
                             "status": "satisfied",
                             "files": ["replace_with_ui_file_path_for_this_action"],
                             "states": [],
@@ -869,7 +771,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
                 .filter_map(|state| {
                     state.get("state").and_then(Value::as_str).map(|id| {
                         json!({
-                            "id": id,
                             "status": "satisfied",
                             "files": ["replace_with_ui_file_path_for_this_state"],
                             "states": [id],
@@ -888,9 +789,8 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
             rules
                 .iter()
                 .filter_map(|rule| {
-                    rule.get("ruleId").and_then(Value::as_str).map(|id| {
+                    rule.get("ruleId").and_then(Value::as_str).map(|_| {
                         json!({
-                            "id": id,
                             "status": "satisfied",
                             "files": ["replace_with_ui_file_path_or_check_for_this_rule"],
                             "states": [],
@@ -921,7 +821,6 @@ fn frontend_quality_self_check_template(task: &TaskDefinition) -> Value {
         .unwrap_or_default();
     json!({
         "status": "partial",
-        "surfaceDecisionContractRef": surface_decision_ref,
         "surfaceRegionEvidence": surface_region_evidence,
         "surfaceActionEvidence": surface_action_evidence,
         "surfaceStateEvidence": surface_state_evidence,
@@ -1062,5 +961,70 @@ mod tests {
                 "frontend quality template must not emit legacy field {key}: {template:#}"
             );
         }
+    }
+
+    #[test]
+    fn task_result_template_exposes_browser_outcomes_without_agent_authored_linkage() {
+        let mut task = frontend_task(json!({
+            "uiSurfaceDecisionContractRef": "surface-contract",
+            "executionGuidance": {
+                "uiProductionBrief": {
+                    "surfaceDecisionContract": {"contractRef": "surface-contract"}
+                }
+            }
+        }));
+        task.verification_intents = serde_json::from_value(json!([{
+            "verificationId": "verify-ui",
+            "requirementDetailRefs": [],
+            "behavior": "Verify the UI.",
+            "preferredEvidence": ["automated_test"],
+            "acceptableEvidence": ["automated_test"]
+        }]))
+        .expect("verification intents");
+        let profile = BrowserVerificationProfile {
+            profile_id: "browser-task-ui-001".to_string(),
+            task_id: task.task_id.clone(),
+            mode: contracts::BrowserVerificationMode::RenderedInspection,
+            runner_source: contracts::BrowserRunnerSource::LoomManaged,
+            installation_id: None,
+            verification_ids: vec!["verify-ui".to_string()],
+            surface_refs: vec![],
+            workflow_refs: vec![],
+            region_refs: vec![],
+            action_refs: vec![],
+            state_refs: vec![],
+            quality_rule_refs: vec![],
+            checks: vec![contracts::BrowserVerificationCheck {
+                check_id: "browser-ui-desktop".to_string(),
+                verification_id: "verify-ui".to_string(),
+                source_task_id: "task-ui".to_string(),
+                source_verification_id: "verify-ui".to_string(),
+                enforcement: contracts::BrowserEvidenceEnforcement::Supplemental,
+                viewport_ref: "desktop_primary".to_string(),
+                backend_mode: contracts::BrowserBackendMode::NotApplicable,
+            }],
+            reference_load_plan: vec![],
+        };
+
+        let template = task_result_template_with_code_quality(&task, &[], Some(&profile));
+
+        assert!(template["verificationResults"][0]["browserChecks"]
+            .get("checkId")
+            .is_none());
+        assert_eq!(
+            template["verificationResults"][0]["browserChecks"][0]["status"],
+            json!("not_run")
+        );
+        assert_eq!(
+            template["verificationResults"][0]["status"],
+            json!("not_run")
+        );
+        assert_eq!(
+            template["verificationResults"][0]["evidenceType"],
+            json!("browser_automation")
+        );
+        assert!(template["frontendQualitySelfCheck"]
+            .get("browserCheckRefs")
+            .is_none());
     }
 }

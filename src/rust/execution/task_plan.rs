@@ -8,13 +8,14 @@ use contracts::{
     code_reference_load_plan, code_reference_selection_for_task, execution::TaskArtifactRefs,
     package_naming_policy_for_reference_groups, planning::RequirementDetailItem,
     ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
-    ArchitectureArtifactContract, ArchitectureQualityRequirement, CodeQualityRequirement,
-    CoverageStatus, EngineeringQualityRequirement, ImplementationAction, TaskDefinition,
-    TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
-    TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
-    TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary,
-    TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus,
-    VerificationEvidence,
+    ArchitectureArtifactContract, ArchitectureQualityRequirement, BrowserEvidenceEnforcement,
+    BrowserRunnerSource, BrowserVerificationMode, BrowserVerificationProfile,
+    CodeQualityRequirement, CoverageStatus, EngineeringQualityRequirement, ImplementationAction,
+    ReferenceLoadPlanItem, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
+    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
+    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
+    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
+    TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -31,6 +32,11 @@ use state::{
     write_targets::AuthorizedWriteSet,
 };
 
+use crate::api_contract::{exposure_projection, interfaces_for_refs, load_project_api_contract};
+use crate::browser::{
+    derive_browser_verification_profiles, scan_browser_automation_facts,
+    task_requires_browser_verification,
+};
 use crate::paths::{
     task_plan_file, task_plan_group_pattern, task_plan_latest_file,
     task_plan_outline_candidate_file, task_plan_request_file, task_plan_run_file,
@@ -80,6 +86,7 @@ const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
 
 const VERIFICATION_EVIDENCE_VALUES: &[&str] = &[
     "automated_test",
+    "browser_automation",
     "manual_command_output",
     "runtime_api_check",
     "static_check",
@@ -179,6 +186,7 @@ fn materialize_request_inner(
     let baseline: contracts::TechnicalBaselineContract = read_project_json(root, &baseline_ref)?;
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
+    let project_api_contract = load_project_api_contract(root, &aac)?;
 
     let request_id = format!("taskplan_{}", state::store::now_millis());
     let outline_file =
@@ -198,6 +206,7 @@ fn materialize_request_inner(
         &baseline,
         &pgc,
         &aac,
+        project_api_contract.as_ref(),
         &outline_file,
         &group_file_pattern,
     );
@@ -242,6 +251,7 @@ fn build_request_root(
     baseline: &contracts::TechnicalBaselineContract,
     pgc: &contracts::PlanningGenerationContract,
     aac: &ArchitectureArtifactContract,
+    project_api_contract: Option<&Value>,
     outline_file: &str,
     group_file_pattern: &str,
 ) -> Value {
@@ -256,13 +266,17 @@ fn build_request_root(
     let frontend_requirement_template = frontend_experience_requirement_template(aac);
     let engineering_quality_template = engineering_quality_requirement_template(baseline);
     let architecture_quality_template = architecture_quality_requirement_template(aac);
-    let api_contract_template = api_contract_requirement_template(aac);
+    let phase_api_interfaces =
+        interfaces_for_refs(project_api_contract, &aac.current_phase_interface_refs);
+    let api_contract_template = api_contract_requirement_template(&phase_api_interfaces);
     let code_quality_seed = build_code_quality_seed(baseline);
     let code_quality_template = code_quality_requirement_template(&code_quality_seed);
-    let source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
-    let outline_result_template =
-        taskplan_outline_result_template(request_id, delivery_id, phase_id);
-    let group_result_template = taskplan_group_result_template(request_id, delivery_id, phase_id);
+    let mut source_refs = taskplan_source_refs(baseline_ref, planning_ref, architecture_ref, pgc);
+    if let Some(api_contract_ref) = &aac.api_contract_ref {
+        source_refs["apiContractRef"] = json!(api_contract_ref);
+    }
+    let outline_result_template = taskplan_outline_result_template();
+    let group_result_template = taskplan_group_result_template();
     let mut output_contract = json!({
         "artifactKind": ArtifactKind::TaskPlanCandidate,
         "writeMode": "taskplan_grouped",
@@ -318,6 +332,32 @@ fn build_request_root(
     if !code_quality_template.is_null() {
         output_contract["codeQualityRequirementTemplate"] = code_quality_template.clone();
     }
+    let mut context_projection = json!({
+        "phaseId": phase_id,
+        "planningContractId": pgc.planning_contract_id,
+        "architectureArtifactContractId": aac.architecture_artifact_contract_id,
+        "technicalBaseline": {
+            "technicalBaselineId": baseline.technical_baseline_id,
+            "projectKind": baseline.project_kind,
+            "stack": baseline.stack
+        },
+        "requirementDetailTransfer": requirement_transfer
+    });
+    if !api_contract_template.is_null() {
+        if let Some(object) = context_projection.as_object_mut() {
+            object.insert(
+                "apiContract".to_string(),
+                exposure_projection(aac.api_contract_ref.as_deref(), project_api_contract),
+            );
+            object.insert(
+                "apiInterfaces".to_string(),
+                json!(phase_api_interfaces
+                    .iter()
+                    .map(compact_api_interface_for_task_plan)
+                    .collect::<Vec<_>>()),
+            );
+        }
+    }
     json!({
         "schemaVersion": "1.0",
         "requestType": "taskplan_grouped_generation",
@@ -326,17 +366,7 @@ fn build_request_root(
         "phaseId": phase_id,
         "artifactKind": ArtifactKind::TaskPlanCandidate,
         "sourceRefs": source_refs,
-        "contextProjection": {
-            "phaseId": phase_id,
-            "planningContractId": pgc.planning_contract_id,
-            "architectureArtifactContractId": aac.architecture_artifact_contract_id,
-            "technicalBaseline": {
-                "technicalBaselineId": baseline.technical_baseline_id,
-                "projectKind": baseline.project_kind,
-                "stack": baseline.stack
-            },
-            "requirementDetailTransfer": requirement_transfer
-        },
+        "contextProjection": context_projection,
         "allowedRefs": allowed_refs(pgc, aac),
         "generationRules": generation_rules(aac, &code_quality_seed),
         "enumRefs": enum_refs(),
@@ -410,6 +440,9 @@ fn taskplan_read_groups(
     if has_non_null_key(source_refs, "repositoryContextRef") {
         core_fields.push("sourceRefs.repositoryContextRef");
     }
+    if has_non_null_key(source_refs, "apiContractRef") {
+        core_fields.push("sourceRefs.apiContractRef");
+    }
     core_fields.extend([
         "contextProjection.phaseId",
         "contextProjection.planningContractId",
@@ -448,6 +481,12 @@ fn taskplan_read_groups(
             "codeQualitySeed.techReferenceProfile.groups.code",
             "codeQualitySeed.techReferenceProfile.referenceLoadPlan",
             "codeQualitySeed.generationRules",
+        ]);
+    }
+    if !api_contract_template.is_null() {
+        core_fields.extend([
+            "contextProjection.apiContract",
+            "contextProjection.apiInterfaces",
         ]);
     }
     let groups = vec![
@@ -712,7 +751,13 @@ where
         "nfrRefs": value_field(&fields, "allowedRefs.nfrRefs"),
         "riskRefs": value_field(&fields, "allowedRefs.riskRefs")
     });
-    let outline_value = read_project_json_value(root, &outline_ref)?;
+    let mut outline_value = read_project_json_value(root, &outline_ref)?;
+    normalize_taskplan_outline_envelope(
+        &mut outline_value,
+        &authorized.request_id,
+        &delivery_id,
+        &phase_id,
+    );
     let outline: TaskPlanOutlineCandidateAgentWritable = match deserialize_candidate(
         outline_value,
         "outline",
@@ -730,7 +775,7 @@ where
             ));
         }
     };
-    let mut issues = validate_outline(&outline, &authorized.request_id, &delivery_id, &phase_id);
+    let mut issues = validate_outline(&outline);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
@@ -748,7 +793,13 @@ where
     let mut tasks = Vec::new();
     for group in &outline.groups {
         let group_file = group_pattern.replace("{groupId}", &group.group_id);
-        let group_value = read_project_json_value(root, &group_file)?;
+        let mut group_value = read_project_json_value(root, &group_file)?;
+        normalize_taskplan_group_envelope(
+            &mut group_value,
+            &authorized.request_id,
+            &delivery_id,
+            &phase_id,
+        );
         let mut candidate: TaskPlanGroupCandidateAgentWritable = match deserialize_candidate(
             group_value,
             "group",
@@ -761,13 +812,7 @@ where
             }
         };
         normalize_taskplan_write_boundaries(&mut candidate.tasks, &allowed_refs);
-        issues.extend(validate_group_candidate(
-            &candidate,
-            group,
-            &authorized.request_id,
-            &delivery_id,
-            &phase_id,
-        ));
+        issues.extend(validate_group_candidate(&candidate, group));
         groups.push(candidate.group.clone());
         tasks.extend(candidate.tasks);
     }
@@ -778,12 +823,21 @@ where
     let pgc: contracts::PlanningGenerationContract = read_project_json(root, &planning_ref)?;
     let aac: ArchitectureArtifactContract = read_project_json(root, &architecture_ref)?;
     normalize_taskplan_candidate_relationships(&mut groups, &mut tasks, &pgc, &aac);
+    normalize_runtime_delivery_requirements(&mut tasks, &aac);
     let engineering_quality_requirements =
         normalize_engineering_quality_requirements(&baseline, &mut tasks);
     let architecture_quality_requirements =
         normalize_architecture_quality_requirements(&aac, &mut tasks);
-    let api_contract_requirements = normalize_api_contract_requirements(&aac, &mut tasks);
+    let api_contract_requirements =
+        normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs);
     let code_quality_requirements = normalize_code_quality_requirements(&baseline, &mut tasks);
+    normalize_browser_verification_assignments(&mut tasks);
+    issues.extend(validate_browser_verification_assignments(&tasks));
+    let browser_automation_facts = scan_browser_automation_facts(root, &baseline);
+    let source_browser_profiles =
+        derive_browser_verification_profiles(&browser_automation_facts, &tasks);
+    let browser_verification_profiles =
+        materialize_browser_quality_closure(&mut groups, &mut tasks, source_browser_profiles);
     issues.extend(validate_taskplan_graph(&groups, &tasks));
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
@@ -817,6 +871,7 @@ where
             planning_generation_contract_id: pgc.planning_contract_id.clone(),
             architecture_artifact_contract_id: aac.architecture_artifact_contract_id.clone(),
             technical_baseline_id: baseline.technical_baseline_id.clone(),
+            api_contract_ref: aac.api_contract_ref.clone(),
         },
         scope_snapshot: TaskPlanScopeSnapshot {
             included_scope_refs: pgc
@@ -856,6 +911,8 @@ where
         architecture_quality_requirements,
         api_contract_requirements,
         code_quality_requirements,
+        browser_automation_facts,
+        browser_verification_profiles,
         handoff: TaskPlanHandoff {
             ready_for_execution: true,
             next_node: "task_execution".to_string(),
@@ -1059,37 +1116,46 @@ pub(crate) fn update_run_summary(run: &mut TaskPlanRun) {
     run.summary = summary;
 }
 
-fn validate_outline(
-    outline: &TaskPlanOutlineCandidateAgentWritable,
+fn normalize_taskplan_outline_envelope(
+    raw: &mut Value,
     request_id: &str,
     delivery_id: &str,
     phase_id: &str,
+) {
+    let Some(object) = raw.as_object_mut() else {
+        return;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert("requestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert(
+        "taskPlanId".to_string(),
+        json!(format!("taskplan-{phase_id}")),
+    );
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+}
+
+fn normalize_taskplan_group_envelope(
+    raw: &mut Value,
+    request_id: &str,
+    delivery_id: &str,
+    phase_id: &str,
+) {
+    let Some(object) = raw.as_object_mut() else {
+        return;
+    };
+    object.insert("schemaVersion".to_string(), json!("1.0"));
+    object.insert("requestId".to_string(), json!(request_id));
+    object.insert("deliveryId".to_string(), json!(delivery_id));
+    object.insert("phaseId".to_string(), json!(phase_id));
+    object.insert("createdAt".to_string(), json!(state::store::now_string()));
+}
+
+fn validate_outline(
+    outline: &TaskPlanOutlineCandidateAgentWritable,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if outline.request_id != request_id {
-        issues.push(issue(
-            "REQUEST_ID_MISMATCH",
-            "outline.requestId",
-            "TaskPlan outline requestId must match the active request.",
-            Some("outline"),
-        ));
-    }
-    if outline.delivery_id != delivery_id {
-        issues.push(issue(
-            "DELIVERY_ID_MISMATCH",
-            "outline.deliveryId",
-            "TaskPlan outline deliveryId must match the active delivery.",
-            Some("outline"),
-        ));
-    }
-    if outline.phase_id != phase_id {
-        issues.push(issue(
-            "PHASE_ID_MISMATCH",
-            "outline.phaseId",
-            "TaskPlan outline phaseId must match the active phase.",
-            Some("outline"),
-        ));
-    }
     if outline.groups.is_empty() {
         issues.push(issue(
             "GROUPS_REQUIRED",
@@ -1104,36 +1170,9 @@ fn validate_outline(
 fn validate_group_candidate(
     candidate: &TaskPlanGroupCandidateAgentWritable,
     expected: &TaskPlanGroup,
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
     let target = Some(candidate.group.group_id.as_str());
-    if candidate.request_id != request_id {
-        issues.push(issue(
-            "REQUEST_ID_MISMATCH",
-            "group.requestId",
-            "TaskPlan group requestId must match the active request.",
-            target,
-        ));
-    }
-    if candidate.delivery_id != delivery_id {
-        issues.push(issue(
-            "DELIVERY_ID_MISMATCH",
-            "group.deliveryId",
-            "TaskPlan group deliveryId must match the active delivery.",
-            target,
-        ));
-    }
-    if candidate.phase_id != phase_id {
-        issues.push(issue(
-            "PHASE_ID_MISMATCH",
-            "group.phaseId",
-            "TaskPlan group phaseId must match the active phase.",
-            target,
-        ));
-    }
     if candidate.group.group_id != expected.group_id {
         issues.push(issue(
             "GROUP_ID_MISMATCH",
@@ -1474,6 +1513,71 @@ fn normalize_taskplan_candidate_relationships(
     normalize_missing_requirement_detail_task_refs(tasks, pgc, aac);
     normalize_task_verification_detail_refs(tasks, pgc, aac);
     normalize_runtime_delivery_closure_group(groups, tasks, aac.runtime_delivery.as_ref());
+}
+
+fn normalize_runtime_delivery_requirements(
+    tasks: &mut [TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) {
+    let Some(runtime_delivery) = aac.runtime_delivery.as_ref() else {
+        for task in tasks {
+            task.runtime_delivery_requirement = None;
+        }
+        return;
+    };
+    let runtime_ref = "sourceRefs.architectureArtifactContractRef#/runtimeDelivery";
+    let contract_fields = runtime_delivery_closure_fields(runtime_delivery);
+    let contract_field_set = contract_fields.iter().cloned().collect::<BTreeSet<_>>();
+
+    for task in tasks {
+        let Some(requirement) = task.runtime_delivery_requirement.as_mut() else {
+            continue;
+        };
+        if !requirement.applies_to_this_task {
+            requirement.runtime_delivery_ref = None;
+            requirement.affected_contract_fields.clear();
+            requirement.required_code_level_checks.clear();
+            continue;
+        }
+
+        requirement.runtime_delivery_ref = Some(runtime_ref.to_string());
+        let is_closure = matches!(task.task_kind, TaskKind::RuntimeDeliveryClosure);
+        let requested_fields = if is_closure {
+            contract_fields.clone()
+        } else {
+            requirement
+                .affected_contract_fields
+                .iter()
+                .filter(|field| contract_field_set.contains(*field))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        requirement.affected_contract_fields = unique_strings(requested_fields);
+
+        let raw_checks = std::mem::take(&mut requirement.required_code_level_checks);
+        let mut checks_by_field = raw_checks
+            .into_iter()
+            .filter_map(|check| {
+                check
+                    .contract_field
+                    .clone()
+                    .filter(|field| requirement.affected_contract_fields.contains(field))
+                    .map(|field| (field, check))
+            })
+            .collect::<BTreeMap<_, _>>();
+        requirement.required_code_level_checks = requirement
+            .affected_contract_fields
+            .iter()
+            .map(|field| {
+                let mut check = checks_by_field
+                    .remove(field)
+                    .unwrap_or_else(|| runtime_delivery_check_for_field(field));
+                check.check_id = runtime_delivery_check_id(field);
+                check.contract_field = Some(field.clone());
+                check
+            })
+            .collect();
+    }
 }
 
 fn normalize_frontend_experience_requirements(
@@ -2547,22 +2651,37 @@ fn validate_runtime_delivery_closure_task(
             Some(&closure_group.group_id),
         ));
     }
-    if groups.last().map(|group| group.group_id.as_str()) != Some(closure_group.group_id.as_str()) {
+    let browser_closure_group = browser_quality_closure_group(groups, tasks);
+    let expected_final_group_id = browser_closure_group
+        .map(|group| group.group_id.as_str())
+        .unwrap_or(closure_group.group_id.as_str());
+    if groups.last().map(|group| group.group_id.as_str()) != Some(expected_final_group_id) {
         issues.push(issue(
             "RUNTIME_CLOSURE_GROUP_INVALID",
             "groups[].position",
-            "runtime_delivery_closure group must be the final TaskPlan group.",
+            "runtime_delivery_closure must be final unless an MCP-generated browser quality closure follows it.",
             Some(&closure_group.group_id),
         ));
     }
-    for group in groups
-        .iter()
-        .filter(|group| group.depends_on.contains(&closure_group.group_id))
+    if browser_closure_group
+        .is_some_and(|group| !group.depends_on.contains(&closure_group.group_id))
     {
         issues.push(issue(
             "RUNTIME_CLOSURE_GROUP_INVALID",
             "groups[].dependsOn",
-            "No TaskPlan group may depend on the final runtime_delivery_closure group.",
+            "The browser quality closure must depend on runtime_delivery_closure.",
+            browser_closure_group.map(|group| group.group_id.as_str()),
+        ));
+    }
+    for group in groups.iter().filter(|group| {
+        group.depends_on.contains(&closure_group.group_id)
+            && Some(group.group_id.as_str())
+                != browser_closure_group.map(|browser| browser.group_id.as_str())
+    }) {
+        issues.push(issue(
+            "RUNTIME_CLOSURE_GROUP_INVALID",
+            "groups[].dependsOn",
+            "Only the MCP-generated browser quality closure may depend on runtime_delivery_closure.",
             Some(&group.group_id),
         ));
     }
@@ -2612,6 +2731,287 @@ fn validate_runtime_delivery_closure_task(
     }
 
     issues
+}
+
+fn browser_quality_closure_group<'a>(
+    groups: &'a [TaskPlanGroup],
+    tasks: &[TaskDefinition],
+) -> Option<&'a TaskPlanGroup> {
+    let closure_group_id = tasks
+        .iter()
+        .find(|task| matches!(task.task_kind, TaskKind::BrowserQualityClosure))
+        .map(|task| task.group_id.as_str())?;
+    groups
+        .iter()
+        .find(|group| group.group_id == closure_group_id)
+}
+
+fn normalize_browser_verification_assignments(tasks: &mut [TaskDefinition]) {
+    for task in tasks {
+        if !task_requires_browser_verification(task)
+            || task.verification_intents.len() != 1
+            || task.verification_intents[0]
+                .preferred_evidence
+                .iter()
+                .chain(task.verification_intents[0].acceptable_evidence.iter())
+                .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
+        {
+            continue;
+        }
+        task.verification_intents[0]
+            .acceptable_evidence
+            .push(VerificationEvidence::BrowserAutomation);
+    }
+}
+
+fn validate_browser_verification_assignments(
+    tasks: &[TaskDefinition],
+) -> Vec<delivery_core::RepairIssue> {
+    tasks
+        .iter()
+        .filter(|task| task_requires_browser_verification(task))
+        .filter(|task| {
+            !task.verification_intents.iter().any(|intent| {
+                intent
+                    .preferred_evidence
+                    .iter()
+                    .chain(intent.acceptable_evidence.iter())
+                    .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
+            })
+        })
+        .map(|task| {
+            issue(
+                "TASKPLAN_BROWSER_VERIFICATION_REQUIRED",
+                "tasks[].verificationIntents[].acceptableEvidence",
+                &format!(
+                    "Task {} owns browser-verifiable UI scope. Mark the verification intent that proves rendered or interactive behavior with browser_automation; keep build, lint, unit-only, API-only, and static intents unchanged.",
+                    task.task_id
+                ),
+                Some(&task.group_id),
+            )
+        })
+        .collect()
+}
+
+fn materialize_browser_quality_closure(
+    groups: &mut Vec<TaskPlanGroup>,
+    tasks: &mut Vec<TaskDefinition>,
+    source_profiles: Vec<BrowserVerificationProfile>,
+) -> Vec<BrowserVerificationProfile> {
+    if source_profiles.is_empty() {
+        return Vec::new();
+    }
+
+    const PREFERRED_TASK_ID: &str = "task-browser-quality-closure";
+    const PREFERRED_GROUP_ID: &str = "group-browser-quality-closure";
+    let task_id = next_unique_identifier(
+        PREFERRED_TASK_ID,
+        tasks.iter().map(|task| task.task_id.as_str()),
+    );
+    let group_id = next_unique_identifier(
+        PREFERRED_GROUP_ID,
+        groups.iter().map(|group| group.group_id.as_str()),
+    );
+    let source_task_indices = tasks
+        .iter()
+        .enumerate()
+        .map(|(index, task)| (task.task_id.clone(), index))
+        .collect::<BTreeMap<_, _>>();
+    let mut checks = Vec::new();
+    let mut verification_intents = Vec::new();
+    let mut scope_refs = BTreeSet::new();
+    let mut acceptance_refs = BTreeSet::new();
+    let mut surface_refs = BTreeSet::new();
+    let mut workflow_refs = BTreeSet::new();
+    let mut region_refs = BTreeSet::new();
+    let mut action_refs = BTreeSet::new();
+    let mut state_refs = BTreeSet::new();
+    let mut quality_rule_refs = BTreeSet::new();
+    let mut reference_plan = BTreeMap::<String, ReferenceLoadPlanItem>::new();
+    let mut has_business_flow_mode = false;
+    let mut has_rendered_inspection_mode = false;
+    let mut runner_source = BrowserRunnerSource::LoomManaged;
+    let mut installation_id = None;
+
+    for profile in source_profiles {
+        has_business_flow_mode |= profile.mode == BrowserVerificationMode::BusinessFlow;
+        has_rendered_inspection_mode |= profile.mode == BrowserVerificationMode::RenderedInspection;
+        runner_source = profile.runner_source;
+        installation_id = installation_id.or(profile.installation_id.clone());
+        surface_refs.extend(profile.surface_refs);
+        workflow_refs.extend(profile.workflow_refs);
+        region_refs.extend(profile.region_refs);
+        action_refs.extend(profile.action_refs);
+        state_refs.extend(profile.state_refs);
+        quality_rule_refs.extend(profile.quality_rule_refs);
+        for item in profile.reference_load_plan {
+            reference_plan.entry(item.path.clone()).or_insert(item);
+        }
+        let Some(task_index) = source_task_indices.get(&profile.task_id).copied() else {
+            continue;
+        };
+        let source_task = &mut tasks[task_index];
+        scope_refs.extend(source_task.scope_refs.iter().cloned());
+        acceptance_refs.extend(source_task.acceptance_refs.iter().cloned());
+        for source_verification_id in profile.verification_ids {
+            let Some(intent) = source_task
+                .verification_intents
+                .iter_mut()
+                .find(|intent| intent.verification_id == source_verification_id)
+            else {
+                continue;
+            };
+            let closure_verification_id = format!(
+                "verify-browser-{}-{}",
+                normalized_identifier(&source_task.task_id),
+                normalized_identifier(&source_verification_id)
+            );
+            let intent_required = profile.checks.iter().any(|check| {
+                check.source_verification_id == source_verification_id
+                    && check.enforcement == BrowserEvidenceEnforcement::Required
+            });
+            acceptance_refs.extend(intent.acceptance_refs.iter().cloned());
+            verification_intents.push(VerificationIntent {
+                verification_id: closure_verification_id.clone(),
+                acceptance_refs: Vec::new(),
+                requirement_detail_refs: Vec::new(),
+                behavior: intent.behavior.clone(),
+                preferred_evidence: intent_required
+                    .then_some(VerificationEvidence::BrowserAutomation)
+                    .into_iter()
+                    .collect(),
+                acceptable_evidence: vec![VerificationEvidence::BrowserAutomation],
+            });
+            intent
+                .preferred_evidence
+                .retain(|evidence| *evidence != VerificationEvidence::BrowserAutomation);
+            intent
+                .acceptable_evidence
+                .retain(|evidence| *evidence != VerificationEvidence::BrowserAutomation);
+            if intent.preferred_evidence.is_empty() && intent.acceptable_evidence.is_empty() {
+                intent
+                    .acceptable_evidence
+                    .push(VerificationEvidence::AutomatedTest);
+            }
+            checks.extend(
+                profile
+                    .checks
+                    .iter()
+                    .filter(|check| check.source_verification_id == source_verification_id)
+                    .cloned()
+                    .map(|mut check| {
+                        check.verification_id = closure_verification_id.clone();
+                        check
+                    }),
+            );
+        }
+    }
+    if checks.is_empty() {
+        return Vec::new();
+    }
+
+    let mode = if has_business_flow_mode {
+        BrowserVerificationMode::BusinessFlow
+    } else if has_rendered_inspection_mode {
+        BrowserVerificationMode::RenderedInspection
+    } else {
+        BrowserVerificationMode::SuiteSetup
+    };
+    let mut implementation_actions = vec![ImplementationAction::AddOrUpdateTests];
+    if runner_source != BrowserRunnerSource::ExistingProject {
+        implementation_actions.push(ImplementationAction::AddOrUpdateConfig);
+    }
+    tasks.push(TaskDefinition {
+        task_id: task_id.clone(),
+        group_id: group_id.clone(),
+        title: "Verify browser quality closure".to_string(),
+        task_kind: TaskKind::BrowserQualityClosure,
+        implementation_actions,
+        objective: "Create or adapt the task-scoped browser checks and close required rendered, interaction, and workflow evidence.".to_string(),
+        depends_on: Vec::new(),
+        scope_refs: scope_refs.iter().cloned().collect(),
+        acceptance_refs: acceptance_refs.iter().cloned().collect(),
+        requirement_detail_refs: Vec::new(),
+        write_boundary: TaskWriteBoundary {
+            forbidden_paths: vec![".loom".to_string()],
+            artifact_refs: TaskArtifactRefs::default(),
+        },
+        verification_intents: verification_intents.clone(),
+        concept_refs: Vec::new(),
+        concept_responsibilities: Vec::new(),
+        concept_verification_intents: Vec::new(),
+        frontend_experience_requirement: None,
+        runtime_delivery_requirement: None,
+        engineering_quality_requirement_refs: Vec::new(),
+        architecture_quality_requirement_refs: Vec::new(),
+        api_contract_requirement_refs: Vec::new(),
+        code_quality_requirement_refs: Vec::new(),
+    });
+    let dependency_group_ids = groups
+        .iter()
+        .filter(|group| !group.task_ids.is_empty())
+        .map(|group| group.group_id.clone())
+        .collect::<Vec<_>>();
+    groups.push(TaskPlanGroup {
+        group_id: group_id.clone(),
+        title: "Browser quality closure".to_string(),
+        objective: "Close the phase browser evidence after implementation and runtime delivery are complete.".to_string(),
+        depends_on: dependency_group_ids,
+        scope_refs: scope_refs.into_iter().collect(),
+        acceptance_refs: acceptance_refs.into_iter().collect(),
+        task_ids: vec![task_id.clone()],
+    });
+
+    vec![BrowserVerificationProfile {
+        profile_id: format!(
+            "browser-quality-closure-{}",
+            normalized_identifier(&task_id)
+        ),
+        task_id,
+        mode,
+        runner_source,
+        installation_id,
+        verification_ids: verification_intents
+            .into_iter()
+            .map(|intent| intent.verification_id)
+            .collect(),
+        surface_refs: surface_refs.into_iter().collect(),
+        workflow_refs: workflow_refs.into_iter().collect(),
+        region_refs: region_refs.into_iter().collect(),
+        action_refs: action_refs.into_iter().collect(),
+        state_refs: state_refs.into_iter().collect(),
+        quality_rule_refs: quality_rule_refs.into_iter().collect(),
+        checks,
+        reference_load_plan: reference_plan.into_values().collect(),
+    }]
+}
+
+fn normalized_identifier(value: &str) -> String {
+    let value = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    value.trim_matches('-').to_string()
+}
+
+fn next_unique_identifier<'a>(preferred: &str, existing: impl Iterator<Item = &'a str>) -> String {
+    let existing = existing.collect::<BTreeSet<_>>();
+    if !existing.contains(preferred) {
+        return preferred.to_string();
+    }
+    for suffix in 2.. {
+        let candidate = format!("{preferred}-{suffix}");
+        if !existing.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded closure identifier suffix search should always return")
 }
 
 fn transitive_group_dependencies(groups: &[TaskPlanGroup], group_id: &str) -> BTreeSet<String> {
@@ -3403,7 +3803,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "Every covered current-phase detailId assigned to a task must appear in at least one verificationIntents[].requirementDetailRefs that proves the concrete behavior.",
             "Every verificationIntents[].requirementDetailRefs item must also be present in the same parent task.requirementDetailRefs; do not reference a detail only inside a verification intent.",
             "Prefer the smallest stable verification signal that proves the user-visible behavior or contract obligation.",
-            "Avoid broad snapshots or weak no-op checks as the primary verification evidence."
+            "Avoid broad snapshots or weak no-op checks as the primary verification evidence.",
+            "For a task with browser-owned UI surfaces, workflows, actions, states, rendered viewport rules, or Playwright suite setup, mark each verification intent that truly requires a browser with browser_automation in acceptableEvidence. Do not attach browser_automation to build, lint, unit-only, API-only, or static verification intents."
         ],
         "detailOwnershipRules": {
             "source": "contextProjection.requirementDetailTransfer.requirementDetailAssignment.items",
@@ -3442,7 +3843,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "runtimeDeliveryRules": {
             "status": aac.runtime_delivery.as_ref().and_then(|value| value.get("status")).cloned().unwrap_or(Value::String("not_applicable".to_string())),
             "rule": "Runtime-affecting tasks must carry runtimeDeliveryRequirement; final runtime closure is required when runtimeDelivery.status=modified.",
-            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement exactly from that template.",
+            "closureTaskRule": "When outputContract.runtimeDeliveryClosureTaskTemplate is present, create exactly one task with taskKind=runtime_delivery_closure and copy its runtimeDeliveryRequirement scope and evidence expectations from that template. Loom derives runtimeDeliveryRef, contractField, and checkId values during accept.",
             "closureGroupRule": "The runtime_delivery_closure task must be the only task in its group, that group must be the final outline.groups entry, no other group may depend on it, and its dependsOn must point to the previous group or groups that make runtime-affecting work transitively complete.",
             "closureTaskDependencyRule": "Do not make the runtime_delivery_closure task depend directly on tasks from other groups; express cross-group ordering through the closure group dependsOn."
         },
@@ -3464,8 +3865,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "apiContractRules": {
             "required": aac.interfaces.iter().any(is_http_api_interface),
             "requirementSource": "outputContract.apiContractRequirementTemplate",
-            "interfaceSource": "sourceRefs.architectureArtifactContractRef#/interfaces",
-            "assignmentRule": "Tasks that create or change current-phase HTTP API implementations must include owned interface ids in task.writeBoundary.artifactRefs.interfaces. Frontend/client binding tasks may reference interface ids for wiring but must not be treated as API contract owners.",
+            "interfaceSource": "contextProjection.apiInterfaces (copied from the accepted AAC interfaces)",
+            "exposureSource": "contextProjection.apiContract (copied from the accepted AAC API contract)",
+            "assignmentRule": "Tasks that create or change current-phase HTTP API implementations, frontend/client bindings, integration tests, or verification flows must include the accepted interface ids in task.writeBoundary.artifactRefs.interfaces. Loom derives one task-scoped API contract requirement for every such task; frontend/client tasks consume the contract without becoming API implementation owners.",
             "implementationRule": "API tasks must preserve request schema, response schema, status codes, error schema, auth policy, and pagination policy declared by the AAC interface.",
             "verificationRule": "API tasks should include verification intents that prove at least the declared success path and important business or validation error path. Collection endpoints should also prove declared pagination/filter behavior.",
             "nonDuplicationRule": "Do not inline full API requirements inside every task; use interface refs and the generated task apiContractRequirementRefs."
@@ -3475,7 +3877,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "seedSource": "codeQualitySeed",
             "requirementSource": "outputContract.codeQualityRequirementTemplate",
             "assignmentRule": "loom.taskPlanAcceptFile derives task codeQualityRequirementRefs from TechnicalBaseline stack signals and task scope; do not inline full code quality requirements inside every task.",
-            "referenceRule": "Use codeQualitySeed.codeStackSignals to understand available language/framework signals, then assign task-scoped codeQualityRequirementRefs with their own referenceLoadPlan; groups are semantic evidence labels and must not be used as path maps.",
+            "referenceRule": "Use codeQualitySeed.codeStackSignals to choose task scope and implementation practices. Do not write codeQualityRequirementRefs or inline reference paths; Loom derives the task-scoped requirement and referenceLoadPlan during accept. Groups are semantic evidence labels, not path maps.",
             "nonDuplicationRule": "Do not repeat language or framework best-practice prose in task objective or verification intents; use codeQualityRequirementRefs and TaskResult codeQualityEvidence."
         }
     })
@@ -3499,7 +3901,7 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "packageNamingPolicySource": "codeQualitySeed.packageNamingPolicy",
         "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
-        "taskRefRule": "Tasks reference generated requirements by codeQualityRequirementRefs; do not inline language or framework reference prose inside tasks."
+        "taskRefRule": "Loom attaches the generated requirement through codeQualityRequirementRefs during accept; agents must not write that field or inline language/framework reference prose inside tasks."
     })
 }
 
@@ -3517,7 +3919,7 @@ fn engineering_quality_requirement_template(
         "alignmentTargets": persistence_alignment_targets(),
         "riskFieldKinds": persistence_risk_field_kinds(),
         "verificationObligations": persistence_verification_obligations(),
-        "taskRefRule": "Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task."
+        "taskRefRule": "Loom attaches this generated requirement through engineeringQualityRequirementRefs during accept; agents must not write that field or duplicate the full object in each task."
     })
 }
 
@@ -3544,15 +3946,13 @@ fn architecture_quality_requirement_template(aac: &ArchitectureArtifactContract)
             "TaskResult architectureQualityEvidence must cite requirementId and verificationIds for the task-owned architecture quality refs.",
             "Verification summaries should state how implementation respected the referenced decision, NFR, or risk mitigation."
         ],
-        "taskRefRule": "Tasks reference generated requirements by architectureQualityRequirementRefs; do not inline or duplicate full decisions, NFRs, or risks inside every task."
+        "taskRefRule": "Loom attaches generated requirements through architectureQualityRequirementRefs during accept; agents must not write that field or duplicate full decisions, NFRs, or risks inside every task."
     })
 }
 
-fn api_contract_requirement_template(aac: &ArchitectureArtifactContract) -> Value {
-    let interface_refs = aac
-        .interfaces
+fn api_contract_requirement_template(interfaces: &[Value]) -> Value {
+    let interface_refs = interfaces
         .iter()
-        .filter(|interface| is_http_api_interface(interface))
         .filter_map(|interface| string_at(interface, "interfaceId"))
         .collect::<Vec<_>>();
     if interface_refs.is_empty() {
@@ -3564,7 +3964,38 @@ fn api_contract_requirement_template(aac: &ArchitectureArtifactContract) -> Valu
         "interfaceRefs": interface_refs,
         "implementationObligations": api_contract_implementation_obligations(),
         "verificationObligations": api_contract_verification_obligations(),
-        "taskRefRule": "Tasks reference generated requirements by apiContractRequirementRefs; do not inline or duplicate full API requirements inside every task."
+        "taskRefRule": "Loom attaches generated requirements through apiContractRequirementRefs during accept for API implementation, client binding, integration, and verification tasks; agents must not write that field or duplicate full API requirements inside every task."
+    })
+}
+
+fn compact_api_interface_for_task_plan(interface: &Value) -> Value {
+    json!({
+        "interfaceId": interface.get("interfaceId").cloned().unwrap_or(Value::Null),
+        "name": interface.get("name").cloned().unwrap_or(Value::Null),
+        "resource": interface.get("resource").cloned().unwrap_or(Value::Null),
+        "operationKind": interface.get("operationKind").cloned().unwrap_or(Value::Null),
+        "method": interface.get("method").cloned().unwrap_or(Value::Null),
+        "path": interface.get("path").cloned().unwrap_or(Value::Null),
+        "statusCodes": interface.get("statusCodes").cloned().unwrap_or(Value::Null),
+        "requestFieldCount": interface
+            .get("requestSchema")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "responseFieldCount": interface
+            .get("responseSchema")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "scopeRefs": interface.get("scopeRefs").cloned().unwrap_or_else(|| json!([])),
+        "acceptanceRefs": interface
+            .get("acceptanceRefs")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+        "requirementDetailRefs": interface
+            .get("requirementDetailRefs")
+            .cloned()
+            .unwrap_or_else(|| json!([]))
     })
 }
 
@@ -3630,6 +4061,7 @@ fn normalize_architecture_quality_requirements(
 fn normalize_api_contract_requirements(
     aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
+    allowed_refs: &Value,
 ) -> Vec<ApiContractRequirement> {
     let http_api_refs = aac
         .interfaces
@@ -3643,13 +4075,11 @@ fn normalize_api_contract_requirements(
         }
         return vec![];
     }
+    let allowed_interface_refs = allowed_set(allowed_refs, "interfaceRefs");
     let mut requirements = Vec::new();
     let mut requirement_ids_by_task = BTreeMap::<String, Vec<String>>::new();
-    for task in tasks.iter() {
-        if !task_owns_api_contract(task) {
-            continue;
-        }
-        let interface_refs = task
+    for task in tasks.iter_mut() {
+        let mut interface_refs = task
             .write_boundary
             .artifact_refs
             .interfaces
@@ -3657,7 +4087,32 @@ fn normalize_api_contract_requirements(
             .filter(|interface_ref| http_api_refs.contains(*interface_ref))
             .cloned()
             .collect::<Vec<_>>();
-        if interface_refs.is_empty() {
+        if interface_refs.is_empty() && task_can_consume_api_contract(task) {
+            interface_refs = aac
+                .user_flows
+                .iter()
+                .filter(|flow| {
+                    task.write_boundary
+                        .artifact_refs
+                        .user_flows
+                        .iter()
+                        .any(|flow_ref| {
+                            string_at(flow, "flowId").as_deref() == Some(flow_ref.as_str())
+                        })
+                })
+                .flat_map(|flow| string_array_at(flow, "interfaceRefs"))
+                .filter(|interface_ref| {
+                    http_api_refs.contains(interface_ref)
+                        && allowed_interface_refs.contains(interface_ref)
+                })
+                .collect::<Vec<_>>();
+            interface_refs.sort();
+            interface_refs.dedup();
+            if !interface_refs.is_empty() {
+                task.write_boundary.artifact_refs.interfaces = interface_refs.clone();
+            }
+        }
+        if interface_refs.is_empty() || !task_uses_api_contract(task) {
             continue;
         }
         let requirement_id = format!("api-contract-{}", task.task_id);
@@ -3769,9 +4224,38 @@ fn task_owns_api_contract(task: &TaskDefinition) -> bool {
         })
 }
 
+fn task_uses_api_contract(task: &TaskDefinition) -> bool {
+    if task_owns_api_contract(task) {
+        return true;
+    }
+    matches!(
+        task.task_kind,
+        TaskKind::IntegrationIncrement
+            | TaskKind::VerificationIncrement
+            | TaskKind::FrontendExperience
+            | TaskKind::UiFlowIncrement
+    ) || task
+        .implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+}
+
+fn task_can_consume_api_contract(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::IntegrationIncrement
+            | TaskKind::VerificationIncrement
+            | TaskKind::FrontendExperience
+            | TaskKind::UiFlowIncrement
+    ) || task
+        .implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+}
+
 fn api_contract_implementation_obligations() -> Vec<String> {
     vec![
-        "Implement or preserve the AAC-declared method, path, resource, request schema, response schema, status codes, and error schema for task-owned HTTP APIs.".to_string(),
+        "Implement or preserve the AAC-declared method, path, resource, request schema, response schema, status codes, and error schema for task-owned HTTP APIs or task-owned client/test bindings.".to_string(),
         "Return actionable validation or business-blocking errors instead of silent success or generic server errors.".to_string(),
         "Apply pagination, filtering, auth, and contract file obligations only when the AAC interface declares them.".to_string(),
         "Keep frontend/client bindings aligned with the declared API response and error shapes when the task owns the binding.".to_string(),
@@ -3781,7 +4265,7 @@ fn api_contract_implementation_obligations() -> Vec<String> {
 fn api_contract_verification_obligations() -> Vec<String> {
     vec![
         "Use task.verificationIntents as verification id source.".to_string(),
-        "Verify at least one declared success path for each task-owned API interface.".to_string(),
+        "Verify at least one declared success path for each task-owned API interface or client/test binding.".to_string(),
         "Verify important validation or business-blocking error behavior for write/state-transition APIs.".to_string(),
         "For collection APIs, verify the declared pagination or filtering behavior when present.".to_string(),
         "Record apiContractEvidence for every assigned API contract requirement.".to_string(),
@@ -4094,7 +4578,6 @@ fn runtime_delivery_closure_task_template(aac: &ArchitectureArtifactContract) ->
         "runtimeDeliveryRequirement": {
             "appliesToThisTask": true,
             "reason": "Final code-level closure for the RuntimeDeliveryContract.",
-            "runtimeDeliveryRef": "sourceRefs.architectureArtifactContractRef#/runtimeDelivery",
             "affectedContractFields": affected_contract_fields,
             "requiredCodeLevelChecks": required_code_level_checks,
             "evidenceExpectedInTaskResult": [],
@@ -4143,11 +4626,32 @@ fn runtime_delivery_closure_fields(runtime_delivery: &Value) -> Vec<String> {
 
 fn runtime_delivery_closure_check(contract_field: &str) -> Value {
     json!({
-        "checkId": runtime_delivery_closure_check_id(contract_field),
-        "contractField": contract_field,
         "objective": format!("Confirm {contract_field} is closed at code level against RuntimeDeliveryContract."),
         "acceptableEvidence": acceptable_evidence_for_runtime_closure_field(contract_field)
     })
+}
+
+fn runtime_delivery_check_for_field(contract_field: &str) -> contracts::RuntimeCodeLevelCheck {
+    contracts::RuntimeCodeLevelCheck {
+        check_id: runtime_delivery_check_id(contract_field),
+        contract_field: Some(contract_field.to_string()),
+        objective: format!(
+            "Confirm {contract_field} is closed at code level against RuntimeDeliveryContract."
+        ),
+        acceptable_evidence: acceptable_evidence_for_runtime_closure_field(contract_field)
+            .into_iter()
+            .filter_map(|evidence| match evidence {
+                "static_check" => Some(VerificationEvidence::StaticCheck),
+                "runtime_api_check" => Some(VerificationEvidence::RuntimeApiCheck),
+                "manual_command_output" => Some(VerificationEvidence::ManualCommandOutput),
+                _ => None,
+            })
+            .collect(),
+    }
+}
+
+fn runtime_delivery_check_id(contract_field: &str) -> String {
+    runtime_delivery_closure_check_id(contract_field)
 }
 
 fn runtime_delivery_closure_check_id(contract_field: &str) -> String {
@@ -4466,6 +4970,50 @@ pub(crate) fn execute_task_next_from_request(
 mod tests {
     use super::*;
 
+    fn browser_task(verification_count: usize) -> TaskDefinition {
+        let verification_intents = (0..verification_count)
+            .map(|index| {
+                json!({
+                    "verificationId": format!("verify-ui-{index}"),
+                    "acceptanceRefs": [],
+                    "requirementDetailRefs": [],
+                    "behavior": format!("Verify UI behavior {index}"),
+                    "preferredEvidence": ["automated_test"],
+                    "acceptableEvidence": ["automated_test"]
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::from_value(json!({
+            "taskId": "task-ui",
+            "groupId": "group-ui",
+            "title": "Implement UI",
+            "taskKind": "ui_flow_increment",
+            "implementationActions": ["create_or_update_ui_flow", "add_or_update_tests"],
+            "objective": "Implement the task-owned UI workflow.",
+            "dependsOn": [],
+            "scopeRefs": [],
+            "acceptanceRefs": [],
+            "requirementDetailRefs": [],
+            "writeBoundary": {"forbiddenPaths": [".loom"], "artifactRefs": {}},
+            "verificationIntents": verification_intents,
+            "conceptRefs": [],
+            "conceptResponsibilities": [],
+            "conceptVerificationIntents": [],
+            "frontendExperienceRequirement": {
+                "uiTaskScope": {"surfacesInScope": ["surface-workbench"]},
+                "uiSurfaceOwnership": {
+                    "regionIdsInScope": ["region-main"],
+                    "qualityRuleIdsInScope": ["verify.rendered_viewports"]
+                }
+            },
+            "engineeringQualityRequirementRefs": [],
+            "architectureQualityRequirementRefs": [],
+            "apiContractRequirementRefs": [],
+            "codeQualityRequirementRefs": []
+        }))
+        .expect("browser task")
+    }
+
     #[test]
     fn ui_surface_ownership_template_keeps_task_scope_compact() {
         let surface_contract = json!({
@@ -4523,6 +5071,199 @@ mod tests {
                 .and_then(Value::as_array)
                 .is_some_and(|items| items.is_empty()),
             "TaskPlan ownership scope starts empty so the agent selects task-owned ids"
+        );
+    }
+
+    #[test]
+    fn single_browser_verification_intent_is_normalized_without_agent_retry() {
+        let mut tasks = vec![browser_task(1)];
+
+        normalize_browser_verification_assignments(&mut tasks);
+
+        assert!(tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(validate_browser_verification_assignments(&tasks).is_empty());
+    }
+
+    #[test]
+    fn generic_frontend_tests_do_not_create_browser_verification() {
+        let mut task = browser_task(1);
+        task.frontend_experience_requirement.as_mut().unwrap()["uiSurfaceOwnership"]
+            ["qualityRuleIdsInScope"] = json!([]);
+        let mut tasks = vec![task];
+
+        normalize_browser_verification_assignments(&mut tasks);
+
+        assert!(!tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(validate_browser_verification_assignments(&tasks).is_empty());
+    }
+
+    #[test]
+    fn multiple_verification_intents_require_explicit_browser_owner() {
+        let mut tasks = vec![browser_task(2)];
+
+        normalize_browser_verification_assignments(&mut tasks);
+        let issues = validate_browser_verification_assignments(&tasks);
+
+        assert!(!tasks[0].verification_intents.iter().any(|intent| intent
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation)));
+        assert!(issues
+            .iter()
+            .any(|issue| issue.code == "TASKPLAN_BROWSER_VERIFICATION_REQUIRED"));
+    }
+
+    #[test]
+    fn browser_verification_is_moved_to_final_mcp_closure() {
+        let mut tasks = vec![browser_task(1)];
+        let mut groups = vec![TaskPlanGroup {
+            group_id: "group-ui".to_string(),
+            title: "UI".to_string(),
+            objective: "Implement UI".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec![],
+            task_ids: vec!["task-ui".to_string()],
+        }];
+        normalize_browser_verification_assignments(&mut tasks);
+        let profiles = derive_browser_verification_profiles(
+            &contracts::BrowserAutomationFacts::default(),
+            &tasks,
+        );
+
+        let closure_profiles =
+            materialize_browser_quality_closure(&mut groups, &mut tasks, profiles);
+
+        assert_eq!(
+            groups.last().unwrap().group_id,
+            "group-browser-quality-closure"
+        );
+        assert_eq!(
+            tasks.last().unwrap().task_id,
+            "task-browser-quality-closure"
+        );
+        assert_eq!(closure_profiles.len(), 1);
+        assert_eq!(closure_profiles[0].task_id, "task-browser-quality-closure");
+        assert_eq!(closure_profiles[0].checks[0].source_task_id, "task-ui");
+        assert_eq!(
+            closure_profiles[0].checks[0].enforcement,
+            BrowserEvidenceEnforcement::Required
+        );
+        assert!(!tasks[0].verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+        assert!(tasks.last().unwrap().verification_intents[0]
+            .acceptable_evidence
+            .contains(&VerificationEvidence::BrowserAutomation));
+    }
+
+    #[test]
+    fn preferred_browser_evidence_remains_required_in_closure() {
+        let mut tasks = vec![browser_task(1)];
+        let mut groups = vec![TaskPlanGroup {
+            group_id: "group-ui".to_string(),
+            title: "UI".to_string(),
+            objective: "Implement UI".to_string(),
+            depends_on: vec![],
+            scope_refs: vec![],
+            acceptance_refs: vec![],
+            task_ids: vec!["task-ui".to_string()],
+        }];
+        normalize_browser_verification_assignments(&mut tasks);
+        tasks[0].verification_intents[0].preferred_evidence =
+            vec![VerificationEvidence::BrowserAutomation];
+        let profiles = derive_browser_verification_profiles(
+            &contracts::BrowserAutomationFacts::default(),
+            &tasks,
+        );
+
+        let closure_profiles =
+            materialize_browser_quality_closure(&mut groups, &mut tasks, profiles);
+
+        assert!(closure_profiles[0]
+            .checks
+            .iter()
+            .all(|check| { check.enforcement == BrowserEvidenceEnforcement::Required }));
+        assert!(matches!(
+            tasks.last().unwrap().task_kind,
+            TaskKind::BrowserQualityClosure
+        ));
+    }
+
+    #[test]
+    fn browser_closure_uses_collision_safe_ids_and_structural_detection() {
+        let mut source = browser_task(1);
+        source.verification_intents[0]
+            .acceptable_evidence
+            .push(VerificationEvidence::BrowserAutomation);
+        let mut tasks = vec![
+            source,
+            TaskDefinition {
+                task_id: "task-browser-quality-closure".to_string(),
+                group_id: "group-browser-quality-closure".to_string(),
+                title: "User task with reserved-looking id".to_string(),
+                task_kind: TaskKind::FeatureIncrement,
+                implementation_actions: vec![],
+                objective: "Existing task".to_string(),
+                depends_on: vec![],
+                scope_refs: vec![],
+                acceptance_refs: vec![],
+                requirement_detail_refs: vec![],
+                write_boundary: TaskWriteBoundary {
+                    forbidden_paths: vec![],
+                    artifact_refs: TaskArtifactRefs::default(),
+                },
+                verification_intents: vec![],
+                concept_refs: vec![],
+                concept_responsibilities: vec![],
+                concept_verification_intents: vec![],
+                frontend_experience_requirement: None,
+                runtime_delivery_requirement: None,
+                engineering_quality_requirement_refs: vec![],
+                architecture_quality_requirement_refs: vec![],
+                api_contract_requirement_refs: vec![],
+                code_quality_requirement_refs: vec![],
+            },
+        ];
+        let mut groups = vec![
+            TaskPlanGroup {
+                group_id: "group-ui".to_string(),
+                title: "UI".to_string(),
+                objective: "Implement UI".to_string(),
+                depends_on: vec![],
+                scope_refs: vec![],
+                acceptance_refs: vec![],
+                task_ids: vec!["task-ui".to_string()],
+            },
+            TaskPlanGroup {
+                group_id: "group-browser-quality-closure".to_string(),
+                title: "Existing".to_string(),
+                objective: "Existing group".to_string(),
+                depends_on: vec![],
+                scope_refs: vec![],
+                acceptance_refs: vec![],
+                task_ids: vec!["task-browser-quality-closure".to_string()],
+            },
+        ];
+        let profiles = derive_browser_verification_profiles(
+            &contracts::BrowserAutomationFacts::default(),
+            &tasks,
+        );
+
+        materialize_browser_quality_closure(&mut groups, &mut tasks, profiles);
+
+        let closure = tasks
+            .iter()
+            .find(|task| matches!(task.task_kind, TaskKind::BrowserQualityClosure))
+            .unwrap();
+        assert_eq!(closure.task_id, "task-browser-quality-closure-2");
+        assert_eq!(closure.group_id, "group-browser-quality-closure-2");
+        assert_eq!(
+            browser_quality_closure_group(&groups, &tasks).map(|group| group.group_id.as_str()),
+            Some("group-browser-quality-closure-2")
         );
     }
 }

@@ -2,6 +2,8 @@
 
 This file applies Angular testing discipline to task-owned components, services, guards, resolvers, RxJS streams, NgRx stores/effects, and feature workflows.
 
+Keep this file at the Angular unit/component/service boundary. When the task has an MCP-derived browser verification profile, Playwright references own E2E locators, fixtures, network synchronization, viewport execution, and browser artifacts.
+
 ## When To Use
 
 - The task creates or changes Angular behavior that should be proven with TestBed, service tests, component tests, guard/resolver tests, observable tests, NgRx tests, or integration-style UI tests.

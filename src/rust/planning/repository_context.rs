@@ -247,16 +247,10 @@ fn build_request_root(
                 "required": true,
                 "description": "Write the RepositoryContext candidate JSON."
             }],
-            "bindingRules": [
-                "source.requestRef must equal the current requestRef passed to loom.repositoryContextAcceptFile.",
-                "Do not write source.requestId; requestRef is the required field."
-            ],
             "schemaShape": schema_shape,
             "schemaProjection": {
                 "requiredTopLevelFields": [
                     "status",
-                    "source",
-                    "requestLens",
                     "repoOverview",
                     "technologySignals",
                     "structureSignals",
@@ -291,20 +285,6 @@ fn build_request_root(
             },
             "resultTemplate": {
                 "status": "ready",
-                "source": {
-                    "requestRef": "{current requestRef}",
-                    "brainstormContractRef": brainstorm_contract_ref,
-                    "technicalBaselineRef": format!(".loom/deliveries/{}/contracts/technical-baseline.json", delivery_id)
-                },
-                "requestLens": {
-                    "projectKind": baseline.project_kind,
-                    "baselineProjectKind": baseline.project_kind,
-                    "repositoryMode": repository_lens.repository_mode,
-                    "phaseDevelopmentMode": repository_lens.phase_development_mode,
-                    "scanPurpose": "phase_start_repository_snapshot",
-                    "primaryConsumer": "phase_brainstorm",
-                    "laterConsumers": ["PGC", "AAC", "TaskPlan"]
-                },
                 "repoOverview": {
                     "summary": "Short repository summary from the current phase perspective.",
                     "repositoryShape": "unknown",
@@ -411,7 +391,6 @@ fn build_request_root(
                     "selectors": read_selectors_value_from_paths([
                         "outputContract.writeTargets",
                         "outputContract.submitTool",
-                        "outputContract.bindingRules",
                         "outputContract.schemaProjection",
                         "outputContract.resultTemplate"
                     ])
@@ -556,10 +535,18 @@ where
     }
     let project_root = Path::new(&input.project_root);
     let candidate_file = from_project_relative(project_root, &target.path)?;
+    let request_index =
+        state::request_index::get_request_index_entry(&input.project_root, &authorized.request_id)?;
+    let request_file = from_project_relative(project_root, &request_index.request_file)?;
+    let request_root = state::store::read_json_value(&request_file)?;
     let candidate: RepositoryContextCandidateAgentWritable =
         match state::store::read_json_value(&candidate_file)
             .map(|mut raw| {
-                normalize_repository_context_candidate_value(&mut raw);
+                normalize_repository_context_candidate_value(
+                    &mut raw,
+                    &request_root,
+                    &input.request_ref,
+                );
                 raw
             })
             .and_then(|raw| serde_json::from_value(raw).map_err(state::store::StateError::Json))
@@ -578,7 +565,7 @@ where
                 ));
             }
         };
-    let issues = validate_repository_context(project_root, &candidate, &input.request_ref);
+    let issues = validate_repository_context(project_root, &candidate);
     if !issues.is_empty() {
         return Ok(repairable(input, authorized, target.path.clone(), issues));
     }
@@ -726,10 +713,34 @@ fn current_phase_scope_confirmed(
         .unwrap_or(false))
 }
 
-fn normalize_repository_context_candidate_value(raw: &mut Value) {
+fn normalize_repository_context_candidate_value(
+    raw: &mut Value,
+    request: &Value,
+    request_ref: &str,
+) {
     let Some(object) = raw.as_object_mut() else {
         return;
     };
+    object.insert(
+        "source".to_string(),
+        json!({
+            "requestRef": request_ref,
+            "brainstormContractRef": request.pointer("/source/brainstormContractRef").cloned().unwrap_or(Value::Null),
+            "technicalBaselineRef": request.pointer("/source/technicalBaselineRef").cloned().unwrap_or(Value::Null)
+        }),
+    );
+    object.insert(
+        "requestLens".to_string(),
+        json!({
+            "projectKind": request.get("baselineProjectKind").cloned().unwrap_or(Value::String("unknown".to_string())),
+            "baselineProjectKind": request.get("baselineProjectKind").cloned().unwrap_or(Value::String("unknown".to_string())),
+            "repositoryMode": request.get("repositoryMode").cloned().unwrap_or(Value::String("unknown".to_string())),
+            "phaseDevelopmentMode": request.get("phaseDevelopmentMode").cloned().unwrap_or(Value::String("unknown".to_string())),
+            "scanPurpose": request.pointer("/scanPurpose/scanPurpose").cloned().unwrap_or(Value::String("phase_start_repository_snapshot".to_string())),
+            "primaryConsumer": request.pointer("/scanPurpose/primaryConsumer").cloned().unwrap_or(Value::String("phase_brainstorm".to_string())),
+            "laterConsumers": request.pointer("/scanPurpose/laterConsumers").cloned().unwrap_or_else(|| json!([]))
+        }),
+    );
     normalize_repo_overview(object.get_mut("repoOverview"));
     normalize_relevant_surfaces(object.get_mut("relevantSurfaces"));
     normalize_recommended_read_refs(object.get_mut("recommendedReadRefs"));
@@ -976,16 +987,8 @@ fn normalize_enum_field(
 fn validate_repository_context(
     project_root: &Path,
     context: &RepositoryContextCandidateAgentWritable,
-    request_ref: &str,
 ) -> Vec<delivery_core::RepairIssue> {
     let mut issues = Vec::new();
-    if context.source.request_ref != request_ref {
-        issues.push(issue(
-            "REQUEST_REF_MISMATCH",
-            "source.requestRef",
-            "RepositoryContext source.requestRef must match the accepted request.",
-        ));
-    }
     let surface_ids = context
         .relevant_surfaces
         .iter()
@@ -1153,18 +1156,20 @@ fn phase_brainstorm_user_gate(
     phase_id: &str,
     request_ref: &str,
 ) -> LoomMcpActionResult {
+    let mut gate = brainstorm::phase_scope_gate();
+    if let Some(object) = gate.as_object_mut() {
+        object.insert("gateId".to_string(), json!("phase_brainstorm_required"));
+        object.insert("kind".to_string(), json!("phase_brainstorm_continuation"));
+        object.insert("requestRef".to_string(), json!(request_ref));
+    }
     LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
         project_root: project_root.to_string(),
-        prompt: "RepositoryContext accepted. Read the generated Brainstorm request, query request-scoped knowledge, and continue the progressive clarification for this phase.".to_string(),
+        prompt: brainstorm::phase_scope_prompt(phase_id),
         accepted_responses: vec!["reply_in_chat".to_string()],
         request_ref: Some(request_ref.to_string()),
         delivery_id: Some(delivery_id.to_string()),
         phase_id: Some(phase_id.to_string()),
-        gate: Some(json!({
-            "gateId": "phase_brainstorm_required",
-            "kind": "phase_brainstorm_continuation",
-            "requestRef": request_ref
-        })),
+        gate: Some(gate),
     })
 }
 

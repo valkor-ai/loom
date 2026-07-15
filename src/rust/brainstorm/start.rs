@@ -18,7 +18,7 @@ use state::{
 
 use crate::{
     clarification::{initial_state, write_initial_state_file},
-    gate::{block_message, to_value, BrainstormGate, BrainstormResponseRule},
+    gate::{gate_for_block, to_value},
     paths::brainstorm_contract_file,
     request::build_brainstorm_request_root,
     requirements::{build_requirement_artifacts, RequirementArtifacts},
@@ -114,20 +114,11 @@ fn start_brainstorm_inner(
             .join(&request_id),
     )?;
 
-    let gate = BrainstormGate {
-        gate_id: "gate_phase_scope".to_string(),
-        current_block: contracts::ClarificationBlockName::PhaseScope,
-        required_blocks: crate::gate::required_blocks(),
-        already_confirmed_blocks: vec![],
-        skipped_blocks: vec![],
-        user_message: block_message(&contracts::ClarificationBlockName::PhaseScope),
-        response_rule: BrainstormResponseRule {
-            mode: "progressive_brainstorm".to_string(),
-            final_summary_required_before_write: true,
-            user_visible_confirmation_required: true,
-        },
-        issues: vec![],
-    };
+    let gate = gate_for_block(
+        contracts::ClarificationBlockName::PhaseScope,
+        vec![],
+        vec![],
+    );
 
     let mut latest_refs = BTreeMap::new();
     latest_refs.insert("brainstormRequestId".to_string(), request_id);

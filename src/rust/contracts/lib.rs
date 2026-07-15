@@ -1,6 +1,7 @@
 pub mod api_quality;
 pub mod architecture;
 pub mod brainstorm;
+pub mod browser_quality;
 pub mod code_quality;
 pub mod deploy;
 pub mod execution;
@@ -11,6 +12,7 @@ pub mod ui_quality;
 pub use api_quality::*;
 pub use architecture::*;
 pub use brainstorm::*;
+pub use browser_quality::*;
 pub use code_quality::*;
 pub use deploy::*;
 pub use execution::*;

@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
-    ui_surface_decision_candidate_shape, ui_surface_decision_candidate_template,
-    ui_surface_decision_enum_refs, ArchitectureSectionGroup, PlanningGenerationContract,
-    TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
+    api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
+    ui_quality_enum_refs, ui_surface_decision_candidate_shape,
+    ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
+    ArchitectureSectionGroup, PlanningGenerationContract, TechnicalBaselineContract,
+    COVERAGE_ARTIFACT_TYPES,
 };
 use delivery_core::{
     read_selectors_value_from_paths, ArtifactKind, LoomMcpActionResult, LoomMcpFailure,
@@ -126,12 +127,11 @@ fn materialize_request_inner(
     let request_id = format!("arch_{}", state::store::now_millis());
     let has_previous_runtime_delivery = phase.latest_refs.contains_key("runtimeDelivery");
     let frontend_experience_source = build_frontend_experience_source(phase);
-    let api_quality_seed = build_api_quality_seed(&planning_contract, &technical_baseline);
+    // API applicability is produced after Foundation declares structured application interactions.
+    let api_quality_seed = Value::Null;
     let section_outputs = build_section_outputs(
         root,
         &request_id,
-        delivery_id,
-        phase_id,
         has_previous_runtime_delivery,
         &frontend_experience_source,
         &planning_contract,
@@ -280,14 +280,8 @@ fn build_request_root(
             "schemaShape": current_output.schema_shape.clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
-                    "schemaVersion",
-                    "requestId",
-                    "deliveryId",
-                    "phaseId",
-                    "section",
                     "status",
-                    "content",
-                    "createdAt"
+                    "content"
                 ],
                 "requiredContentKeys": required_content_keys(current_output.section)
             }
@@ -386,18 +380,6 @@ pub(crate) fn architecture_read_groups(
         "architectureQualitySeed.techReferenceProfile.groups.arch",
         "architectureQualitySeed.techReferenceProfile.referenceLoadPlan",
     ]);
-    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
-        core_fields.extend([
-            "apiQualitySeed.required",
-            "apiQualitySeed.qualityLevel",
-            "apiQualitySeed.selectionReason",
-            "apiQualitySeed.techReferenceProfile.loadMode",
-            "apiQualitySeed.techReferenceProfile.groups.api",
-            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
-            "apiQualitySeed.interfaceContract",
-            "apiQualitySeed.generationRules",
-        ]);
-    }
     if matches!(
         section,
         ArchitectureSectionGroup::Foundation
@@ -469,6 +451,15 @@ pub(crate) fn architecture_read_groups(
             "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
+    if !api_quality_seed.is_null() {
+        groups.push(json!({
+            "groupId": "architecture_api_quality_context",
+            "required": matches!(section, ArchitectureSectionGroup::DomainContract),
+            "purpose": "Read the MCP-derived API quality seed only when generating or repairing the current HTTP interface section.",
+            "whenToRead": "Read when sectionState.currentSection is domain_contract, or when Loom is rebuilding a repair request that must preserve API applicability.",
+            "selectors": read_selectors_value_from_paths(api_quality_seed_read_fields())
+        }));
+    }
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
         let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
         for ref_key in [
@@ -778,8 +769,6 @@ fn compact_requirement_details_index(planning_contract: &PlanningGenerationContr
 fn build_section_outputs(
     project_root: &Path,
     request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
     planning_contract: &PlanningGenerationContract,
@@ -802,9 +791,6 @@ fn build_section_outputs(
                     api_quality_seed,
                 ),
                 result_template: section_result_template(
-                    request_id,
-                    delivery_id,
-                    phase_id,
                     section,
                     has_previous_runtime_delivery,
                     frontend_experience_source,
@@ -844,7 +830,7 @@ pub fn section_order() -> &'static [ArchitectureSectionGroup] {
 
 pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static str> {
     match section {
-        ArchitectureSectionGroup::Foundation => vec!["source", "engineeringBoundary", "modules"],
+        ArchitectureSectionGroup::Foundation => vec!["engineeringBoundary", "modules"],
         ArchitectureSectionGroup::DomainContract => vec!["dataModel", "interfaces"],
         ArchitectureSectionGroup::Behavior => vec!["userFlows", "stateMachines"],
         ArchitectureSectionGroup::FrontendExperience => vec!["frontendExperience"],
@@ -860,25 +846,19 @@ pub fn required_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static 
     }
 }
 
-fn section_schema_shape(
+pub(crate) fn section_schema_shape(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": "string",
-        "deliveryId": "string",
-        "phaseId": "string",
-        "section": section,
         "status": "ready | blocked",
         "content": section_content_shape(section, has_previous_runtime_delivery, api_quality_seed),
         "blockedReasons": [{
             "code": "string",
             "message": "string",
             "nextNode": "string"
-        }],
-        "createdAt": "string"
+        }]
     })
 }
 
@@ -889,14 +869,27 @@ fn section_content_shape(
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
-            "source": {
-                "planningGenerationContractId": "string",
-                "technicalBaselineId": "string"
-            },
             "engineeringBoundary": {
                 "summary": "string",
                 "applications": ["object"],
-                "modules": ["object"]
+                "modules": ["object"],
+                "applicationInteractions": [{
+                    "interactionId": "string",
+                    "providerApplicationRef": "string",
+                    "consumerApplicationRefs": ["string"],
+                    "providerModuleRef": "string",
+                    "interactionType": "http_api | service_method | external_adapter | event | job | cli_command",
+                    "protocol": "string",
+                    "interfaceRefs": ["string for an existing project API contract interface"],
+                    "qualityTraits": {
+                        "paginationRequired": "boolean",
+                        "contractArtifactRequired": "boolean",
+                        "compatibilityRequired": "boolean",
+                        "operationalPolicies": ["idempotency | cache | retry | rate_limit | request_id"]
+                    },
+                    "scopeRefs": ["string"],
+                    "acceptanceRefs": ["string"]
+                }]
             },
             "modules": ["object"]
         }),
@@ -906,7 +899,8 @@ fn section_content_shape(
                 "relationships": ["object"],
                 "constraints": ["object"]
             },
-            "interfaces": domain_contract_interfaces_shape(api_quality_seed)
+            "interfaces": domain_contract_interfaces_shape(api_quality_seed),
+            "apiContract": api_contract_shape(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": ["object"],
@@ -1121,7 +1115,6 @@ fn runtime_delivery_content_shape(has_previous_runtime_delivery: bool) -> Value 
             "runtimeSurfaces": ["object"],
             "httpProbes": {
                 "previewPath": "string",
-                "apiPaths": ["string"],
                 "expectedStatus": "2xx_or_3xx"
             },
             "frontend": "optional object when a separate frontend surface exists",
@@ -1180,10 +1173,7 @@ fn domain_contract_interfaces_shape(api_quality_seed: &Value) -> Value {
     }])
 }
 
-fn section_result_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
+pub(crate) fn section_result_template(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     frontend_experience_source: &Value,
@@ -1191,11 +1181,6 @@ fn section_result_template(
     api_quality_seed: &Value,
 ) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
-        "section": section,
         "status": "ready",
         "content": section_content_template(
             section,
@@ -1204,8 +1189,7 @@ fn section_result_template(
             planning_contract,
             api_quality_seed
         ),
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime"
+        "blockedReasons": []
     })
 }
 
@@ -1218,10 +1202,6 @@ fn section_content_template(
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
-            "source": {
-                "planningGenerationContractId": "",
-                "technicalBaselineId": ""
-            },
             "engineeringBoundary": {
                 "summary": "",
                 "applications": [{
@@ -1236,7 +1216,8 @@ fn section_content_template(
                     "scopeRefs": [],
                     "acceptanceRefs": [],
                     "summary": ""
-                }]
+                }],
+                "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module_1",
@@ -1259,7 +1240,8 @@ fn section_content_template(
                 "relationships": [],
                 "constraints": []
             },
-            "interfaces": domain_contract_interfaces_template(api_quality_seed)
+            "interfaces": domain_contract_interfaces_template(api_quality_seed),
+            "apiContract": api_contract_template(api_quality_seed)
         }),
         ArchitectureSectionGroup::Behavior => json!({
             "userFlows": [{
@@ -1557,7 +1539,6 @@ fn runtime_delivery_content_template(has_previous_runtime_delivery: bool) -> Val
             }],
             "httpProbes": {
                 "previewPath": "/",
-                "apiPaths": [],
                 "expectedStatus": "2xx_or_3xx"
             },
             "environment": {
@@ -1698,7 +1679,41 @@ fn domain_contract_interfaces_template(api_quality_seed: &Value) -> Value {
     }])
 }
 
-fn section_enum_refs(
+fn api_contract_shape(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "publicExposure": {
+            "basePath": "string",
+            "preservePath": "boolean"
+        },
+        "browserBinding": {
+            "mode": "same_origin | external_origin",
+            "baseUrl": "string",
+            "pathOwnership": "interface_path"
+        }
+    })
+}
+
+fn api_contract_template(api_quality_seed: &Value) -> Value {
+    if api_quality_seed.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "publicExposure": {
+            "basePath": "/api",
+            "preservePath": true
+        },
+        "browserBinding": {
+            "mode": "same_origin",
+            "baseUrl": "",
+            "pathOwnership": "interface_path"
+        }
+    })
+}
+
+pub(crate) fn section_enum_refs(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -1724,7 +1739,7 @@ fn section_enum_refs(
     }
 }
 
-fn section_generation_rules(
+pub(crate) fn section_generation_rules(
     section: ArchitectureSectionGroup,
     has_previous_runtime_delivery: bool,
     api_quality_seed: &Value,
@@ -1733,6 +1748,8 @@ fn section_generation_rules(
         ArchitectureSectionGroup::Foundation => vec![
             "Carry the planning and technical baseline identity into content.source.".to_string(),
             "Define the engineering boundary and current-phase modules only.".to_string(),
+            "Declare every current-phase cross-application or cross-module communication boundary in engineeringBoundary.applicationInteractions. Choose interactionType from the structured protocol kinds; do not rely on API, backend, or framework words in business prose to activate later interface design.".to_string(),
+            "For an existing accepted interface, use interfaceRefs. For a new boundary, leave interfaceRefs empty and provide provider/consumer ownership plus qualityTraits so MCP can generate the precise DomainContract reference plan.".to_string(),
             "Read only files listed in architectureQualitySeed.techReferenceProfile.referenceLoadPlan; selected architecture groups are evidence labels only and do not copy reference prose into the candidate.".to_string(),
             "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
@@ -1755,6 +1772,7 @@ fn section_generation_rules(
                 rules.extend([
                     "Model current-phase HTTP/API contracts in content.interfaces using apiQualitySeed.interfaceContract and files listed in apiQualitySeed.techReferenceProfile.referenceLoadPlan.".to_string(),
                     "For HTTP APIs, include resource, operationKind, method, path, requestSchema, responseSchema, statusCodes, errorSchema, and current-phase refs; include pagination/auth/contract/evolution/operations fields only when selected or applicable.".to_string(),
+                    "Write content.apiContract.publicExposure and content.apiContract.browserBinding once for the current API surface. publicExposure.basePath is the externally served prefix, preservePath must describe proxy behavior, and browserBinding.pathOwnership must remain interface_path. Do not repeat these fields inside every interface.".to_string(),
                     "Do not introduce versioned API paths or OpenAPI files unless apiQualitySeed selects evolution or contract references or existing repository context requires them.".to_string(),
                 ]);
             }
@@ -1786,7 +1804,8 @@ fn section_generation_rules(
             runtime_delivery_authority(has_previous_runtime_delivery).to_string(),
             "For status=modified, fill build.command, runtimeSurfaces, httpProbes.previewPath, httpProbes.expectedStatus, and taskPlanningGuidance so TaskPlan and Deploy do not guess runtime facts."
                 .to_string(),
-            "Do not choose deploymentShape manually. MCP derives it during submit from frontend/api endpoint objects, runtimeSurfaces, apiPaths, servedBy, and role-labeled commands.".to_string(),
+            "Do not choose deploymentShape manually. MCP derives it during submit from frontend/api endpoint objects, runtimeSurfaces, servedBy, and role-labeled commands.".to_string(),
+            "Do not author httpProbes.apiPaths or api.probePaths. Loom derives accepted API probe paths from DomainContract HTTP interfaces and carries them into runtime, integration, browser, and deploy projections.".to_string(),
             "Include frontend or api only when the current phase has a separate frontend or backend/API surface; omit unused optional endpoint objects."
                 .to_string(),
             "Omit unknown optional runtime fields instead of writing null; include start.port only when a fixed port is known."
@@ -1905,6 +1924,35 @@ mod tests {
         assert!(
             rules.iter().any(|rule| rule.contains("MCP owns reference")),
             "reference and rule derivation must stay MCP-owned"
+        );
+    }
+
+    #[test]
+    fn api_quality_seed_has_a_stable_read_group_after_domain_contract() {
+        let seed = json!({
+            "required": true,
+            "techReferenceProfile": {"groups": {"api": ["core"]}}
+        });
+        let groups = architecture_read_groups(
+            ArchitectureSectionGroup::Coverage,
+            true,
+            false,
+            &json!({}),
+            &json!({}),
+            &seed,
+        );
+        let group = groups
+            .as_array()
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("groupId").and_then(Value::as_str)
+                        == Some("architecture_api_quality_context")
+                })
+            })
+            .expect("API quality read group");
+        assert!(
+            group["selectors"].to_string().contains("apiQualitySeed"),
+            "the dedicated group must expose the seed fields to MCP repair logic"
         );
     }
 }

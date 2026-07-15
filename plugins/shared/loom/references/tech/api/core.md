@@ -5,7 +5,7 @@ API work in Loom is not a standalone specification exercise. It is a task-verifi
 ## Operating Model
 
 1. Use the confirmed delivery contract and current task scope as the authority for API ownership, ids, and boundaries.
-2. Model only current-phase APIs that are required by confirmed scope, frontend bindings, business workflows, runtime probes, or integration boundaries.
+2. Model only current-phase APIs whose structured Foundation application interaction is `http_api` or references an accepted HTTP interface. Business prose, a backend-capable language/framework, or a generic runtime probe must not activate API work.
 3. Express API decisions through the current architecture/API contract artifacts; use references to make concrete decisions rather than copying reference prose.
 4. Keep API quality evidence concrete: changed files, endpoint paths, status/error behavior, request/response DTOs, tests, runtime probes, or contract files.
 
@@ -42,5 +42,7 @@ A usable API contract lets a later agent answer:
 - Which business errors must be actionable for the UI/client?
 - Which status codes are expected for success, validation, conflict, missing resource, auth, and unexpected failure?
 - Which verification evidence proves this endpoint is not a mock or silent failure?
+
+Loom stores one project-level current API contract under the delivery contract area. The accepted Architecture artifact carries only its `apiContractRef` and current-phase interface ids. Task planning, execution, review, runtime delivery, and deploy consume task-scoped projections from that contract; they must not copy a second full API contract or reconstruct a public prefix from `/api`.
 
 If those answers are missing, repair upstream design or task planning instead of leaving implementation to guess.

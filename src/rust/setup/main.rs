@@ -1,7 +1,7 @@
 use setup::{
-    archive_package_layout, doctor, install, parse_agent_selection, purge,
-    release_artifact_file_names, uninstall, write_package_layout, SetupEnvironment, SetupError,
-    TargetPlatform, VERSION,
+    archive_package_layout, doctor, install, parse_agent_selection, prepare_browser_runtime, purge,
+    release_artifact_file_names, uninstall, write_package_layout, BrowserRuntimePrepareOptions,
+    SetupEnvironment, SetupError, TargetPlatform, VERSION,
 };
 use std::path::PathBuf;
 
@@ -103,6 +103,29 @@ fn run() -> Result<serde_json::Value, SetupError> {
                 source,
             })
         }
+        "browser-runtime" => {
+            if args.get(1).map(String::as_str) != Some("prepare") {
+                return Err(SetupError::InvalidArgument(
+                    "browser-runtime requires the prepare subcommand".into(),
+                ));
+            }
+            let options = CliOptions::parse(&args[2..])?;
+            let env = SetupEnvironment::from_env(options.package_root)?;
+            serde_json::to_value(prepare_browser_runtime(
+                &env,
+                &BrowserRuntimePrepareOptions {
+                    requested_versions: options.playwright_versions,
+                    requested_browsers: options.playwright_browsers,
+                    npm_program: None,
+                    node_program: None,
+                    container_program: None,
+                },
+            )?)
+            .map_err(|source| SetupError::Json {
+                path: PathBuf::from("<browser-runtime-report>"),
+                source,
+            })
+        }
         "package-layout" => {
             let options = CliOptions::parse(&args[1..])?;
             let output_dir = options.output_dir.ok_or_else(|| {
@@ -160,6 +183,8 @@ struct CliOptions {
     output_dir: Option<PathBuf>,
     platform: Option<String>,
     all: bool,
+    playwright_versions: Vec<String>,
+    playwright_browsers: Vec<String>,
 }
 
 impl CliOptions {
@@ -190,6 +215,18 @@ impl CliOptions {
                     options.platform = Some(required_value(args, index, "--platform")?.to_string());
                 }
                 "--all" => options.all = true,
+                "--playwright-version" => {
+                    index += 1;
+                    options
+                        .playwright_versions
+                        .push(required_value(args, index, "--playwright-version")?.to_string());
+                }
+                "--browser" => {
+                    index += 1;
+                    options
+                        .playwright_browsers
+                        .push(required_value(args, index, "--browser")?.to_string());
+                }
                 unknown => {
                     return Err(SetupError::InvalidArgument(format!(
                         "unknown option '{unknown}'"
@@ -218,6 +255,7 @@ fn usage() -> &'static str {
      loom-setup uninstall --agent codex|claude-code|opencode|all\n\
      loom-setup uninstall --all\n\
      loom-setup purge\n\
+     loom-setup browser-runtime prepare [--playwright-version <registry-version-or-range>] [--browser chromium|firefox|webkit]\n\
      loom-setup package-layout --output-dir <dir> [--platform all|darwin-arm64|darwin-x64|linux-x64|linux-arm64|windows-x64]\n\
      loom-setup package-archive --package-root <dir> --output-dir <dir> --platform <platform>"
 }

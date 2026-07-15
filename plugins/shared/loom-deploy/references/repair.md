@@ -80,6 +80,7 @@ This tree prevents blind Dockerfile edits. A Dockerfile repair is correct only a
 ## Editing Rules
 
 - Edit only files listed in `editableFiles`.
+- `source-model.json`, `topology.json`, and `facts.json` are MCP-generated snapshots. When Loom exposes `modelRepairRef`, put a controlled correction in `model-repair.json` with the returned base fingerprint, `status=accepted`, and only the corrected `sourceModel` or `topology`; Loom regenerates dependent topology when only the source model changes, then recalculates facts and generated assets from that correction.
 - If `editableFiles` is empty because the failure is routed to deploy-sourced execution repair, the allowed edit boundary comes from the synthetic execution request, not from deploy repair.
 - Treat `protectedFiles` as read-only unless the user explicitly approves editing them.
 - Do not edit app source, package scripts, or environment files unless the user approves and the current repair action cannot be solved in deployment files.
@@ -107,7 +108,7 @@ Existing Compose and Dockerfile assets are user-owned unless the user forced a g
 
 - For `compose-existing`, inspect and report the user Compose topology. Do not inject generated proxy, dependency, or healthcheck services into it.
 - For `dockerfile-existing`, generate or repair the Compose wrapper and environment around the protected Dockerfile. Do not change the Dockerfile when its assumptions are merely inconvenient.
-- For generated providers, generated files under `.loom/deployment/specs/generated/` are editable and should be repaired when they contradict facts.
+- For generated providers, generated Dockerfile/Compose/nginx assets under `.loom/deployment/specs/generated/` are editable when returned. Generated model snapshots are read-only; use the controlled model-repair file when the source facts or topology are wrong.
 - If a protected asset cannot satisfy the accepted runtime contract, report the protected-asset blocker and the exact required change. Loom may fall back to generated assets only when provider policy allows it.
 
 ## Retry Rules
@@ -118,6 +119,6 @@ Existing Compose and Dockerfile assets are user-owned unless the user forced a g
 - Do not call `loom.deployRun` as a repair retry. `deployRun` is a high-level entry point, while repair retry is an execution step against the current spec.
 - If it succeeds, call `loom.deployStatus` for the same `projectRoot`.
 - If it fails, call `loom.deployRepair` for the same `projectRoot` again and use the new request.
-- Default `maxAttempts` is 10.
+- Default `maxAttempts` is 2 for the same failure signature; a changed failure signature creates a new bounded repair assessment.
 - Default Docker Compose build/start timeout is 10 minutes because first-time dependency installation can be slow on real projects.
 - Stop when `attempts >= maxAttempts` or when the next repair requires protected files.

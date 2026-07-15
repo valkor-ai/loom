@@ -233,7 +233,6 @@ fn baseline_reference_groups(signals: &[CodeStackSignal]) -> BTreeMap<String, Ve
         "frontend".to_string(),
         "persistence".to_string(),
         "configuration".to_string(),
-        "testing".to_string(),
     ];
     for signal in signals {
         if let Some(language) = &signal.language {
@@ -564,7 +563,9 @@ fn role_from_track(track: &str) -> Vec<String> {
 
 fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     let mut tags = Vec::new();
-    push_unique(&mut tags, "testing");
+    if task_owns_test_implementation(task) {
+        push_unique(&mut tags, "testing");
+    }
     if task_is_frontend_task(task) {
         push_unique(&mut tags, "frontend");
     }
@@ -1176,10 +1177,15 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             if has_focus("async") {
                 items.insert("reactive".to_string());
             }
-            items.insert("testing".to_string());
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
         }
         Some("typescript") => {
-            items.extend(["core", "types", "config", "patterns", "testing"].map(str::to_string));
+            items.extend(["core", "types", "config", "patterns"].map(str::to_string));
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("api") || has_focus("api_client") {
                 items.insert("guards".to_string());
             }
@@ -1195,16 +1201,24 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             } else {
                 items.insert("node".to_string());
             }
-            items.insert("testing".to_string());
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
         }
         Some("python") => {
-            items.extend(["core", "typing", "packaging", "testing"].map(str::to_string));
+            items.extend(["core", "typing", "packaging"].map(str::to_string));
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("async") || signal.frameworks.iter().any(|item| item == "fastapi") {
                 items.insert("async".to_string());
             }
         }
         Some("go") => {
-            items.extend(["core", "interfaces", "structure", "testing"].map(str::to_string));
+            items.extend(["core", "interfaces", "structure"].map(str::to_string));
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("async") || has_focus("api") {
                 items.insert("concurrency".to_string());
             }
@@ -1213,7 +1227,10 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("csharp") => {
-            items.extend(["core", "testing"].map(str::to_string));
+            items.insert("core".to_string());
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("api") || signal.frameworks.iter().any(|item| item == "aspnet_core") {
                 items.insert("aspnet".to_string());
             }
@@ -1228,7 +1245,10 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("cpp") => {
-            items.extend(["core", "modern", "build", "testing"].map(str::to_string));
+            items.extend(["core", "modern", "build"].map(str::to_string));
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("generics") {
                 items.insert("templates".to_string());
             }
@@ -1240,7 +1260,10 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("kotlin") => {
-            items.extend(["core", "testing"].map(str::to_string));
+            items.insert("core".to_string());
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("async") {
                 items.insert("coroutines".to_string());
             }
@@ -1255,7 +1278,10 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("php") => {
-            items.extend(["core", "testing"].map(str::to_string));
+            items.insert("core".to_string());
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if signal.frameworks.iter().any(|item| item == "laravel") {
                 items.insert("laravel".to_string());
             }
@@ -1267,13 +1293,19 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("rust") => {
-            items.extend(["core", "ownership", "traits", "errors", "testing"].map(str::to_string));
+            items.extend(["core", "ownership", "traits", "errors"].map(str::to_string));
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("async") || signal.frameworks.iter().any(|item| item == "tokio") {
                 items.insert("async".to_string());
             }
         }
         Some("swift") => {
-            items.extend(["core", "protocols", "testing"].map(str::to_string));
+            items.extend(["core", "protocols"].map(str::to_string));
+            if has_focus("testing") {
+                items.insert("testing".to_string());
+            }
             if has_focus("async") {
                 items.insert("concurrency".to_string());
             }
@@ -1312,7 +1344,9 @@ fn backend_reference_items_for_signal(
     let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
     if signal.frameworks.iter().any(|item| item == "spring_boot") {
         let items = groups.entry("springboot".to_string()).or_default();
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("api") {
             items.insert("web".to_string());
         }
@@ -1331,7 +1365,9 @@ fn backend_reference_items_for_signal(
     }
     if signal.frameworks.iter().any(|item| item == "django") {
         let items = groups.entry("django".to_string()).or_default();
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("api") {
             items.insert("views".to_string());
             items.insert("serializers".to_string());
@@ -1345,7 +1381,9 @@ fn backend_reference_items_for_signal(
     }
     if signal.frameworks.iter().any(|item| item == "fastapi") {
         let items = groups.entry("fastapi".to_string()).or_default();
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("api") {
             items.insert("routing".to_string());
             items.insert("schemas".to_string());
@@ -1364,7 +1402,9 @@ fn backend_reference_items_for_signal(
     }
     if signal.frameworks.iter().any(|item| item == "aspnet_core") {
         let items = groups.entry("aspnetcore".to_string()).or_default();
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("api") {
             items.insert("minimal".to_string());
         }
@@ -1387,7 +1427,9 @@ fn backend_reference_items_for_signal(
     }
     if signal.frameworks.iter().any(|item| item == "nestjs") {
         let items = groups.entry("nestjs".to_string()).or_default();
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("api") {
             items.insert("controllers".to_string());
             items.insert("dtos".to_string());
@@ -1419,7 +1461,9 @@ fn frontend_reference_items_for_signal(
         let items = groups.entry("nextjs".to_string()).or_default();
         items.insert("core".to_string());
         items.insert("app-router".to_string());
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("data_fetching") || has_focus("performance") || has_focus("persistence") {
             items.insert("data".to_string());
         }
@@ -1438,7 +1482,9 @@ fn frontend_reference_items_for_signal(
         items.insert("core".to_string());
         items.insert("hooks".to_string());
         items.insert("state".to_string());
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("performance") {
             items.insert("performance".to_string());
         }
@@ -1457,7 +1503,9 @@ fn frontend_reference_items_for_signal(
         items.insert("core".to_string());
         items.insert("components".to_string());
         items.insert("state".to_string());
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if signal.language.as_deref() == Some("typescript") {
             items.insert("typescript".to_string());
         }
@@ -1479,7 +1527,9 @@ fn frontend_reference_items_for_signal(
         let items = groups.entry("angular".to_string()).or_default();
         items.insert("core".to_string());
         items.insert("components".to_string());
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("routing") {
             items.insert("routing".to_string());
         }
@@ -1495,7 +1545,9 @@ fn frontend_reference_items_for_signal(
         items.insert("core".to_string());
         items.insert("structure".to_string());
         items.insert("platform".to_string());
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("routing") || signal.frameworks.iter().any(|item| item == "expo") {
             items.insert("navigation".to_string());
         }
@@ -1511,7 +1563,9 @@ fn frontend_reference_items_for_signal(
         items.insert("core".to_string());
         items.insert("structure".to_string());
         items.insert("widgets".to_string());
-        items.insert("testing".to_string());
+        if has_focus("testing") {
+            items.insert("testing".to_string());
+        }
         if has_focus("routing") || signal.frameworks.iter().any(|item| item == "gorouter") {
             items.insert("navigation".to_string());
         }
@@ -1583,6 +1637,14 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateEntityAdminPage
             )
         })
+}
+
+fn task_owns_test_implementation(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::VerificationIncrement)
+        || task
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::AddOrUpdateTests))
 }
 
 fn task_is_backend_task(task: &TaskDefinition) -> bool {
@@ -1933,9 +1995,9 @@ mod tests {
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"persistence".to_string()));
-        assert!(selection.reference_groups["java"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
-        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"schema".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"dialects".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -2002,7 +2064,7 @@ mod tests {
         assert!(selection.reference_groups["react"].contains(&"core".to_string()));
         assert!(selection.reference_groups["react"].contains(&"hooks".to_string()));
         assert!(selection.reference_groups["react"].contains(&"state".to_string()));
-        assert!(selection.reference_groups["react"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["react"].contains(&"migration".to_string()));
         assert!(!selection.reference_groups["react"].contains(&"server-components".to_string()));
         assert!(!selection.reference_groups.contains_key("java"));
@@ -2023,6 +2085,52 @@ mod tests {
         assert!(!load_plan
             .iter()
             .any(|item| item.path.starts_with("tech/backend/springboot/")));
+    }
+
+    #[test]
+    fn testing_references_require_structured_test_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React + TypeScript"}
+            }
+        }));
+        let seed = build_code_quality_seed(&baseline);
+        assert!(!seed["techReferenceProfile"]["referenceLoadPlan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("/testing.md"))));
+
+        let mut implementation_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        implementation_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let implementation_selection =
+            code_reference_selection_for_task(&baseline, &implementation_task).unwrap();
+        assert!(!implementation_selection.reference_groups["typescript"]
+            .contains(&"testing".to_string()));
+        assert!(
+            !implementation_selection.reference_groups["react"].contains(&"testing".to_string())
+        );
+
+        let mut test_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        test_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let test_selection = code_reference_selection_for_task(&baseline, &test_task).unwrap();
+        assert!(test_selection.reference_groups["typescript"].contains(&"testing".to_string()));
+        assert!(test_selection.reference_groups["react"].contains(&"testing".to_string()));
+        let load_plan = code_reference_load_plan(&test_selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/typescript/testing.md"));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/frontend/react/testing.md"));
     }
 
     #[test]
@@ -2098,7 +2206,7 @@ mod tests {
         assert!(selection.reference_groups.contains_key("nextjs"));
         assert!(selection.reference_groups["nextjs"].contains(&"core".to_string()));
         assert!(selection.reference_groups["nextjs"].contains(&"app-router".to_string()));
-        assert!(selection.reference_groups["nextjs"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["nextjs"].contains(&"testing".to_string()));
         assert!(selection.reference_groups.contains_key("react"));
         assert!(selection.reference_groups.contains_key("typescript"));
         assert!(!selection.reference_groups.contains_key("vue"));
@@ -2164,7 +2272,7 @@ mod tests {
         assert!(selection.reference_groups["vue"].contains(&"components".to_string()));
         assert!(selection.reference_groups["vue"].contains(&"state".to_string()));
         assert!(selection.reference_groups["vue"].contains(&"typescript".to_string()));
-        assert!(selection.reference_groups["vue"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["vue"].contains(&"testing".to_string()));
         assert!(selection.reference_groups.contains_key("typescript"));
         assert!(!selection.reference_groups.contains_key("react"));
         assert!(!selection.reference_groups.contains_key("nextjs"));
@@ -2247,7 +2355,7 @@ mod tests {
         assert!(angular_refs.contains(&"routing".to_string()));
         assert!(angular_refs.contains(&"rxjs".to_string()));
         assert!(angular_refs.contains(&"ngrx".to_string()));
-        assert!(angular_refs.contains(&"testing".to_string()));
+        assert!(!angular_refs.contains(&"testing".to_string()));
         assert!(!selection.reference_groups.contains_key("react"));
         assert!(!selection.reference_groups.contains_key("nextjs"));
         assert!(!selection.reference_groups.contains_key("vue"));
@@ -2302,7 +2410,7 @@ mod tests {
         assert!(rn_refs.contains(&"platform".to_string()));
         assert!(rn_refs.contains(&"lists".to_string()));
         assert!(rn_refs.contains(&"storage".to_string()));
-        assert!(rn_refs.contains(&"testing".to_string()));
+        assert!(!rn_refs.contains(&"testing".to_string()));
         assert!(!selection.reference_groups.contains_key("react"));
         assert!(!selection.reference_groups.contains_key("nextjs"));
         assert!(!selection.reference_groups.contains_key("vue"));
@@ -2362,7 +2470,7 @@ mod tests {
         assert!(flutter_refs.contains(&"navigation".to_string()));
         assert!(flutter_refs.contains(&"riverpod".to_string()));
         assert!(flutter_refs.contains(&"performance".to_string()));
-        assert!(flutter_refs.contains(&"testing".to_string()));
+        assert!(!flutter_refs.contains(&"testing".to_string()));
         assert!(!flutter_refs.contains(&"bloc".to_string()));
         assert!(!selection.reference_groups.contains_key("typescript"));
         assert!(!selection.reference_groups.contains_key("react"));
@@ -2395,7 +2503,7 @@ mod tests {
         let flutter_refs = &selection.reference_groups["flutter"];
         assert!(flutter_refs.contains(&"bloc".to_string()));
         assert!(flutter_refs.contains(&"widgets".to_string()));
-        assert!(flutter_refs.contains(&"testing".to_string()));
+        assert!(!flutter_refs.contains(&"testing".to_string()));
         assert!(!flutter_refs.contains(&"riverpod".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan
@@ -2565,7 +2673,7 @@ mod tests {
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"spring".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
-        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(!selection.reference_groups.contains_key("sql"));
@@ -2599,7 +2707,7 @@ mod tests {
             "Add actuator health startup logging and typed runtime configuration.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["springboot"].contains(&"runtime".to_string()));
-        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"web".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
@@ -2623,7 +2731,7 @@ mod tests {
                 .to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["springboot"].contains(&"cloud".to_string()));
-        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.spring.cloud" && item.path == "tech/backend/springboot/cloud.md"
@@ -2645,7 +2753,7 @@ mod tests {
         assert!(selection.reference_groups["python"].contains(&"core".to_string()));
         assert!(selection.reference_groups["django"].contains(&"views".to_string()));
         assert!(selection.reference_groups["django"].contains(&"serializers".to_string()));
-        assert!(selection.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["django"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["django"].contains(&"models".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
@@ -2677,7 +2785,7 @@ mod tests {
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["django"].contains(&"models".to_string()));
-        assert!(selection.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["django"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["django"].contains(&"security".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
@@ -2700,7 +2808,7 @@ mod tests {
         assert!(selection.reference_groups["python"].contains(&"async".to_string()));
         assert!(selection.reference_groups["fastapi"].contains(&"routing".to_string()));
         assert!(selection.reference_groups["fastapi"].contains(&"schemas".to_string()));
-        assert!(selection.reference_groups["fastapi"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["fastapi"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["fastapi"].contains(&"data".to_string()));
         assert!(!selection.reference_groups["fastapi"].contains(&"migration".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -2751,7 +2859,7 @@ mod tests {
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["csharp"].contains(&"aspnet".to_string()));
         assert!(selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
-        assert!(selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"data".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"architecture".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -2779,7 +2887,7 @@ mod tests {
                 .to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["aspnetcore"].contains(&"architecture".to_string()));
-        assert!(selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
@@ -2804,7 +2912,7 @@ mod tests {
         assert!(selection.reference_groups["nestjs"].contains(&"controllers".to_string()));
         assert!(selection.reference_groups["nestjs"].contains(&"dtos".to_string()));
         assert!(selection.reference_groups["nestjs"].contains(&"services".to_string()));
-        assert!(selection.reference_groups["nestjs"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["nestjs"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["nestjs"].contains(&"migration".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {

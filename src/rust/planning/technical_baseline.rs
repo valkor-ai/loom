@@ -699,10 +699,13 @@ fn technical_baseline_selection_guidance(
         },
         "confirmationRules": confirmation_rules(has_previous_baseline),
         "trackModel": {
-            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. Each track should include status, selection, source, and rationale.",
+            "requiredFinalShape": "Use stack.tracks with web, app, backend, persistence, dataAccess, and externalServices keys. When web is selected, also include qualityAutomation. Each track should include status, selection, source, and rationale.",
             "trackStatusValues": ["selected", "not_needed", "not_applicable", "user_custom"],
             "sourceValues": ["agent_recommended_user_confirmed", "user_adjusted", "user_specified", "previous_baseline", "not_applicable"],
             "coreTracks": ["web", "app", "backend", "persistence", "dataAccess", "externalServices"],
+            "conditionalTracks": {
+                "qualityAutomation": "Required when web.status is selected or user_custom; choose the browser automation stack in the same confirmed baseline."
+            },
             "customTechnologyPolicy": "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary."
         },
         "recommendationBasis": {
@@ -720,9 +723,9 @@ fn technical_baseline_selection_guidance(
         "userFacingConfirmationProtocol": {
             "mandatorySections": [
                 "Recommendation basis: summarize the full requirement/roadmap signals used, not only the current phase.",
-                "Recommended final baseline: list every core track with selection and short rationale.",
+                "Recommended final baseline: list every core track with selection and short rationale, plus qualityAutomation when web is selected.",
                 "Adjustable technology range: show common examples for every core track so the user knows how to modify the recommendation.",
-                "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, and externalServices.",
+                "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, externalServices, and qualityAutomation for web projects.",
                 "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting."
             ],
             "wordingRules": [
@@ -758,6 +761,10 @@ fn technical_baseline_selection_guidance(
             "externalServices": {
                 "label": "External services",
                 "examples": ["None", "User specified", "Only recommend services explicitly required by the confirmed requirement"]
+            },
+            "qualityAutomation": {
+                "label": "Browser quality automation",
+                "examples": ["Playwright", "User-specified existing browser test stack"]
             }
         },
         "shorthandNormalization": {
@@ -784,8 +791,8 @@ fn technical_baseline_selection_guidance(
         ],
         "replyProtocolForUser": {
             "acceptRecommendation": "确认推荐方案",
-            "partialAdjustmentExample": "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, app=不需要, externalServices=不需要",
-            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, externalServices=不需要",
+            "partialAdjustmentExample": "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, qualityAutomation=Playwright, app=不需要, externalServices=不需要",
+            "fullCustomExample": "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, qualityAutomation=Playwright, externalServices=不需要",
             "finalConfirmationPrompt": "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ..."
         }
     }))
@@ -797,7 +804,7 @@ fn confirmation_rules(has_previous_baseline: bool) -> Vec<&'static str> {
         "If the user accepts the recommendation directly, that reply can be the final technology baseline confirmation.",
         "If the user adjusts part of the stack or specifies a custom stack, summarize the final baseline and ask for final confirmation before writing the candidate.",
         "Do not submit a confirmed candidate while any core track is ambiguous. Mark a track as not_applicable/not_needed only when the requirement or user confirmation supports that.",
-        "Testing, build, local run, and deployment preparation are derived later. Do not require first-screen user choices for them and do not reopen technology baseline confirmation only to update those commands.",
+        "Build commands, local run commands, and deployment preparation are derived later. For a selected Web client, include qualityAutomation in the same baseline confirmation; do not reopen confirmation only to update test commands or runtime details.",
     ];
     if has_previous_baseline {
         rules.extend([
@@ -1144,6 +1151,15 @@ fn validate_new_project_candidate(
             "New-project TechnicalBaseline stack.tracks must include web, app, backend, persistence, dataAccess, and externalServices; each track needs a valid status and non-empty selection.",
         ));
     }
+    if new_project_web_selected(&candidate.stack)
+        && !new_project_quality_automation_complete(&candidate.stack)
+    {
+        issues.push(issue(
+            "NEW_PROJECT_QUALITY_AUTOMATION_INCOMPLETE",
+            "stack.tracks.qualityAutomation",
+            "New-project Web baselines must include a selected qualityAutomation track with a concrete browser automation stack.",
+        ));
+    }
 }
 
 fn new_project_stack_tracks_complete(stack: &Value) -> bool {
@@ -1168,6 +1184,33 @@ fn new_project_stack_tracks_complete(stack: &Value) -> bool {
     })
 }
 
+fn new_project_web_selected(stack: &Value) -> bool {
+    stack
+        .pointer("/tracks/web")
+        .and_then(Value::as_object)
+        .is_some_and(|track| {
+            matches!(
+                track.get("status").and_then(Value::as_str),
+                Some("selected" | "user_custom")
+            )
+        })
+}
+
+fn new_project_quality_automation_complete(stack: &Value) -> bool {
+    stack
+        .pointer("/tracks/qualityAutomation")
+        .and_then(Value::as_object)
+        .is_some_and(|track| {
+            matches!(
+                track.get("status").and_then(Value::as_str),
+                Some("selected" | "user_custom")
+            ) && track
+                .get("selection")
+                .and_then(Value::as_str)
+                .is_some_and(|selection| !selection.trim().is_empty())
+        })
+}
+
 fn technical_baseline_decision_needs(
     project_kind: ProjectKind,
     baseline_exists: bool,
@@ -1180,6 +1223,7 @@ fn technical_baseline_decision_needs(
             "database or persistence technology track".to_string(),
             "ORM or data access technology track".to_string(),
             "external services only when required by the confirmed requirement".to_string(),
+            "browser quality automation when a Web client is selected".to_string(),
         ];
     }
     if baseline_exists {

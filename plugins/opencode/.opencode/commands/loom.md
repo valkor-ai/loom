@@ -17,7 +17,7 @@ Call the matching Loom MCP tool for the current project directory before doing a
 - `plan <request>` -> `loom.plan` with `<request>`
 - Any other request text -> `loom.plan` with the full request text
 
-After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; do not report progress, mark a local plan complete, send a final answer, or stop while `stopAllowed=false`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking; repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
+After the tool returns, follow `LoomMcpActionResult.state`: continue immediately for `auto_runnable`; do not report progress, mark a local plan complete, send a final answer, or stop while `stopAllowed=false`; for `user_gate` with `requestRef`, inspect the request, read required `requestReadPlan.groups`, and run Brainstorm `knowledge_context_plan` steps before asking. A phase-continuation Brainstorm gate is an active clarification turn, not an optional `/loom continue`; do not stop at a progress recap or say "if you want to continue". Complete the reads and knowledge calls, then ask the visible current-block question and wait for the user's answer. Repair only returned targets for `repairable_error`; stop only for `done`, `blocked`, or `failed`.
 
 ## Result Discipline
 

@@ -90,6 +90,14 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
         implemented: true,
     },
     ToolRegistration {
+        name: "browserRuntimePrepare",
+        description: "Prepare or reuse Loom's shared Playwright browser runtime for this project.",
+        target_batch: 8,
+        input_kind: ToolInputKind::Project,
+        output_kind: ToolOutputKind::ActionResult,
+        implemented: true,
+    },
+    ToolRegistration {
         name: "inspectRequest",
         description:
             "Inspect request metadata and declared read groups without returning the full request.",

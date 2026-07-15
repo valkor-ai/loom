@@ -19,6 +19,7 @@ pub struct DeploymentPaths {
     pub code_evidence_file: PathBuf,
     pub generated_dir: PathBuf,
     pub compose_file: PathBuf,
+    pub model_repair_file: PathBuf,
 }
 
 pub fn deployment_paths(project_root: &Path) -> DeploymentPaths {
@@ -39,6 +40,7 @@ pub fn deployment_paths(project_root: &Path) -> DeploymentPaths {
         failure_file: state_dir.join("latest-failure.json"),
         code_evidence_file: evidence_dir.join("latest-code-evidence.json"),
         compose_file: generated_dir.join("compose.yaml"),
+        model_repair_file: generated_dir.join("model-repair.json"),
         specs_dir,
         state_dir,
         logs_dir,

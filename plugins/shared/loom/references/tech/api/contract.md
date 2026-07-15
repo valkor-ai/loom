@@ -2,7 +2,7 @@
 
 ## Role In Loom
 
-Loom's primary API contract lives in the accepted architecture/API contract. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.
+Loom's primary API contract lives in the project-level current API contract referenced by the accepted Architecture artifact. The Architecture artifact records `apiContractRef` plus current-phase interface refs; downstream requests receive only the projection needed by their task. A separate OpenAPI or schema file is optional and should be created only when it has a real consumer.
 
 ## When To Create Or Update OpenAPI
 
@@ -53,3 +53,16 @@ If the repository already owns an OpenAPI/schema file:
 ## Implementation Evidence
 
 For tasks that touch API contracts, implementation evidence should name generated or updated contract files. If no separate contract file is expected, cite source code and tests instead.
+
+## Runtime And Browser Binding
+
+The accepted API contract is the source of truth for every consumer-facing path. Keep the HTTP interface `path` as the complete public path, including its public prefix; do not make downstream tasks reconstruct it from a generic `/api` label.
+
+Declare the API surface binding once at the contract level:
+
+- `publicExposure.basePath`: the public proxy prefix used by the deployed gateway
+- `publicExposure.preservePath`: whether the gateway forwards the interface path unchanged
+- `browserBinding.mode`: `same_origin` for a browser served by the Loom public entry, or `external_origin` when an explicit external origin is part of the contract
+- `browserBinding.pathOwnership`: `interface_path`
+
+Frontend, integration, browser-verification, and deployment work consumes these accepted values. It must preserve the interface path and request/response contract. It must not add a second base prefix to a path that already contains the public prefix. A separate build-time API environment variable is used only when the frontend source actually composes a relative suffix with that variable; it is not a generic deployment default.

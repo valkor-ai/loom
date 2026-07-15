@@ -378,6 +378,8 @@ pub struct DeployRepairAssetsNext {
     pub source_model_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_repair_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub generated_file_refs: Vec<String>,
     pub diagnostics_ref: Option<String>,

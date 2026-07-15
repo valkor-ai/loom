@@ -52,15 +52,26 @@ pub struct ArchitectureBlockedReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchitectureSectionCandidateAgentWritable {
+    #[serde(default)]
+    #[schemars(skip)]
     pub schema_version: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub request_id: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub delivery_id: String,
+    #[serde(default)]
+    #[schemars(skip)]
     pub phase_id: String,
+    #[schemars(skip)]
     pub section: ArchitectureSectionGroup,
     pub status: ArchitectureSectionStatus,
     pub content: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_reasons: Vec<ArchitectureBlockedReason>,
+    #[serde(default)]
+    #[schemars(skip)]
     pub created_at: String,
 }
 
@@ -290,6 +301,10 @@ pub struct ArchitectureArtifactContract {
     pub data_model: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_contract_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_phase_interface_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_flows: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

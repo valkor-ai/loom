@@ -1,3 +1,4 @@
+mod browser_runtime;
 pub mod resource_registry;
 pub mod server;
 pub mod tool_registry;

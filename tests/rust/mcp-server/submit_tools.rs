@@ -174,14 +174,14 @@ fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
     assert_eq!(result["state"], "repairable_error");
     assert_eq!(
         result["issues"][0]["code"],
-        "CLARIFICATION_PROGRESS_INVALID"
+        "BRAINSTORM_CANDIDATE_SCHEMA_INVALID"
     );
     assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
 }
 
 #[test]
-fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_gate() {
-    let fixture = Fixture::new("submit-legacy-progress-shape");
+fn brainstorm_submit_ignores_agent_authored_confirmation_metadata() {
+    let fixture = Fixture::new("submit-derived-confirmation-metadata");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     let mut candidate = valid_candidate_json();
     candidate["clarificationProgress"] = json!({
@@ -203,12 +203,33 @@ fn brainstorm_submit_repairs_legacy_progress_shape_instead_of_reopening_phase_ga
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let contract = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(delivery_id)
+            .join("brainstorm/contract.json"),
+    )
+    .expect("read accepted brainstorm contract");
     assert_eq!(
-        result["issues"][0]["code"],
-        "CLARIFICATION_PROGRESS_LEGACY_FIELDS"
+        contract["clarificationProgress"]["skippedBlocks"][0]["block"],
+        "frontend_experience"
     );
-    assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
+    assert_eq!(
+        contract["clarificationProgress"]["skippedBlocks"][0]["reason"],
+        "This submit fixture does not require a frontend experience."
+    );
+    assert_eq!(
+        contract["userConfirmation"]["confirmationBasis"]["presentedItems"],
+        json!([
+            "phase_scope",
+            "concept_grounding",
+            "frontend_experience",
+            "final_summary"
+        ])
+    );
 }
 
 #[test]
@@ -384,6 +405,14 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
         .as_array()
         .expect("data access examples")
         .contains(&json!("MyBatis Plus")));
+    assert_eq!(
+        guidance["commonOptions"]["qualityAutomation"]["examples"][0],
+        json!("Playwright")
+    );
+    assert_eq!(
+        guidance["trackModel"]["conditionalTracks"]["qualityAutomation"],
+        json!("Required when web.status is selected or user_custom; choose the browser automation stack in the same confirmed baseline.")
+    );
     assert!(guidance["shorthandNormalization"]["backend"]
         .as_array()
         .expect("backend shorthand rules")
@@ -417,6 +446,146 @@ fn brainstorm_submit_accepts_valid_candidate_and_hands_off_to_batch_eight() {
             .as_str()
             .unwrap_or_default()
             .contains("Do not mention Loom internals")));
+}
+
+#[test]
+fn brainstorm_submit_derives_glossary_update_ids_instead_of_repairing_agent_output() {
+    let fixture = Fixture::new("submit-derived-glossary-update-id");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let write_contract = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.clone(),
+        group_id: "candidate_write_contract".to_string(),
+    })
+    .expect("read candidate write contract");
+    let schema = &write_contract.fields["outputContract.schemaProjection"].value;
+    assert!(
+        schema["objectShapeRules"]["conceptGrounding.glossaryUpdates[]"]
+            .as_str()
+            .expect("glossary update shape rule")
+            .contains("Loom generates updateId")
+    );
+    let request_id = request_ref
+        .rsplit('/')
+        .next()
+        .expect("brainstorm request id");
+    let stored_output_contract = read_json_value(
+        &fixture
+            .root
+            .join(".loom/requests")
+            .join(format!("{request_id}.refs/output-contract.json")),
+    )
+    .expect("read stored output contract");
+    let glossary_update_schema = &stored_output_contract["schemaShape"]["$defs"]["GlossaryUpdate"];
+    assert!(glossary_update_schema["properties"]
+        .get("updateId")
+        .is_none());
+    assert!(!glossary_update_schema["required"]
+        .as_array()
+        .expect("glossary update required fields")
+        .contains(&json!("updateId")));
+
+    let mut candidate = valid_candidate_json();
+    let glossary_concept = json!({
+        "conceptId": "concept_account_opening",
+        "term": "证券账户开户",
+        "normalizedName": "securities account opening",
+        "explanation": "The confirmed account-opening capability for the current phase.",
+        "mustNotMisinterpretAs": [],
+        "phaseRelevance": "current",
+        "priority": "must_understand",
+        "attentionRank": 1,
+        "riskFactors": ["business_invariant"],
+        "scopeRefs": ["scope_1"],
+        "acceptanceRefs": ["acc_1"],
+        "humanReadableReason": "The term owns the current phase workflow boundary."
+    });
+    candidate["conceptGrounding"]["glossaryUpdates"] = json!([{
+        "operation": "add",
+        "concept": glossary_concept,
+        "reason": "Add the confirmed account term to the delivery glossary."
+    }]);
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let contract = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(delivery_id)
+            .join("brainstorm/contract.json"),
+    )
+    .expect("read accepted brainstorm contract");
+    assert_eq!(
+        contract["conceptGrounding"]["glossaryUpdates"][0]["updateId"],
+        "glossary_update_1"
+    );
+}
+
+#[test]
+fn brainstorm_submit_rejects_incomplete_glossary_update_semantics() {
+    let fixture = Fixture::new("submit-incomplete-glossary-update");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let mut candidate = valid_candidate_json();
+    candidate["conceptGrounding"]["glossaryUpdates"] = json!([{
+        "operation": "add",
+        "reason": "Add a confirmed term."
+    }]);
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(
+        result["issues"][0]["code"],
+        "GLOSSARY_UPDATE_CONCEPT_REQUIRED"
+    );
+    assert_eq!(
+        result["issues"][0]["fieldPath"],
+        "conceptGrounding.glossaryUpdates[0].concept"
+    );
+}
+
+#[test]
+fn brainstorm_submit_rejects_flattened_glossary_concept_fields() {
+    let fixture = Fixture::new("submit-flattened-glossary-update");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    let mut candidate = valid_candidate_json();
+    candidate["conceptGrounding"]["glossaryUpdates"] = json!([{
+        "operation": "add",
+        "reason": "Add a confirmed term.",
+        "term": "证券账户开户",
+        "normalizedName": "securities account opening",
+        "explanation": "A flattened concept must not be silently discarded."
+    }]);
+    write_candidate_target(&fixture, &request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(
+        result["issues"][0]["code"],
+        "BRAINSTORM_CANDIDATE_SCHEMA_INVALID"
+    );
+    assert!(result["issues"][0]["message"]
+        .as_str()
+        .expect("schema issue message")
+        .contains("unknown field"));
 }
 
 #[test]
@@ -639,21 +808,23 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         write_contract.fields["outputContract.resultTemplate"].value["warnings"][0]["code"],
         "LOW_CONFIDENCE_REPOSITORY_SCAN"
     );
+    assert!(write_contract
+        .fields
+        .get("outputContract.bindingRules")
+        .is_none());
+    assert!(write_contract.fields["outputContract.resultTemplate"]
+        .value
+        .get("source")
+        .is_none());
+    assert!(write_contract.fields["outputContract.resultTemplate"]
+        .value
+        .get("requestLens")
+        .is_none());
     assert!(
-        write_contract.fields["outputContract.bindingRules"].value[0]
-            .as_str()
-            .expect("binding rule")
-            .contains("source.requestRef")
-    );
-    assert!(
-        write_contract.fields["outputContract.resultTemplate"].value["source"]
-            .get("requestRef")
-            .is_some()
-    );
-    assert!(
-        write_contract.fields["outputContract.resultTemplate"].value["source"]
-            .get("requestId")
-            .is_none()
+        !write_contract.fields["outputContract.schemaProjection"].value["requiredTopLevelFields"]
+            .as_array()
+            .expect("repository context required fields")
+            .contains(&json!("source"))
     );
     assert_eq!(
         write_contract.fields["outputContract.schemaProjection"].value["enumFields"]
@@ -682,10 +853,9 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
             .contains("code and message")
     );
 
-    let mut repository_candidate = write_contract.fields["outputContract.resultTemplate"]
+    let repository_candidate = write_contract.fields["outputContract.resultTemplate"]
         .value
         .clone();
-    repository_candidate["source"]["requestRef"] = json!(repository_context_request_ref);
     write_candidate_target(
         &fixture,
         repository_context_request_ref,
@@ -703,6 +873,19 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
     assert_eq!(
         repository_result["next"]["artifactKind"],
         "architecture_section_candidate"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &request_ref);
+    let accepted = read_json_value(
+        &fixture
+            .root
+            .join(".loom/deliveries")
+            .join(delivery_id)
+            .join("workspace/phase-1/repository-context.json"),
+    )
+    .expect("read accepted repository context");
+    assert_eq!(
+        accepted["source"]["requestRef"],
+        repository_context_request_ref
     );
 }
 
@@ -1256,6 +1439,45 @@ fn new_project_technical_baseline_requires_complete_track_model() {
             |issue| issue["code"] == "NEW_PROJECT_BASELINE_TRACKS_INCOMPLETE"
                 && issue["fieldPath"] == "stack.tracks"
         ));
+}
+
+#[test]
+fn new_project_web_baseline_requires_quality_automation_track() {
+    let fixture = Fixture::new("technical-baseline-new-project-quality-automation");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+
+    let brainstorm_result = call_submit(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+    let baseline_request_ref = brainstorm_result["next"]["requestRef"]
+        .as_str()
+        .expect("baseline requestRef")
+        .to_string();
+    let mut candidate = new_project_technical_baseline_candidate_json();
+    candidate["stack"]["tracks"]
+        .as_object_mut()
+        .expect("tracks object")
+        .remove("qualityAutomation");
+    write_candidate_target(&fixture, &baseline_request_ref, &candidate);
+
+    let result = call_submit(
+        "loom.technicalBaselineAcceptFile",
+        &baseline_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert!(result["issues"]
+        .as_array()
+        .expect("issues")
+        .iter()
+        .any(|issue| {
+            issue["code"] == "NEW_PROJECT_QUALITY_AUTOMATION_INCOMPLETE"
+                && issue["fieldPath"] == "stack.tracks.qualityAutomation"
+        }));
 }
 
 #[test]
@@ -2042,7 +2264,6 @@ fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
         "content.runtimeDelivery.taskPlanningGuidance.verificationBoundary",
         "content.runtimeDelivery.frontend.outputDir",
         "content.runtimeDelivery.start.port",
-        "content.runtimeDelivery.api",
     ] {
         assert!(
             issues
@@ -2051,6 +2272,12 @@ fn architecture_runtime_delivery_submit_repairs_missing_contract_fields() {
             "missing issue for {field_path}: {issues:#?}"
         );
     }
+    assert!(
+        !issues
+            .iter()
+            .any(|issue| issue["fieldPath"] == json!("content.runtimeDelivery.api")),
+        "API probe paths are MCP-derived and must not be required from the agent: {issues:#?}"
+    );
 }
 
 #[test]
@@ -2683,8 +2910,10 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         &taskplan_contract_fields["outputContract.runtimeDeliveryRequirementTemplate"].value;
     assert!(runtime_requirement_template.is_object());
     assert!(
-        runtime_requirement_template["requiredCodeLevelChecks"][0]["checkId"].is_string(),
-        "{runtime_requirement_template:#}"
+        runtime_requirement_template["requiredCodeLevelChecks"][0]
+            .get("checkId")
+            .is_none(),
+        "runtime check identity is MCP-owned: {runtime_requirement_template:#}"
     );
     assert!(
         runtime_requirement_template["requiredCodeLevelChecks"][0]["acceptableEvidence"]
@@ -2715,8 +2944,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .expect("requiredCodeLevelChecks");
     assert!(closure_checks
         .iter()
-        .any(|check| check["checkId"] == json!("rd-closure-httpprobes")
-            && check["contractField"] == json!("httpProbes")));
+        .all(|check| { check.get("checkId").is_none() && check.get("contractField").is_none() }));
     assert_eq!(
         closure_checks.len(),
         closure_requirement["affectedContractFields"]
@@ -2757,7 +2985,7 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .contains_key("persistence"));
     assert_eq!(
         engineering_template["taskRefRule"],
-        json!("Tasks reference this by engineeringQualityRequirementRefs; do not inline or duplicate the full object in each task.")
+        json!("Loom attaches this generated requirement through engineeringQualityRequirementRefs during accept; agents must not write that field or duplicate the full object in each task.")
     );
     let engineering_rules =
         &taskplan_contract_fields["generationRules.engineeringQualityRules"].value;
@@ -2997,6 +3225,13 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     assert!(
         frontend_fields.contains(&"executionRules.interactiveVerificationProbePolicy".to_string())
     );
+    assert!(
+        inspected
+            .read_groups
+            .iter()
+            .all(|group| group.group_id != "task_execution_browser_verification"),
+        "ordinary frontend tasks must not carry browser runtime or Playwright reference context"
+    );
     let runtime_group = inspected
         .read_groups
         .iter()
@@ -3136,11 +3371,17 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
     );
     assert_eq!(
         fields["outputContract.resultTemplate"].value["frontendExperienceSelfCheck"]
-            ["closureRequirementIds"],
-        json!(["closure:flow.account-lifecycle:step.submit-open-account"])
+            .get("closureRequirementIds"),
+        None
     );
     let frontend_quality_template =
         &fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
+    assert!(frontend_quality_template.get("browserCheckRefs").is_none());
+    assert!(
+        fields["outputContract.resultTemplate"].value["verificationResults"][0]
+            .get("browserChecks")
+            .is_none()
+    );
     assert!(
         frontend_quality_template.get("scenarioKind").is_none(),
         "frontend quality template must not emit legacy scenarioKind"
@@ -3149,20 +3390,18 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         frontend_quality_template.get("qualityLevel").is_none(),
         "frontend quality template must not emit legacy qualityLevel"
     );
-    assert_eq!(
-        frontend_quality_template["surfaceDecisionContractRef"],
-        fields["task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"].value
-    );
+    assert!(frontend_quality_template
+        .get("surfaceDecisionContractRef")
+        .is_none());
     assert!(frontend_quality_template["referencePlanFilesChecked"]
         .as_array()
         .expect("reference plan files checked")
         .contains(&json!("uix/tokens/spacing.md")));
     assert!(frontend_quality_template["surfaceStateEvidence"][0].is_object());
     assert!(frontend_quality_template["surfaceQualityRuleEvidence"][0].is_object());
-    assert_eq!(
-        frontend_quality_template["surfaceRegionEvidence"][0]["id"],
-        json!("region_account_results")
-    );
+    assert!(frontend_quality_template["surfaceRegionEvidence"][0]
+        .get("id")
+        .is_none());
     assert!(
         frontend_quality_template["surfaceRegionEvidence"][0]["files"]
             .as_array()
@@ -3192,7 +3431,7 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .iter()
         .any(|rule| rule
             .as_str()
-            .is_some_and(|text| text.contains("do not leave replace_with_* values"))));
+            .is_some_and(|text| text.contains("replace_with_*"))));
     assert!(
         fields["outputContract.schemaShape.properties.frontendQualitySelfCheck"]
             .value
@@ -3218,20 +3457,70 @@ fn task_execution_request_carries_task_scoped_frontend_closure_guidance() {
         .as_array()
         .expect("required top-level fields")
         .contains(&json!("conceptEvidence")));
-    let result_file = fields["outputContract.resultFile"]
-        .value
-        .as_str()
-        .expect("result file");
-    let mut result = fields["outputContract.resultTemplate"].value.clone();
-    result["changedFiles"] = json!(["src/App.tsx"]);
-    complete_frontend_quality_token_evidence_for_test(&mut result);
-    write_json_atomic(&fixture.root.join(result_file), &result).expect("write task result");
-    let record_result = call_submit(
-        "loom.recordTaskResultFile",
-        execution_request_ref,
-        fixture.root_str(),
+    let closure_request_ref =
+        advance_to_browser_closure_execution(&fixture, execution_request_ref.to_string());
+    let closure_inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: closure_request_ref.clone(),
+    })
+    .expect("inspect browser closure execution request");
+    assert!(closure_inspected
+        .read_groups
+        .iter()
+        .all(|group| group.group_id != "task_execution_frontend_context"));
+    let browser_group = closure_inspected
+        .read_groups
+        .iter()
+        .find(|group| group.group_id == "task_execution_browser_verification")
+        .expect("browser closure verification group");
+    assert_eq!(
+        browser_group.expanded_fields(),
+        vec![
+            "executionRules.browserVerificationRules".to_string(),
+            "sourceContext.browserVerificationContext".to_string(),
+        ]
     );
-    assert_eq!(record_result["state"], "auto_runnable", "{record_result:#}");
+    let closure_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: closure_request_ref,
+        fields: vec![
+            "task.taskId".to_string(),
+            "task.taskKind".to_string(),
+            "sourceContext.browserVerificationContext".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read browser closure context")
+    .fields;
+    assert_eq!(
+        closure_fields["task.taskKind"].value,
+        json!("browser_quality_closure")
+    );
+    let profile = &closure_fields["sourceContext.browserVerificationContext"].value["profile"];
+    assert_eq!(profile["taskId"], closure_fields["task.taskId"].value);
+    assert_eq!(profile["runnerSource"], json!("loom_managed"));
+    assert!(!profile["checks"]
+        .as_array()
+        .expect("browser closure checks")
+        .is_empty());
+    assert!(profile["checks"]
+        .as_array()
+        .expect("browser closure checks")
+        .iter()
+        .all(|check| check["sourceTaskId"] == json!("task-account-ui-001")));
+    assert!(profile["referenceLoadPlan"]
+        .as_array()
+        .expect("browser reference plan")
+        .iter()
+        .all(|item| item["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("tech/test/playwright/"))));
+    let closure_browser_checks = closure_fields["outputContract.resultTemplate"].value
+        ["verificationResults"][0]["browserChecks"]
+        .as_array()
+        .expect("browser closure result checks");
+    assert!(!closure_browser_checks.is_empty());
+    assert_eq!(closure_browser_checks[0]["status"], json!("not_run"));
 }
 
 #[test]
@@ -3469,6 +3758,305 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
 }
 
 #[test]
+fn browser_result_repair_is_scoped_to_unresolved_checks_and_reliability_guidance() {
+    let fixture = Fixture::new("browser-result-repair-context");
+    let frontend_execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let execution_request_ref =
+        advance_to_browser_closure_execution(&fixture, frontend_execution_request_ref);
+    write_task_result_candidate(&fixture, &execution_request_ref);
+    mutate_task_result_candidate(&fixture, &execution_request_ref, |result| {
+        let verification = result
+            .get_mut("verificationResults")
+            .and_then(Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+            .expect("browser verification result");
+        verification["status"] = json!("inconclusive");
+        let check = verification
+            .get_mut("browserChecks")
+            .and_then(Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+            .expect("browser check");
+        check["status"] = json!("blocked");
+        check["blockedReason"] = json!("");
+        check["observedOutcome"] = json!("");
+        result["status"] = json!("completed_with_notes");
+        result["notes"] = json!(["Browser execution was blocked."]);
+    });
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.clone(),
+        fields: vec!["task.taskKind".to_string()],
+    })
+    .expect("read browser closure task kind")
+    .fields;
+    assert_eq!(fields["task.taskKind"].value, "browser_quality_closure");
+
+    let rejected = call_submit(
+        "loom.recordTaskResultFile",
+        &execution_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(rejected["state"], "auto_runnable", "{rejected:#}");
+    assert_eq!(rejected["next"]["artifactKind"], "task_result_repair");
+    let repair_ref = rejected["next"]["requestRef"]
+        .as_str()
+        .expect("repair requestRef");
+    let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: repair_ref.to_string(),
+        fields: vec![
+            "repairContract.issueConflicts".to_string(),
+            "repairContract.referenceLoadPlan".to_string(),
+            "outputContract.resultTemplate".to_string(),
+        ],
+    })
+    .expect("read browser repair contract")
+    .fields;
+    let browser_issue = repair_fields["repairContract.issueConflicts"]
+        .value
+        .as_array()
+        .expect("repair issues")
+        .iter()
+        .find(|issue| issue["code"] == json!("TASK_RESULT_BROWSER_VERIFICATION_INVALID"))
+        .expect("browser repair issue");
+    assert_eq!(
+        browser_issue["currentUnresolvedChecks"][0]["status"],
+        json!("blocked")
+    );
+    assert_eq!(
+        browser_issue["currentUnresolvedChecks"]
+            .as_array()
+            .expect("unresolved checks")
+            .len(),
+        1
+    );
+    assert_eq!(
+        browser_issue["expectedChecks"]
+            .as_array()
+            .expect("expected repair checks")
+            .len(),
+        1
+    );
+    assert_eq!(
+        repair_fields["repairContract.referenceLoadPlan"].value[0]["path"],
+        json!("tech/test/playwright/reliability.md")
+    );
+    assert!(
+        repair_fields["outputContract.resultTemplate"].value["verificationResults"][0]
+            ["browserChecks"]
+            .is_array()
+    );
+}
+
+#[test]
+fn unavailable_browser_runtime_closes_by_system_result_and_routes_manual_review() {
+    let fixture = Fixture::new("browser-runtime-unavailable-manual-review");
+
+    let manual_request_ref = reach_browser_environment_manual_review(&fixture);
+    let protocol = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: manual_request_ref,
+        fields: vec![
+            "manualReviewProtocol.acceptedDecisions".to_string(),
+            "source.browserQualityGate".to_string(),
+        ],
+    })
+    .expect("read browser manual review protocol")
+    .fields;
+
+    assert_eq!(
+        protocol["manualReviewProtocol.acceptedDecisions"].value,
+        json!([
+            "retry_browser_environment",
+            "submit_external_browser_evidence",
+            "approve_quality_waiver"
+        ])
+    );
+    assert_eq!(
+        protocol["source.browserQualityGate"].value["browserVerification"]["environmentBlocked"],
+        json!(true)
+    );
+}
+
+#[test]
+fn browser_environment_retry_resets_closure_and_restarts_runtime_preparation() {
+    let fixture = Fixture::new("browser-runtime-retry");
+    let manual_request_ref = reach_browser_environment_manual_review(&fixture);
+    write_browser_quality_resolution_candidate(
+        &fixture,
+        &manual_request_ref,
+        "retry_browser_environment",
+    );
+
+    let retried = call_submit(
+        "loom.reviewResolveFile",
+        &manual_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(retried["state"], "auto_runnable", "{retried:#}");
+    assert_eq!(retried["next"]["kind"], "run_loom_tool", "{retried:#}");
+    assert_eq!(
+        retried["next"]["toolName"], "loom.browserRuntimePrepare",
+        "{retried:#}"
+    );
+    assert!(!fixture
+        .root
+        .join(".loom/runtime/browser-automation/latest.json")
+        .exists());
+}
+
+#[test]
+fn external_browser_evidence_updates_closure_and_returns_to_review() {
+    let fixture = Fixture::new("browser-runtime-external-evidence");
+    let manual_request_ref = reach_browser_environment_manual_review(&fixture);
+    write_browser_quality_resolution_candidate(
+        &fixture,
+        &manual_request_ref,
+        "submit_external_browser_evidence",
+    );
+
+    let resumed = call_submit(
+        "loom.reviewResolveFile",
+        &manual_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(resumed["state"], "auto_runnable", "{resumed:#}");
+    assert_eq!(resumed["next"]["artifactKind"], "review_result");
+    let review_request_ref = resumed["next"]["requestRef"]
+        .as_str()
+        .expect("review requestRef");
+    let matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.to_string(),
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read review matrices after external browser evidence")
+    .fields;
+    let frontend = matrices["reviewMatrixSummary.frontendQuality"]
+        .value
+        .as_array()
+        .expect("frontend quality matrix");
+    assert!(!frontend.is_empty());
+    assert!(frontend.iter().all(|item| {
+        item["browserVerification"]["environmentBlocked"] == json!(false)
+            && item["browserVerification"]["satisfied"] == json!(true)
+    }));
+    let signals = matrices["outputContract.reviewSignals.items"]
+        .value
+        .as_array()
+        .expect("review signals");
+    assert!(signals
+        .iter()
+        .filter(|signal| { signal["kind"] == json!("frontend_ui_quality") })
+        .all(|signal| signal["recommendedNextAction"] == json!("none")));
+}
+
+#[test]
+fn browser_quality_waiver_completes_without_rewriting_blocked_evidence() {
+    let fixture = Fixture::new("browser-runtime-quality-waiver");
+    let manual_request_ref = reach_browser_environment_manual_review(&fixture);
+    write_browser_quality_resolution_candidate(
+        &fixture,
+        &manual_request_ref,
+        "approve_quality_waiver",
+    );
+
+    let resolved = call_submit(
+        "loom.reviewResolveFile",
+        &manual_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(resolved["state"], "done", "{resolved:#}");
+    let status: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(".loom/status.json"))
+            .expect("read delivery status"),
+    )
+    .expect("parse delivery status");
+    assert_eq!(status["deliveries"][0]["status"], "completed");
+    let task_results = find_json_files_containing(
+        &fixture.root.join(".loom/deliveries"),
+        "system-browser-environment-",
+    );
+    assert!(!task_results.is_empty());
+    assert!(task_results.iter().any(|path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+            .and_then(|result| result.get("verificationResults").cloned())
+            .and_then(|items| items.as_array().cloned())
+            .into_iter()
+            .flatten()
+            .flat_map(|verification| {
+                verification
+                    .get("browserChecks")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .any(|check| check["status"] == json!("blocked"))
+    }));
+}
+
+#[test]
+fn browser_environment_blocked_result_bypasses_execution_repair() {
+    let fixture = Fixture::new("browser-runtime-blocked-during-closure");
+    let frontend_execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(&fixture);
+    let closure_request_ref =
+        advance_to_browser_closure_execution(&fixture, frontend_execution_request_ref);
+    require_browser_closure_checks(&fixture, &closure_request_ref);
+    write_task_result_candidate(&fixture, &closure_request_ref);
+    mutate_task_result_candidate(&fixture, &closure_request_ref, |result| {
+        result["status"] = json!("failed");
+        result["failure"] = json!({
+            "code": "BROWSER_LAUNCH_FAILED",
+            "summary": "The prepared Chromium runtime stopped launching."
+        });
+        let check = result
+            .pointer_mut("/verificationResults/0/browserChecks/0")
+            .expect("browser check");
+        check["status"] = json!("blocked");
+        check["blockedReason"] =
+            json!("The supplied Chromium runtime is no longer launchable on this host.");
+        check["observedOutcome"] = json!("");
+    });
+
+    let submitted = call_submit(
+        "loom.recordTaskResultFile",
+        &closure_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(submitted["state"], "auto_runnable", "{submitted:#}");
+    assert_eq!(submitted["next"]["artifactKind"], "review_result");
+    assert_ne!(
+        submitted["next"]["executionKind"],
+        "delivery_execution_repair"
+    );
+    let matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: submitted["next"]["requestRef"]
+            .as_str()
+            .expect("review requestRef")
+            .to_string(),
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read environment-blocked review matrix")
+    .fields;
+    assert!(matrices["reviewMatrixSummary.frontendQuality"]
+        .value
+        .as_array()
+        .expect("frontend quality matrix")
+        .iter()
+        .any(|item| item["browserVerification"]["environmentBlocked"] == json!(true)));
+}
+
+#[test]
 fn task_result_submit_hydrates_stale_frontend_task_guidance() {
     let fixture = Fixture::new("task-result-stale-frontend-guidance");
     let execution_request_ref =
@@ -3525,18 +4113,7 @@ fn review_execution_repair_carries_frontend_execution_guidance() {
         .as_str()
         .expect("execution requestRef")
         .to_string();
-    write_task_result_candidate(&fixture, &execution_request_ref);
-    let task_result = call_submit(
-        "loom.recordTaskResultFile",
-        &execution_request_ref,
-        fixture.root_str(),
-    );
-    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
-    assert_eq!(task_result["next"]["artifactKind"], "review_result");
-    let review_request_ref = task_result["next"]["requestRef"]
-        .as_str()
-        .expect("review requestRef")
-        .to_string();
+    let review_request_ref = complete_execution_requests_to_review(&fixture, execution_request_ref);
     write_review_result_candidate(
         &fixture,
         &review_request_ref,
@@ -3606,10 +4183,9 @@ fn review_execution_repair_carries_frontend_execution_guidance() {
     );
     let frontend_quality_template =
         &repair_fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
-    assert_eq!(
-        frontend_quality_template["surfaceDecisionContractRef"],
-        surface_contract["contractRef"]
-    );
+    assert!(frontend_quality_template
+        .get("surfaceDecisionContractRef")
+        .is_none());
     assert!(!frontend_quality_template["surfaceRegionEvidence"]
         .as_array()
         .expect("repair region evidence template")
@@ -3977,7 +4553,7 @@ fn task_result_submit_fills_single_intent_detail_verification_ids() {
         .as_str()
         .expect("result file");
     let result_rules_text = fields["outputContract.resultRules"].value.to_string();
-    assert!(result_rules_text.contains("do not leave verificationIds empty"));
+    assert!(result_rules_text.contains("Loom derives detailId and verificationIds"));
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["taskResultId"] = json!("result-single-intent-fallback");
     result["taskPlanId"] = fields["source.taskPlanId"].value.clone();
@@ -4295,10 +4871,14 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     })
     .expect("read execution result template")
     .fields;
-    assert_eq!(
-        execution_fields["outputContract.resultTemplate"].value["taskId"],
-        execution_fields["source.taskId"].value
-    );
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("taskId")
+        .is_none());
+    assert!(execution_fields["outputContract.resultTemplate"]
+        .value
+        .get("taskPlanId")
+        .is_none());
     assert!(
         execution_fields["outputContract.resultTemplate"].value["verificationResults"][0]
             .is_object()
@@ -4514,25 +5094,29 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     );
 
     assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
-    assert_eq!(task_result["next"]["kind"], "execute_task");
-    assert_eq!(
-        task_result["next"]["submitTool"],
-        "loom.recordTaskResultFile"
-    );
-    let closure_execution_ref = task_result["next"]["requestRef"]
-        .as_str()
-        .expect("closure execution requestRef")
-        .to_string();
-    write_task_result_candidate(&fixture, &closure_execution_ref);
-    let task_result = call_submit(
-        "loom.recordTaskResultFile",
-        &closure_execution_ref,
-        fixture.root_str(),
-    );
-    assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
-    assert_eq!(task_result["next"]["kind"], "write_artifact");
-    assert_eq!(task_result["next"]["artifactKind"], "review_result");
-    assert_eq!(task_result["next"]["submitTool"], "loom.reviewAcceptFile");
+    let task_result = resume_browser_runtime_action(&fixture, task_result);
+    let review_request_ref = if task_result["next"]["artifactKind"] == json!("review_result") {
+        task_result["next"]["requestRef"]
+            .as_str()
+            .expect("review requestRef")
+            .to_string()
+    } else {
+        assert_eq!(
+            task_result["next"]["kind"], "execute_task",
+            "{task_result:#}"
+        );
+        assert_eq!(
+            task_result["next"]["submitTool"],
+            "loom.recordTaskResultFile"
+        );
+        complete_execution_requests_to_review(
+            &fixture,
+            task_result["next"]["requestRef"]
+                .as_str()
+                .expect("next execution requestRef")
+                .to_string(),
+        )
+    };
     let delivery_id = request_delivery_id(fixture.root_str(), &execution_request_ref);
     let index_path = fixture
         .root
@@ -4549,23 +5133,20 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         !latest_refs.contains_key("activeTaskResultRepairActionRef"),
         "accepted repair must clear stale activeTaskResultRepairActionRef: {latest_refs:#?}"
     );
-    let review_request_ref = task_result["next"]["requestRef"]
-        .as_str()
-        .expect("review requestRef");
     let review_inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: review_request_ref.to_string(),
+        request_ref: review_request_ref.clone(),
     })
     .expect("inspect review request");
     assert_eq!(review_inspected.request_kind, "review_request");
     let review_fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
-        request_ref: review_request_ref.to_string(),
+        request_ref: review_request_ref.clone(),
         fields: vec!["outputContract.resultTemplate".to_string()],
     })
     .expect("read review result template")
     .fields;
-    let review_root = read_request_root_value(fixture.root_str(), review_request_ref);
+    let review_root = read_request_root_value(fixture.root_str(), &review_request_ref);
     assert!(
         review_root.get("reviewPacket").is_none(),
         "review request root must not expose full reviewPacket: {review_root:#}"
@@ -4582,7 +5163,7 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
         review_root.get("reviewSignals").is_none(),
         "review request root must not duplicate outputContract.reviewSignals: {review_root:#}"
     );
-    let review_request_id = request_id_from_ref(review_request_ref);
+    let review_request_id = request_id_from_ref(&review_request_ref);
     let review_storage_manifest: Value = serde_json::from_str(
         &std::fs::read_to_string(
             fixture
@@ -4598,10 +5179,14 @@ fn taskplan_accept_materializes_task_execution_and_task_result_routes_review() {
     assert!(review_manifest_refs.contains_key("reviewPacket"));
     assert!(review_manifest_refs.contains_key("changeContext"));
     assert!(review_manifest_refs.contains_key("outputContract"));
-    assert_eq!(
-        review_fields["outputContract.resultTemplate"].value["source"]["requestId"],
-        review_root["requestId"]
-    );
+    assert!(review_fields["outputContract.resultTemplate"]
+        .value
+        .get("source")
+        .is_none());
+    assert!(review_fields["outputContract.resultTemplate"]
+        .value
+        .get("reviewId")
+        .is_none());
     let review_rules = state::read_field_group(ReadFieldGroupInput {
         project_root: fixture.root_str().to_string(),
         request_ref: review_request_ref.to_string(),
@@ -4943,9 +5528,10 @@ fn taskplan_accept_materializes_persistence_engineering_quality_requirements() {
         frontend.get("engineeringQualityRequirementRefs").is_none(),
         "pure frontend task must not receive persistence quality refs: {frontend:#}"
     );
-    assert!(
-        frontend.get("apiContractRequirementRefs").is_none(),
-        "frontend API binding task must not receive API contract owner refs: {frontend:#}"
+    assert_eq!(
+        frontend["apiContractRequirementRefs"],
+        json!(["api-contract-task-frontend-001"]),
+        "frontend API binding task must receive the accepted API contract binding requirement: {frontend:#}"
     );
     let code_requirements = taskplan["codeQualityRequirements"]
         .as_array()
@@ -5064,6 +5650,7 @@ fn review_request_carries_engineering_quality_signals() {
             fixture.root_str(),
         );
         assert_eq!(result["state"], "auto_runnable", "{result:#}");
+        let result = resume_browser_runtime_action(&fixture, result);
         if result["next"]["artifactKind"] == json!("review_result") {
             review_request_ref = Some(
                 result["next"]["requestRef"]
@@ -5220,14 +5807,22 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
             .expect("parse persisted taskplan");
     let persisted_groups = persisted["groups"].as_array().expect("persisted groups");
     let final_group = persisted_groups.last().expect("final group");
-    assert_eq!(final_group["taskIds"], json!([closure_task_id]));
     assert_eq!(
         final_group["groupId"],
         json!("group-runtime-delivery-closure")
     );
-    assert!(final_group["dependsOn"]
+    let runtime_closure_group = persisted_groups
+        .iter()
+        .find(|group| group["groupId"] == json!("group-runtime-delivery-closure"))
+        .expect("runtime closure group");
+    assert_eq!(runtime_closure_group["taskIds"], json!([closure_task_id]));
+    assert_eq!(
+        runtime_closure_group["groupId"],
+        json!("group-runtime-delivery-closure")
+    );
+    assert!(runtime_closure_group["dependsOn"]
         .as_array()
-        .expect("final group dependencies")
+        .expect("runtime closure dependencies")
         .iter()
         .any(|item| item == &json!(implementation_group_id)));
     let closure_task = persisted["tasks"]
@@ -5236,7 +5831,7 @@ fn taskplan_accept_normalizes_runtime_closure_into_final_group() {
         .iter()
         .find(|task| task["taskKind"] == json!("runtime_delivery_closure"))
         .expect("persisted closure task");
-    assert_eq!(closure_task["groupId"], final_group["groupId"]);
+    assert_eq!(closure_task["groupId"], runtime_closure_group["groupId"]);
     assert!(closure_task["dependsOn"]
         .as_array()
         .map_or(true, |items| items.is_empty()));
@@ -5320,17 +5915,28 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     .fields;
     assert_eq!(
         fields["task.runtimeDeliveryRequirement.requiredCodeLevelChecks"].value[0]["checkId"],
-        json!("check-runtime-wiring")
+        json!("rd-closure-runtimesurfaces")
     );
     assert!(
         serde_json::to_string(&fields["executionRules.controlledRuntimeProbeRules"].value)
             .unwrap()
             .contains("foreground blocking verification commands")
     );
-    assert_eq!(
+    assert!(
+        fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
+            .get("requirementRef")
+            .is_none()
+    );
+    assert!(
+        fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
+            .get("checkedFields")
+            .is_none()
+    );
+    assert!(
         fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]["codeLevelChecks"]
-            [0]["checkId"],
-        json!("check-runtime-wiring")
+            [0]
+        .get("checkId")
+        .is_none()
     );
     assert!(fields["outputContract.requiredTopLevelFields"]
         .value
@@ -5355,6 +5961,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     result["changedFiles"] = json!(["src/runtime.ts"]);
     complete_architecture_quality_evidence_for_test(&mut result);
     result["verificationResults"][0]["evidenceType"] = json!("static_check");
+    complete_browser_check_evidence_for_test(&mut result);
     result["runtimeDeliveryEvidence"]["requirementRef"] = json!("wrong-runtime-ref");
     result["runtimeDeliveryEvidence"]["checkedFields"] = json!(["wrong-field"]);
     result["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"] =
@@ -5401,7 +6008,7 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
     );
     assert_eq!(
         persisted["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"],
-        json!("check-runtime-wiring")
+        json!("rd-closure-runtimesurfaces")
     );
 }
 
@@ -5488,15 +6095,16 @@ fn task_result_repair_template_restores_missing_runtime_evidence() {
     .expect("read task result repair template")
     .fields;
 
-    assert_eq!(
+    assert!(
         repair_fields["outputContract.resultTemplate"].value["runtimeDeliveryEvidence"]
-            ["codeLevelChecks"][0]["checkId"],
-        json!("check-runtime-wiring")
+            ["codeLevelChecks"][0]
+            .get("checkId")
+            .is_none()
     );
     assert!(
         serde_json::to_string(&repair_fields["repairContract.issueConflicts"].value)
             .expect("serialize issue conflicts")
-            .contains("check-runtime-wiring")
+            .contains("rd-closure-runtimesurfaces")
     );
 }
 
@@ -5942,7 +6550,10 @@ fn review_accept_approved_marks_delivery_done() {
     let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
     assert_eq!(
         latest_ref_for_phase(fixture.root_str(), &delivery_id, "reviewResult"),
-        format!(".loom/deliveries/{delivery_id}/reviews/phase-1/results/review-phase-1.json")
+        format!(
+            ".loom/deliveries/{delivery_id}/reviews/phase-1/results/{}.json",
+            request_id_from_ref(&review_request_ref)
+        )
     );
     let index_path = fixture
         .root
@@ -6069,9 +6680,10 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         template_fields["outputContract.resultTemplate"].value["nextAction"]["type"],
         "continue_to_next_phase"
     );
-    assert_eq!(
-        template_fields["outputContract.resultTemplate"].value["nextAction"]["targetPhaseId"],
-        "phase-2"
+    assert!(
+        template_fields["outputContract.resultTemplate"].value["nextAction"]
+            .get("targetPhaseId")
+            .is_none()
     );
 
     write_review_result_candidate(&fixture, &review_request_ref, "approved", "done", vec![]);
@@ -6189,9 +6801,28 @@ fn review_accept_approved_materializes_next_phase_from_preview() {
         repository_result["gate"]["gateId"],
         "phase_brainstorm_required"
     );
+    assert_eq!(repository_result["gate"]["currentBlock"], "phase_scope");
+    assert_eq!(
+        repository_result["gate"]["kind"],
+        "phase_brainstorm_continuation"
+    );
+    assert!(repository_result["prompt"]
+        .as_str()
+        .expect("phase-3 brainstorm prompt")
+        .contains("Brainstorm clarification for phase-2 is active"));
+    assert!(!repository_result["prompt"]
+        .as_str()
+        .expect("phase-3 brainstorm prompt")
+        .contains("if you want to continue"));
     let phase_2_request_ref = repository_result["requestRef"]
         .as_str()
         .expect("phase-2 brainstorm request ref");
+    let continued = continue_delivery(fixture.root_str());
+    assert_eq!(continued["state"], "user_gate", "{continued:#}");
+    assert_eq!(continued["requestRef"], phase_2_request_ref);
+    assert_eq!(continued["gate"]["gateId"], "phase_brainstorm_required");
+    assert_eq!(continued["gate"]["currentBlock"], "phase_scope");
+    assert_eq!(continued["gate"]["nextPhaseSeed"]["phaseId"], "phase-2");
     let refreshed_index_path = fixture
         .root
         .join(".loom/deliveries")
@@ -6458,7 +7089,7 @@ fn review_accept_allows_normalized_changed_file_refs() {
 }
 
 #[test]
-fn review_accept_rejects_pending_action_refs_with_wrong_route() {
+fn review_accept_derives_pending_action_refs_from_finding_routes() {
     let fixture = Fixture::new("review-pending-action-route-mismatch");
     let review_request_ref = complete_task_execution_to_review(&fixture);
     write_review_result_candidate(
@@ -6496,11 +7127,7 @@ fn review_accept_rejects_pending_action_refs_with_wrong_route() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "REVIEW_RESULT_STATUS_INCONSISTENT"
-            && issue["fieldPath"] == "pendingActions[].findingRefs"
-    }));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
 }
 
 #[test]
@@ -6640,6 +7267,7 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
         fixture.root_str(),
     );
     assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+    let task_result = resume_browser_runtime_action(&fixture, task_result);
     let review_request_ref = if task_result["next"]["artifactKind"] == json!("review_result") {
         task_result["next"]["requestRef"]
             .as_str()
@@ -6654,21 +7282,7 @@ fn review_request_uses_git_diff_refs_without_inlining_diffs() {
             .as_str()
             .expect("next execution requestRef")
             .to_string();
-        write_task_result_candidate(&fixture, &next_execution_ref);
-        let review_result = call_submit(
-            "loom.recordTaskResultFile",
-            &next_execution_ref,
-            fixture.root_str(),
-        );
-        assert_eq!(review_result["state"], "auto_runnable", "{review_result:#}");
-        assert_eq!(
-            review_result["next"]["artifactKind"], "review_result",
-            "{review_result:#}"
-        );
-        review_result["next"]["requestRef"]
-            .as_str()
-            .expect("review requestRef")
-            .to_string()
+        complete_execution_requests_to_review(&fixture, next_execution_ref)
     };
 
     let change_context = state::read_field_group(ReadFieldGroupInput {
@@ -6801,6 +7415,7 @@ fn review_flags_missing_workflow_closure_assignment_as_taskplan_repair() {
             fixture.root_str(),
         );
         assert_eq!(result["state"], "auto_runnable", "{result:#}");
+        let result = resume_browser_runtime_action(&fixture, result);
         if result["next"]["artifactKind"] == json!("review_result") {
             task_result = result;
             break;
@@ -7110,7 +7725,7 @@ fn review_accept_hydrates_execution_repair_targets_from_all_review_signals() {
     );
     assert_eq!(
         second_repair_root["repairContext"]["findingRefs"],
-        json!(["finding-first-task-only"])
+        json!(["finding-1"])
     );
 }
 
@@ -7193,14 +7808,14 @@ fn review_execution_repair_materializes_repair_task() {
     );
     assert_eq!(
         result["next"]["repairContext"]["findingRefs"],
-        json!(["finding-product"])
+        json!(["finding-1"])
     );
     let repair_request_ref = result["next"]["requestRef"].as_str().expect("requestRef");
     let repair_root = read_request_root_value(fixture.root_str(), repair_request_ref);
     assert!(repair_root["repairContext"].get("attemptCount").is_none());
     assert_eq!(
         repair_root["repairContext"]["findingRefs"],
-        json!(["finding-product"])
+        json!(["finding-1"])
     );
     let inspected_repair = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
@@ -7994,7 +8609,7 @@ fn taskplan_submit_requires_runtime_delivery_closure() {
 }
 
 #[test]
-fn taskplan_submit_rejects_runtime_closure_check_mismatch() {
+fn taskplan_submit_derives_runtime_closure_check_identity() {
     let fixture = Fixture::new("taskplan-runtime-closure-check-mismatch");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
     let taskplan_result = complete_architecture_sections(&fixture, &architecture_request_ref);
@@ -8031,11 +8646,39 @@ fn taskplan_submit_rejects_runtime_closure_check_mismatch() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert!(result["issues"].as_array().unwrap().iter().any(|issue| {
-        issue["code"] == "RUNTIME_CLOSURE_CHECK_INVALID"
-            && issue["fieldPath"] == "tasks[].runtimeDeliveryRequirement.requiredCodeLevelChecks"
-    }));
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    let taskplan_ref = result["next"]["requestRef"]
+        .as_str()
+        .expect("execution request ref");
+    let delivery_id = request_delivery_id(fixture.root_str(), taskplan_ref);
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    let persisted_ref = index["phases"][0]["latestRefs"]["taskPlan"]
+        .as_str()
+        .expect("taskplan ref");
+    let persisted: Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture.root.join(persisted_ref)).expect("read taskplan"),
+    )
+    .expect("parse taskplan");
+    let closure = persisted["tasks"]
+        .as_array()
+        .expect("tasks")
+        .iter()
+        .find(|task| task["taskKind"] == json!("runtime_delivery_closure"))
+        .expect("runtime closure task");
+    let http_probe_check = closure["runtimeDeliveryRequirement"]["requiredCodeLevelChecks"]
+        .as_array()
+        .expect("runtime closure checks")
+        .iter()
+        .find(|check| check["contractField"] == json!("httpProbes"))
+        .expect("http probe closure check");
+    assert_eq!(http_probe_check["checkId"], json!("rd-closure-httpprobes"));
 }
 
 #[test]
@@ -8655,6 +9298,13 @@ fn start_brainstorm_request(fixture: &Fixture) -> String {
 }
 
 fn start_brainstorm_candidate_write_request(fixture: &Fixture) -> String {
+    start_brainstorm_candidate_write_request_with_frontend(fixture, false)
+}
+
+fn start_brainstorm_candidate_write_request_with_frontend(
+    fixture: &Fixture,
+    include_frontend: bool,
+) -> String {
     let server = LoomMcpServer::default();
     let mut request_ref = start_brainstorm_request(fixture);
 
@@ -8695,20 +9345,31 @@ fn start_brainstorm_candidate_write_request(fixture: &Fixture) -> String {
         .as_str()
         .expect("frontend requestRef")
         .to_string();
-    request_ref = confirm_brainstorm_block(
-        &server,
-        fixture,
-        &request_ref,
-        "frontend_experience",
-        "确认工作人员后台证券账户管理页面路径。",
-        json!({
-            "required": true,
-            "surfaces": ["证券账户管理页面"],
-            "targetDiscovery": ["分页查询列表", "按账户号、姓名、证件号查询"],
-            "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
-            "mustNot": ["不能只靠内部主键触发办理动作"]
-        }),
-    )["requestRef"]
+    let frontend_action = if include_frontend {
+        confirm_brainstorm_block(
+            &server,
+            fixture,
+            &request_ref,
+            "frontend_experience",
+            "确认工作人员后台证券账户管理页面路径。",
+            json!({
+                "required": true,
+                "surfaces": ["证券账户管理页面"],
+                "targetDiscovery": ["分页查询列表", "按账户号、姓名、证件号查询"],
+                "operationPaths": ["开户从新建入口进入", "挂失补办和销户先查询并选择目标账户"],
+                "mustNot": ["不能只靠内部主键触发办理动作"]
+            }),
+        )
+    } else {
+        skip_brainstorm_block(
+            &server,
+            fixture,
+            &request_ref,
+            "frontend_experience",
+            "This submit fixture does not require a frontend experience.",
+        )
+    };
+    request_ref = frontend_action["requestRef"]
         .as_str()
         .expect("final summary requestRef")
         .to_string();
@@ -8770,6 +9431,37 @@ fn confirm_brainstorm_block(
     let result = server
         .invoke_tool("loom.brainstormConfirmBlock", Some(arguments))
         .expect("confirm brainstorm block")
+        .structured_content
+        .expect("structured content");
+    assert!(
+        result["state"] == "user_gate" || result["state"] == "auto_runnable",
+        "{result:#}"
+    );
+    result
+}
+
+fn skip_brainstorm_block(
+    server: &LoomMcpServer,
+    fixture: &Fixture,
+    request_ref: &str,
+    block: &str,
+    reason: &str,
+) -> Value {
+    run_knowledge_context(server, fixture, request_ref, block);
+    let arguments = json!({
+        "projectRoot": fixture.root_str(),
+        "requestRef": request_ref,
+        "block": block,
+        "summary": reason,
+        "skipped": true,
+        "skipReason": reason
+    })
+    .as_object()
+    .expect("arguments object")
+    .clone();
+    let result = server
+        .invoke_tool("loom.brainstormConfirmBlock", Some(arguments))
+        .expect("skip brainstorm block")
         .structured_content
         .expect("structured content");
     assert!(
@@ -8947,7 +9639,10 @@ fn architecture_write_target_path(fixture: &Fixture, request_ref: &str) -> Strin
 }
 
 fn start_existing_project_architecture_flow(fixture: &Fixture) -> String {
-    start_existing_project_architecture_flow_with_candidate(fixture, valid_candidate_json())
+    start_existing_project_architecture_flow_with_candidate(
+        fixture,
+        valid_candidate_with_frontend_json(),
+    )
 }
 
 fn start_existing_project_architecture_flow_with_candidate(
@@ -8966,7 +9661,10 @@ fn start_existing_project_architecture_flow_with_candidate(
     )
     .expect("write entrypoint");
 
-    let request_ref = start_brainstorm_candidate_write_request(fixture);
+    let request_ref = start_brainstorm_candidate_write_request_with_frontend(
+        fixture,
+        candidate.get("frontendExperience").is_some(),
+    );
     write_candidate_target(fixture, &request_ref, &candidate);
 
     let brainstorm_result = call_submit(
@@ -9862,7 +10560,7 @@ fn write_taskplan_grouped_candidates_for_workflow_closure(fixture: &Fixture, req
                     "requirementDetailRefs": [detail_id],
                     "behavior": "Verify the UI action invokes the declared API and shows success feedback.",
                     "preferredEvidence": ["runtime_api_check"],
-                    "acceptableEvidence": ["automated_test", "runtime_api_check", "manual_command_output"]
+                    "acceptableEvidence": ["automated_test", "browser_automation", "runtime_api_check", "manual_command_output"]
                 }],
                 "frontendExperienceRequirement": frontend_requirement_template,
                 "conceptRefs": [],
@@ -9937,6 +10635,8 @@ fn write_task_result_candidate(fixture: &Fixture, request_ref: &str) {
 
 fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
     complete_architecture_quality_evidence_for_test(result);
+    complete_api_contract_evidence_for_test(result);
+    complete_browser_check_evidence_for_test(result);
     if let Some(self_check) = result
         .get_mut("frontendQualitySelfCheck")
         .and_then(Value::as_object_mut)
@@ -9969,6 +10669,40 @@ fn complete_frontend_quality_token_evidence_for_test(result: &mut Value) {
         );
     }
     evidence.insert("parallelTokenSystemCreated".to_string(), json!(false));
+}
+
+fn complete_browser_check_evidence_for_test(result: &mut Value) {
+    let Some(verifications) = result
+        .get_mut("verificationResults")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for verification in verifications {
+        if verification
+            .get("browserChecks")
+            .and_then(Value::as_array)
+            .is_some_and(|checks| !checks.is_empty())
+        {
+            verification["status"] = json!("passed");
+            verification["evidenceType"] = json!("browser_automation");
+        }
+        let Some(checks) = verification
+            .get_mut("browserChecks")
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for check in checks {
+            check["status"] = json!("passed");
+            check["command"] = json!("pnpm playwright test --grep task");
+            check["attempts"] = json!(1);
+            check["artifactRefs"] = json!([]);
+            check["observedOutcome"] =
+                json!("The task-scoped browser behavior and rendered state were observed.");
+            check["blockedReason"] = Value::Null;
+        }
+    }
 }
 
 fn complete_frontend_quality_surface_evidence_for_test(
@@ -10152,9 +10886,11 @@ fn write_task_result_candidate_with_detail_evidence(
         .value
         .as_str()
         .expect("resultFile");
-    let detail_id = fields["task.requirementDetailRefs"].value[0]
-        .as_str()
-        .expect("requirement detail id");
+    let detail_id = fields
+        .get("task.requirementDetailRefs")
+        .and_then(|field| field.value.as_array())
+        .and_then(|items| items.first())
+        .and_then(Value::as_str);
     let verification_id = fields["task.verificationIntents"].value[0]["verificationId"]
         .as_str()
         .expect("verification id");
@@ -10175,9 +10911,9 @@ fn write_task_result_candidate_with_detail_evidence(
     } else {
         json!([])
     };
-    let requirement_detail_evidence = if include_detail_evidence {
+    let requirement_detail_evidence = if include_detail_evidence && detail_id.is_some() {
         json!([{
-            "detailId": detail_id,
+            "detailId": detail_id.unwrap(),
             "status": "satisfied",
             "verificationIds": [verification_id],
             "evidenceRefs": ["src/main.tsx"],
@@ -10186,6 +10922,22 @@ fn write_task_result_candidate_with_detail_evidence(
     } else {
         json!([])
     };
+    let mut browser_checks = result["verificationResults"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("browserChecks"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for check in &mut browser_checks {
+        check["status"] = json!("passed");
+        check["command"] = json!("pnpm playwright test --grep task");
+        check["attempts"] = json!(1);
+        check["artifactRefs"] = json!([]);
+        check["observedOutcome"] =
+            json!("The task-scoped browser behavior and rendered state were observed.");
+        check["blockedReason"] = Value::Null;
+    }
     result["taskResultId"] = json!("result-task-account-001");
     result["taskId"] = json!(task_id);
     result["taskPlanId"] = json!(task_plan_id);
@@ -10196,7 +10948,8 @@ fn write_task_result_candidate_with_detail_evidence(
         "verificationId": verification_id,
         "status": "passed",
         "evidenceType": "static_check",
-        "summary": verification_summary
+        "summary": verification_summary,
+        "browserChecks": browser_checks
     }]);
     result["selfRepairSummary"] = json!({
         "attempted": false,
@@ -10234,8 +10987,244 @@ fn complete_task_execution_to_review(fixture: &Fixture) -> String {
     complete_task_execution_to_review_with_candidate(fixture, valid_candidate_json())
 }
 
+fn advance_to_browser_closure_execution(
+    fixture: &Fixture,
+    mut execution_request_ref: String,
+) -> String {
+    for _ in 0..8 {
+        let fields = state::read_request_fields(ReadRequestFieldsInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: execution_request_ref.clone(),
+            fields: vec!["task.taskKind".to_string()],
+        })
+        .expect("read task kind before browser closure")
+        .fields;
+        if fields["task.taskKind"].value == json!("browser_quality_closure") {
+            return execution_request_ref;
+        }
+        write_task_result_candidate(fixture, &execution_request_ref);
+        let next = call_submit(
+            "loom.recordTaskResultFile",
+            &execution_request_ref,
+            fixture.root_str(),
+        );
+        assert_eq!(next["state"], "auto_runnable", "{next:#}");
+        let next = resume_browser_runtime_action(fixture, next);
+        assert_eq!(next["next"]["kind"], "execute_task", "{next:#}");
+        execution_request_ref = next["next"]["requestRef"]
+            .as_str()
+            .expect("next execution requestRef")
+            .to_string();
+    }
+    panic!("execution did not reach browser quality closure");
+}
+
+fn reach_browser_environment_manual_review(fixture: &Fixture) -> String {
+    let frontend_execution_request_ref =
+        start_frontend_quality_task_execution_without_architecture_quality(fixture);
+    let closure_execution_request_ref =
+        advance_to_browser_closure_execution(fixture, frontend_execution_request_ref);
+    require_browser_closure_checks(fixture, &closure_execution_request_ref);
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/runtime/browser-automation/latest.json"),
+        &json!({
+            "status": "unavailable",
+            "projectTargets": execution::browser_runtime_targets(&fixture.root),
+            "runtime": {
+                "status": "unavailable",
+                "runtimes": [{
+                    "doctorChecks": [{
+                        "status": "failed",
+                        "summary": "Chromium launch failed on the host and in the Loom-managed container."
+                    }]
+                }]
+            },
+            "runtimeEnvironments": []
+        }),
+    )
+    .expect("write unavailable browser runtime state");
+
+    let review = continue_delivery(fixture.root_str());
+    assert_eq!(review["state"], "auto_runnable", "{review:#}");
+    assert_eq!(
+        review["next"]["artifactKind"], "review_result",
+        "{review:#}"
+    );
+    let review_request_ref = review["next"]["requestRef"]
+        .as_str()
+        .expect("browser environment review requestRef")
+        .to_string();
+    let review_matrices = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: review_request_ref.clone(),
+        group_id: "review_matrices".to_string(),
+    })
+    .expect("read browser environment review matrices")
+    .fields;
+    let review_signals = &review_matrices["outputContract.reviewSignals.items"].value;
+    assert!(
+        review_signals
+            .as_array()
+            .expect("review signals")
+            .iter()
+            .any(|signal| {
+                signal["kind"] == json!("frontend_ui_quality")
+                    && signal["recommendedNextAction"] == json!("manual_review")
+                    && signal["browserVerification"]["environmentBlocked"] == json!(true)
+            }),
+        "{review_signals:#}"
+    );
+
+    write_review_result_candidate(fixture, &review_request_ref, "approved", "done", vec![]);
+    let gate = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(gate["state"], "user_gate", "{gate:#}");
+    assert_eq!(
+        gate["acceptedResponses"],
+        json!([
+            "retry_browser_environment",
+            "submit_external_browser_evidence",
+            "approve_quality_waiver"
+        ])
+    );
+    gate["requestRef"]
+        .as_str()
+        .expect("browser manual review requestRef")
+        .to_string()
+}
+
+fn require_browser_closure_checks(fixture: &Fixture, closure_execution_request_ref: &str) {
+    let delivery_id = request_delivery_id(fixture.root_str(), &closure_execution_request_ref);
+    let taskplan_ref = latest_ref_for_phase(fixture.root_str(), &delivery_id, "taskPlan");
+    let taskplan_path = fixture.root.join(taskplan_ref);
+    let mut taskplan: Value = serde_json::from_str(
+        &std::fs::read_to_string(&taskplan_path).expect("read browser task plan"),
+    )
+    .expect("parse browser task plan");
+    for profile in taskplan["browserVerificationProfiles"]
+        .as_array_mut()
+        .expect("browser verification profiles")
+    {
+        for check in profile["checks"]
+            .as_array_mut()
+            .expect("browser verification checks")
+        {
+            check["enforcement"] = json!("required");
+        }
+    }
+    write_json_atomic(&taskplan_path, &taskplan).expect("require browser closure checks");
+}
+
+fn write_browser_quality_resolution_candidate(
+    fixture: &Fixture,
+    request_ref: &str,
+    decision: &str,
+) {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec![
+            "outputContract.resultFile".to_string(),
+            "outputContract.resultTemplatesByDecision".to_string(),
+        ],
+    })
+    .expect("read browser resolution contract")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("browser resolution result file");
+    let mut candidate = fields["outputContract.resultTemplatesByDecision"].value[decision].clone();
+    candidate["userAnswer"]["text"] = json!(match decision {
+        "retry_browser_environment" => "The browser environment was repaired; retry preparation.",
+        "submit_external_browser_evidence" => {
+            "Required browser checks passed in the external CI environment."
+        }
+        _ => "Browser quality decision recorded.",
+    });
+    candidate["createdAt"] = json!("2026-07-13T16:30:00+08:00");
+    if decision == "submit_external_browser_evidence" {
+        for (index, evidence) in candidate["browserQualityResolution"]["externalEvidence"]
+            .as_array_mut()
+            .expect("external browser evidence template")
+            .iter_mut()
+            .enumerate()
+        {
+            evidence["evidenceRefs"] =
+                json!([format!("https://ci.example.test/browser/{}", index + 1)]);
+            evidence["observedOutcome"] =
+                json!("The required workflow and rendered viewport passed in CI.");
+            evidence["source"] = json!("CI Playwright job");
+        }
+    } else if decision == "approve_quality_waiver" {
+        candidate["browserQualityResolution"]["waiverReason"] = json!(
+            "The user accepts missing browser evidence for this delivery because no supported browser environment is currently available."
+        );
+    }
+    write_json_atomic(&fixture.root.join(result_file), &candidate)
+        .expect("write browser quality resolution candidate");
+}
+
+fn resume_browser_runtime_action(fixture: &Fixture, result: Value) -> Value {
+    if result["next"]["kind"] != json!("run_loom_tool")
+        || result["next"]["toolName"] != json!("loom.browserRuntimePrepare")
+    {
+        return result;
+    }
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: result["next"]["requestRef"]
+            .as_str()
+            .expect("browser runtime requestRef")
+            .to_string(),
+    })
+    .expect("inspect browser runtime request");
+    assert_eq!(inspected.request_kind, "browser_runtime_prepare_request");
+    write_json_atomic(
+        &fixture
+            .root
+            .join(".loom/runtime/browser-automation/latest.json"),
+        &json!({
+            "status": "ready",
+            "projectTargets": execution::browser_runtime_targets(&fixture.root),
+            "runtime": {"status": "ready", "runtimes": []},
+            "runtimeEnvironments": []
+        }),
+    )
+    .expect("write prepared browser runtime state");
+    let resumed = continue_delivery(fixture.root_str());
+    assert_eq!(resumed["next"]["kind"], "execute_task", "{resumed:#}");
+    let execution_request_ref = resumed["next"]["requestRef"]
+        .as_str()
+        .expect("resumed browser execution requestRef");
+    let runtime_context = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: execution_request_ref.to_string(),
+        fields: vec!["sourceContext.browserVerificationContext".to_string()],
+    })
+    .expect("read resumed browser context");
+    assert_eq!(
+        runtime_context.fields["sourceContext.browserVerificationContext"].value["runtime"]
+            ["status"],
+        "ready"
+    );
+    resumed
+}
+
 fn complete_task_execution_to_review_with_candidate(fixture: &Fixture, candidate: Value) -> String {
-    let mut execution_request_ref = start_planned_task_execution_with_candidate(fixture, candidate);
+    let execution_request_ref = start_planned_task_execution_with_candidate(fixture, candidate);
+    complete_execution_requests_to_review(fixture, execution_request_ref)
+}
+
+fn complete_execution_requests_to_review(
+    fixture: &Fixture,
+    mut execution_request_ref: String,
+) -> String {
     for _ in 0..8 {
         write_task_result_candidate(fixture, &execution_request_ref);
         let task_result = call_submit(
@@ -10244,6 +11233,7 @@ fn complete_task_execution_to_review_with_candidate(fixture: &Fixture, candidate
             fixture.root_str(),
         );
         assert_eq!(task_result["state"], "auto_runnable", "{task_result:#}");
+        let task_result = resume_browser_runtime_action(fixture, task_result);
         if task_result["next"]["artifactKind"] == json!("review_result") {
             return task_result["next"]["requestRef"]
                 .as_str()
@@ -10466,7 +11456,7 @@ fn task_result_submit_backfills_machine_owned_shape_fields() {
 }
 
 fn start_planned_task_execution(fixture: &Fixture) -> String {
-    start_planned_task_execution_with_candidate(fixture, valid_candidate_json())
+    start_planned_task_execution_with_candidate(fixture, valid_candidate_with_frontend_json())
 }
 
 fn start_frontend_quality_task_execution_without_architecture_quality(fixture: &Fixture) -> String {
@@ -11111,7 +12101,8 @@ fn architecture_section_candidate_json(fixture: &Fixture, request_ref: &str) -> 
             "engineeringBoundary": {
                 "summary": "Current phase stays inside the confirmed account-delivery boundary.",
                 "applications": [],
-                "modules": []
+                "modules": [],
+                "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module.account-service",
@@ -11616,6 +12607,30 @@ fn read_request_root_value(project_root: &str, request_ref: &str) -> Value {
         .expect("parse request file")
 }
 
+fn find_json_files_containing(root: &std::path::Path, needle: &str) -> Vec<PathBuf> {
+    fn visit(root: &std::path::Path, needle: &str, matches: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, needle, matches);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("json")
+                && std::fs::read_to_string(&path)
+                    .ok()
+                    .is_some_and(|content| content.contains(needle))
+            {
+                matches.push(path);
+            }
+        }
+    }
+
+    let mut matches = Vec::new();
+    visit(root, needle, &mut matches);
+    matches
+}
+
 fn read_group_fields_from_json(group: &Value) -> Vec<String> {
     let selectors =
         serde_json::from_value::<Vec<delivery_core::ReadSelector>>(group["selectors"].clone())
@@ -11900,6 +12915,12 @@ fn new_project_technical_baseline_candidate_json() -> Value {
                     "selection": "No external services in this phase",
                     "source": "requirement_scope",
                     "rationale": "The phase can run locally without third-party integration."
+                },
+                "qualityAutomation": {
+                    "status": "selected",
+                    "selection": "Playwright",
+                    "source": "user_confirmed",
+                    "rationale": "Provides browser workflow and rendered UI verification."
                 }
             }
         },
@@ -12179,7 +13200,7 @@ fn candidate_with_next_phase_preview() -> Value {
 }
 
 fn phase2_candidate_json() -> Value {
-    let mut candidate = valid_candidate_json();
+    let mut candidate = valid_candidate_with_frontend_json();
     candidate["requestSummary"]["title"] = json!("资金账户基础能力");
     candidate["requestSummary"]["oneLine"] = json!("实现资金账户开户、密码、存取款与账户关联");
     candidate["requestSummary"]["businessGoal"] = json!("承接证券账户闭环，完成资金账户基础能力");

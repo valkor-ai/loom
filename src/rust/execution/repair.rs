@@ -4,8 +4,8 @@ use std::{
 };
 
 use contracts::{
-    api_quality_enum_refs, build_api_quality_seed, build_ui_quality_seed, ui_quality_enum_refs,
-    ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
+    api_quality_enum_refs, api_quality_seed_read_fields, build_ui_quality_seed,
+    ui_quality_enum_refs, ui_surface_decision_candidate_template, ui_surface_decision_enum_refs,
     ArchitectureSectionGroup, PlanningGenerationContract, TaskDefinition, TaskPlan,
     TaskPlanGroupCandidateAgentWritable, TaskPlanOutlineCandidateAgentWritable, TaskPlanRun,
     TaskRunStatus, TechnicalBaselineContract, COVERAGE_ARTIFACT_TYPES,
@@ -33,8 +33,10 @@ use crate::{
         task_plan_outline_candidate_file,
     },
     task_execution::{
-        load_current_plan_and_run, runtime_delivery_requirement_read_fields, save_run,
-        task_execution_rules, task_with_phase_execution_guidance,
+        browser_verification_context, browser_verification_profile_for_task,
+        browser_verification_rules, load_current_plan_and_run,
+        runtime_delivery_requirement_read_fields, save_run, task_execution_rules,
+        task_with_phase_execution_guidance,
     },
     task_plan::update_run_summary,
     templates::{
@@ -367,6 +369,7 @@ fn materialize_delivery_execution_repair_inner(
     )?;
     let repair_origin = repair_origin(origin);
     let request_root = build_repair_execution_request(
+        root,
         &request_id,
         delivery_id,
         phase_id,
@@ -646,6 +649,7 @@ fn delivery_execution_repair_next(
 }
 
 fn build_repair_execution_request(
+    project_root: &Path,
     request_id: &str,
     delivery_id: &str,
     phase_id: &str,
@@ -658,7 +662,8 @@ fn build_repair_execution_request(
     finding_refs: Vec<String>,
     attempt_count: u32,
 ) -> Value {
-    let schema_shape = task_result_schema_shape(task);
+    let browser_profile = browser_verification_profile_for_task(task_plan, task);
+    let schema_shape = task_result_schema_shape(task, browser_profile);
     let engineering_quality_requirements = task_plan
         .engineering_quality_requirements
         .iter()
@@ -678,12 +683,12 @@ fn build_repair_execution_request(
         .cloned()
         .collect::<Vec<_>>();
     let code_quality_requirements = code_quality_requirements_for_task(task_plan, task);
-    let result_template = task_result_template_with_code_quality(
-        &task_plan.task_plan_id,
-        task,
-        &code_quality_requirements,
-    );
+    let result_template =
+        task_result_template_with_code_quality(task, &code_quality_requirements, browser_profile);
     let mut execution_rules = task_execution_rules(result_file, task, None);
+    if browser_profile.is_some() {
+        execution_rules["browserVerificationRules"] = browser_verification_rules();
+    }
     if let Some(object) = execution_rules.as_object_mut() {
         object.insert(
             "boundaryRules".to_string(),
@@ -818,6 +823,12 @@ fn build_repair_execution_request(
             "task.codeQualityRequirementRefs",
             "sourceContext.codeQualityExecutionContext",
             "executionRules.codeQualityExecutionRules",
+        ]);
+    }
+    if browser_profile.is_some() {
+        repair_core_fields.extend([
+            "sourceContext.browserVerificationContext",
+            "executionRules.browserVerificationRules",
         ]);
     }
     if execution_rules
@@ -988,10 +999,40 @@ fn build_repair_execution_request(
             code_quality_execution_context(&code_quality_requirements),
         );
     }
+    if let Some(browser_profile) = browser_profile {
+        source_context.insert(
+            "browserVerificationContext".to_string(),
+            browser_verification_repair_context(project_root, task_plan, browser_profile),
+        );
+    }
     if !source_context.is_empty() {
         root_value["sourceContext"] = Value::Object(source_context);
     }
     root_value
+}
+
+fn browser_verification_repair_context(
+    project_root: &Path,
+    task_plan: &TaskPlan,
+    browser_profile: &contracts::BrowserVerificationProfile,
+) -> Value {
+    let mut context = browser_verification_context(project_root, task_plan, browser_profile);
+    let Some(reference_plan) = context
+        .pointer_mut("/profile/referenceLoadPlan")
+        .and_then(Value::as_array_mut)
+    else {
+        return context;
+    };
+    if !reference_plan.iter().any(|item| {
+        item.get("path").and_then(Value::as_str) == Some("tech/test/playwright/reliability.md")
+    }) {
+        reference_plan.push(json!({
+            "refId": "test.pw.reliability",
+            "path": "tech/test/playwright/reliability.md",
+            "reason": "Repair flaky, retried, failed, or blocked browser verification without hiding the original signal."
+        }));
+    }
+    context
 }
 
 pub fn materialize_taskplan_repair(
@@ -1327,8 +1368,8 @@ fn materialize_taskplan_repair_action(
             },
             "outlineSchemaShape": schema_shape,
             "groupSchemaShape": group_schema,
-            "outlineResultTemplate": taskplan_outline_result_template(&request_id, delivery_id, phase_id),
-            "groupResultTemplate": taskplan_group_result_template(&request_id, delivery_id, phase_id)
+            "outlineResultTemplate": taskplan_outline_result_template(),
+            "groupResultTemplate": taskplan_group_result_template()
         },
         "requestReadPlan": {
             "groups": [
@@ -1658,11 +1699,16 @@ fn materialize_architecture_repair_action(
             technical_baseline.as_ref(),
         )
     });
-    let api_quality_seed = planning_contract
-        .as_ref()
-        .zip(technical_baseline.as_ref())
-        .map(|(planning, baseline)| build_api_quality_seed(planning, baseline))
-        .unwrap_or(Value::Null);
+    // Preserve the accepted request's derived API seed for repairs. A replacement Foundation can
+    // still change applicability; the Architecture submitter rebuilds this seed after acceptance.
+    let api_quality_fields = state::read_field_group_flat(ReadFieldGroupInput {
+        project_root: project_root.to_string(),
+        request_ref: original_request_ref.clone(),
+        group_id: "architecture_api_quality_context".to_string(),
+    })
+    .map(|result| result.fields)
+    .unwrap_or_default();
+    let api_quality_seed = api_quality_seed_from_fields(&api_quality_fields);
     let runtime_authority = if source_refs
         .get("previousRuntimeDeliveryRef")
         .and_then(Value::as_str)
@@ -1675,8 +1721,6 @@ fn materialize_architecture_repair_action(
     let section_outputs = build_architecture_repair_section_outputs(
         root,
         &request_id,
-        delivery_id,
-        phase_id,
         &frontend_experience_source,
         &context_projection,
         &api_quality_seed,
@@ -1714,6 +1758,7 @@ fn materialize_architecture_repair_action(
         "contextProjection": context_projection,
         "frontendExperienceSource": frontend_experience_source,
         "uiQualitySeed": ui_quality_seed,
+        "apiQualitySeed": api_quality_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": ARCHITECTURE_SECTION_ORDER,
@@ -1753,14 +1798,8 @@ fn materialize_architecture_repair_action(
             "schemaShape": current_output["schemaShape"].clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
-                    "schemaVersion",
-                    "requestId",
-                    "deliveryId",
-                    "phaseId",
-                    "section",
                     "status",
-                    "content",
-                    "createdAt"
+                    "content"
                 ],
                 "requiredContentKeys": required_architecture_content_keys(ArchitectureSectionGroup::Foundation)
             }
@@ -1788,7 +1827,6 @@ fn materialize_architecture_repair_action(
         }
     });
     if !api_quality_seed.is_null() {
-        request_root["apiQualitySeed"] = api_quality_seed;
         request_root["enumRefs"]["apiQuality"] = api_quality_enum_refs();
     }
     let stored = state::write_native_request(
@@ -1878,6 +1916,29 @@ fn value_field(fields: &BTreeMap<String, delivery_core::FieldReadResult>, field:
         .get(field)
         .map(|result| result.value.clone())
         .unwrap_or(Value::Null)
+}
+
+fn api_quality_seed_from_fields(
+    fields: &BTreeMap<String, delivery_core::FieldReadResult>,
+) -> Value {
+    let required = value_field(fields, "apiQualitySeed.required");
+    if required.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "required": required,
+        "qualityLevel": value_field(fields, "apiQualitySeed.qualityLevel"),
+        "selectionReason": value_field(fields, "apiQualitySeed.selectionReason"),
+        "techReferenceProfile": {
+            "loadMode": value_field(fields, "apiQualitySeed.techReferenceProfile.loadMode"),
+            "groups": {
+                "api": value_field(fields, "apiQualitySeed.techReferenceProfile.groups.api")
+            },
+            "referenceLoadPlan": value_field(fields, "apiQualitySeed.techReferenceProfile.referenceLoadPlan")
+        },
+        "interfaceContract": value_field(fields, "apiQualitySeed.interfaceContract"),
+        "generationRules": value_field(fields, "apiQualitySeed.generationRules")
+    })
 }
 
 fn repair_source_refs_from_fields(
@@ -2046,18 +2107,6 @@ fn architecture_repair_read_groups(
         "contextProjection.technicalBaseline.summary",
         "contextProjection.technicalBaseline.mustFollow",
     ]);
-    if !api_quality_seed.is_null() && matches!(section, ArchitectureSectionGroup::DomainContract) {
-        core_fields.extend([
-            "apiQualitySeed.required",
-            "apiQualitySeed.qualityLevel",
-            "apiQualitySeed.selectionReason",
-            "apiQualitySeed.techReferenceProfile.loadMode",
-            "apiQualitySeed.techReferenceProfile.groups.api",
-            "apiQualitySeed.techReferenceProfile.referenceLoadPlan",
-            "apiQualitySeed.interfaceContract",
-            "apiQualitySeed.generationRules",
-        ]);
-    }
     if include_source_ref {
         core_fields.insert(9, "repairContext.sourceRef");
     }
@@ -2113,6 +2162,15 @@ fn architecture_repair_read_groups(
             "selectors": read_selectors_value_from_paths(contract_fields)
         }),
     ];
+    if !api_quality_seed.is_null() {
+        groups.push(json!({
+            "groupId": "architecture_api_quality_context",
+            "required": matches!(section, ArchitectureSectionGroup::DomainContract),
+            "purpose": "Read the MCP-derived API quality seed only when generating or repairing the current HTTP interface section.",
+            "whenToRead": "Read when sectionState.currentSection is domain_contract, or when Loom is rebuilding a repair request that must preserve API applicability.",
+            "selectors": read_selectors_value_from_paths(api_quality_seed_read_fields())
+        }));
+    }
     if matches!(section, ArchitectureSectionGroup::FrontendExperience) {
         let mut frontend_fields = vec!["frontendExperienceSource.authorityRule"];
         for ref_key in [
@@ -2197,8 +2255,6 @@ fn has_non_null_key(value: &Value, key: &str) -> bool {
 fn build_architecture_repair_section_outputs(
     project_root: &Path,
     request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     frontend_experience_source: &Value,
     context_projection: &Value,
     api_quality_seed: &Value,
@@ -2212,16 +2268,12 @@ fn build_architecture_repair_section_outputs(
                 .join(request_id)
                 .join(format!("architecture-{}.json", section_name(*section)));
             let result_template = architecture_repair_section_result_template(
-                request_id,
-                delivery_id,
-                phase_id,
                 *section,
                 frontend_experience_source,
                 context_projection,
                 api_quality_seed
             );
-            let schema_shape =
-                architecture_repair_section_schema_shape(*section, &result_template["content"]);
+            let schema_shape = architecture_repair_section_schema_shape(&result_template["content"]);
             let mut output = json!({
                 "section": section,
                 "candidateFile": to_project_relative(project_root, &candidate_file)?,
@@ -2261,20 +2313,12 @@ fn build_architecture_repair_section_outputs(
 }
 
 fn architecture_repair_section_result_template(
-    request_id: &str,
-    delivery_id: &str,
-    phase_id: &str,
     section: ArchitectureSectionGroup,
     frontend_experience_source: &Value,
     context_projection: &Value,
     api_quality_seed: &Value,
 ) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": request_id,
-        "deliveryId": delivery_id,
-        "phaseId": phase_id,
-        "section": section,
         "status": "ready",
         "content": architecture_repair_section_content_template(
             section,
@@ -2282,29 +2326,19 @@ fn architecture_repair_section_result_template(
             context_projection,
             api_quality_seed
         ),
-        "blockedReasons": [],
-        "createdAt": "ISO-8601 datetime"
+        "blockedReasons": []
     })
 }
 
-fn architecture_repair_section_schema_shape(
-    section: ArchitectureSectionGroup,
-    content_shape: &Value,
-) -> Value {
+fn architecture_repair_section_schema_shape(content_shape: &Value) -> Value {
     json!({
-        "schemaVersion": "1.0",
-        "requestId": "string",
-        "deliveryId": "string",
-        "phaseId": "string",
-        "section": section,
         "status": "ready | blocked",
         "content": content_shape,
         "blockedReasons": [{
             "code": "string",
             "message": "string",
             "nextNode": "string"
-        }],
-        "createdAt": "string"
+        }]
     })
 }
 
@@ -2398,10 +2432,6 @@ fn architecture_repair_section_content_template(
 ) -> Value {
     match section {
         ArchitectureSectionGroup::Foundation => json!({
-            "source": {
-                "planningGenerationContractId": "",
-                "technicalBaselineId": ""
-            },
             "engineeringBoundary": {
                 "summary": "",
                 "applications": [{
@@ -2416,7 +2446,8 @@ fn architecture_repair_section_content_template(
                     "scopeRefs": [],
                     "acceptanceRefs": [],
                     "summary": ""
-                }]
+                }],
+                "applicationInteractions": []
             },
             "modules": [{
                 "moduleId": "module_1",
@@ -2614,7 +2645,6 @@ fn architecture_repair_section_content_template(
                 }],
                 "httpProbes": {
                     "previewPath": "/",
-                    "apiPaths": [],
                     "expectedStatus": "2xx_or_3xx"
                 },
                 "environment": {
@@ -2786,7 +2816,7 @@ fn section_name(section: ArchitectureSectionGroup) -> &'static str {
 
 fn required_architecture_content_keys(section: ArchitectureSectionGroup) -> Vec<&'static str> {
     match section {
-        ArchitectureSectionGroup::Foundation => vec!["source", "engineeringBoundary", "modules"],
+        ArchitectureSectionGroup::Foundation => vec!["engineeringBoundary", "modules"],
         ArchitectureSectionGroup::DomainContract => vec!["dataModel", "interfaces"],
         ArchitectureSectionGroup::Behavior => vec!["userFlows", "stateMachines"],
         ArchitectureSectionGroup::FrontendExperience => vec!["frontendExperience"],
