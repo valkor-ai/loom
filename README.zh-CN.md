@@ -41,8 +41,8 @@ Loom 会保存关键项目状态：需求、任务进度、测试结果、运行
 
 ## News
 
-- 即将推出：V-SEFM，一个面向软件交付的验证模型，正在准备中。细节后续公布。
-- 2026 年 7 月：Loom 已将 MCP runtime 从 TypeScript 迁移到 Rust，让核心更小、更快。
+- **即将推出：** V-SEFM，一个面向软件交付的验证模型，正在准备中。细节后续公布。
+- **2026 年 7 月：** Loom 已将 MCP runtime 从 TypeScript 迁移到 Rust，让核心更小、更快。
 
 ## 为什么需要 Harness？
 

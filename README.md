@@ -39,8 +39,8 @@ Use Loom when a task is too big for a single prompt: feature work, deployment, r
 
 ## News
 
-- Upcoming: V-SEFM, a verifier model for software delivery, is in progress. Details later.
-- Jul 2026: Loom moved its MCP runtime from TypeScript to Rust to make the core smaller and faster.
+- **Upcoming:** V-SEFM, a verifier model for software delivery, is in progress. Details later.
+- **Jul 2026:** Loom moved its MCP runtime from TypeScript to Rust to make the core smaller and faster.
 
 ## Why a Harness?
 
