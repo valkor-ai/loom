@@ -1,12 +1,13 @@
 # SQL Query Quality
 
-This file applies to hand-written SQL and query-builder logic.
+This file applies to portable hand-written SQL and query-builder logic. Load the selected provider query overlay when syntax, plan behavior, JSON operators, or index semantics are provider-specific.
 
 ## When To Use
 
 - The task changes SELECT/INSERT/UPDATE/DELETE statements, joins, CTEs, recursive queries, aggregations, subqueries, set operations, pagination, reporting queries, or ORM query-builder code.
 - Use this when query semantics, result shape, row count, ordering, or database-side filtering affects business behavior.
 - If the task only changes schema without changing query behavior, use `sql.schema` instead when selected.
+- Do not load this file for an entity-only or migration-only task that does not change query behavior.
 
 ## Implementation Focus
 
@@ -20,6 +21,7 @@ This file applies to hand-written SQL and query-builder logic.
 - Pagination must be deterministic. Include stable ordering and avoid unbounded result sets for user-facing list APIs.
 - Keep mutation queries idempotent where retries are possible and return/read back the state downstream code needs.
 - Parameterize user input through the framework/driver. Do not concatenate values into SQL strings.
+- Keep provider-specific operators, casts, conflict syntax, and index hints in the selected dialect overlay. Do not hide a provider dependency inside a supposedly portable query rule.
 
 ## Verification Focus
 
@@ -27,7 +29,15 @@ This file applies to hand-written SQL and query-builder logic.
 - For mutations, prove affected row count or write/read state, including no-op and invalid-input cases when the task owns them.
 - For pagination and sorting, test stable order across multiple rows with same primary sort value.
 - For recursive, aggregate, or reporting queries, include fixtures that prove the edge case the query was introduced to handle.
+- For query-plan changes, record the provider, query shape, relevant indexes, and plan evidence. Do not claim performance improvement from a query that was never executed against representative data.
 
 ## Evidence Focus
 
 - In the evidence summary, name the query decision: result shape, join cardinality, CTE, recursive guard, aggregation, EXISTS, NULL handling, pagination, parameterization, or mutation readback.
+
+## Anti-Patterns
+
+- Selecting SQL references for every backend or API task.
+- Replacing a provider-specific query with a different dialect and calling it compatible.
+- Using `EXPLAIN ANALYZE` on a mutating statement without a controlled verification boundary.
+- Treating a passing mock repository test as proof of provider-specific query behavior.
