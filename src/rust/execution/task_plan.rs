@@ -76,8 +76,13 @@ const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
     "create_entity_repository",
     "create_entity_admin_page",
     "create_entity_migration",
+    "create_or_update_persistence_query",
+    "implement_persistence_transaction",
+    "optimize_persistence_query",
+    "implement_analytical_query",
     "implement_entity_lifecycle",
     "add_or_update_tests",
+    "add_or_update_persistence_tests",
     "add_or_update_config",
     "implement_frontend_experience_contract",
     "implement_runtime_delivery_contract",
@@ -3854,6 +3859,19 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "acceptNormalization": "loom.taskPlanAcceptFile deterministically materializes top-level engineeringQualityRequirements and task engineeringQualityRequirementRefs; do not duplicate full quality requirements inside every task.",
             "taskPlanningRule": "For applicable tasks, verificationIntents should prove storage schema, data-access mapping, DTO/API contract, query/sort/filter fields, and same-provider persistence behavior stay aligned."
         },
+        "codeReferenceRules": {
+            "authority": "MCP derives task-scoped code reference groups from TechnicalBaseline stack signals and implementationActions; agents must not author referenceLoadPlan or reference group paths.",
+            "persistenceActions": {
+                "schema": ["create_or_update_entity", "create_or_update_persistence", "create_entity_migration", "create_entity_crud"],
+                "query": ["create_entity_repository", "create_entity_crud", "create_or_update_persistence_query", "optimize_persistence_query", "implement_analytical_query"],
+                "transaction": ["create_or_update_persistence", "create_entity_repository", "create_entity_crud", "create_or_update_persistence_query", "implement_persistence_transaction"],
+                "performance": ["optimize_persistence_query"],
+                "analytics": ["implement_analytical_query"],
+                "persistenceTest": ["add_or_update_persistence_tests"]
+            },
+            "dialectRule": "When the accepted persistence provider is MySQL or PostgreSQL, MCP adds only the provider overlay matching the assigned persistence subject. MariaDB is not silently treated as MySQL.",
+            "nonSelectionRule": "Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
+        },
         "architectureQualityRules": {
             "requirementSource": "outputContract.architectureQualityRequirementTemplate",
             "architectureQualitySource": "sourceRefs.architectureArtifactContractRef#/architectureQuality",
@@ -4447,6 +4465,11 @@ fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateEntityMigration
                     | ImplementationAction::CreateEntityRepository
                     | ImplementationAction::CreateEntityCrud
+                    | ImplementationAction::CreateOrUpdatePersistenceQuery
+                    | ImplementationAction::ImplementPersistenceTransaction
+                    | ImplementationAction::OptimizePersistenceQuery
+                    | ImplementationAction::ImplementAnalyticalQuery
+                    | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
 }

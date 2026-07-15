@@ -68,6 +68,7 @@ pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
             "Use codeStackSignals as derived signals, then select code references by current task scope.",
             "Read only files listed in techReferenceProfile.referenceLoadPlan; selected code groups are semantic evidence labels, not path maps.",
             "Do not attach SQL references to every backend task merely because a database exists; attach SQL only for schema, migration, query, reporting, dialect, or optimization work.",
+            "MySQL and PostgreSQL overlays are selected only from accepted dialect signals plus explicit persistence task ownership; do not load database administration or unrelated provider material.",
             "For JVM production source, derive package names from existing repository package roots, build group metadata, or confirmed organization/project identity; never create com.example/org.example/com.company/demo/sample package roots.",
             "If a stack signal is low confidence or unmapped, preserve existing repository style and verification instead of guessing a nearby language profile."
         ]
@@ -100,10 +101,14 @@ pub fn code_quality_enum_refs() -> Value {
                 "php": ["core", "laravel", "symfony", "async", "testing"],
                 "rust": ["core", "ownership", "traits", "errors", "async", "testing"],
                 "swift": ["core", "swiftui", "concurrency", "protocols", "memory", "testing"],
-                "sql": ["schema", "queries", "dialects", "optimization", "windows"]
+                "sql": [
+                    "schema", "queries", "dialects", "optimization", "windows",
+                    "mysql.schema", "mysql.queries", "mysql.transactions",
+                    "postgresql.schema", "postgresql.queries", "postgresql.transactions"
+                ]
             }
         },
-        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
+        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -483,6 +488,7 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
             &["postgres", "postgresql"],
         );
         push_if_contains(&haystack, &mut dialects, "mysql", &["mysql"]);
+        push_if_contains(&haystack, &mut dialects, "mariadb", &["mariadb"]);
         push_if_contains(&haystack, &mut dialects, "sqlite", &["sqlite"]);
         push_if_contains(
             &haystack,
@@ -578,6 +584,25 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     }
     if task_owns_persistence(task) {
         push_unique(&mut tags, "persistence");
+        push_unique(&mut tags, "sql");
+    }
+    if task_owns_sql_schema(task) {
+        push_unique(&mut tags, "sql_schema");
+    }
+    if task_owns_sql_query(task) {
+        push_unique(&mut tags, "sql_query");
+    }
+    if task_owns_sql_transaction(task) {
+        push_unique(&mut tags, "sql_transaction");
+    }
+    if task_owns_sql_performance(task) {
+        push_unique(&mut tags, "performance");
+    }
+    if task_owns_sql_analytics(task) {
+        push_unique(&mut tags, "analytics");
+    }
+    if task_owns_sql_tests(task) {
+        push_unique(&mut tags, "sql_test");
         push_unique(&mut tags, "sql");
     }
     if task_is_backend_task(task) {
@@ -1317,9 +1342,16 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("sql") => {
-            if has_focus("persistence") {
+            let task_scoped_sql = has_focus("sql_schema")
+                || has_focus("sql_query")
+                || has_focus("sql_transaction")
+                || has_focus("sql_test");
+            if has_focus("sql_schema") || (has_focus("persistence") && !task_scoped_sql) {
                 items.insert("schema".to_string());
                 items.insert("dialects".to_string());
+            }
+            if has_focus("sql_query") {
+                items.insert("queries".to_string());
             }
             if has_focus("performance") {
                 items.insert("optimization".to_string());
@@ -1327,8 +1359,56 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             if has_focus("analytics") {
                 items.insert("windows".to_string());
             }
-            if has_focus("api") || has_focus("persistence") || has_focus("analytics") {
+            if has_focus("sql_test") {
+                items.insert("schema".to_string());
                 items.insert("queries".to_string());
+                items.insert("dialects".to_string());
+            }
+            if has_focus("sql_query") || has_focus("analytics") {
+                items.insert("queries".to_string());
+            }
+            if has_focus("sql_transaction") {
+                items.insert("dialects".to_string());
+            }
+            if has_focus("sql_schema")
+                || has_focus("sql_query")
+                || has_focus("sql_transaction")
+                || has_focus("sql_test")
+            {
+                if signal.dialects.iter().any(|dialect| dialect == "mysql") {
+                    if has_focus("sql_schema") || has_focus("sql_test") {
+                        items.insert("mysql.schema".to_string());
+                    }
+                    if has_focus("sql_query")
+                        || has_focus("performance")
+                        || has_focus("analytics")
+                        || has_focus("sql_test")
+                    {
+                        items.insert("mysql.queries".to_string());
+                    }
+                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                        items.insert("mysql.transactions".to_string());
+                    }
+                }
+                if signal
+                    .dialects
+                    .iter()
+                    .any(|dialect| dialect == "postgresql")
+                {
+                    if has_focus("sql_schema") || has_focus("sql_test") {
+                        items.insert("postgresql.schema".to_string());
+                    }
+                    if has_focus("sql_query")
+                        || has_focus("performance")
+                        || has_focus("analytics")
+                        || has_focus("sql_test")
+                    {
+                        items.insert("postgresql.queries".to_string());
+                    }
+                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                        items.insert("postgresql.transactions".to_string());
+                    }
+                }
             }
         }
         _ => {}
@@ -1614,6 +1694,25 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
             ),
         };
     }
+    if group_key == "sql" {
+        if let Some((provider, subject)) = group.split_once('.') {
+            if matches!(provider, "mysql" | "postgresql")
+                && matches!(subject, "schema" | "queries" | "transactions")
+            {
+                let label = match provider {
+                    "mysql" => "MySQL",
+                    _ => "PostgreSQL",
+                };
+                return ReferenceLoadPlanItem {
+                    ref_id: format!("tech.code.sql.{provider}.{subject}"),
+                    path: format!("tech/code/sql/{provider}/{subject}.md"),
+                    reason: format!(
+                        "Selected {label} {subject} dialect reference for this persistence task."
+                    ),
+                };
+            }
+        }
+    }
     ReferenceLoadPlanItem {
         ref_id: format!("tech.code.{group_key}.{group}"),
         path: format!("tech/code/{group_key}/{group}.md"),
@@ -1641,10 +1740,13 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
 
 fn task_owns_test_implementation(task: &TaskDefinition) -> bool {
     matches!(task.task_kind, TaskKind::VerificationIncrement)
-        || task
-            .implementation_actions
-            .iter()
-            .any(|action| matches!(action, ImplementationAction::AddOrUpdateTests))
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::AddOrUpdateTests
+                    | ImplementationAction::AddOrUpdatePersistenceTests
+            )
+        })
 }
 
 fn task_is_backend_task(task: &TaskDefinition) -> bool {
@@ -1671,6 +1773,11 @@ fn task_is_backend_task(task: &TaskDefinition) -> bool {
                 | ImplementationAction::WireReferenceInApiOrUi
                 | ImplementationAction::CreateEntityCrud
                 | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::ImplementPersistenceTransaction
+                | ImplementationAction::OptimizePersistenceQuery
+                | ImplementationAction::ImplementAnalyticalQuery
+                | ImplementationAction::AddOrUpdatePersistenceTests
                 | ImplementationAction::ImplementEntityLifecycle
                 | ImplementationAction::RefactorSupportingCode
         )
@@ -1711,8 +1818,70 @@ fn task_owns_persistence(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateEntityMigration
                     | ImplementationAction::CreateEntityRepository
                     | ImplementationAction::CreateEntityCrud
+                    | ImplementationAction::CreateOrUpdatePersistenceQuery
+                    | ImplementationAction::ImplementPersistenceTransaction
+                    | ImplementationAction::OptimizePersistenceQuery
+                    | ImplementationAction::ImplementAnalyticalQuery
+                    | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
+}
+
+fn task_owns_sql_schema(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::DataModelIncrement)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::CreateOrUpdateEntity
+                    | ImplementationAction::CreateOrUpdatePersistence
+                    | ImplementationAction::CreateEntityMigration
+                    | ImplementationAction::CreateEntityCrud
+            )
+        })
+}
+
+fn task_owns_sql_query(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::OptimizePersistenceQuery
+                | ImplementationAction::ImplementAnalyticalQuery
+        )
+    })
+}
+
+fn task_owns_sql_transaction(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdatePersistence
+                | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::ImplementPersistenceTransaction
+        )
+    })
+}
+
+fn task_owns_sql_performance(task: &TaskDefinition) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::OptimizePersistenceQuery))
+}
+
+fn task_owns_sql_analytics(task: &TaskDefinition) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementAnalyticalQuery))
+}
+
+fn task_owns_sql_tests(task: &TaskDefinition) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::AddOrUpdatePersistenceTests))
 }
 
 fn dedupe_signals(signals: Vec<CodeStackSignal>) -> Vec<CodeStackSignal> {
@@ -2989,5 +3158,96 @@ mod tests {
         let seed = build_code_quality_seed(&baseline);
         assert_eq!(seed["required"], false);
         assert_eq!(seed["unmappedSignals"][0]["confidence"], "low");
+    }
+
+    #[test]
+    fn mysql_schema_task_loads_only_schema_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "MySQL 8"}}
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityMigration,
+            ],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"schema".to_string()));
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"mysql.schema".to_string()));
+        assert!(!sql.contains(&"queries".to_string()));
+        assert!(!sql.contains(&"mysql.queries".to_string()));
+        assert!(!sql.contains(&"mysql.transactions".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.mysql.schema"
+                && item.path == "tech/code/sql/mysql/schema.md"
+        }));
+    }
+
+    #[test]
+    fn postgresql_query_task_loads_query_and_transaction_overlays_without_schema() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "PostgreSQL 16"}}
+        }));
+        let task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistenceQuery],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"queries".to_string()));
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"postgresql.queries".to_string()));
+        assert!(sql.contains(&"postgresql.transactions".to_string()));
+        assert!(!sql.contains(&"schema".to_string()));
+        assert!(!sql.contains(&"postgresql.schema".to_string()));
+    }
+
+    #[test]
+    fn generic_tests_do_not_load_sql_references() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "MySQL"}}
+        }));
+        let task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        assert!(code_reference_selection_for_task(&baseline, &task).is_none());
+    }
+
+    #[test]
+    fn mariadb_does_not_silently_load_mysql_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "MariaDB"}}
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdateEntity],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"schema".to_string()));
+        assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
+    }
+
+    #[test]
+    fn baseline_seed_does_not_load_vendor_overlays() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "PostgreSQL"}}
+        }));
+        let seed = build_code_quality_seed(&baseline);
+        let load_plan = seed
+            .pointer("/techReferenceProfile/referenceLoadPlan")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert!(!load_plan.iter().any(|item| {
+            item.get("path")
+                .and_then(Value::as_str)
+                .is_some_and(|path| path.contains("/mysql/") || path.contains("/postgresql/"))
+        }));
     }
 }
