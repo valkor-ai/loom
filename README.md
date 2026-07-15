@@ -39,6 +39,11 @@ Coding agents can write code. Loom helps them keep the delivery promise from ide
 
 Use Loom when a request is larger than a one-shot edit: a feature needs clarification, architecture, task splitting, implementation evidence, review, repair, preview, deployment, or a clean handoff.
 
+## News
+
+- Upcoming: We are preparing V-SEFM, a verification model for software engineering delivery. More details will be shared later.
+- Jul 2026: Loom moved its MCP runtime from TypeScript to Rust for a smaller, faster, and more reliable delivery core.
+
 ## Why a Harness?
 
 Website and app generation is becoming table stakes. The harder problem is reliable delivery: keeping the agent aligned after compaction, preserving requirements across many turns, verifying its own work without bias, repairing failures, and resuming from the right step after an interruption.
@@ -52,10 +57,6 @@ Goal drift | Confirmed scope, architecture contracts, task plans, and compact co
 Self-check bias | Review, verification, repair requests, and evidence records separate implementation from validation.
 Repeated context loading | Project summaries, task graphs, backend/runtime state, test results, and deployment evidence reduce repeated whole-repo reads.
 Handoff gaps | Delivery reports, preview checks, logs, and repair history make the final state inspectable by humans and other agents.
-
-The hard part is the harness around the model: durable state, scoped work, routing, verification, recovery, and human-readable evidence. Loom uses dynamic workflows as the operating pattern, then lifts them to the project level so delivery can survive interruptions, compaction, agent switches, and future handoffs.
-
-That is where Loom is different from prompt files, one-off workflows, and single-agent scripts: it stores delivery state in `.loom/`, exposes an MCP tool protocol to coding agents, and makes verification, repair, preview, and handoff first-class protocol steps.
 
 ## From Demo to Delivery
 
