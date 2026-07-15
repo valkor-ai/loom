@@ -1756,6 +1756,14 @@ fn derived_ui_ownership_dimensions(
         dimensions.push("action".to_string());
         dimensions.push("integration_feedback".to_string());
     }
+    if implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::ImplementFrontendFrameworkVersionFeature
+        )
+    }) {
+        dimensions.push("surface".to_string());
+    }
     if task_kind_is_frontend(task_kind)
         || implementation_actions.iter().any(|action| {
             matches!(
@@ -1767,6 +1775,7 @@ fn derived_ui_ownership_dimensions(
                     | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementServerRenderedComponent
                     | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
@@ -3971,6 +3980,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "frontendPerformance": ["optimize_frontend_performance"],
                 "serverRenderedComponent": ["implement_server_rendered_component"],
                 "serverMutation": ["implement_server_mutation"],
+                "frontendFrameworkVersionFeature": ["implement_frontend_framework_version_feature"],
                 "security": ["implement_authentication_or_authorization"],
                 "async": ["implement_async_processing"],
                 "cache": ["implement_cache_policy"],
@@ -3988,6 +3998,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "frontendPerformance": "Use optimize_frontend_performance only for a task that owns a measurable client rendering, rebuild, list, image, animation, memory, startup, or interaction-latency risk and its verification evidence.",
                 "serverRenderedComponent": "Use implement_server_rendered_component only for a task that owns a framework server-rendered component boundary, server/client composition, streaming, hydration, or serializable handoff.",
                 "serverMutation": "Use implement_server_mutation only for a task that owns a framework server-side form/action mutation, its authorization and validation, result state, and cache/readback reconciliation.",
+                "frontendFrameworkVersionFeature": "Use implement_frontend_framework_version_feature only for a frontend task that intentionally owns an API available from the accepted framework version and whose implementation or fallback differs from the repository's baseline patterns.",
                 "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
@@ -4901,6 +4912,7 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementServerRenderedComponent
                     | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -5710,6 +5722,11 @@ mod tests {
         assert_eq!(
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["serverMutation"],
             json!(["implement_server_mutation"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]
+                ["frontendFrameworkVersionFeature"],
+            json!(["implement_frontend_framework_version_feature"])
         );
     }
 

@@ -1733,25 +1733,49 @@ fn frontend_reference_items_for_signal(
         groups.insert("nextjs".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "react") {
-        let items = groups.entry("react".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("hooks".to_string());
-        items.insert("state".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        let nextjs_owns_framework_boundary = signal.frameworks.iter().any(|item| item == "nextjs");
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if task_has_action(task, ImplementationAction::ImplementReactiveClientFlow) {
+            items.insert("hooks".to_string());
+        }
+        if task_uses_api_client_binding(task)
+            || task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
+            items.insert("state".to_string());
+        }
+        if task_owns_test_implementation(task) && !nextjs_owns_framework_boundary {
             items.insert("testing".to_string());
         }
-        if has_focus("performance") {
+        if task_has_action(task, ImplementationAction::OptimizeFrontendPerformance)
+            && !nextjs_owns_framework_boundary
+        {
             items.insert("performance".to_string());
         }
-        if has_focus("server_components") {
+        if signal
+            .frameworks
+            .iter()
+            .any(|item| item == "react_server_components")
+            && task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+            && !nextjs_owns_framework_boundary
+        {
             items.insert("server-components".to_string());
         }
-        if has_focus("react19") {
+        if signal.frameworks.iter().any(|item| item == "react19")
+            && task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+            )
+            && !nextjs_owns_framework_boundary
+        {
             items.insert("react19".to_string());
         }
-        if has_focus("migration") {
+        if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
         }
+        groups.insert("react".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "vue") {
         let items = groups.entry("vue".to_string()).or_default();
@@ -1938,6 +1962,7 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementServerRenderedComponent
                     | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -1958,6 +1983,7 @@ fn task_owns_frontend_implementation(task: &TaskDefinition) -> bool {
                 | ImplementationAction::OptimizeFrontendPerformance
                 | ImplementationAction::ImplementServerRenderedComponent
                 | ImplementationAction::ImplementServerMutation
+                | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                 | ImplementationAction::WireReferenceInApiOrUi
                 | ImplementationAction::CreateEntityAdminPage
                 | ImplementationAction::ImplementFrontendExperienceContract
@@ -2270,6 +2296,18 @@ fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<S
             &["react", "next", "nextjs", "next js"],
         );
     }
+    push_if_contains(haystack, frameworks, "react19", &["react 19", "react19"]);
+    push_if_contains(
+        haystack,
+        frameworks,
+        "react_server_components",
+        &[
+            "react server component",
+            "server components",
+            " rsc ",
+            "app router",
+        ],
+    );
     push_if_contains(haystack, frameworks, "vue", &["vue", "nuxt"]);
     push_if_contains(haystack, frameworks, "nuxt", &["nuxt"]);
     push_if_contains(haystack, frameworks, "angular", &["angular", "ngrx"]);
@@ -2533,6 +2571,7 @@ mod tests {
             vec![
                 ImplementationAction::CreateOrUpdateUiFlow,
                 ImplementationAction::WireReferenceInApiOrUi,
+                ImplementationAction::ImplementReactiveClientFlow,
             ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
@@ -2624,7 +2663,7 @@ mod tests {
         assert!(selection.unmapped_signals.is_empty());
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
-            item.ref_id == "fe.react.state" && item.path == "tech/frontend/react/state.md"
+            item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
         }));
     }
 
@@ -2632,15 +2671,22 @@ mod tests {
     fn react_specialized_refs_are_task_scoped() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "React + TypeScript"}
+                "web": {"selection": "React 19 + React Server Components + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::MigrateFrameworkImplementation,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::OptimizeFrontendPerformance,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Migrate a class component to hooks and add React 19 useActionState optimistic form state with server components while optimizing table performance.".to_string();
+        task.objective =
+            "Implement the accepted React modernization and rendering boundary.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let react_refs = &selection.reference_groups["react"];
         assert!(react_refs.contains(&"migration".to_string()));
@@ -2658,6 +2704,60 @@ mod tests {
             item.ref_id == "fe.react.server-components"
                 && item.path == "tech/frontend/react/server-components.md"
         }));
+    }
+
+    #[test]
+    fn react_specialized_references_ignore_prose_and_require_stack_capabilities() {
+        let specialized_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "React 19 + React Server Components + TypeScript"}}
+        }));
+        let react18_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "React 18 + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Migrate classes to hooks, add React 19 useActionState, Server Components, memo performance, and tests.".to_string();
+        let mut unsupported = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+                ImplementationAction::ImplementServerRenderedComponent,
+            ],
+        );
+        unsupported.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&specialized_baseline, &prose_only).unwrap();
+        let unsupported_selection =
+            code_reference_selection_for_task(&react18_baseline, &unsupported).unwrap();
+        let tests = code_reference_selection_for_task(&react18_baseline, &testing).unwrap();
+
+        for specialized in [
+            "hooks",
+            "state",
+            "performance",
+            "server-components",
+            "react19",
+            "migration",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["react"].contains(&specialized.to_string()));
+        }
+        assert!(!unsupported_selection.reference_groups["react"]
+            .contains(&"server-components".to_string()));
+        assert!(!unsupported_selection.reference_groups["react"].contains(&"react19".to_string()));
+        assert!(tests.reference_groups["react"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["react"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["react"].contains(&"hooks".to_string()));
+        assert!(!tests.reference_groups["react"].contains(&"state".to_string()));
     }
 
     #[test]
@@ -2721,6 +2821,9 @@ mod tests {
         assert!(next_refs.contains(&"data".to_string()));
         assert!(next_refs.contains(&"server-components".to_string()));
         assert!(next_refs.contains(&"runtime".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"server-components".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"performance".to_string()));
+        assert!(!selection.reference_groups["react"].contains(&"testing".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.next.actions" && item.path == "tech/frontend/nextjs/actions.md"

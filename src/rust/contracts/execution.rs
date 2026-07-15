@@ -45,6 +45,7 @@ pub enum ImplementationAction {
     OptimizeFrontendPerformance,
     ImplementServerRenderedComponent,
     ImplementServerMutation,
+    ImplementFrontendFrameworkVersionFeature,
     CreateOrUpdateStateMachine,
     CreateOrUpdateBusinessRule,
     AddReferenceField,

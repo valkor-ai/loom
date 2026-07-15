@@ -1398,6 +1398,7 @@ fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
                     | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementServerRenderedComponent
                     | ImplementationAction::ImplementServerMutation
+                    | ImplementationAction::ImplementFrontendFrameworkVersionFeature
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })

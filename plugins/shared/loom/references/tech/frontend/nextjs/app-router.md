@@ -57,7 +57,7 @@ Define middleware/auth redirects without loops and retain a safe intended destin
 
 ## Route Handlers
 
-Route handlers are server HTTP interfaces. Implement only AAC-owned method/path/schemas/status/errors/auth/exposure. Validate inputs, scope identity/tenant, map failures, and keep persistence/business logic in the accepted application boundary.
+Route handlers are server HTTP interfaces. Implement only the accepted method, path, schemas, statuses, errors, authorization, and exposure behavior. Validate inputs, scope identity/tenant, map failures, and keep persistence/business logic in the accepted application boundary.
 
 Avoid creating route handlers solely to proxy an existing same-origin backend unless architecture requires a BFF. Preserve cookies, streaming, caching, headers, and body limits deliberately.
 

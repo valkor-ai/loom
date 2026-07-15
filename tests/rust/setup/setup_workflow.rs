@@ -1467,7 +1467,8 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
         let is_angular = frontend_profile == Some("angular");
         let is_flutter = frontend_profile == Some("flutter");
         let is_nextjs = frontend_profile == Some("nextjs");
-        let is_enhanced_frontend = is_angular || is_flutter || is_nextjs;
+        let is_react = frontend_profile == Some("react");
+        let is_enhanced_frontend = is_angular || is_flutter || is_nextjs || is_react;
         let minimum_lines = if is_enhanced_frontend { 65 } else { 25 };
         assert!(
             line_count >= minimum_lines,
@@ -1588,6 +1589,31 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let next_testing = fs::read_to_string(frontend_root.join("nextjs/testing.md")).unwrap();
     assert!(next_testing.contains("production `next build`"));
     assert!(next_testing.contains("Server Action"));
+    let react_core = fs::read_to_string(frontend_root.join("react/core.md")).unwrap();
+    assert!(react_core.contains("stable domain keys"));
+    assert!(react_core.contains("dangerouslySetInnerHTML"));
+    let react_hooks = fs::read_to_string(frontend_root.join("react/hooks.md")).unwrap();
+    assert!(react_hooks.contains("AbortController"));
+    assert!(react_hooks.contains("useSyncExternalStore"));
+    let react_state = fs::read_to_string(frontend_root.join("react/state.md")).unwrap();
+    assert!(react_state.contains("TanStack Query"));
+    assert!(react_state.contains("query keys"));
+    let react_migration = fs::read_to_string(frontend_root.join("react/migration.md")).unwrap();
+    assert!(react_migration.contains("componentDidCatch"));
+    assert!(react_migration.contains("behavior assertions proving parity"));
+    let react_performance = fs::read_to_string(frontend_root.join("react/performance.md")).unwrap();
+    assert!(react_performance.contains("representative workload"));
+    assert!(react_performance.contains("Virtualized rows"));
+    let react_19 = fs::read_to_string(frontend_root.join("react/react19.md")).unwrap();
+    assert!(react_19.contains("useActionState"));
+    assert!(react_19.contains("stable operation identity"));
+    let react_server =
+        fs::read_to_string(frontend_root.join("react/server-components.md")).unwrap();
+    assert!(react_server.contains("Serializable Handoff"));
+    assert!(react_server.contains("server-only"));
+    let react_testing = fs::read_to_string(frontend_root.join("react/testing.md")).unwrap();
+    assert!(react_testing.contains("userEvent"));
+    assert!(react_testing.contains("Strict Mode"));
 }
 
 #[test]
