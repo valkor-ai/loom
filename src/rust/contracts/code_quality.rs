@@ -1473,19 +1473,27 @@ fn backend_reference_items_for_signal(
         }
     }
     if signal.frameworks.iter().any(|item| item == "django") {
-        let items = groups.entry("django".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) && stack_frameworks.contains("django_rest_framework") {
             items.insert("views".to_string());
             items.insert("serializers".to_string());
         }
-        if has_focus("persistence") || has_focus("performance") {
+        if task_owns_persistence(task) {
             items.insert("models".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("django".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "fastapi") {
@@ -3459,6 +3467,64 @@ mod tests {
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.django.models" && item.path == "tech/backend/django/models.md"
         }));
+    }
+
+    #[test]
+    fn django_rest_framework_references_require_drf_stack_selection() {
+        let django_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django"}
+            }
+        }));
+        let drf_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django"},
+                "apiFramework": {"selection": "Django REST Framework"}
+            }
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let django = code_reference_selection_for_task(&django_baseline, &api_task).unwrap();
+        let drf = code_reference_selection_for_task(&drf_baseline, &api_task).unwrap();
+
+        assert!(!django
+            .reference_groups
+            .get("django")
+            .is_some_and(|items| items.contains(&"views".to_string())));
+        assert!(!django
+            .reference_groups
+            .get("django")
+            .is_some_and(|items| items.contains(&"serializers".to_string())));
+        assert!(drf.reference_groups["django"].contains(&"views".to_string()));
+        assert!(drf.reference_groups["django"].contains(&"serializers".to_string()));
+    }
+
+    #[test]
+    fn django_security_and_testing_references_require_owned_actions() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + Django + Django REST Framework"}
+            }
+        }));
+        let security_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+        let testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+
+        let security = code_reference_selection_for_task(&baseline, &security_task).unwrap();
+        let testing = code_reference_selection_for_task(&baseline, &testing_task).unwrap();
+
+        assert!(security.reference_groups["django"].contains(&"security".to_string()));
+        assert!(!security.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(testing.reference_groups["django"].contains(&"testing".to_string()));
+        assert!(!testing.reference_groups["django"].contains(&"security".to_string()));
     }
 
     #[test]

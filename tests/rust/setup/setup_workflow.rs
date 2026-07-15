@@ -1305,7 +1305,8 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str());
         let is_spring_boot = backend_profile == Some("springboot");
-        let minimum_lines = if matches!(backend_profile, Some("springboot" | "fastapi")) {
+        let minimum_lines = if matches!(backend_profile, Some("springboot" | "fastapi" | "django"))
+        {
             65
         } else {
             25
@@ -1379,6 +1380,22 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let fastapi_migration = fs::read_to_string(backend_root.join("fastapi/migration.md")).unwrap();
     assert!(fastapi_migration.contains("ViewSet"));
     assert!(fastapi_migration.contains("parity"));
+    let django_models = fs::read_to_string(backend_root.join("django/models.md")).unwrap();
+    assert!(django_models.contains("select_related"));
+    assert!(django_models.contains("apps.get_model"));
+    let django_serializers =
+        fs::read_to_string(backend_root.join("django/serializers.md")).unwrap();
+    assert!(django_serializers.contains("SerializerMethodField"));
+    assert!(django_serializers.contains("partial=True"));
+    let django_views = fs::read_to_string(backend_root.join("django/views.md")).unwrap();
+    assert!(django_views.contains("get_queryset"));
+    assert!(django_views.contains("object-level checks"));
+    let django_security = fs::read_to_string(backend_root.join("django/security.md")).unwrap();
+    assert!(django_security.contains("SimpleJWT"));
+    assert!(django_security.contains("CSRF"));
+    let django_testing = fs::read_to_string(backend_root.join("django/testing.md")).unwrap();
+    assert!(django_testing.contains("TransactionTestCase"));
+    assert!(django_testing.contains("assertNumQueries"));
 
     let mut frontend_files = Vec::new();
     collect_markdown_files(&frontend_root, &mut frontend_files);

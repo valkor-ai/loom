@@ -1,30 +1,83 @@
-# Django REST Framework Serializer Quality
+# Django REST Framework Serializers
 
-This file applies DRF serializer rules to task-owned request validation and response shaping.
+DRF serializers define API input validation and response representation. They do not own cross-entry-point business invariants, authorization, transaction policy, or unbounded database work.
 
 ## When To Use
 
-- The task changes DRF serializers, input validation, nested serializer behavior, read/write field split, computed fields, create/update overrides, or representation shape.
-- Use this when user input, API output, or model-to-DTO mapping affects correctness.
-- If the task only changes Django models or raw views with no DRF serialization boundary, do not load this serializer reference.
+Use this reference for DRF request/response serializers, `ModelSerializer`, field/object validation, nested representation or writes, partial updates, related fields, computed output, and serializer-driven create/update behavior.
 
 ## Implementation Focus
 
-- Keep request and response intent explicit. Use separate serializers when create/update input differs from read output or when sensitive/internal fields must never serialize.
-- Use `read_only_fields`, write-only fields, `source`, and related-field serializers deliberately. Do not expose model internals just because `ModelSerializer` can infer them.
-- Put syntax and cross-field input validation in `validate_<field>` and `validate`; keep business invariants that must hold outside the API in the domain/service/model layer.
-- For nested writes, make create/update ownership explicit and transactional. Do not silently replace related rows unless the API contract says so.
-- Treat `SerializerMethodField` as a computed read model, not a place for unbounded database work. Pair it with queryset optimization or precomputed annotations.
-- Use serializer context for request/user-dependent behavior instead of global state.
-- Keep partial update behavior intentional: `required`, defaults, omitted fields, and `partial=True` must match the API contract.
+### Separate Directional Contracts
+
+Use separate create, update/patch, list, and detail serializers when fields, trust, cost, or representation differ. Do not expose every model field through `fields = "__all__"` on a public API.
+
+```python
+class OrderCreateSerializer(serializers.Serializer):
+    supplier_name = serializers.CharField(max_length=160, trim_whitespace=True)
+    lines = OrderLineCreateSerializer(many=True, allow_empty=False)
+
+
+class OrderReadSerializer(serializers.ModelSerializer):
+    requester_name = serializers.CharField(source="requester.username", read_only=True)
+
+    class Meta:
+        model = Order
+        fields = ["id", "supplier_name", "status", "requester_name", "requested_at"]
+        read_only_fields = fields
+```
+
+Mark server-owned, audit, identity, state, and sensitive values explicitly read-only or omit them. Mark secrets write-only and ensure they are not retained in `validated_data` longer than required.
+
+### Validation Ownership
+
+Use `validate_<field>` for local field rules and `validate` for deterministic cross-field request rules. Database uniqueness, actor ownership, lifecycle eligibility, inventory, and multi-record invariants must also be enforced in the model/service/transaction boundary.
+
+Serializer validation that queries the database can race and can create N+1 behavior in list/nested operations. Use it only for bounded feedback while preserving the authoritative constraint/write check.
+
+Keep error codes/field placement aligned with the accepted API error contract. Do not return raw model/database exceptions from `create` or `update`.
+
+### Related Fields And Representation
+
+Choose IDs, slugs, hyperlinks, nested objects, or side-loaded data from the accepted response contract. Avoid implicit deep nesting and unrestricted reverse relationships.
+
+`source="relation.field"` and nested serializers require matching queryset loading. A serializer must not be the first place where query planning is discovered. `SerializerMethodField` must remain deterministic, bounded, and free from per-row database queries.
+
+### Create, Update, And Nested Writes
+
+Keep simple model construction in `ModelSerializer` only when it preserves business and transaction behavior. Move multi-model workflows and state transitions to an application service.
+
+Nested writes need explicit ownership, matching rules, create/update/delete semantics, and `transaction.atomic()`. Do not delete and recreate all children on every patch unless replacement is the accepted contract.
+
+For partial updates, distinguish omitted fields from explicit null/empty values. `partial=True` relaxes required-field validation; it does not define business patch semantics automatically.
+
+### Serializer Context
+
+Use serializer context for request/actor, URL generation, locale, or already-computed values. Do not access module-global request state. Keep actor-dependent output consistent with authorization and queryset scoping.
+
+### Performance And Pagination
+
+Use lighter list serializers or annotated/projection fields for tables and summaries. Avoid serializing huge querysets or file/blob fields by default. Pagination belongs at the view/query boundary before serializer evaluation.
 
 ## Verification Focus
 
-- Test valid input, invalid field input, cross-field validation, partial update, nested input, and sensitive field exclusion when touched.
-- Verify response shape for list/detail serializers, including read-only/computed fields and related-object representation.
-- For serializer-driven create/update overrides, assert database side effects and transaction behavior.
-- Pair serializer tests with view/API tests when status codes or permission behavior depend on serializer errors.
+- Test valid and invalid field/cross-field input with exact error structure.
+- Prove create, full update, partial update, explicit null, omission, and immutable/server-owned fields.
+- Assert sensitive/write-only field exclusion and stable list/detail response shape.
+- Test nested write ownership, rollback, update matching, and removal semantics when owned.
+- Pair computed/related serializers with query-count or loader evidence.
+- Exercise serializer behavior through API tests when status or error envelopes matter.
 
 ## Evidence Focus
 
-- In the evidence summary, name the serializer decision: read/write split, field validation, object validation, nested write, computed field, partial update, or sensitive-field exclusion.
+Identify the directional serializer, validation rule, nested-write policy, or representation and the assertion that proves wire and persistence behavior. Serializer `.is_valid()` alone does not prove authorization, transaction, query count, or endpoint errors.
+
+## Unsafe Defaults
+
+- Public `ModelSerializer` with `fields = "__all__"`.
+- One serializer reused for create, patch, list, and detail despite different contracts.
+- Authorization or durable business invariants enforced only by serializer validation.
+- `SerializerMethodField` issuing per-object queries.
+- Nested updates that silently delete and recreate related records.
+- Request/user access through global state.
+- Sensitive or server-owned model fields exposed by inference.
