@@ -1734,6 +1734,12 @@ fn derived_ui_ownership_dimensions(
     {
         dimensions.push("integration_feedback".to_string());
     }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::OptimizeFrontendPerformance))
+    {
+        dimensions.push("layout".to_string());
+    }
     if task_kind_is_frontend(task_kind)
         || implementation_actions.iter().any(|action| {
             matches!(
@@ -1742,6 +1748,7 @@ fn derived_ui_ownership_dimensions(
                     | ImplementationAction::CreateOrUpdateFrontendNavigation
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
@@ -1934,8 +1941,6 @@ fn task_owns_business_flow_behavior(task: &TaskDefinition) -> bool {
                 | ImplementationAction::CreateOrUpdateInterface
                 | ImplementationAction::CreateOrUpdateUiFlow
                 | ImplementationAction::CreateOrUpdateFrontendNavigation
-                | ImplementationAction::ImplementReactiveClientFlow
-                | ImplementationAction::ImplementSharedClientState
                 | ImplementationAction::WireReferenceInApiOrUi
         )
     })
@@ -3945,6 +3950,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "frontendNavigation": ["create_or_update_frontend_navigation"],
                 "reactiveClientFlow": ["implement_reactive_client_flow"],
                 "sharedClientState": ["implement_shared_client_state"],
+                "frontendPerformance": ["optimize_frontend_performance"],
                 "security": ["implement_authentication_or_authorization"],
                 "async": ["implement_async_processing"],
                 "cache": ["implement_cache_policy"],
@@ -3959,6 +3965,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "frontendNavigation": "Use create_or_update_frontend_navigation only for the task that owns route definitions, route parameters, guards, resolvers, deep links, nested navigation, or equivalent framework navigation configuration.",
                 "reactiveClientFlow": "Use implement_reactive_client_flow only for a task that owns stream cancellation, ordering, fan-out, subscription lifecycle, or other reactive client behavior beyond a simple one-shot binding.",
                 "sharedClientState": "Use implement_shared_client_state only for the task that owns a selected shared state container, reducer/store, effects, selectors, or a cross-surface client state lifecycle. Local component state does not use this action.",
+                "frontendPerformance": "Use optimize_frontend_performance only for a task that owns a measurable client rendering, rebuild, list, image, animation, memory, startup, or interaction-latency risk and its verification evidence.",
                 "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
@@ -4869,6 +4876,7 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateOrUpdateFrontendNavigation
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -5666,6 +5674,10 @@ mod tests {
         assert_eq!(
             rules["codeReferenceRules"]["frameworkCapabilityActions"]["sharedClientState"],
             json!(["implement_shared_client_state"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["frontendPerformance"],
+            json!(["optimize_frontend_performance"])
         );
     }
 

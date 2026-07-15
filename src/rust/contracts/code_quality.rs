@@ -600,6 +600,9 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
             }
             ImplementationAction::ImplementReactiveClientFlow => push_unique(&mut tags, "async"),
             ImplementationAction::ImplementSharedClientState => push_unique(&mut tags, "state"),
+            ImplementationAction::OptimizeFrontendPerformance => {
+                push_unique(&mut tags, "performance")
+            }
             ImplementationAction::ImplementAuthenticationOrAuthorization => {
                 push_unique(&mut tags, "security")
             }
@@ -1794,25 +1797,43 @@ fn frontend_reference_items_for_signal(
         }
     }
     if signal.frameworks.iter().any(|item| item == "flutter") {
-        let items = groups.entry("flutter".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("structure".to_string());
-        items.insert("widgets".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if task_owns_frontend_surface(task) {
+            items.insert("widgets".to_string());
+        }
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            )
+        {
+            items.insert("structure".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("routing") || signal.frameworks.iter().any(|item| item == "gorouter") {
+        if task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation) {
             items.insert("navigation".to_string());
         }
-        if has_focus("riverpod") || signal.frameworks.iter().any(|item| item == "riverpod") {
+        if signal.frameworks.iter().any(|item| item == "riverpod")
+            && task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
             items.insert("riverpod".to_string());
         }
-        if has_focus("bloc") || signal.frameworks.iter().any(|item| item == "bloc") {
+        if signal.frameworks.iter().any(|item| item == "bloc")
+            && task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
             items.insert("bloc".to_string());
         }
-        if has_focus("performance") || has_focus("list_performance") {
+        if task_has_action(task, ImplementationAction::OptimizeFrontendPerformance) {
             items.insert("performance".to_string());
         }
+        groups.insert("flutter".to_string(), items);
     }
     groups
 }
@@ -1890,6 +1911,7 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::CreateOrUpdateFrontendNavigation
                     | ImplementationAction::ImplementReactiveClientFlow
                     | ImplementationAction::ImplementSharedClientState
+                    | ImplementationAction::OptimizeFrontendPerformance
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -1907,7 +1929,22 @@ fn task_owns_frontend_implementation(task: &TaskDefinition) -> bool {
                 | ImplementationAction::CreateOrUpdateFrontendNavigation
                 | ImplementationAction::ImplementReactiveClientFlow
                 | ImplementationAction::ImplementSharedClientState
+                | ImplementationAction::OptimizeFrontendPerformance
                 | ImplementationAction::WireReferenceInApiOrUi
+                | ImplementationAction::CreateEntityAdminPage
+                | ImplementationAction::ImplementFrontendExperienceContract
+        )
+    })
+}
+
+fn task_owns_frontend_surface(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateUiFlow
                 | ImplementationAction::CreateEntityAdminPage
                 | ImplementationAction::ImplementFrontendExperienceContract
         )
@@ -2915,10 +2952,16 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementSharedClientState,
+                ImplementationAction::OptimizeFrontendPerformance,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Create a purchase approval Flutter screen with GoRouter route params, ConsumerWidget Riverpod AsyncValue state, ListView.builder rows, and jank profiling.".to_string();
+        task.objective = "Implement the accepted purchase approval Flutter workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("flutter"));
         let flutter_refs = &selection.reference_groups["flutter"];
@@ -2953,10 +2996,13 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Implement a Flutter wizard using Cubit, BlocBuilder, BlocListener, immutable states, and widget tests.".to_string();
+        task.objective = "Implement the accepted multi-step Flutter workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let flutter_refs = &selection.reference_groups["flutter"];
         assert!(flutter_refs.contains(&"bloc".to_string()));
@@ -2986,10 +3032,61 @@ mod tests {
         assert!(!selection.reference_groups.contains_key("javascript"));
         assert!(!selection.reference_groups.contains_key("kotlin"));
         assert!(!selection.reference_groups["flutter"].contains(&"bloc".to_string()));
+        assert!(!selection.reference_groups["flutter"].contains(&"structure".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.flutter.widgets" && item.path == "tech/frontend/flutter/widgets.md"
         }));
+    }
+
+    #[test]
+    fn flutter_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let selected_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Flutter 3 + Riverpod + GoRouter"}}
+        }));
+        let plain_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Flutter 3"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Add GoRouter navigation, Riverpod providers, Bloc state, profile list rebuilds, and widget tests.".to_string();
+        let mut shared_without_library = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
+        );
+        shared_without_library.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&selected_baseline, &prose_only).unwrap();
+        let shared =
+            code_reference_selection_for_task(&plain_baseline, &shared_without_library).unwrap();
+        let tests = code_reference_selection_for_task(&plain_baseline, &testing).unwrap();
+
+        for specialized in [
+            "navigation",
+            "riverpod",
+            "bloc",
+            "performance",
+            "structure",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["flutter"].contains(&specialized.to_string()));
+        }
+        assert!(!shared.reference_groups["flutter"].contains(&"riverpod".to_string()));
+        assert!(!shared.reference_groups["flutter"].contains(&"bloc".to_string()));
+        assert!(tests.reference_groups["flutter"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["flutter"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["flutter"].contains(&"widgets".to_string()));
     }
 
     #[test]

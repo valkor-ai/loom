@@ -1465,13 +1465,15 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str());
         let is_angular = frontend_profile == Some("angular");
-        let minimum_lines = if is_angular { 65 } else { 25 };
+        let is_flutter = frontend_profile == Some("flutter");
+        let is_enhanced_frontend = is_angular || is_flutter;
+        let minimum_lines = if is_enhanced_frontend { 65 } else { 25 };
         assert!(
             line_count >= minimum_lines,
             "{} is too thin to act as a frontend framework reference: {line_count} lines",
             path.display()
         );
-        if is_angular {
+        if is_enhanced_frontend {
             for required in [
                 "## Verification",
                 "## Delivery Evidence",
@@ -1479,7 +1481,7 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             ] {
                 assert!(
                     content.contains(required),
-                    "{} missing enhanced Angular engineering section {required}",
+                    "{} missing enhanced frontend engineering section {required}",
                     path.display()
                 );
             }
@@ -1537,6 +1539,32 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let angular_testing = fs::read_to_string(frontend_root.join("angular/testing.md")).unwrap();
     assert!(angular_testing.contains("provideHttpClientTesting"));
     assert!(angular_testing.contains("TestScheduler.run"));
+    let flutter_core = fs::read_to_string(frontend_root.join("flutter/core.md")).unwrap();
+    assert!(flutter_core.contains("if (!mounted)"));
+    assert!(flutter_core.contains("Platform.is"));
+    let flutter_widgets = fs::read_to_string(frontend_root.join("flutter/widgets.md")).unwrap();
+    assert!(flutter_widgets.contains("ValueKey"));
+    assert!(flutter_widgets.contains("SliverList"));
+    let flutter_structure = fs::read_to_string(frontend_root.join("flutter/structure.md")).unwrap();
+    assert!(flutter_structure.contains("build_runner"));
+    assert!(flutter_structure.contains("conditional imports"));
+    let flutter_navigation =
+        fs::read_to_string(frontend_root.join("flutter/navigation.md")).unwrap();
+    assert!(flutter_navigation.contains("stateful shell"));
+    assert!(flutter_navigation.contains("pathParameters"));
+    let flutter_riverpod = fs::read_to_string(frontend_root.join("flutter/riverpod.md")).unwrap();
+    assert!(flutter_riverpod.contains("AsyncNotifierProvider"));
+    assert!(flutter_riverpod.contains("copyWithPrevious"));
+    let flutter_bloc = fs::read_to_string(frontend_root.join("flutter/bloc.md")).unwrap();
+    assert!(flutter_bloc.contains("BlocProvider.value"));
+    assert!(flutter_bloc.contains("event transformers"));
+    let flutter_performance =
+        fs::read_to_string(frontend_root.join("flutter/performance.md")).unwrap();
+    assert!(flutter_performance.contains("profile mode"));
+    assert!(flutter_performance.contains("RepaintBoundary"));
+    let flutter_testing = fs::read_to_string(frontend_root.join("flutter/testing.md")).unwrap();
+    assert!(flutter_testing.contains("ProviderContainer"));
+    assert!(flutter_testing.contains("pumpAndSettle"));
 }
 
 #[test]

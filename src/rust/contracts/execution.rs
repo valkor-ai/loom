@@ -42,6 +42,7 @@ pub enum ImplementationAction {
     CreateOrUpdateFrontendNavigation,
     ImplementReactiveClientFlow,
     ImplementSharedClientState,
+    OptimizeFrontendPerformance,
     CreateOrUpdateStateMachine,
     CreateOrUpdateBusinessRule,
     AddReferenceField,

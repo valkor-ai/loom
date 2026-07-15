@@ -1,33 +1,95 @@
-# Flutter Riverpod Quality
+# Flutter Shared State With Riverpod
 
-This file applies Riverpod discipline to task-owned providers, notifiers, async notifiers, provider scopes, provider families, selectors, and Riverpod-backed UI workflows.
+Apply Riverpod only when TechnicalBaseline selects it and the task owns shared client state. Local ephemeral widget state does not require providers, and a Bloc-selected project should not receive Riverpod patterns.
 
-## When To Use
+## Provider Selection
 
-- The task creates or changes Riverpod providers, generated `@riverpod` notifiers, `ConsumerWidget` screens, `WidgetRef` reads/watches, async state, provider families, or provider overrides in tests.
-- Use this when Riverpod is the repository's selected state boundary or when the task explicitly names Riverpod, providers, notifiers, `WidgetRef`, or `ProviderScope`.
-- Do not introduce Riverpod into a Bloc-only or plain Flutter codebase unless the technical baseline or existing repository already uses it.
+Choose the smallest provider that matches lifecycle and commands:
 
-## Implementation Focus
+| Need | Riverpod boundary |
+|---|---|
+| Stateless dependency/derived value | `Provider` |
+| Read-only finite async data | `FutureProvider` |
+| Long-lived stream | `StreamProvider` |
+| Command-bearing synchronous state | `NotifierProvider` |
+| Command-bearing async workflow | `AsyncNotifierProvider` |
+| Parameterized stable identity | `.family` with immutable/equatable key |
 
-- Keep provider state immutable. Replace lists/maps/models with new instances; do not mutate existing state in place.
-- Choose provider types by lifecycle and behavior: `Provider` for derived values/services, `StateProvider` for simple local mutable values, `FutureProvider` for read-only async loads, `StreamProvider` for streams, and Notifier/AsyncNotifier for command-bearing feature state.
-- Use `ConsumerWidget`, `ConsumerStatefulWidget`, or scoped `Consumer` only where the widget needs provider access. Do not convert pure presentational widgets into consumers without a state reason.
-- Use `ref.watch` for rendering dependencies and `ref.read` for event handlers/commands. Avoid `watch` inside callbacks.
-- Use `select` to limit rebuilds when widgets need one field from a larger state object.
-- Model async state with `AsyncValue` and explicit `data/loading/error` rendering. Keep business-blocking failures distinct from transport or unexpected failures.
-- Keep provider families keyed by stable domain identifiers. Avoid passing mutable view objects as provider family arguments.
-- Use provider overrides in tests for repositories, clocks, storage, API clients, and permissions. Do not hit real infrastructure from provider tests.
-- Keep generated providers in sync when using Riverpod annotations and build-runner.
+Do not use `StateProvider` as an unstructured feature store or create providers for every text field when a form/widget owns the draft.
 
-## Verification Focus
+## Notifier And State Contract
 
-- Test provider state transitions for success, failure, loading, refresh, command outcomes, and immutability.
-- Test Consumer widgets render each relevant `AsyncValue` state and dispatch commands through `ref.read`.
-- Verify `select` or provider scoping prevents broad rebuilds when performance is part of the task.
-- Verify provider overrides isolate tests from real API/storage/native services.
-- Run `flutter analyze`, focused provider/widget tests, and code generation when annotations change.
+Keep state immutable and model workflow outcomes explicitly. Notifier methods represent product commands and coordinate repositories/ports without holding `BuildContext`.
 
-## Evidence Focus
+```dart
+@riverpod
+class OrderDetail extends _$OrderDetail {
+  @override
+  Future<OrderViewModel> build(String orderId) =>
+      ref.watch(orderRepositoryProvider).load(orderId);
 
-- In the evidence summary, name the Riverpod decision: provider type, notifier command, AsyncValue contract, provider family key, selector, override strategy, generated provider update, or provider-test proof.
+  Future<void> approve(int expectedVersion) async {
+    final current = await future;
+    state = const AsyncLoading<OrderViewModel>().copyWithPrevious(state);
+    state = await AsyncValue.guard(() =>
+      ref.read(orderRepositoryProvider).approve(current.id, expectedVersion));
+  }
+}
+```
+
+The exact generated API depends on selected Riverpod version. Preserve previous data during mutation only when UX/product behavior accepts stale content.
+
+Do not mutate watched list/map/model instances. Use copy/update methods and reconcile server-returned identity/version/state.
+
+## Reading, Watching, And Side Effects
+
+Use `ref.watch` for rendering/derived dependencies and `ref.read` for event commands. Use `ref.listen` for one-shot navigation/dialog/snack/analytics behavior at a stable widget/provider boundary.
+
+Never call `watch` inside callbacks, dispatch commands during build, or create repeated listeners as widgets rebuild. Listeners must distinguish initial/loading/data/error transitions and avoid duplicate side effects.
+
+Use `select` to narrow rebuilds when a widget needs one stable field. Do not select a newly allocated collection/view model each time and expect rebuild reduction.
+
+## Lifetime, Families, And Invalidation
+
+Use auto-dispose for route/parameter state that should end when unobserved; keepAlive only with explicit freshness/cache/invalidation policy. Unbounded family keys can retain memory/network state.
+
+Family parameters must be stable value keys, not mutable objects or whole DTOs. Invalidate/refresh after mutations, identity/tenant changes, logout, or accepted staleness events.
+
+Avoid cyclic provider dependencies and hidden global provider containers. Use one app `ProviderScope` plus deliberate nested overrides/scopes where ownership requires.
+
+## AsyncValue And Errors
+
+Render `AsyncValue` loading/data/error while preserving distinctions among empty, validation, conflict, forbidden, offline/unavailable, stale, and unexpected errors in feature state/view models.
+
+Refreshing, initial loading, and mutating are different UX states. Do not erase usable data during background refresh or leave submit controls disabled after errors.
+
+Cancellation/disposal must reach repositories/clients where supported. Do not launch untracked futures from notifiers for required business effects.
+
+## Dependencies And Generated Code
+
+Inject repositories, clocks, storage, permissions, and platform adapters through providers and override them in tests. Providers should not read scattered environment/global singletons.
+
+When annotations/generation are selected, keep source and generated files synchronized through the repository's build_runner policy. Do not hand-edit generated providers.
+
+## Verification
+
+- Test provider/notifier initial, loading, data, empty, validation/conflict/forbidden/offline, refresh, mutation, and recovery transitions owned by the task.
+- Verify immutable updates and server readback/version reconciliation.
+- Test family key/lifetime, auto-dispose, invalidation, logout/tenant clearing, and no duplicate requests/listeners.
+- Verify `select`/scoping limits rebuilds only when performance is claimed.
+- Override infrastructure with fakes and assert commands hit the displayed target.
+- Regenerate/analyze when annotations or generated providers change.
+
+## Delivery Evidence
+
+Identify the provider/notifier command, lifetime, and state-transition assertion proving it. A `ConsumerWidget` rendering one value or generated file presence cannot prove invalidation, disposal, command failure, immutability, or side-effect deduplication.
+
+## Unsafe Defaults
+
+- Riverpod loaded/introduced without selected stack and shared-state ownership.
+- `StateProvider` used as a generic feature store.
+- Mutable list/model state updated in place.
+- `watch` in callbacks or commands/listeners created during build.
+- Families keyed by mutable/full DTO objects and kept alive indefinitely.
+- Async errors collapsed to generic empty/error text.
+- Generated files edited manually or left stale.
