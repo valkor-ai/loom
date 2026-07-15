@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/headbar.png" alt="Loom" width="100%">
   <p><strong>Loop engineering for agentic software delivery.</strong></p>
-  <p>An open delivery harness that turns Claude Code, Codex, OpenCode and other coding agents into repeatable software delivery systems.</p>
+  <p>An open delivery harness that helps Claude Code, Codex, OpenCode, and other coding agents finish larger software tasks without losing state.</p>
   <p>
     <a href="./README.zh-CN.md">Simplified Chinese</a>
     ·
@@ -29,48 +29,42 @@
 
 ## What Is Loom?
 
-Loom is an open-source delivery harness for existing coding agents. It does not replace the model or editor you already use; it turns each delivery goal into a structured loop of planning, building, verification, repair, preview, and handoff.
+Coding agents are good at writing code. They are less reliable at finishing the whole job: they lose context, skip checks, and leave handoffs unclear.
 
-Loom uses dynamic workflows to choose the right delivery path for each goal, then makes that path durable: project context, task contracts, backend state, test results, preview evidence, repair notes, and handoff reports are persisted so the next session or agent can continue without starting over.
+Loom is an open-source harness that runs beside the agent you already use. It keeps the work moving through a simple loop: plan, build, test, fix, preview, and hand off.
 
-Instead of a one-shot prompt chain, Loom treats delivery as a loop: route the next step, execute, verify, record evidence, repair when needed, and continue from saved state.
+Loom saves the important project state: requirements, task progress, test results, runtime facts, and repair notes. If a session stops, the next run can continue from where things left off.
 
-Coding agents can write code. Loom helps them keep the delivery promise from idea to release without rebuilding context from scratch every turn.
-
-Use Loom when a request is larger than a one-shot edit: a feature needs clarification, architecture, task splitting, implementation evidence, review, repair, preview, deployment, or a clean handoff.
+Use Loom when a task is too big for a single prompt: feature work, deployment, review, repair, preview, or a handoff that needs evidence.
 
 ## News
 
-- Upcoming: We are preparing V-SEFM, a verification model for software engineering delivery. More details will be shared later.
-- Jul 2026: Loom moved its MCP runtime from TypeScript to Rust for a smaller, faster, and more reliable delivery core.
+- Upcoming: V-SEFM, a verifier model for software delivery, is in progress. Details later.
+- Jul 2026: Loom moved its MCP runtime from TypeScript to Rust to make the core smaller and faster.
 
 ## Why a Harness?
 
-Website and app generation is becoming table stakes. The harder problem is reliable delivery: keeping the agent aligned after compaction, preserving requirements across many turns, verifying its own work without bias, repairing failures, and resuming from the right step after an interruption.
+Coding agents can generate websites and apps quickly. The rough part is keeping them on track after the first pass: preserving requirements, checking the work, fixing failures, and resuming after a stopped session.
 
-Long-running agent work tends to break down in predictable ways:
+Longer tasks tend to fail in familiar ways:
 
 Failure mode | Loom response
 --- | ---
-Partial completion | Bounded tasks, explicit result files, continue routing, and final-response guards keep agents from declaring done after partial progress.
-Goal drift | Confirmed scope, architecture contracts, task plans, and compact context packs preserve the original objective across sessions.
-Self-check bias | Review, verification, repair requests, and evidence records separate implementation from validation.
-Repeated context loading | Project summaries, task graphs, backend/runtime state, test results, and deployment evidence reduce repeated whole-repo reads.
-Handoff gaps | Delivery reports, preview checks, logs, and repair history make the final state inspectable by humans and other agents.
+Partial completion | Tasks are bounded and must write explicit results before Loom routes the next step.
+Goal drift | Scope and architecture decisions are saved and reused across sessions.
+Self-check bias | Review and repair run as separate steps with recorded evidence.
+Repeated context loading | Agents read compact project and task state instead of reloading the whole repo.
+Handoff gaps | Reports, logs, previews, and repair history make the final state inspectable.
 
 ## From Demo to Delivery
 
-Vibe Coding and AI Coding are making software creation accessible to more builders than ever. More people can now turn an idea into a demo, prototype a product, or build a tool for themselves with the help of coding agents.
+AI coding has made demos cheap. A single prompt can get you a web page, a prototype, or a personal tool.
 
-But there is still a large gap between a demo that works once and reliable application delivery that can be trusted, shipped, repaired, and evolved.
+Shipping the same work is different. You still need requirements, architecture choices, tests, runtime setup, fixes, preview evidence, and a handoff someone can trust.
 
-That gap is not only about model capability. Even as models improve, builders still need to clarify requirements, preserve project context, make architectural decisions, prepare backend/runtime state, run checks, inspect failures, repair issues, verify again, preview the result, and collect delivery evidence.
+Loom focuses on that gap. It gives existing agents a delivery loop and a place to store progress, so a task can survive failed checks, context compaction, and a new session.
 
-Loom exists to close that gap.
-
-It is an open-source delivery layer for existing coding agents. It helps agents move from one-shot coding to repeatable software delivery: clarify the request, plan the work, split tasks, preserve context, execute checks, repair failures, and report evidence.
-
-The goal is simple: help builders move from vibe-coded demos and personal tools to reliable application delivery with production-grade discipline, less manual effort, and less repeated context gathering.
+The goal is simple: fewer rebuilt sessions, fewer half-finished agent runs, and more software that reaches a verifiable finish.
 
 Capability | What it changes
 --- | ---
