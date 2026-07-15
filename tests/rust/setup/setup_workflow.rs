@@ -1468,7 +1468,9 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
         let is_flutter = frontend_profile == Some("flutter");
         let is_nextjs = frontend_profile == Some("nextjs");
         let is_react = frontend_profile == Some("react");
-        let is_enhanced_frontend = is_angular || is_flutter || is_nextjs || is_react;
+        let is_react_native = frontend_profile == Some("react-native");
+        let is_enhanced_frontend =
+            is_angular || is_flutter || is_nextjs || is_react || is_react_native;
         let minimum_lines = if is_enhanced_frontend { 65 } else { 25 };
         assert!(
             line_count >= minimum_lines,
@@ -1614,6 +1616,28 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let react_testing = fs::read_to_string(frontend_root.join("react/testing.md")).unwrap();
     assert!(react_testing.contains("userEvent"));
     assert!(react_testing.contains("Strict Mode"));
+    let rn_core = fs::read_to_string(frontend_root.join("react-native/core.md")).unwrap();
+    assert!(rn_core.contains("development-client rebuild"));
+    assert!(rn_core.contains("stable target identity"));
+    let rn_structure = fs::read_to_string(frontend_root.join("react-native/structure.md")).unwrap();
+    assert!(rn_structure.contains("generated native output"));
+    assert!(rn_structure.contains("Metro"));
+    let rn_navigation =
+        fs::read_to_string(frontend_root.join("react-native/navigation.md")).unwrap();
+    assert!(rn_navigation.contains("singular/array forms"));
+    assert!(rn_navigation.contains("hardware back"));
+    let rn_platform = fs::read_to_string(frontend_root.join("react-native/platform.md")).unwrap();
+    assert!(rn_platform.contains("Platform.select"));
+    assert!(rn_platform.contains("permanently denied"));
+    let rn_lists = fs::read_to_string(frontend_root.join("react-native/lists.md")).unwrap();
+    assert!(rn_lists.contains("getItemLayout"));
+    assert!(rn_lists.contains("onEndReached"));
+    let rn_storage = fs::read_to_string(frontend_root.join("react-native/storage.md")).unwrap();
+    assert!(rn_storage.contains("schemaVersion"));
+    assert!(rn_storage.contains("late hydration"));
+    let rn_testing = fs::read_to_string(frontend_root.join("react-native/testing.md")).unwrap();
+    assert!(rn_testing.contains("React Native Testing Library"));
+    assert!(rn_testing.contains("both-platform coverage"));
 }
 
 #[test]

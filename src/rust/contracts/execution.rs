@@ -46,6 +46,8 @@ pub enum ImplementationAction {
     ImplementServerRenderedComponent,
     ImplementServerMutation,
     ImplementFrontendFrameworkVersionFeature,
+    ImplementMobilePlatformBehavior,
+    ImplementClientStorage,
     CreateOrUpdateStateMachine,
     CreateOrUpdateBusinessRule,
     AddReferenceField,

@@ -1827,22 +1827,36 @@ fn frontend_reference_items_for_signal(
         groups.insert("angular".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "reactnative") {
-        let items = groups.entry("reactnative".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("structure".to_string());
-        items.insert("platform".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+        }
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            )
+        {
+            items.insert("structure".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("routing") || signal.frameworks.iter().any(|item| item == "expo") {
+        if task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation) {
             items.insert("navigation".to_string());
         }
-        if has_focus("list_performance") || has_focus("performance") {
+        if task_has_action(task, ImplementationAction::OptimizeFrontendPerformance) {
             items.insert("lists".to_string());
         }
-        if has_focus("storage") {
+        if task_has_action(task, ImplementationAction::ImplementMobilePlatformBehavior) {
+            items.insert("platform".to_string());
+        }
+        if task_has_action(task, ImplementationAction::ImplementClientStorage) {
             items.insert("storage".to_string());
         }
+        groups.insert("reactnative".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "flutter") {
         let mut items = BTreeSet::new();
@@ -1963,6 +1977,8 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
                     | ImplementationAction::ImplementServerRenderedComponent
                     | ImplementationAction::ImplementServerMutation
                     | ImplementationAction::ImplementFrontendFrameworkVersionFeature
+                    | ImplementationAction::ImplementMobilePlatformBehavior
+                    | ImplementationAction::ImplementClientStorage
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -3082,10 +3098,17 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::OptimizeFrontendPerformance,
+                ImplementationAction::ImplementMobilePlatformBehavior,
+                ImplementationAction::ImplementClientStorage,
+                ImplementationAction::ImplementFrontendExperienceContract,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Create a mobile purchase request screen with Expo Router navigation, iOS and Android SafeArea keyboard handling, FlatList pull to refresh, and MMKV storage.".to_string();
+        task.objective = "Implement the accepted mobile purchase request workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("reactnative"));
         assert!(selection.reference_groups.contains_key("typescript"));
@@ -3120,7 +3143,10 @@ mod tests {
             baseline(json!({"tracks": {"app": {"selection": "Expo Router + React Native"}}}));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
@@ -3132,6 +3158,61 @@ mod tests {
             item.ref_id == "fe.rn.navigation"
                 && item.path == "tech/frontend/react-native/navigation.md"
         }));
+    }
+
+    #[test]
+    fn react_native_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let baseline =
+            baseline(json!({"tracks": {"app": {"selection": "Expo Router + React Native"}}}));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective = "Add Expo routes, safe areas, keyboard handling, FlatList performance, MMKV persistence, and tests.".to_string();
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let storage = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::ImplementClientStorage],
+        );
+        let platform = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementMobilePlatformBehavior],
+        );
+
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+        let storage_selection = code_reference_selection_for_task(&baseline, &storage).unwrap();
+        let platform_selection = code_reference_selection_for_task(&baseline, &platform).unwrap();
+
+        assert!(prose.reference_groups["reactnative"].contains(&"core".to_string()));
+        for specialized in [
+            "structure",
+            "navigation",
+            "platform",
+            "lists",
+            "storage",
+            "testing",
+        ] {
+            assert!(!prose.reference_groups["reactnative"].contains(&specialized.to_string()));
+        }
+        assert!(tests.reference_groups["reactnative"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["reactnative"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["reactnative"].contains(&"structure".to_string()));
+        assert!(!tests.reference_groups["reactnative"].contains(&"platform".to_string()));
+        assert!(storage_selection.reference_groups["reactnative"].contains(&"storage".to_string()));
+        assert!(
+            storage_selection.reference_groups["reactnative"].contains(&"structure".to_string())
+        );
+        assert!(!storage_selection.reference_groups["reactnative"].contains(&"core".to_string()));
+        assert!(
+            platform_selection.reference_groups["reactnative"].contains(&"platform".to_string())
+        );
+        assert!(!platform_selection.reference_groups["reactnative"].contains(&"core".to_string()));
     }
 
     #[test]

@@ -1,33 +1,81 @@
-# React Native Storage Quality
+# React Native Client Storage
 
-This file applies React Native storage discipline to task-owned AsyncStorage, MMKV, SecureStore, persisted Zustand state, storage hooks, and local cache behavior.
+Apply storage guidance only when the task owns device persistence, secure credentials, offline drafts, cached records, remembered preferences, persisted state, hydration, migration, expiry, or identity-scoped cleanup.
 
-## When To Use
+## Classify The Data
 
-- The task creates or changes mobile persistence, preferences, auth/session storage, local caches, offline drafts, feature flags, remembered filters, or storage-backed hooks.
-- Use this when storage choice, serialization, lifecycle, security, cache invalidation, or hydration behavior affects the delivered workflow.
-- Keep API fetching and server cache strategy aligned with the repository's data layer; do not use local storage as a substitute for authoritative server state.
+For each value, name sensitivity, authority, size, access frequency, lifetime, identity/tenant/environment scope, offline requirement, expiry, and conflict behavior before choosing a backend.
 
-## Implementation Focus
+Use platform secure storage/keychain/keystore through the repository abstraction for tokens or sensitive credentials. AsyncStorage fits small non-sensitive async values; MMKV or another synchronous store fits frequent reads only when already compatible and justified.
 
-- Choose storage by data sensitivity and access pattern. Use SecureStore or the repository's secure mechanism for tokens/secrets, AsyncStorage for small async preferences, and MMKV for frequent synchronous reads when already supported.
-- Keep storage keys centralized and namespaced by feature/account/environment when collisions are possible.
-- Serialize and parse defensively. Invalid JSON, old schema versions, missing values, and app upgrades need safe fallbacks.
-- Keep hydrated loading state explicit. Screens should not briefly render incorrect defaults as real data while storage is still loading.
-- Avoid storing mutable server records as authoritative truth unless the feature explicitly supports offline mode and conflict handling.
-- For persisted stores, define which slices persist and which slices remain runtime-only. Do not persist loading flags, transient errors, selected modal state, or stale form submission state.
-- Use small typed hooks or services for storage operations. Components should not scatter raw storage calls across event handlers.
-- Clear or migrate storage on logout, account switch, environment switch, permission downgrade, or schema change when data scope changes.
-- Avoid unbounded storage growth for caches, drafts, logs, or recent activity. Add limits, expiry, or invalidation when persistence can grow.
+Files/databases suit larger structured/offline data. Do not turn key-value storage into an unbounded database or use local persistence as authoritative server state.
 
-## Verification Focus
+## Keys And Stored Shape
 
-- Verify first-run empty storage, existing value hydration, invalid/corrupt value fallback, update, removal, logout/account-switch cleanup, and schema migration when in scope.
-- Verify sensitive values are not written to non-secure storage.
-- Verify persisted UI preferences do not override server/business state incorrectly after refresh or relaunch.
-- Verify hooks expose loading/error states and do not update unmounted components after async storage calls resolve.
-- Run the repository's focused tests for storage hooks, stores, and serialization helpers when available.
+Centralize and namespace keys by app/environment, feature, schema version, and identity dimensions as needed. Avoid one global `user`, `settings`, or `draft` key shared across accounts.
 
-## Evidence Focus
+Store a versioned envelope when data evolves:
 
-- In the evidence summary, name the storage decision: storage backend, key namespace, secure handling, hydration state, parse fallback, persisted slice boundary, cleanup trigger, or cache invalidation proof.
+```ts
+type StoredDraft<T> = {
+  schemaVersion: 2
+  ownerId: string
+  updatedAt: string
+  expiresAt?: string
+  value: T
+}
+```
+
+Validate parsed values at the boundary. Corrupt JSON, partial writes, unknown versions, missing fields, expired data, and downgrade scenarios need explicit discard, migrate, or recovery behavior.
+
+## Hydration And Rendering
+
+Represent unhydrated, ready, missing, invalid/migrating, and failed states. Do not briefly render a default as persisted truth and then replace it after storage resolves.
+
+Sequence hydration and writes. A slow initial read must not overwrite a user change made before it completes; key/account changes must invalidate older completions.
+
+Avoid using a new object/function default as a hook dependency that restarts hydration every render. Keep storage hooks typed and expose meaningful error/retry/reset behavior.
+
+## Writes And Consistency
+
+Define whether UI updates before or after durable write and what happens on write failure. For important drafts/settings, surface failure and retain recoverable in-memory state rather than pretending persistence succeeded.
+
+Serialize writes per key or use storage transactions/batches where available. Concurrent functional updates must read from one current owner, not a stale closure.
+
+Limit and expire caches/drafts/history. Define eviction and storage-pressure behavior; mobile OS cleanup and unavailable storage are normal failure modes.
+
+## Identity And Lifecycle Cleanup
+
+Clear or re-scope data on logout, account/tenant/environment switch, permission downgrade, schema migration, and app reset. Do not call backend-wide `clear()` when the app shares storage with unrelated features.
+
+Persist only durable slices. Loading flags, transient errors, open overlays, in-flight mutations, and mutable selected rows should not survive restart by default.
+
+For offline edits, define sync identity, conflict detection, retry/idempotency, tombstones, and readback. A cached DTO plus later overwrite is not an offline architecture.
+
+## Security And Privacy
+
+Assume non-secure storage, logs, backups, and device files can be inspected. Do not store raw passwords, private keys, unrestricted provider payloads, or secrets in AsyncStorage/MMKV.
+
+Minimize sensitive retention, redact diagnostics, and follow platform backup/screenshot/data-protection policy where required. Biometric gating does not automatically encrypt arbitrary app storage.
+
+## Verification
+
+- Test first run, valid hydration, missing/corrupt/expired/unknown-version data, migration, update, removal, and write failure.
+- Prove a late hydration cannot overwrite a newer write or another account/key.
+- Verify logout/account/tenant/environment cleanup without deleting unrelated keys.
+- Confirm sensitive values use the accepted secure backend and are absent from ordinary storage/logs.
+- Exercise restart/offline/reconnect/conflict behavior when the task owns offline persistence.
+
+## Delivery Evidence
+
+Name the data class, backend, key namespace, schema/migration, hydration/write ordering, cleanup triggers, and assertions proving failure safety. A successful `setItem`/`getItem` round trip does not establish identity isolation, security, migration, or concurrency correctness.
+
+## Unsafe Defaults
+
+- MMKV or AsyncStorage selected from speed alone.
+- Generic keys shared across accounts/environments.
+- `JSON.parse` output trusted without shape/version validation.
+- Default state shown as persisted truth before hydration.
+- Slow hydration allowed to overwrite current user input.
+- Whole storage cleared on logout.
+- Server records persisted as offline truth without sync/conflict policy.

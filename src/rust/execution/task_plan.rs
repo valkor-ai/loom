@@ -3981,6 +3981,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "serverRenderedComponent": ["implement_server_rendered_component"],
                 "serverMutation": ["implement_server_mutation"],
                 "frontendFrameworkVersionFeature": ["implement_frontend_framework_version_feature"],
+                "mobilePlatformBehavior": ["implement_mobile_platform_behavior"],
+                "clientStorage": ["implement_client_storage"],
                 "security": ["implement_authentication_or_authorization"],
                 "async": ["implement_async_processing"],
                 "cache": ["implement_cache_policy"],
@@ -3999,6 +4001,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "serverRenderedComponent": "Use implement_server_rendered_component only for a task that owns a framework server-rendered component boundary, server/client composition, streaming, hydration, or serializable handoff.",
                 "serverMutation": "Use implement_server_mutation only for a task that owns a framework server-side form/action mutation, its authorization and validation, result state, and cache/readback reconciliation.",
                 "frontendFrameworkVersionFeature": "Use implement_frontend_framework_version_feature only for a frontend task that intentionally owns an API available from the accepted framework version and whose implementation or fallback differs from the repository's baseline patterns.",
+                "mobilePlatformBehavior": "Use implement_mobile_platform_behavior only for a task that owns iOS/Android-specific behavior, native APIs or modules, permissions, safe-area/keyboard/status-bar integration, gestures, or hardware-back semantics.",
+                "clientStorage": "Use implement_client_storage only for a task that owns client-side persistence, secure device storage, persisted drafts/preferences/session state, hydration, migration, expiry, or identity-scoped cleanup.",
                 "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
@@ -5727,6 +5731,14 @@ mod tests {
             rules["codeReferenceRules"]["frameworkCapabilityActions"]
                 ["frontendFrameworkVersionFeature"],
             json!(["implement_frontend_framework_version_feature"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["mobilePlatformBehavior"],
+            json!(["implement_mobile_platform_behavior"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["clientStorage"],
+            json!(["implement_client_storage"])
         );
     }
 
