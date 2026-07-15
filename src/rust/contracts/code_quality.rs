@@ -142,7 +142,7 @@ pub fn code_reference_selection_for_task_with_context(
             continue;
         }
         let items = if signal.language.is_some() {
-            reference_items_for_signal(&signal, &focus_tags)
+            reference_items_for_signal(&signal, &focus_tags, task)
         } else {
             BTreeSet::new()
         };
@@ -1226,7 +1226,11 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
     }
 }
 
-fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -> BTreeSet<String> {
+fn reference_items_for_signal(
+    signal: &CodeStackSignal,
+    focus_tags: &[String],
+    task: &TaskDefinition,
+) -> BTreeSet<String> {
     let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut items = BTreeSet::new();
     match signal.language.as_deref() {
@@ -1327,17 +1331,35 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             }
         }
         Some("cpp") => {
-            items.extend(["core", "modern", "build"].map(str::to_string));
-            if has_focus("testing") {
+            if matches!(
+                task.task_kind,
+                TaskKind::FeatureIncrement
+                    | TaskKind::DataModelIncrement
+                    | TaskKind::InterfaceIncrement
+                    | TaskKind::IntegrationIncrement
+                    | TaskKind::RefactorSupport
+            ) {
+                items.insert("core".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature) {
+                items.insert("modern".to_string());
+                items.insert("build".to_string());
+            }
+            if task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+                || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
+            {
+                items.insert("build".to_string());
+            }
+            if task_owns_test_implementation(task) {
                 items.insert("testing".to_string());
             }
-            if has_focus("generics") {
+            if task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction) {
                 items.insert("templates".to_string());
             }
-            if has_focus("performance") {
+            if task_has_action(task, ImplementationAction::OptimizeRuntimePerformance) {
                 items.insert("performance".to_string());
             }
-            if has_focus("async") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("concurrency".to_string());
             }
         }
@@ -3511,7 +3533,59 @@ mod tests {
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("cpp"));
-        assert!(selection.reference_groups["cpp"].contains(&"build".to_string()));
+        assert!(selection.reference_groups["cpp"].contains(&"core".to_string()));
+        assert!(!selection.reference_groups["cpp"].contains(&"build".to_string()));
+        assert!(!selection.reference_groups["cpp"].contains(&"modern".to_string()));
+    }
+
+    #[test]
+    fn cpp_specialized_references_require_explicit_task_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "C++23 + CMake + Clang"}}
+        }));
+        let mut owned = task(
+            TaskKind::FeatureIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateBusinessRule,
+                ImplementationAction::ImplementLanguageVersionFeature,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+                ImplementationAction::OptimizeRuntimePerformance,
+                ImplementationAction::ImplementAsyncProcessing,
+            ],
+        );
+        owned.objective = "Implement the accepted C++ processing boundary.".to_string();
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective = "Use C++23 concepts, templates, coroutines, SIMD performance, CMake, sanitizers, and tests.".to_string();
+        let testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let config = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+
+        let selected = code_reference_selection_for_task(&baseline, &owned).unwrap();
+        let prose = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        let tests = code_reference_selection_for_task(&baseline, &testing).unwrap();
+        let build = code_reference_selection_for_task(&baseline, &config).unwrap();
+
+        for expected in [
+            "core",
+            "modern",
+            "build",
+            "templates",
+            "performance",
+            "concurrency",
+        ] {
+            assert!(selected.reference_groups["cpp"].contains(&expected.to_string()));
+        }
+        assert_eq!(prose.reference_groups["cpp"], vec!["core".to_string()]);
+        assert_eq!(tests.reference_groups["cpp"], vec!["testing".to_string()]);
+        assert_eq!(build.reference_groups["cpp"], vec!["build".to_string()]);
     }
 
     #[test]
@@ -3519,9 +3593,12 @@ mod tests {
         let cpp_baseline = baseline(json!({"tracks": {"backend": {"selection": "C++20 + CMake"}}}));
         let mut cpp_task = task(
             TaskKind::FeatureIncrement,
-            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+            vec![
+                ImplementationAction::CreateOrUpdateBusinessRule,
+                ImplementationAction::ImplementGenericTypeAbstraction,
+            ],
         );
-        cpp_task.objective = "Implement a template-based generic rules registry.".to_string();
+        cpp_task.objective = "Implement the accepted reusable rules registry.".to_string();
         let cpp_selection = code_reference_selection_for_task(&cpp_baseline, &cpp_task).unwrap();
         assert!(cpp_selection.reference_groups["cpp"].contains(&"templates".to_string()));
 

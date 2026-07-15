@@ -1235,8 +1235,13 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
         }
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
+        let code_profile = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str());
+        let minimum_lines = if code_profile == Some("cpp") { 65 } else { 25 };
         assert!(
-            line_count >= 25,
+            line_count >= minimum_lines,
             "{} is too thin to act as a topic code reference: {line_count} lines",
             path.display()
         );
@@ -1249,6 +1254,13 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             assert!(
                 content.contains(required),
                 "{} missing code reference section or boundary {required}",
+                path.display()
+            );
+        }
+        if code_profile == Some("cpp") {
+            assert!(
+                content.contains("## Unsafe Defaults"),
+                "{} missing enhanced C++ unsafe-default guidance",
                 path.display()
             );
         }
@@ -1281,6 +1293,27 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     assert!(java_spring.contains("component scanning"));
     assert!(java_spring.contains("app.<project_slug>"));
     assert!(java_spring.contains("@Qualifier"));
+    let cpp_core = fs::read_to_string(code_root.join("cpp/core.md")).unwrap();
+    assert!(cpp_core.contains("std::string_view"));
+    assert!(cpp_core.contains("One Definition Rule"));
+    let cpp_modern = fs::read_to_string(code_root.join("cpp/modern.md")).unwrap();
+    assert!(cpp_modern.contains("feature-test macros"));
+    assert!(cpp_modern.contains("std::expected"));
+    let cpp_templates = fs::read_to_string(code_root.join("cpp/templates.md")).unwrap();
+    assert!(cpp_templates.contains("reference collapsing"));
+    assert!(cpp_templates.contains("explicit instantiation"));
+    let cpp_performance = fs::read_to_string(code_root.join("cpp/performance.md")).unwrap();
+    assert!(cpp_performance.contains("anti-optimization"));
+    assert!(cpp_performance.contains("ISA-specific"));
+    let cpp_concurrency = fs::read_to_string(code_root.join("cpp/concurrency.md")).unwrap();
+    assert!(cpp_concurrency.contains("std::jthread"));
+    assert!(cpp_concurrency.contains("happens-before"));
+    let cpp_build = fs::read_to_string(code_root.join("cpp/build.md")).unwrap();
+    assert!(cpp_build.contains("generator expressions"));
+    assert!(cpp_build.contains("target_compile_features"));
+    let cpp_testing = fs::read_to_string(code_root.join("cpp/testing.md")).unwrap();
+    assert!(cpp_testing.contains("ASan"));
+    assert!(cpp_testing.contains("Fuzz targets"));
     let spring_runtime = fs::read_to_string(backend_root.join("springboot/runtime.md")).unwrap();
     assert!(spring_runtime.contains("@ConfigurationProperties"));
     assert!(spring_runtime.contains("graceful shutdown"));
