@@ -1,30 +1,103 @@
-# FastAPI Security Quality
+# FastAPI Authentication And Authorization
 
-This file applies FastAPI OAuth2, JWT, dependency, and password-handling rules to task-owned authentication and authorization behavior.
+Implement only the accepted identity and access policy. FastAPI dependencies are transport/application guards; they do not justify adding JWT, password login, roles, refresh tokens, or account storage to an unauthenticated phase.
 
 ## When To Use
 
-- The task changes OAuth2 password flow, JWT creation/validation, password hashing, current-user dependencies, role checks, protected routers, CORS/security middleware, or auth error behavior.
-- Use this when endpoint access, token claims, user identity, or permission behavior affects correctness.
-- If the current phase explicitly has no auth work, do not add a security layer because this reference is available.
+Use this reference when a task owns authentication extraction, token/session validation, current-actor dependencies, permissions, resource ownership, password handling, security middleware, or protected route behavior.
 
 ## Implementation Focus
 
-- Keep JWT secrets, algorithms, token lifetimes, issuer/audience, CORS origins, and OAuth2 token URLs in configuration.
-- Hash passwords with a maintained password hashing library. Never store plaintext passwords or return password hashes in response models.
-- Use `OAuth2PasswordBearer`, current-user dependencies, and role/permission dependencies so protected endpoints cannot bypass auth by direct service access.
-- Distinguish authentication failure from authorization failure. Use 401 with `WWW-Authenticate` for invalid/missing credentials and 403 for insufficient permissions.
-- Validate token type, subject, expiry, and disabled/deleted-user state. Do not accept refresh tokens where access tokens are required.
-- Keep role checks and ownership checks close to the endpoint/service boundary that owns the protected operation.
-- Avoid broad global dependencies that accidentally protect public endpoints or leave intended private endpoints open.
+### Mechanism Boundary
+
+Preserve the repository and accepted trust model:
+
+| Client/Trust Model | Suitable FastAPI Boundary |
+|---|---|
+| External bearer-token API | OAuth2 bearer extraction plus issuer/JWK or trusted JWT validation |
+| Same-origin browser session | Secure session cookie, CSRF protection, and current-actor dependency |
+| Service-to-service | Existing gateway identity, mTLS-aware infrastructure, or service token validation |
+| Explicitly public/internal endpoint | No placeholder login system; declare the route public |
+
+`OAuth2PasswordBearer` extracts a bearer token and documents the scheme; it does not validate signatures, claims, users, or permissions. Prefer a maintained issuer/JWK validation path over handwritten JWT parsing when an identity provider owns tokens.
+
+### Token Validation
+
+For JWT access tokens, validate the accepted algorithm set, signature, issuer, audience, expiry/not-before, subject, and token type. Do not accept an algorithm from the token itself. Keep keys, JWK URLs, allowed clock skew, and lifetimes in validated configuration.
+
+```python
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+
+async def require_actor(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    users: Annotated[UserRepository, Depends(get_user_repository)],
+) -> Actor:
+    claims = token_verifier.verify_access_token(token)
+    actor = await users.find_actor(claims.subject)
+    if actor is None or not actor.active:
+        raise unauthenticated()
+    return actor
+```
+
+Use a stable safe `401` response with `WWW-Authenticate: Bearer` for missing or invalid bearer credentials. Do not reveal whether an account exists or which token check failed.
+
+### Passwords And Login
+
+Use a maintained adaptive password-hashing library and repository-approved parameters. Never store plaintext or reversible passwords, compare raw hashes manually, or serialize password hashes.
+
+Login endpoints need rate/abuse handling only when accepted by the API/security contract. Use a generic invalid-credentials result and avoid account enumeration. Password reset, verification, lockout, and recovery are separate capabilities, not implied by login.
+
+### Authorization And Ownership
+
+Use typed dependencies for coarse endpoint permissions and application services for resource ownership and lifecycle eligibility. A role check alone does not prove access to a particular record.
+
+```python
+def require_permissions(*required: Permission):
+    async def dependency(actor: CurrentActor) -> Actor:
+        if not set(required).issubset(actor.permissions):
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return actor
+    return dependency
+```
+
+Keep `401` for unauthenticated callers and `403` for authenticated callers lacking permission. Hide or expose protected-resource existence according to the accepted policy. UI visibility is never authorization.
+
+### Refresh, Revocation, And Logout
+
+Add refresh tokens only when the accepted contract requires them. Enforce a distinct token type, audience/scope, lifetime, rotation or reuse policy, storage/revocation model, and theft response. Never accept a refresh token at an access-token dependency.
+
+Deleting a browser/client token does not revoke a stateless server token. Logout behavior must match the actual session, denylist, rotation, or short-lived-token model.
+
+### Cookies, CORS, And CSRF
+
+Cookie-authenticated browsers require secure, HTTP-only, appropriate `SameSite` cookies and CSRF protection for state-changing requests. Bearer-token APIs should not disable unrelated browser protections by habit.
+
+Use explicit CORS origins, methods, and headers. Wildcard origins cannot be combined safely with credentialed browser requests. Keep CORS and authentication middleware ordering verified.
+
+### Sensitive Data And Errors
+
+Never log authorization headers, bearer/refresh tokens, passwords, signing keys, raw credential payloads, or sensitive claims. Public errors remain stable while detailed diagnostics stay in protected correlation-aware logs.
 
 ## Verification Focus
 
-- Test login/token issuance, invalid credentials, invalid token, expired token, wrong token type, missing auth, insufficient role, and successful protected access when touched.
-- Test password hashing and verify plaintext or hashes do not appear in API responses.
-- Verify protected routers cannot be reached without the expected dependencies.
-- Run endpoint tests with real security dependencies unless the test is explicitly about downstream business logic.
+- Test allowed, missing-auth, invalid-token/session, expired, wrong issuer/audience/type, and insufficient-permission paths owned by the task.
+- Prove resource-ownership denial independently from broad roles.
+- Verify `401`, `403`, `WWW-Authenticate`, and accepted safe error bodies.
+- Test password hashing/verification without exposing credentials or hashes.
+- Test refresh rotation/reuse/revocation only when that capability exists.
+- Verify cookie, CSRF, and CORS behavior against the real browser trust model.
 
 ## Evidence Focus
 
-- In the evidence summary, name the FastAPI security decision: OAuth2 flow, JWT claim, password hashing, current-user dependency, role dependency, CORS/security middleware, or protected endpoint proof.
+Identify the protected operation, identity mechanism, claim/permission rule, and exact denial/success assertions. A dependency appearing in a function signature or an OpenAPI lock icon does not prove authentication or authorization behavior.
+
+## Unsafe Defaults
+
+- Adding custom JWT login because FastAPI examples use it.
+- Hardcoded secrets, algorithms, issuers, audiences, lifetimes, or origins.
+- Treating token extraction as token validation.
+- Reusing refresh tokens as access tokens.
+- Role checks without resource ownership checks.
+- `401` and `403` collapsed into one ambiguous result.
+- Wildcard credentialed CORS or cookie auth without CSRF protection.
+- Tokens, passwords, hashes, or sensitive claims in logs or response models.

@@ -1300,12 +1300,16 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     for path in backend_files {
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
-        let is_spring_boot = path
+        let backend_profile = path
             .parent()
             .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            == Some("springboot");
-        let minimum_lines = if is_spring_boot { 65 } else { 25 };
+            .and_then(|name| name.to_str());
+        let is_spring_boot = backend_profile == Some("springboot");
+        let minimum_lines = if matches!(backend_profile, Some("springboot" | "fastapi")) {
+            65
+        } else {
+            25
+        };
         assert!(
             line_count >= minimum_lines,
             "{} is too thin to act as a backend framework reference: {line_count} lines",
@@ -1357,6 +1361,24 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let spring_web = fs::read_to_string(backend_root.join("springboot/web.md")).unwrap();
     assert!(spring_web.contains("real Spring Boot base package"));
     assert!(spring_web.contains("com.example"));
+    let fastapi_routing = fs::read_to_string(backend_root.join("fastapi/routing.md")).unwrap();
+    assert!(fastapi_routing.contains("APIRouter"));
+    assert!(fastapi_routing.contains("BackgroundTasks"));
+    let fastapi_schemas = fs::read_to_string(backend_root.join("fastapi/schemas.md")).unwrap();
+    assert!(fastapi_schemas.contains("model_fields_set"));
+    assert!(fastapi_schemas.contains("from_attributes"));
+    let fastapi_data = fs::read_to_string(backend_root.join("fastapi/data.md")).unwrap();
+    assert!(fastapi_data.contains("async_sessionmaker"));
+    assert!(fastapi_data.contains("Alembic"));
+    let fastapi_security = fs::read_to_string(backend_root.join("fastapi/security.md")).unwrap();
+    assert!(fastapi_security.contains("OAuth2PasswordBearer"));
+    assert!(fastapi_security.contains("issuer"));
+    let fastapi_testing = fs::read_to_string(backend_root.join("fastapi/testing.md")).unwrap();
+    assert!(fastapi_testing.contains("ASGITransport"));
+    assert!(fastapi_testing.contains("dependency_overrides"));
+    let fastapi_migration = fs::read_to_string(backend_root.join("fastapi/migration.md")).unwrap();
+    assert!(fastapi_migration.contains("ViewSet"));
+    assert!(fastapi_migration.contains("parity"));
 
     let mut frontend_files = Vec::new();
     collect_markdown_files(&frontend_root, &mut frontend_files);

@@ -92,6 +92,7 @@ const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
     "implement_resilience_policy",
     "configure_service_routing_or_discovery",
     "implement_observability",
+    "migrate_framework_implementation",
     "implement_frontend_experience_contract",
     "implement_runtime_delivery_contract",
     "refactor_supporting_code",
@@ -3920,7 +3921,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "externalIntegration": ["implement_external_service_integration"],
                 "resilience": ["implement_resilience_policy"],
                 "serviceRoutingOrDiscovery": ["configure_service_routing_or_discovery"],
-                "observability": ["implement_observability"]
+                "observability": ["implement_observability"],
+                "frameworkMigration": ["migrate_framework_implementation"]
             },
             "frameworkCapabilityRule": "Use these implementationActions only when the task really owns the corresponding capability. They are cross-framework implementation facts; MCP maps them to the framework selected by TechnicalBaseline.",
             "structuredCapabilitySources": {
@@ -3930,7 +3932,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "externalIntegration": "A task owning an external_adapter application interaction uses implement_external_service_integration.",
                 "resilience": "A task owning an application-interaction retry operationalPolicy or an applicable availability/reliability decision uses implement_resilience_policy. An HTTP interface retryPolicy alone describes caller-visible API behavior and does not activate internal retries.",
                 "observability": "A task owning an observability/operability architecture-quality ref uses implement_observability.",
-                "serviceRoutingOrDiscovery": "Use configure_service_routing_or_discovery only for an explicitly accepted service-routing, discovery, gateway, or centralized-config capability."
+                "serviceRoutingOrDiscovery": "Use configure_service_routing_or_discovery only for an explicitly accepted service-routing, discovery, gateway, or centralized-config capability.",
+                "frameworkMigration": "Use migrate_framework_implementation only when the task explicitly owns behavior parity or an accepted contract transition from an existing framework implementation."
             },
             "structuredCapabilityOwnershipRule": "Assign a capability action only to the task whose artifactRefs own the matching interface, provider module, decision, NFR, or risk. Do not infer capability actions from framework availability or generic task prose.",
             "unmappedStackRule": "When codeQualitySeed.unmappedSignals is non-empty, preserve the accepted stack and repository conventions; do not substitute a nearby language or framework profile.",

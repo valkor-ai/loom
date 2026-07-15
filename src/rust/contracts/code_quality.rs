@@ -606,6 +606,9 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
                 push_unique(&mut tags, "cloud")
             }
             ImplementationAction::ImplementObservability => push_unique(&mut tags, "observability"),
+            ImplementationAction::MigrateFrameworkImplementation => {
+                push_unique(&mut tags, "migration")
+            }
             ImplementationAction::ImplementRuntimeDeliveryContract => {
                 push_unique(&mut tags, "runtime")
             }
@@ -1486,24 +1489,30 @@ fn backend_reference_items_for_signal(
         }
     }
     if signal.frameworks.iter().any(|item| item == "fastapi") {
-        let items = groups.entry("fastapi".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) {
             items.insert("routing".to_string());
             items.insert("schemas".to_string());
         }
-        if has_focus("persistence")
-            || (has_focus("migration") && signal.frameworks.iter().any(|item| item == "sqlalchemy"))
-        {
+        if task_owns_persistence(task) && stack_frameworks.contains("sqlalchemy") {
             items.insert("data".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
         }
-        if has_focus("migration") {
+        if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("fastapi".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "aspnet_core") {
@@ -1880,6 +1889,7 @@ fn task_is_backend_task(task: &TaskDefinition) -> bool {
                 | ImplementationAction::ImplementResiliencePolicy
                 | ImplementationAction::ConfigureServiceRoutingOrDiscovery
                 | ImplementationAction::ImplementObservability
+                | ImplementationAction::MigrateFrameworkImplementation
                 | ImplementationAction::RefactorSupportingCode
         )
     })
@@ -3488,19 +3498,60 @@ mod tests {
                 "backend": {"selection": "Python + FastAPI + SQLAlchemy"}
             }
         }));
-        let mut task = task(
+        let migration_task = task(
             TaskKind::IntegrationIncrement,
-            vec![ImplementationAction::RefactorSupportingCode],
+            vec![ImplementationAction::MigrateFrameworkImplementation],
         );
-        task.objective = "Migrate the existing Django REST Framework order endpoint to FastAPI while preserving response behavior.".to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let selection = code_reference_selection_for_task(&baseline, &migration_task).unwrap();
         assert!(selection.reference_groups["fastapi"].contains(&"migration".to_string()));
-        assert!(selection.reference_groups["fastapi"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["fastapi"].contains(&"data".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.fastapi.migration"
                 && item.path == "tech/backend/fastapi/migration.md"
         }));
+
+        let mut prose_only = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        prose_only.objective = "Migrate a Django endpoint to FastAPI.".to_string();
+        let prose_selection = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        assert!(!prose_selection
+            .reference_groups
+            .get("fastapi")
+            .is_some_and(|items| items.contains(&"migration".to_string())));
+    }
+
+    #[test]
+    fn fastapi_data_reference_requires_sqlalchemy_stack_and_persistence_ownership() {
+        let sqlalchemy_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + FastAPI"},
+                "dataAccess": {"selection": "SQLAlchemy 2"}
+            }
+        }));
+        let tortoise_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Python + FastAPI"},
+                "dataAccess": {"selection": "Tortoise ORM"}
+            }
+        }));
+        let persistence_task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistence],
+        );
+
+        let sqlalchemy =
+            code_reference_selection_for_task(&sqlalchemy_baseline, &persistence_task).unwrap();
+        let tortoise =
+            code_reference_selection_for_task(&tortoise_baseline, &persistence_task).unwrap();
+
+        assert!(sqlalchemy.reference_groups["fastapi"].contains(&"data".to_string()));
+        assert!(!tortoise
+            .reference_groups
+            .get("fastapi")
+            .is_some_and(|items| items.contains(&"data".to_string())));
     }
 
     #[test]

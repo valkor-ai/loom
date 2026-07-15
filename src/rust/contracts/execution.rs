@@ -64,6 +64,7 @@ pub enum ImplementationAction {
     ImplementResiliencePolicy,
     ConfigureServiceRoutingOrDiscovery,
     ImplementObservability,
+    MigrateFrameworkImplementation,
     ImplementFrontendExperienceContract,
     ImplementRuntimeDeliveryContract,
     RefactorSupportingCode,
