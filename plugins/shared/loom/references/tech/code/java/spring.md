@@ -20,6 +20,8 @@ This file focuses on Spring Boot wiring and service delivery, not broad architec
 - Keep CORS local to actual frontend/runtime needs. Do not hardcode one dev origin if the project already externalizes origins.
 - Preserve application startup behavior. New beans should not require unavailable environment variables, external services, or databases unless the task also provides safe local defaults or clear configuration.
 - Use constructor injection and avoid circular dependencies. If a new service creates a cycle, revisit boundary placement rather than adding lazy injection.
+- Use `@Qualifier` only when multiple candidate beans implement the required contract. Keep the qualifier name aligned with the repository's bean naming convention and prove the selected implementation through context startup or a focused wiring test.
+- Keep constructors free of I/O, business workflows, and environment lookups. Constructor injection establishes dependencies; initialization that can fail belongs in an explicit lifecycle or configuration boundary.
 - Keep the Spring Boot application class at or above the task-owned component packages so component scanning, configuration properties, repositories, and controller advice are discovered without broad scan hacks.
 - When starting a new Spring Boot module, choose the base package from existing production packages, build group metadata, or a confirmed namespace. Use `app.<project_slug>` as the neutral fallback and avoid tutorial placeholders such as `com.example` or `org.example`.
 

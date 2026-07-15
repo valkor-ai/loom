@@ -18,6 +18,10 @@ This file applies Spring Boot runtime behavior rules; deployment assets remain u
 - Keep logging structured enough to diagnose failures without dumping sensitive payloads. Preserve existing correlation/request-id conventions when present.
 - Add resilience patterns such as timeout, retry, circuit breaker, or bulkhead only for external calls with a current failure mode. Do not add Spring Cloud components as boilerplate.
 - For startup runners, schedulers, and background tasks, define ownership, idempotency, failure handling, and shutdown behavior.
+- Use `@Async` only when the task owns asynchronous execution. Define the executor, queue/rejection behavior, exception propagation, cancellation, shutdown, and idempotency boundary; do not make a blocking request non-blocking by adding the annotation alone.
+- For `@Async` methods, avoid relying on same-class self-invocation, preserve the repository's proxy/configuration convention, and verify the asynchronous boundary without asserting timing by sleep alone.
+- Use Spring Cache only when the task owns a named cache behavior or an accepted performance requirement. Define key ownership, cached result scope, TTL or freshness, invalidation on writes, null/error behavior, and the behavior when the cache is unavailable.
+- Do not introduce Redis, Caffeine, a new executor, cache annotations, or monitoring dependencies merely because this reference is loaded. The task must provide the runtime dependency and verification boundary.
 - Keep runtime changes aligned with architecture/runtime-delivery artifacts while leaving container/server generation to deploy.
 
 ## Verification Focus
@@ -25,6 +29,8 @@ This file applies Spring Boot runtime behavior rules; deployment assets remain u
 - Run an application context startup or runtime smoke for configuration, actuator, health, scheduler, or bean wiring changes.
 - Test configuration binding defaults and invalid-value behavior when the task adds required settings.
 - Probe the exact actuator/health/runtime endpoint changed by the task.
+- For asynchronous work, verify dispatch, success, failure, cancellation or shutdown behavior, and duplicate-effect protection with synchronization primitives or task completion signals rather than arbitrary delays.
+- For cache work, verify hit/miss behavior, key separation, invalidation after mutation, freshness/expiry policy, and the declared fallback when the cache provider is unavailable.
 - For external client resilience, verify timeout/error mapping and ensure retries do not duplicate unsafe operations.
 
 ## Evidence Focus

@@ -108,7 +108,7 @@ pub fn code_quality_enum_refs() -> Value {
                 ]
             }
         },
-        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
+        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "reactive", "cache", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -952,6 +952,23 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     ) {
         push_unique(&mut tags, "security");
     }
+    if !task_is_frontend_task(task)
+        && (task_is_backend_task(task) || matches!(task.task_kind, TaskKind::ConfigurationSupport))
+        && contains_any(
+            &text,
+            &[
+                "reactive",
+                "webflux",
+                "reactor",
+                "mono",
+                "flux",
+                "r2dbc",
+                "响应式",
+            ],
+        )
+    {
+        push_unique(&mut tags, "reactive");
+    }
     if contains_any(
         &text,
         &[
@@ -959,13 +976,38 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
             "concurrent",
             "queue",
             "stream",
-            "reactive",
             "websocket",
             "并发",
             "异步",
         ],
     ) {
         push_unique(&mut tags, "async");
+    }
+    if task_is_backend_task(task)
+        && contains_any(
+            &text,
+            &[
+                "spring cache",
+                "cachemanager",
+                "cache manager",
+                "cacheable",
+                "cacheevict",
+                "caffeine",
+                "redis cache",
+                "application cache",
+                "in-memory cache",
+                "cache aside",
+                "cache-aside",
+                "cache hit",
+                "cache miss",
+                "缓存",
+                "缓存键",
+                "缓存失效",
+                "缓存策略",
+            ],
+        )
+    {
+        push_unique(&mut tags, "cache");
     }
     if contains_any(
         &text,
@@ -1161,8 +1203,6 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     || has_focus("api")
                     || has_focus("persistence")
                     || has_focus("security")
-                    || has_focus("async")
-                    || has_focus("performance")
                     || has_focus("configuration")
                     || has_focus("runtime")
                     || has_focus("integration")
@@ -1175,9 +1215,8 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     || has_focus("backend")
                     || has_focus("persistence")
                     || has_focus("security")
-                    || has_focus("async")
-                    || has_focus("performance")
                     || has_focus("configuration")
+                    || has_focus("runtime")
             }
         }
         None => roles.contains("frontend") && has_focus("frontend"),
@@ -1199,7 +1238,7 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             if has_focus("security") {
                 items.insert("security".to_string());
             }
-            if has_focus("async") {
+            if has_focus("reactive") {
                 items.insert("reactive".to_string());
             }
             if has_focus("testing") {
@@ -1436,7 +1475,11 @@ fn backend_reference_items_for_signal(
         if has_focus("security") {
             items.insert("security".to_string());
         }
-        if has_focus("configuration") || has_focus("runtime") || has_focus("performance") {
+        if has_focus("configuration")
+            || has_focus("runtime")
+            || has_focus("async")
+            || has_focus("cache")
+        {
             items.insert("runtime".to_string());
         }
         if has_focus("integration") || signal.frameworks.iter().any(|item| item == "spring_cloud") {
@@ -2861,6 +2904,81 @@ mod tests {
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/backend/springboot/data.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/runtime.md"));
+    }
+
+    #[test]
+    fn spring_boot_async_and_cache_task_loads_runtime_without_reactive_or_testing() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        task.objective =
+            "Implement Spring @Async processing with Spring Cache keys, TTL, and invalidation."
+                .to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/runtime.md"));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/java/reactive.md"));
+    }
+
+    #[test]
+    fn spring_boot_reactive_task_loads_reactive_without_runtime() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        task.objective = "Expose a WebFlux endpoint returning Mono and Flux values.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["java"].contains(&"reactive".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/java/reactive.md"));
+    }
+
+    #[test]
+    fn spring_boot_persistence_performance_does_not_load_runtime() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "Spring Data JPA"},
+                "persistence": {"selection": "PostgreSQL"}
+            }
+        }));
+        let mut task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::OptimizePersistenceQuery],
+        );
+        task.objective = "Optimize a Spring Data JPA query plan and index path.".to_string();
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/runtime.md"));
     }
 
     #[test]

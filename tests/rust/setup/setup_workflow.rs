@@ -1275,6 +1275,11 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let java_spring = fs::read_to_string(code_root.join("java/spring.md")).unwrap();
     assert!(java_spring.contains("component scanning"));
     assert!(java_spring.contains("app.<project_slug>"));
+    assert!(java_spring.contains("@Qualifier"));
+    let spring_runtime = fs::read_to_string(backend_root.join("springboot/runtime.md")).unwrap();
+    assert!(spring_runtime.contains("@Async"));
+    assert!(spring_runtime.contains("Spring Cache"));
+    assert!(spring_runtime.contains("Do not introduce Redis, Caffeine"));
 
     let mut backend_files = Vec::new();
     collect_markdown_files(&backend_root, &mut backend_files);
