@@ -41,6 +41,7 @@ pub struct CodeReferenceSelection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CodeReferenceTaskContext {
+    pub application_architecture: bool,
     pub security: bool,
     pub async_processing: bool,
     pub integration: bool,
@@ -145,13 +146,8 @@ pub fn code_reference_selection_for_task_with_context(
         } else {
             BTreeSet::new()
         };
-        let backend_items = backend_reference_items_for_signal(
-            &signal,
-            &stack_frameworks,
-            &focus_tags,
-            task,
-            context,
-        );
+        let backend_items =
+            backend_reference_items_for_signal(&signal, &stack_frameworks, task, context);
         let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags);
         if !items.is_empty() || !backend_items.is_empty() || !frontend_items.is_empty() {
             selected_signals.push(signal.clone());
@@ -352,6 +348,12 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
                 "asp.net core",
                 "minimal api",
             ],
+        );
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
+            "minimal_api",
+            &["minimal api", "minimal-api"],
         );
         push_if_contains(
             &haystack,
@@ -1460,11 +1462,9 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
 fn backend_reference_items_for_signal(
     signal: &CodeStackSignal,
     stack_frameworks: &BTreeSet<String>,
-    focus_tags: &[String],
     task: &TaskDefinition,
     context: &CodeReferenceTaskContext,
 ) -> BTreeMap<String, BTreeSet<String>> {
-    let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
     if signal.frameworks.iter().any(|item| item == "spring_boot") {
         let mut items = BTreeSet::new();
@@ -1525,28 +1525,50 @@ fn backend_reference_items_for_signal(
         }
     }
     if signal.frameworks.iter().any(|item| item == "aspnet_core") {
-        let items = groups.entry("aspnetcore".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) && stack_frameworks.contains("minimal_api") {
             items.insert("minimal".to_string());
         }
-        if has_focus("architecture") {
+        if context.application_architecture && task_is_backend_task(task) {
             items.insert("architecture".to_string());
         }
-        if has_focus("persistence") {
+        if task_owns_persistence(task) && stack_frameworks.contains("entity_framework") {
             items.insert("data".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
         }
-        if has_focus("configuration")
-            || has_focus("runtime")
-            || has_focus("performance")
-            || has_focus("integration")
+        if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+            || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::ImplementRuntimeDeliveryContract)
+            || task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
+            || task_has_action(task, ImplementationAction::ImplementCachePolicy)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementExternalServiceIntegration,
+            )
+            || task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
+            || task_has_action(
+                task,
+                ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+            )
+            || task_has_action(task, ImplementationAction::ImplementObservability)
+            || context.integration
+            || context.resilience
+            || context.observability
         {
             items.insert("runtime".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("aspnetcore".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "nestjs") {
@@ -3118,6 +3140,7 @@ mod tests {
             vec![ImplementationAction::RefactorSupportingCode],
         );
         let context = CodeReferenceTaskContext {
+            application_architecture: false,
             security: true,
             async_processing: true,
             integration: true,
@@ -3653,7 +3676,7 @@ mod tests {
     fn aspnet_core_api_task_loads_minimal_without_data_or_architecture() {
         let baseline = baseline(json!({
             "tracks": {
-                "backend": {"selection": ".NET 8 + ASP.NET Core + Entity Framework Core"}
+                "backend": {"selection": ".NET 8 + ASP.NET Core Minimal APIs + Entity Framework Core"}
             }
         }));
         let task = task(
@@ -3689,7 +3712,18 @@ mod tests {
         task.objective =
             "Introduce clean architecture CQRS handlers and dependency injection boundaries."
                 .to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let prose_only = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(!prose_only
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"architecture".to_string())));
+
+        let context = CodeReferenceTaskContext {
+            application_architecture: true,
+            ..CodeReferenceTaskContext::default()
+        };
+        let selection =
+            code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
         assert!(selection.reference_groups["aspnetcore"].contains(&"architecture".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
@@ -3698,6 +3732,103 @@ mod tests {
             item.ref_id == "bk.aspnet.architecture"
                 && item.path == "tech/backend/aspnetcore/architecture.md"
         }));
+    }
+
+    #[test]
+    fn aspnet_core_minimal_reference_requires_minimal_api_stack_selection() {
+        let minimal_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core Minimal APIs"}
+            }
+        }));
+        let controller_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core MVC Controllers"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let minimal = code_reference_selection_for_task(&minimal_baseline, &task).unwrap();
+        let controllers = code_reference_selection_for_task(&controller_baseline, &task).unwrap();
+
+        assert!(minimal.reference_groups["aspnetcore"].contains(&"minimal".to_string()));
+        assert!(!controllers
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"minimal".to_string())));
+    }
+
+    #[test]
+    fn aspnet_core_data_reference_requires_ef_core_and_persistence_ownership() {
+        let ef_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core"},
+                "dataAccess": {"selection": "Entity Framework Core 8"}
+            }
+        }));
+        let dapper_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core"},
+                "dataAccess": {"selection": "Dapper"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistence],
+        );
+
+        let ef = code_reference_selection_for_task(&ef_baseline, &task).unwrap();
+        let dapper = code_reference_selection_for_task(&dapper_baseline, &task).unwrap();
+
+        assert!(ef.reference_groups["aspnetcore"].contains(&"data".to_string()));
+        assert!(!dapper
+            .reference_groups
+            .get("aspnetcore")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+    }
+
+    #[test]
+    fn aspnet_core_security_testing_and_runtime_references_are_task_owned() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "C# 12 + ASP.NET Core"}
+            }
+        }));
+        let security_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+        let testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let config_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+        let capability_task = task(
+            TaskKind::IntegrationIncrement,
+            vec![
+                ImplementationAction::ImplementAsyncProcessing,
+                ImplementationAction::ImplementCachePolicy,
+            ],
+        );
+
+        let security = code_reference_selection_for_task(&baseline, &security_task).unwrap();
+        let testing = code_reference_selection_for_task(&baseline, &testing_task).unwrap();
+        let runtime = code_reference_selection_for_task(&baseline, &config_task).unwrap();
+        let capability = code_reference_selection_for_task(&baseline, &capability_task).unwrap();
+
+        assert!(security.reference_groups["aspnetcore"].contains(&"security".to_string()));
+        assert!(!security.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(testing.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(!testing.reference_groups["aspnetcore"].contains(&"security".to_string()));
+        assert!(runtime.reference_groups["aspnetcore"].contains(&"runtime".to_string()));
+        assert!(!runtime.reference_groups["aspnetcore"].contains(&"testing".to_string()));
+        assert!(capability.reference_groups["aspnetcore"].contains(&"runtime".to_string()));
     }
 
     #[test]

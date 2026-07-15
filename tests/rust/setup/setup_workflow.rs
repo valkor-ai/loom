@@ -1306,9 +1306,10 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .and_then(|name| name.to_str());
         let is_spring_boot = backend_profile == Some("springboot");
         let is_nestjs = backend_profile == Some("nestjs");
+        let is_aspnet_core = backend_profile == Some("aspnetcore");
         let minimum_lines = if matches!(
             backend_profile,
-            Some("springboot" | "fastapi" | "django" | "nestjs")
+            Some("springboot" | "fastapi" | "django" | "nestjs" | "aspnetcore")
         ) {
             65
         } else {
@@ -1327,7 +1328,7 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
                     path.display()
                 );
             }
-        } else if is_nestjs {
+        } else if is_nestjs || is_aspnet_core {
             for required in [
                 "## Verification",
                 "## Delivery Evidence",
@@ -1335,7 +1336,7 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             ] {
                 assert!(
                     content.contains(required),
-                    "{} missing NestJS engineering section {required}",
+                    "{} missing enhanced backend engineering section {required}",
                     path.display()
                 );
             }
@@ -1429,6 +1430,26 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let nest_migration = fs::read_to_string(backend_root.join("nestjs/migration.md")).unwrap();
     assert!(nest_migration.contains("parity matrix"));
     assert!(nest_migration.contains("routing owner"));
+    let aspnet_architecture =
+        fs::read_to_string(backend_root.join("aspnetcore/architecture.md")).unwrap();
+    assert!(aspnet_architecture.contains("MediatR"));
+    assert!(aspnet_architecture.contains("IServiceProvider"));
+    let aspnet_minimal = fs::read_to_string(backend_root.join("aspnetcore/minimal.md")).unwrap();
+    assert!(aspnet_minimal.contains("TypedResults"));
+    assert!(aspnet_minimal.contains("WebApplicationFactory"));
+    let aspnet_data = fs::read_to_string(backend_root.join("aspnetcore/data.md")).unwrap();
+    assert!(aspnet_data.contains("IEntityTypeConfiguration"));
+    assert!(aspnet_data.contains("DbUpdateConcurrencyException"));
+    let aspnet_security = fs::read_to_string(backend_root.join("aspnetcore/security.md")).unwrap();
+    assert!(aspnet_security.contains("IAuthorizationRequirement"));
+    assert!(aspnet_security.contains("UseAuthentication"));
+    let aspnet_runtime = fs::read_to_string(backend_root.join("aspnetcore/runtime.md")).unwrap();
+    assert!(aspnet_runtime.contains("ValidateOnStart"));
+    assert!(aspnet_runtime.contains("IHttpClientFactory"));
+    assert!(aspnet_runtime.contains("HybridCache"));
+    let aspnet_testing = fs::read_to_string(backend_root.join("aspnetcore/testing.md")).unwrap();
+    assert!(aspnet_testing.contains("WebApplicationFactory<Program>"));
+    assert!(aspnet_testing.contains("EF InMemory"));
 
     let mut frontend_files = Vec::new();
     collect_markdown_files(&frontend_root, &mut frontend_files);

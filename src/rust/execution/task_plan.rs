@@ -4360,6 +4360,20 @@ fn code_reference_task_context(
     aac: &ArchitectureArtifactContract,
     task: &TaskDefinition,
 ) -> CodeReferenceTaskContext {
+    let owned_decisions = task
+        .write_boundary
+        .artifact_refs
+        .decisions
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let application_architecture = aac.architecture_quality.decisions.iter().any(|decision| {
+        owned_decisions.contains(&decision.decision_id)
+            && matches!(
+                decision.category.as_str(),
+                "architecture_style" | "module_boundary"
+            )
+    });
     let owned_interfaces = task
         .write_boundary
         .artifact_refs
@@ -4414,6 +4428,7 @@ fn code_reference_task_context(
             || task_quality_category_matches(aac, task, "observability")
             || task_quality_category_matches(aac, task, "operability");
     CodeReferenceTaskContext {
+        application_architecture,
         security,
         async_processing,
         integration,
@@ -5492,7 +5507,34 @@ mod tests {
             "acceptanceMatrix": [],
             "detailCoverage": [],
             "architectureQuality": {
-                "decisions": [],
+                "decisions": [{
+                    "decisionId": "adr-orders-module-boundary",
+                    "category": "module_boundary",
+                    "title": "Keep order application boundaries explicit",
+                    "status": "accepted",
+                    "context": "Order behavior spans HTTP, persistence, and a provider adapter.",
+                    "decision": "The order module owns application orchestration behind inward-facing ports.",
+                    "alternativesConsidered": [{
+                        "name": "endpoint-owned orchestration",
+                        "tradeoff": "fewer types but mixed transport and business concerns",
+                        "rejectedBecause": "the accepted module boundary requires reusable application behavior"
+                    }],
+                    "consequences": {
+                        "positive": ["explicit ownership"],
+                        "negative": ["additional adapter mapping"],
+                        "neutral": []
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": [],
+                        "acceptanceRefs": [],
+                        "requirementDetailRefs": []
+                    },
+                    "ownerArtifactRefs": {
+                        "modules": ["module-orders"],
+                        "interfaces": ["api-orders-create"]
+                    },
+                    "verificationHints": ["verify application dependency direction"]
+                }],
                 "nfrs": [{
                     "nfrId": "nfr-orders-observability",
                     "category": "observability",
@@ -5533,6 +5575,8 @@ mod tests {
         task.frontend_experience_requirement = None;
         task.write_boundary.artifact_refs.modules = vec!["module-orders".to_string()];
         task.write_boundary.artifact_refs.interfaces = vec!["api-orders-create".to_string()];
+        task.write_boundary.artifact_refs.decisions =
+            vec!["adr-orders-module-boundary".to_string()];
         task.write_boundary.artifact_refs.nfrs = vec!["nfr-orders-observability".to_string()];
 
         let context = code_reference_task_context(&aac, &task);
@@ -5543,6 +5587,11 @@ mod tests {
             .artifact_refs
             .modules
             .clear();
+        api_policy_only_task
+            .write_boundary
+            .artifact_refs
+            .decisions
+            .clear();
         api_policy_only_task.write_boundary.artifact_refs.interfaces =
             vec!["api-cache-hints-only".to_string()];
         api_policy_only_task
@@ -5552,12 +5601,14 @@ mod tests {
             .clear();
         let api_policy_only_context = code_reference_task_context(&aac, &api_policy_only_task);
 
+        assert!(context.application_architecture);
         assert!(context.security);
         assert!(context.async_processing);
         assert!(context.integration);
         assert!(context.resilience);
         assert!(context.observability);
         assert!(!api_policy_only_context.resilience);
+        assert!(!api_policy_only_context.application_architecture);
         assert_eq!(projected_interactions.len(), 2);
         assert_eq!(
             projected_interactions[0]["interactionType"],
