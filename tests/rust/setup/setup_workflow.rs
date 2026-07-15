@@ -1460,22 +1460,42 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     for path in frontend_files {
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
+        let frontend_profile = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str());
+        let is_angular = frontend_profile == Some("angular");
+        let minimum_lines = if is_angular { 65 } else { 25 };
         assert!(
-            line_count >= 25,
+            line_count >= minimum_lines,
             "{} is too thin to act as a frontend framework reference: {line_count} lines",
             path.display()
         );
-        for required in [
-            "When To Use",
-            "Implementation Focus",
-            "Verification Focus",
-            "Evidence Focus",
-        ] {
-            assert!(
-                content.contains(required),
-                "{} missing frontend framework reference section {required}",
-                path.display()
-            );
+        if is_angular {
+            for required in [
+                "## Verification",
+                "## Delivery Evidence",
+                "## Unsafe Defaults",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing enhanced Angular engineering section {required}",
+                    path.display()
+                );
+            }
+        } else {
+            for required in [
+                "When To Use",
+                "Implementation Focus",
+                "Verification Focus",
+                "Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing frontend framework reference section {required}",
+                    path.display()
+                );
+            }
         }
         for forbidden in [
             "referenceLoadPlan",
@@ -1498,6 +1518,25 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             );
         }
     }
+    let angular_core = fs::read_to_string(frontend_root.join("angular/core.md")).unwrap();
+    assert!(angular_core.contains("ChangeDetectionStrategy.OnPush"));
+    assert!(angular_core.contains("getRawValue()"));
+    let angular_components =
+        fs::read_to_string(frontend_root.join("angular/components.md")).unwrap();
+    assert!(angular_components.contains("input.required"));
+    assert!(angular_components.contains("DestroyRef"));
+    let angular_routing = fs::read_to_string(frontend_root.join("angular/routing.md")).unwrap();
+    assert!(angular_routing.contains("RouterTestingHarness"));
+    assert!(angular_routing.contains("withComponentInputBinding"));
+    let angular_rxjs = fs::read_to_string(frontend_root.join("angular/rxjs.md")).unwrap();
+    assert!(angular_rxjs.contains("takeUntilDestroyed"));
+    assert!(angular_rxjs.contains("shareReplay"));
+    let angular_ngrx = fs::read_to_string(frontend_root.join("angular/ngrx.md")).unwrap();
+    assert!(angular_ngrx.contains("createEntityAdapter"));
+    assert!(angular_ngrx.contains("concatLatestFrom"));
+    let angular_testing = fs::read_to_string(frontend_root.join("angular/testing.md")).unwrap();
+    assert!(angular_testing.contains("provideHttpClientTesting"));
+    assert!(angular_testing.contains("TestScheduler.run"));
 }
 
 #[test]

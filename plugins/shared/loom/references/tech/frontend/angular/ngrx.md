@@ -1,33 +1,93 @@
-# Angular NgRx Quality
+# Angular Shared State With NgRx
 
-This file applies NgRx discipline to task-owned stores, actions, reducers, selectors, effects, entity adapters, facades, and component-store integration.
+Apply NgRx only when TechnicalBaseline selects it and the task owns shared client state, reducers/store, selectors, effects, entity collections, or a cross-surface lifecycle. Local component state does not justify a store.
 
-## When To Use
+## State Ownership
 
-- The task creates or changes NgRx store setup, feature state, action groups, reducers, selectors, effects, entity collections, facade APIs, or component-store usage.
-- Use this when state must be shared across routes, survive component teardown, coordinate multiple API calls, drive permissions/eligibility, or support complex list/detail workflows.
-- Do not introduce NgRx for small local component state when signals, component state, or an existing lightweight store is the repository norm and the workflow does not need shared state.
+Model state around product workflow and source-of-truth boundaries, not one field per API response. Keep only state required across components/routes, for coordinated effects, or for stable workflow history.
 
-## Implementation Focus
+A feature state may include normalized entities, request status/error, selected identity, filters/page, dirty draft, optimistic operation, and freshness metadata when those are actually used. Do not duplicate derived lists/counts/eligibility that selectors can compute.
 
-- Model feature state around domain workflow, not around API endpoints. Include loading, error, selected ID, filters, pagination, dirty draft, or optimistic state only when the UI actually uses it.
-- Prefer action groups with clear source names and event names. Include enough payload context to avoid relying on stale selected state inside effects.
-- Keep reducers pure and immutable. Never mutate arrays, entities, nested draft state, or error fields directly.
-- Use entity adapters for normalized collections when the feature has list/detail lookup, update/delete, pagination merge, or stable identity requirements.
-- Keep selectors small, typed, and composable. Derive view models in selectors or facades when multiple components need the same business-ready shape.
-- Use effects for async work, external services, router side effects, and persistence. Pick effect flattening operators by business semantics: latest list load, ordered save queue, duplicate-submit prevention, or independent concurrent operations.
-- Convert store selectors to signals at component boundaries when that matches the app style. Do not dispatch actions from presentational components.
-- Use a facade when it reduces repeated store wiring, hides action names from components, or centralizes workflow commands. Do not create a facade that only renames one selector and one dispatch.
-- Keep store keys, feature names, and selector names stable. Avoid breaking persisted state, router-store links, or devtools inspection without an explicit migration.
+Keep server data ownership explicit. NgRx state is a client representation/cache, not authority over concurrent backend changes.
 
-## Verification Focus
+## Feature Registration And Keys
 
-- Test reducers for state transitions, entity adapter behavior, error clearing, and immutable updates.
-- Test selectors for filtered, sorted, selected, empty, loading, and permission-derived view models.
-- Test effects for success, failure, retry, cancellation, duplicate-submit prevention, and dispatch/no-dispatch side effects.
-- Verify component integration dispatches actions with the displayed record's identity and renders store-derived states correctly.
-- Run build/typecheck to catch feature-key, selector, action payload, and effect typing errors.
+Use `provideState`/`provideEffects` or the repository's module setup at the correct application/route lifetime. Keep feature keys stable and unique; changing a key can break selectors, router integration, persisted state, devtools, and tests.
 
-## Evidence Focus
+Register effects once. Lazy route registration needs clear teardown/re-entry behavior and must not duplicate side effects.
 
-- In the evidence summary, name the NgRx decision: feature state shape, action payload contract, entity adapter, selector view model, effect concurrency operator, facade boundary, or store integration proof.
+## Actions And Reducers
+
+Use action groups with business/event sources and typed payloads:
+
+```typescript
+export const OrdersActions = createActionGroup({
+  source: 'Orders Workbench',
+  events: {
+    'Load Requested': props<{ filter: OrderFilter }>(),
+    'Load Succeeded': props<{ orders: readonly OrderSummary[] }>(),
+    'Load Failed': props<{ error: UiError }>(),
+    'Approval Requested': props<{ orderId: string; expectedVersion: number }>(),
+  },
+});
+```
+
+Include stable target/context in commands so effects do not read a possibly changed `selectedId` after the user navigates or filters.
+
+Reducers are pure and immutable. Clear stale errors/loading/optimistic state on the correct initiating/success/failure events. Never mutate entity arrays, nested drafts, or error objects.
+
+Use `createEntityAdapter` for normalized collections with stable identity and list/detail updates. Configure `selectId` and sorting only when they match domain identity and desired canonical order; pagination order may need separate ID lists.
+
+## Selectors And Facades
+
+Keep selectors typed, pure, composable, and free of service calls, mutation, time/randomness, or component-only formatting. Build reusable business-ready view models where multiple surfaces need them.
+
+Avoid factory selectors created repeatedly during rendering without memoization/lifetime control. Prefer selected-ID plus entities selectors or a facade method that reuses selector instances.
+
+A facade is useful when it hides store mechanics, centralizes commands/view models, or protects component APIs from action/key churn. Do not create pass-through facades that only rename every dispatch/select one-for-one.
+
+Convert selectors to signals at container boundaries when selected by the repository; presentational components still receive typed values/events.
+
+## Effects And Concurrency
+
+Effects coordinate async/external work and dispatch outcomes. Choose flattening by operation semantics:
+
+- `switchMap` for replaceable list/filter loads
+- `exhaustMap` for duplicate-submit prevention
+- `concatMap` for ordered writes
+- bounded `mergeMap` for independent operations
+
+Catch errors inside the inner operation so the effect stream remains alive. Map validation/conflict/permission/unavailable failures to typed events instead of generic strings.
+
+Use `concatLatestFrom` only when the latest store value is truly required after the action arrives. Do not hide missing action payload context through broad state reads.
+
+Router, toast, analytics, and other non-dispatch side effects need `dispatch: false` and should not replace product-visible state/recovery.
+
+## Optimistic And Persisted State
+
+Optimistic changes require temporary identity/version, rollback/reconciliation, duplicate response handling, and visible pending/failure behavior. Avoid optimistic updates for destructive/high-conflict operations without an accepted design.
+
+Persist only explicitly safe state with schema/version/migration and logout/tenant clearing. Never persist tokens, secrets, sensitive records, transient loading/errors, or stale authorization decisions by default.
+
+## Verification
+
+- Test reducer transitions, immutable updates, entity adapter identity/order, and stale-state clearing.
+- Test selectors for empty/loading/error, filtering/sorting, selected identity, permissions, and view-model derivation.
+- Test effects for success/failure, operator concurrency, duplicate-submit, cancellation, retry bounds, and no-dispatch effects.
+- Verify feature registration/key and lazy route lifecycle in an integration boundary when changed.
+- Verify optimistic rollback/reconciliation and persisted-state migration/clearing when owned.
+- Confirm components dispatch the displayed record identity and render selector/facade states.
+
+## Delivery Evidence
+
+Identify the feature key/state, action, reducer/selector/effect decision, and transition/emission assertion proving it. Redux DevTools visibility or a successful API response cannot prove immutability, action targeting, effect concurrency, rollback, or persisted-state safety.
+
+## Unsafe Defaults
+
+- NgRx loaded/introduced without selected stack and shared-state ownership.
+- API responses copied wholesale into duplicated feature state.
+- Effects reading mutable selected state instead of action target context.
+- Reducers mutating nested/entity data.
+- One pass-through facade method per selector/action.
+- Effect streams terminating after the first error.
+- Sensitive or authorization state persisted without lifecycle/migration policy.

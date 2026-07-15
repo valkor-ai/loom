@@ -1392,6 +1392,9 @@ fn task_has_frontend_execution(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })

@@ -1,34 +1,97 @@
-# Angular Component Quality
+# Angular Components And Templates
 
-This file applies Angular component-level discipline to task-owned standalone components, templates, input/output contracts, content projection, and reusable UI boundaries.
+Components translate task-owned business surfaces into accessible rendering and interactions. Design component APIs around product concepts and visible workflow state, not raw backend entities or generic wrappers.
 
-## When To Use
+## Component Responsibility
 
-- The task creates or changes Angular components, shared UI primitives, feature components, forms, tables, detail panels, modals, or component composition.
-- Use this when component API shape, template control flow, projection slots, change detection, accessibility, or parent-child data flow affects the delivered workflow.
-- Keep broader state-store decisions in the NgRx reference and broader stream decisions in the RxJS reference.
+Container/surface components may coordinate route data, API/facade/store state, and business actions. Presentational components receive typed inputs, emit user intent, and render states without hidden navigation, HTTP, or store mutation.
 
-## Implementation Focus
+Split components at reusable behavior/visual boundaries or independent state ownership. Do not fragment every row/label into a component, and do not build one page component that owns unrelated list, detail, form, modal, and transport logic.
 
-- Design component APIs around product concepts, not backend transport shapes. Editable forms, filters, selected rows, and confirmation dialogs often need view models distinct from API DTOs.
-- Use required inputs only when the component cannot render a meaningful fallback. Optional inputs need explicit default rendering, disabled state, or empty state behavior.
-- Emit events with enough context for the parent to act safely. For row actions, emit stable identifiers or snapshots that cannot drift if filters or selection change before the handler runs.
-- Keep two-way `model<T>()` bindings for simple controlled values. Use explicit input/output pairs for complex workflows where saving, validation, or confirmation has separate states.
-- Keep presentational components free of direct HTTP calls, router decisions, store dispatches, and hidden business mutations. Those belong in a container, facade, service, or store boundary.
-- Use content projection only for real extension points such as card header/body/footer, toolbar actions, table empty state, or modal footer. Do not use projection to hide unrelated page composition in a generic shell.
-- Keep templates readable. Move repeated conditions, labels, and eligibility rules into named computed values or methods with no side effects.
-- Use semantic controls and accessible names. Icon-only buttons, menu triggers, custom selects, dialogs, and destructive actions must expose labels and focus behavior.
-- Keep styles aligned with the repository's design system or UIX tokens. Do not add one-off inline styling when the app has shared component classes, tokens, or theme primitives.
-- Avoid mixing old and new Angular syntax in the same new component unless compatibility requires it. A new standalone component should not introduce NgModule declarations.
+## Inputs, Outputs, And Models
 
-## Verification Focus
+Use signal inputs/outputs/models only on a compatible Angular version. Required inputs are appropriate when the component cannot render without a value; optional inputs need explicit defaults and fallback behavior.
 
-- Test component rendering through public inputs, visible output, and user events rather than private fields.
-- Verify loading, empty, populated, validation error, blocking error, disabled, and destructive confirmation states owned by the component.
-- Verify emitted events target the displayed record after sorting, filtering, pagination, modal open/close, or repeated list refresh.
-- Verify focus handling for dialogs, drawers, menus, and error summaries when the component introduces an overlay or custom interaction.
-- Run component tests with TestBed or the repository's existing Angular testing stack, plus build/lint when component templates or imports changed.
+```typescript
+@Component({
+  selector: 'app-order-row',
+  standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  templateUrl: './order-row.component.html',
+})
+export class OrderRowComponent {
+  readonly order = input.required<OrderRowViewModel>();
+  readonly disabled = input(false);
+  readonly inspect = output<{ orderId: string }>();
+}
+```
 
-## Evidence Focus
+Emit stable identifiers plus required context. A row action should not depend on a mutable global selected item that can change after sorting, filtering, refresh, or modal opening.
 
-- In the evidence summary, name the component decision: required input, event payload contract, signal/model usage, projection slot, OnPush boundary, accessible control, or action-targeting proof.
+Use `model<T>()` for genuinely controlled simple values. Save/validate/confirm workflows need explicit events and draft state rather than implicit two-way mutation of persisted objects.
+
+## Template Control Flow
+
+Keep templates declarative and bounded. Use `@if` for mutually exclusive state, `@for (...; track item.id)` for dynamic collections, and `@empty` for collection-empty output where supported.
+
+Avoid methods/getters that allocate, sort, filter, format, or mutate on every change-detection pass. Compute view models in signals/selectors/pipes. Do not use `track $index` for reorderable, pageable, insertable, or refreshable records.
+
+Keep loading/error/empty feedback near the affected region while retaining page context and recovery actions. Overlay spinners should not erase unrelated usable work.
+
+## Forms And Controls
+
+Use native semantic controls or the established component library. Every input has a programmatic label; validation messages associate to the field; icon-only buttons have accessible names; disabled and read-only semantics are not interchangeable.
+
+For typed reactive forms, initialize defaults intentionally and keep DTO conversion at a boundary:
+
+```typescript
+readonly form = this.formBuilder.nonNullable.group({
+  supplierName: ['', [Validators.required, Validators.maxLength(120)]],
+  amount: [0, [Validators.required, Validators.min(0.01)]],
+});
+```
+
+Show field and form-level backend errors, preserve valid draft values, focus/announce meaningful blocking errors, and prevent duplicate submits. Confirmation dialogs must keep affected object identity and consequence visible.
+
+## Content Projection And Reuse
+
+Use content projection for stable extension points such as toolbar actions, card/header content, empty state, or modal footer. Name/select slots clearly and provide sensible default rendering where appropriate.
+
+Avoid generic shell components with many boolean inputs and projection slots that hide page composition. Prefer focused product primitives with typed APIs.
+
+## Styling, Layout, And Responsiveness
+
+Use repository UIX tokens, semantic colors, spacing, typography, density, and component primitives. Keep component styles scoped according to the existing strategy and avoid `::ng-deep`, global selectors, and one-off inline values unless a documented integration requires them.
+
+Business tables need stable columns/actions and a narrow-screen strategy such as cards, drawer/detail route, or intentional horizontal handling. Fixed toolbars, overlays, menus, and dialogs must not overlap content or lose keyboard/focus behavior.
+
+Use Angular CDK overlay/focus utilities or the selected component library for complex dialogs, menus, drag/drop, and focus trapping rather than reimplementing interaction primitives casually.
+
+## Performance And Lifecycle
+
+OnPush and stable input identity reduce work only when state updates are explicit. Virtualize genuinely large lists with CDK or repository tooling after measuring, and preserve item identity, keyboard behavior, and scroll restoration.
+
+Clean up event/observer/subscription resources through `DestroyRef`, `takeUntilDestroyed`, async pipe, or signal interop. Avoid manual DOM listeners and timers without teardown.
+
+## Verification
+
+- Test visible behavior through public inputs, DOM roles/labels/text, and emitted user events.
+- Cover loading, empty, populated, validation, disabled, submitting, conflict, permission, and destructive confirmation states owned by the component.
+- Verify row/action identity after sort, filter, pagination, refresh, and overlay open/close.
+- Exercise keyboard, focus return, error announcement, and accessible naming for custom interactions.
+- Verify responsive behavior for dense lists/forms/details and long/localized content.
+- Build templates to catch missing standalone imports and invalid bindings.
+
+## Delivery Evidence
+
+Name the component API/state and the rendered interaction assertion proving it. Private-field tests, shallow class construction, or static template inspection cannot prove binding, focus, accessibility, action identity, or responsive behavior.
+
+## Unsafe Defaults
+
+- Presentational components making HTTP/store/router decisions.
+- Persisted entities mutated through two-way binding.
+- Template methods doing repeated filtering/sorting/allocation.
+- Index tracking on dynamic business records.
+- Generic projected shells replacing clear page composition.
+- Custom dialogs/menus without focus and keyboard behavior.
+- One-off styles bypassing UIX/design-system tokens.

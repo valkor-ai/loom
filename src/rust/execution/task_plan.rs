@@ -1713,11 +1713,35 @@ fn derived_ui_ownership_dimensions(
     if has_integration || has_action {
         dimensions.push("integration_feedback".to_string());
     }
+    if implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateFrontendNavigation
+        )
+    }) {
+        dimensions.push("surface".to_string());
+        dimensions.push("action".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementSharedClientState))
+    {
+        dimensions.push("state".to_string());
+    }
+    if implementation_actions
+        .iter()
+        .any(|action| matches!(action, ImplementationAction::ImplementReactiveClientFlow))
+    {
+        dimensions.push("integration_feedback".to_string());
+    }
     if task_kind_is_frontend(task_kind)
         || implementation_actions.iter().any(|action| {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::ImplementFrontendExperienceContract
             )
         })
@@ -1909,6 +1933,9 @@ fn task_owns_business_flow_behavior(task: &TaskDefinition) -> bool {
             ImplementationAction::CreateOrUpdateBusinessRule
                 | ImplementationAction::CreateOrUpdateInterface
                 | ImplementationAction::CreateOrUpdateUiFlow
+                | ImplementationAction::CreateOrUpdateFrontendNavigation
+                | ImplementationAction::ImplementReactiveClientFlow
+                | ImplementationAction::ImplementSharedClientState
                 | ImplementationAction::WireReferenceInApiOrUi
         )
     })
@@ -3915,6 +3942,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
         "codeReferenceRules": {
             "authority": "MCP derives task-scoped code reference groups from the intersection of TechnicalBaseline stack signals and task-owned implementation capabilities; agents must not author referenceLoadPlan or reference group paths.",
             "frameworkCapabilityActions": {
+                "frontendNavigation": ["create_or_update_frontend_navigation"],
+                "reactiveClientFlow": ["implement_reactive_client_flow"],
+                "sharedClientState": ["implement_shared_client_state"],
                 "security": ["implement_authentication_or_authorization"],
                 "async": ["implement_async_processing"],
                 "cache": ["implement_cache_policy"],
@@ -3926,6 +3956,9 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             },
             "frameworkCapabilityRule": "Use these implementationActions only when the task really owns the corresponding capability. They are cross-framework implementation facts; MCP maps them to the framework selected by TechnicalBaseline.",
             "structuredCapabilitySources": {
+                "frontendNavigation": "Use create_or_update_frontend_navigation only for the task that owns route definitions, route parameters, guards, resolvers, deep links, nested navigation, or equivalent framework navigation configuration.",
+                "reactiveClientFlow": "Use implement_reactive_client_flow only for a task that owns stream cancellation, ordering, fan-out, subscription lifecycle, or other reactive client behavior beyond a simple one-shot binding.",
+                "sharedClientState": "Use implement_shared_client_state only for the task that owns a selected shared state container, reducer/store, effects, selectors, or a cross-surface client state lifecycle. Local component state does not use this action.",
                 "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
                 "async": "A task owning an event/job application interaction uses implement_async_processing.",
                 "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
@@ -4833,6 +4866,9 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
@@ -5581,6 +5617,7 @@ mod tests {
 
         let context = code_reference_task_context(&aac, &task);
         let projected_interactions = compact_application_interactions(&aac);
+        let rules = generation_rules(&aac, &Value::Null);
         let mut api_policy_only_task = task.clone();
         api_policy_only_task
             .write_boundary
@@ -5617,6 +5654,18 @@ mod tests {
         assert_eq!(
             projected_interactions[1]["providerModuleRef"],
             json!("module-orders")
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["frontendNavigation"],
+            json!(["create_or_update_frontend_navigation"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["reactiveClientFlow"],
+            json!(["implement_reactive_client_flow"])
+        );
+        assert_eq!(
+            rules["codeReferenceRules"]["frameworkCapabilityActions"]["sharedClientState"],
+            json!(["implement_shared_client_state"])
         );
     }
 

@@ -148,7 +148,7 @@ pub fn code_reference_selection_for_task_with_context(
         };
         let backend_items =
             backend_reference_items_for_signal(&signal, &stack_frameworks, task, context);
-        let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags);
+        let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags, task);
         if !items.is_empty() || !backend_items.is_empty() || !frontend_items.is_empty() {
             selected_signals.push(signal.clone());
             if let Some(language) = &signal.language {
@@ -595,6 +595,11 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     for action in &task.implementation_actions {
         match action {
             ImplementationAction::AddOrUpdateConfig => push_unique(&mut tags, "configuration"),
+            ImplementationAction::CreateOrUpdateFrontendNavigation => {
+                push_unique(&mut tags, "routing")
+            }
+            ImplementationAction::ImplementReactiveClientFlow => push_unique(&mut tags, "async"),
+            ImplementationAction::ImplementSharedClientState => push_unique(&mut tags, "state"),
             ImplementationAction::ImplementAuthenticationOrAuthorization => {
                 push_unique(&mut tags, "security")
             }
@@ -1673,6 +1678,7 @@ fn task_has_action(task: &TaskDefinition, expected: ImplementationAction) -> boo
 fn frontend_reference_items_for_signal(
     signal: &CodeStackSignal,
     focus_tags: &[String],
+    task: &TaskDefinition,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
@@ -1746,21 +1752,28 @@ fn frontend_reference_items_for_signal(
         }
     }
     if signal.frameworks.iter().any(|item| item == "angular") {
-        let items = groups.entry("angular".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("components".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_frontend_implementation(task) {
+            items.insert("core".to_string());
+            items.insert("components".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("routing") {
+        if task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation) {
             items.insert("routing".to_string());
         }
-        if has_focus("rxjs") || has_focus("async") || has_focus("data_fetching") {
+        if task_uses_api_client_binding(task)
+            || task_has_action(task, ImplementationAction::ImplementReactiveClientFlow)
+        {
             items.insert("rxjs".to_string());
         }
-        if has_focus("ngrx") {
+        if signal.frameworks.iter().any(|item| item == "ngrx")
+            && task_has_action(task, ImplementationAction::ImplementSharedClientState)
+        {
             items.insert("ngrx".to_string());
         }
+        groups.insert("angular".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "reactnative") {
         let items = groups.entry("reactnative".to_string()).or_default();
@@ -1874,10 +1887,31 @@ fn task_is_frontend_task(task: &TaskDefinition) -> bool {
             matches!(
                 action,
                 ImplementationAction::CreateOrUpdateUiFlow
+                    | ImplementationAction::CreateOrUpdateFrontendNavigation
+                    | ImplementationAction::ImplementReactiveClientFlow
+                    | ImplementationAction::ImplementSharedClientState
                     | ImplementationAction::ImplementFrontendExperienceContract
                     | ImplementationAction::CreateEntityAdminPage
             )
         })
+}
+
+fn task_owns_frontend_implementation(task: &TaskDefinition) -> bool {
+    matches!(
+        task.task_kind,
+        TaskKind::FrontendExperience | TaskKind::UiFlowIncrement
+    ) || task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateUiFlow
+                | ImplementationAction::CreateOrUpdateFrontendNavigation
+                | ImplementationAction::ImplementReactiveClientFlow
+                | ImplementationAction::ImplementSharedClientState
+                | ImplementationAction::WireReferenceInApiOrUi
+                | ImplementationAction::CreateEntityAdminPage
+                | ImplementationAction::ImplementFrontendExperienceContract
+        )
+    })
 }
 
 fn task_owns_test_implementation(task: &TaskDefinition) -> bool {
@@ -2173,6 +2207,7 @@ fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<S
     push_if_contains(haystack, frameworks, "vue", &["vue", "nuxt"]);
     push_if_contains(haystack, frameworks, "nuxt", &["nuxt"]);
     push_if_contains(haystack, frameworks, "angular", &["angular", "ngrx"]);
+    push_if_contains(haystack, frameworks, "ngrx", &["ngrx"]);
     push_if_contains(haystack, frameworks, "svelte", &["svelte"]);
 }
 
@@ -2709,15 +2744,20 @@ mod tests {
     fn maps_angular_typescript_to_task_scoped_angular_refs() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Angular 17 + TypeScript"}
+                "web": {"selection": "Angular 17 + NgRx + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementReactiveClientFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Build standalone purchase approval components with signals, route guard and resolver, RxJS switchMap search, NgRx entity adapter state, and component tests.".to_string();
+        task.objective = "Implement the accepted purchase approval frontend workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("angular"));
         assert!(selection.reference_groups.contains_key("typescript"));
@@ -2757,6 +2797,52 @@ mod tests {
             item.ref_id == "fe.angular.components"
                 && item.path == "tech/frontend/angular/components.md"
         }));
+    }
+
+    #[test]
+    fn angular_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let angular_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Angular 17 + TypeScript"}}
+        }));
+        let ngrx_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Angular 17 + NgRx + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective =
+            "Add Angular routes, RxJS streams, resolvers, selectors, effects, and an NgRx store."
+                .to_string();
+        let mut state_without_ngrx = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
+        );
+        state_without_ngrx.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+
+        let prose = code_reference_selection_for_task(&ngrx_baseline, &prose_only).unwrap();
+        let state =
+            code_reference_selection_for_task(&angular_baseline, &state_without_ngrx).unwrap();
+        let tests = code_reference_selection_for_task(&angular_baseline, &testing).unwrap();
+
+        for specialized in ["routing", "rxjs", "ngrx", "testing"] {
+            assert!(!prose.reference_groups["angular"].contains(&specialized.to_string()));
+        }
+        assert!(!state.reference_groups["angular"].contains(&"ngrx".to_string()));
+        assert!(tests.reference_groups["angular"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"components".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"routing".to_string()));
+        assert!(!tests.reference_groups["angular"].contains(&"rxjs".to_string()));
     }
 
     #[test]
