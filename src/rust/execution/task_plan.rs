@@ -5,17 +5,18 @@ use std::{
 
 use contracts::{
     architecture::ArchitectureDetailCoverageEntry, build_code_quality_seed, code_quality_enum_refs,
-    code_reference_load_plan, code_reference_selection_for_task, execution::TaskArtifactRefs,
-    package_naming_policy_for_reference_groups, planning::RequirementDetailItem,
-    ui_surface_decision_enum_refs, AcceptancePriority, ApiContractRequirement,
-    ArchitectureArtifactContract, ArchitectureQualityRequirement, BrowserEvidenceEnforcement,
-    BrowserRunnerSource, BrowserVerificationMode, BrowserVerificationProfile,
-    CodeQualityRequirement, CoverageStatus, EngineeringQualityRequirement, ImplementationAction,
-    ReferenceLoadPlanItem, TaskDefinition, TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup,
-    TaskPlanGroupCandidateAgentWritable, TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable,
-    TaskPlanPolicy, TaskPlanRun, TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus,
-    TaskPlanRunSummary, TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState,
-    TaskRunStatus, TaskWriteBoundary, VerificationEvidence, VerificationIntent,
+    code_reference_load_plan, code_reference_selection_for_task_with_context,
+    execution::TaskArtifactRefs, package_naming_policy_for_reference_groups,
+    planning::RequirementDetailItem, ui_surface_decision_enum_refs, AcceptancePriority,
+    ApiContractRequirement, ArchitectureArtifactContract, ArchitectureQualityRequirement,
+    BrowserEvidenceEnforcement, BrowserRunnerSource, BrowserVerificationMode,
+    BrowserVerificationProfile, CodeQualityRequirement, CodeReferenceTaskContext, CoverageStatus,
+    EngineeringQualityRequirement, ImplementationAction, ReferenceLoadPlanItem, TaskDefinition,
+    TaskGroupRunState, TaskKind, TaskPlan, TaskPlanGroup, TaskPlanGroupCandidateAgentWritable,
+    TaskPlanHandoff, TaskPlanOutlineCandidateAgentWritable, TaskPlanPolicy, TaskPlanRun,
+    TaskPlanRunNextAction, TaskPlanRunScheduler, TaskPlanRunStatus, TaskPlanRunSummary,
+    TaskPlanScopeSnapshot, TaskPlanSource, TaskPlanStatus, TaskRunState, TaskRunStatus,
+    TaskWriteBoundary, VerificationEvidence, VerificationIntent,
 };
 use delivery_core::{
     apply_delivery_index, read_selectors_value_from_paths, ArtifactKind, DeliveryLifecycleStatus,
@@ -84,6 +85,13 @@ const IMPLEMENTATION_ACTION_VALUES: &[&str] = &[
     "add_or_update_tests",
     "add_or_update_persistence_tests",
     "add_or_update_config",
+    "implement_authentication_or_authorization",
+    "implement_async_processing",
+    "implement_cache_policy",
+    "implement_external_service_integration",
+    "implement_resilience_policy",
+    "configure_service_routing_or_discovery",
+    "implement_observability",
     "implement_frontend_experience_contract",
     "implement_runtime_delivery_contract",
     "refactor_supporting_code",
@@ -475,10 +483,6 @@ fn taskplan_read_groups(
             "codeQualitySeed.qualityLevel",
             "codeQualitySeed.codeStackSignals",
             "codeQualitySeed.unmappedSignals",
-            "codeQualitySeed.techReferenceProfile.loadMode",
-            "codeQualitySeed.techReferenceProfile.groups.code",
-            "codeQualitySeed.techReferenceProfile.referenceLoadPlan",
-            "codeQualitySeed.generationRules",
         ]);
     }
     if !api_contract_template.is_null() {
@@ -824,7 +828,8 @@ where
         normalize_architecture_quality_requirements(&aac, &mut tasks);
     let api_contract_requirements =
         normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs);
-    let code_quality_requirements = normalize_code_quality_requirements(&baseline, &mut tasks);
+    let code_quality_requirements =
+        normalize_code_quality_requirements(&baseline, &aac, &mut tasks);
     normalize_browser_verification_assignments(&mut tasks);
     issues.extend(validate_browser_verification_assignments(&tasks));
     let browser_automation_facts = scan_browser_automation_facts(root, &baseline);
@@ -3231,6 +3236,7 @@ fn requirement_detail_transfer(
         },
         "architectureDetails": {
             "modules": aac.modules,
+            "applicationInteractions": compact_application_interactions(aac),
             "entities": aac.data_model.get("entities").cloned().unwrap_or(Value::Array(vec![])),
             "interfaces": aac.interfaces,
             "userFlows": aac.user_flows,
@@ -3278,6 +3284,35 @@ fn compact_architecture_quality(aac: &ArchitectureArtifactContract) -> Value {
             "verificationHints": &risk.verification_hints
         })).collect::<Vec<_>>()
     })
+}
+
+fn compact_application_interactions(aac: &ArchitectureArtifactContract) -> Vec<Value> {
+    aac.engineering_boundary
+        .pointer("/applicationInteractions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|interaction| {
+            let mut compact = serde_json::Map::new();
+            for key in [
+                "interactionId",
+                "providerApplicationRef",
+                "consumerApplicationRefs",
+                "providerModuleRef",
+                "interactionType",
+                "protocol",
+                "interfaceRefs",
+                "qualityTraits",
+                "scopeRefs",
+                "acceptanceRefs",
+            ] {
+                if let Some(value) = interaction.get(key).filter(|value| !value.is_null()) {
+                    compact.insert(key.to_string(), value.clone());
+                }
+            }
+            Value::Object(compact)
+        })
+        .collect()
 }
 
 fn compact_requirement_artifact_hints(artifact_refs: &Value) -> Value {
@@ -3877,7 +3912,28 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "taskPlanningRule": "For applicable tasks, verificationIntents should prove storage schema, data-access mapping, DTO/API contract, query/sort/filter fields, and same-provider persistence behavior stay aligned."
         },
         "codeReferenceRules": {
-            "authority": "MCP derives task-scoped code reference groups from TechnicalBaseline stack signals and implementationActions; agents must not author referenceLoadPlan or reference group paths.",
+            "authority": "MCP derives task-scoped code reference groups from the intersection of TechnicalBaseline stack signals and task-owned implementation capabilities; agents must not author referenceLoadPlan or reference group paths.",
+            "frameworkCapabilityActions": {
+                "security": ["implement_authentication_or_authorization"],
+                "async": ["implement_async_processing"],
+                "cache": ["implement_cache_policy"],
+                "externalIntegration": ["implement_external_service_integration"],
+                "resilience": ["implement_resilience_policy"],
+                "serviceRoutingOrDiscovery": ["configure_service_routing_or_discovery"],
+                "observability": ["implement_observability"]
+            },
+            "frameworkCapabilityRule": "Use these implementationActions only when the task really owns the corresponding capability. They are cross-framework implementation facts; MCP maps them to the framework selected by TechnicalBaseline.",
+            "structuredCapabilitySources": {
+                "security": "A task owning an interface authPolicy, an application interaction with required/optional/deferred_with_risk authRequirement, or an architecture-quality security ref uses implement_authentication_or_authorization.",
+                "async": "A task owning an event/job application interaction uses implement_async_processing.",
+                "cache": "A task owning an explicit application-cache decision, NFR, or implementation boundary uses implement_cache_policy. HTTP cachePolicy, validators, and conditional requests remain API/web behavior and do not activate an application-cache reference.",
+                "externalIntegration": "A task owning an external_adapter application interaction uses implement_external_service_integration.",
+                "resilience": "A task owning an application-interaction retry operationalPolicy or an applicable availability/reliability decision uses implement_resilience_policy. An HTTP interface retryPolicy alone describes caller-visible API behavior and does not activate internal retries.",
+                "observability": "A task owning an observability/operability architecture-quality ref uses implement_observability.",
+                "serviceRoutingOrDiscovery": "Use configure_service_routing_or_discovery only for an explicitly accepted service-routing, discovery, gateway, or centralized-config capability."
+            },
+            "structuredCapabilityOwnershipRule": "Assign a capability action only to the task whose artifactRefs own the matching interface, provider module, decision, NFR, or risk. Do not infer capability actions from framework availability or generic task prose.",
+            "unmappedStackRule": "When codeQualitySeed.unmappedSignals is non-empty, preserve the accepted stack and repository conventions; do not substitute a nearby language or framework profile.",
             "persistenceActions": {
                 "schema": ["create_or_update_entity", "create_or_update_persistence", "create_entity_migration", "create_entity_crud"],
                 "query": ["create_entity_repository", "create_entity_crud", "create_or_update_persistence_query", "optimize_persistence_query", "implement_analytical_query"],
@@ -3887,7 +3943,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
                 "persistenceTest": ["add_or_update_persistence_tests"]
             },
             "dialectRule": "When the accepted persistence provider is MySQL or PostgreSQL, MCP adds only the provider overlay matching the assigned persistence subject. MariaDB is not silently treated as MySQL.",
-            "nonSelectionRule": "Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
+            "nonSelectionRule": "Do not attach framework references solely because a language or framework is present in TechnicalBaseline. Do not attach SQL or provider overlays to pure API, controller, frontend, or generic test tasks. Generic add_or_update_tests does not select database references."
         },
         "architectureQualityRules": {
             "requirementSource": "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality plus task-owned modules and interfaces",
@@ -3912,7 +3968,7 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "seedSource": "codeQualitySeed",
             "requirementSource": "outputContract.codeQualityRequirementTemplate",
             "assignmentRule": "loom.taskPlanAcceptFile derives task codeQualityRequirementRefs from TechnicalBaseline stack signals and task scope; do not inline full code quality requirements inside every task.",
-            "referenceRule": "Use codeQualitySeed.codeStackSignals to choose task scope and implementation practices. Do not write codeQualityRequirementRefs or inline reference paths; Loom derives the task-scoped requirement and referenceLoadPlan during accept. Groups are semantic evidence labels, not path maps.",
+            "referenceRule": "Use codeQualitySeed.codeStackSignals only to describe accurate task ownership. Do not write codeQualityRequirementRefs, reference groups, or reference paths; Loom derives task-scoped requirements and referenceLoadPlan during accept.",
             "nonDuplicationRule": "Do not repeat language or framework best-practice prose in task objective or verification intents; use codeQualityRequirementRefs and TaskResult codeQualityEvidence."
         }
     })
@@ -3931,9 +3987,7 @@ fn code_quality_requirement_template(code_quality_seed: &Value) -> Value {
         "requirementId": "code-quality-{taskId}",
         "kind": "language_implementation_quality",
         "codeStackSignalSource": "codeQualitySeed.codeStackSignals",
-        "referenceGroupSource": "codeQualitySeed.techReferenceProfile.groups.code",
-        "referenceLoadPlanSource": "Generated by loom.taskPlanAcceptFile from selected reference groups; agents must read only files listed in each requirement referenceLoadPlan.",
-        "packageNamingPolicySource": "codeQualitySeed.packageNamingPolicy",
+        "derivationAuthority": "loom.taskPlanAcceptFile derives reference groups and referenceLoadPlan from codeStackSignals plus accepted task ownership.",
         "implementationObligations": code_quality_implementation_obligations(),
         "verificationObligations": code_quality_verification_obligations(),
         "taskRefRule": "Loom attaches the generated requirement through codeQualityRequirementRefs during accept; agents must not write that field or inline language/framework reference prose inside tasks."
@@ -4254,12 +4308,16 @@ fn normalize_api_contract_requirements(
 
 fn normalize_code_quality_requirements(
     baseline: &contracts::TechnicalBaselineContract,
+    aac: &ArchitectureArtifactContract,
     tasks: &mut [TaskDefinition],
 ) -> Vec<CodeQualityRequirement> {
     let mut requirements = Vec::new();
     let mut requirement_ids_by_task = BTreeMap::<String, Vec<String>>::new();
     for task in tasks.iter() {
-        let Some(selection) = code_reference_selection_for_task(baseline, task) else {
+        let context = code_reference_task_context(aac, task);
+        let Some(selection) =
+            code_reference_selection_for_task_with_context(baseline, task, &context)
+        else {
             continue;
         };
         if selection.reference_groups.is_empty() {
@@ -4293,6 +4351,164 @@ fn normalize_code_quality_requirements(
             .unwrap_or_default();
     }
     requirements
+}
+
+fn code_reference_task_context(
+    aac: &ArchitectureArtifactContract,
+    task: &TaskDefinition,
+) -> CodeReferenceTaskContext {
+    let owned_interfaces = task
+        .write_boundary
+        .artifact_refs
+        .interfaces
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let task_interfaces = aac
+        .interfaces
+        .iter()
+        .filter(|interface| {
+            string_at(interface, "interfaceId")
+                .is_some_and(|interface_id| owned_interfaces.contains(&interface_id))
+        })
+        .collect::<Vec<_>>();
+    let task_interactions = task_owned_application_interactions(aac, task);
+    let security = task_has_implementation_action(
+        task,
+        ImplementationAction::ImplementAuthenticationOrAuthorization,
+    ) || task_interfaces
+        .iter()
+        .any(|interface| interface_requires_security(interface))
+        || task_interactions
+            .iter()
+            .any(|interaction| interaction_requires_security(interaction))
+        || task_quality_category_matches(aac, task, "security");
+    let async_processing =
+        task_has_implementation_action(task, ImplementationAction::ImplementAsyncProcessing)
+            || task_interactions.iter().any(|interaction| {
+                matches!(
+                    interaction.get("interactionType").and_then(Value::as_str),
+                    Some("event" | "job")
+                )
+            });
+    let integration = task_has_implementation_action(
+        task,
+        ImplementationAction::ImplementExternalServiceIntegration,
+    ) || task_interactions.iter().any(|interaction| {
+        interaction.get("interactionType").and_then(Value::as_str) == Some("external_adapter")
+    });
+    let resilience =
+        task_has_implementation_action(task, ImplementationAction::ImplementResiliencePolicy)
+            || task_interactions
+                .iter()
+                .any(|interaction| interaction_owns_operational_policy(interaction, "retry"))
+            || (integration
+                && (task_quality_category_matches(aac, task, "integration")
+                    || task_quality_category_matches(aac, task, "availability")
+                    || task_quality_category_matches(aac, task, "reliability")));
+    let observability =
+        task_has_implementation_action(task, ImplementationAction::ImplementObservability)
+            || task_quality_category_matches(aac, task, "observability")
+            || task_quality_category_matches(aac, task, "operability");
+    CodeReferenceTaskContext {
+        security,
+        async_processing,
+        integration,
+        resilience,
+        observability,
+    }
+}
+
+fn task_has_implementation_action(task: &TaskDefinition, expected: ImplementationAction) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| *action == expected)
+}
+
+fn interface_requires_security(interface: &Value) -> bool {
+    match interface.pointer("/authPolicy/required") {
+        Some(Value::Bool(required)) => *required,
+        Some(Value::String(required)) => !matches!(
+            required.as_str(),
+            "" | "none" | "not_applicable" | "not_required" | "false"
+        ),
+        _ => false,
+    }
+}
+
+fn interaction_requires_security(interaction: &Value) -> bool {
+    matches!(
+        interaction
+            .pointer("/qualityTraits/authRequirement")
+            .and_then(Value::as_str),
+        Some("required" | "optional" | "deferred_with_risk")
+    )
+}
+
+fn interaction_owns_operational_policy(interaction: &Value, policy: &str) -> bool {
+    interaction
+        .pointer("/qualityTraits/operationalPolicies")
+        .and_then(Value::as_array)
+        .is_some_and(|policies| policies.iter().any(|item| item.as_str() == Some(policy)))
+}
+
+fn task_owned_application_interactions<'a>(
+    aac: &'a ArchitectureArtifactContract,
+    task: &TaskDefinition,
+) -> Vec<&'a Value> {
+    let module_refs = task
+        .write_boundary
+        .artifact_refs
+        .modules
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let interface_refs = task
+        .write_boundary
+        .artifact_refs
+        .interfaces
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    aac.engineering_boundary
+        .pointer("/applicationInteractions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|interaction| {
+            interaction
+                .get("providerModuleRef")
+                .and_then(Value::as_str)
+                .is_some_and(|module_ref| module_refs.contains(module_ref))
+                || string_array_at(interaction, "interfaceRefs")
+                    .iter()
+                    .any(|interface_ref| interface_refs.contains(interface_ref))
+        })
+        .collect()
+}
+
+fn task_quality_category_matches(
+    aac: &ArchitectureArtifactContract,
+    task: &TaskDefinition,
+    category: &str,
+) -> bool {
+    aac.architecture_quality.decisions.iter().any(|decision| {
+        decision.category == category
+            && task
+                .write_boundary
+                .artifact_refs
+                .decisions
+                .contains(&decision.decision_id)
+    }) || aac.architecture_quality.nfrs.iter().any(|nfr| {
+        nfr.category == category && task.write_boundary.artifact_refs.nfrs.contains(&nfr.nfr_id)
+    }) || aac.architecture_quality.risks.iter().any(|risk| {
+        risk.category == category
+            && task
+                .write_boundary
+                .artifact_refs
+                .risks
+                .contains(&risk.risk_id)
+    })
 }
 
 fn code_quality_implementation_obligations() -> Vec<String> {
@@ -5227,6 +5443,127 @@ mod tests {
         assert!(tasks[1].write_boundary.artifact_refs.decisions.is_empty());
         assert!(tasks[1].write_boundary.artifact_refs.nfrs.is_empty());
         assert!(tasks[1].write_boundary.artifact_refs.risks.is_empty());
+    }
+
+    #[test]
+    fn code_reference_context_uses_task_owned_architecture_facts() {
+        let aac: ArchitectureArtifactContract = serde_json::from_value(json!({
+            "schemaVersion": "1.0",
+            "architectureArtifactContractId": "aac-code-context",
+            "deliveryId": "delivery-1",
+            "phaseId": "phase-1",
+            "status": "ready",
+            "source": {
+                "planningGenerationContractId": "pgc-1",
+                "technicalBaselineId": "tbr-1"
+            },
+            "engineeringBoundary": {
+                "applicationInteractions": [{
+                    "interactionId": "interaction-payment-provider",
+                    "interactionType": "external_adapter",
+                    "providerModuleRef": "module-orders",
+                    "interfaceRefs": ["api-orders-create"],
+                    "qualityTraits": {"operationalPolicies": ["retry"]}
+                }, {
+                    "interactionId": "interaction-order-events",
+                    "interactionType": "event",
+                    "providerModuleRef": "module-orders",
+                    "interfaceRefs": []
+                }]
+            },
+            "modules": [{"moduleId": "module-orders"}],
+            "dataModel": {},
+            "interfaces": [{
+                "interfaceId": "api-orders-create",
+                "authPolicy": {"required": true}
+            }, {
+                "interfaceId": "api-cache-hints-only",
+                "cachePolicy": {"strategy": "private", "validators": ["etag"]},
+                "retryPolicy": {
+                    "retryableStatuses": [502, 503],
+                    "retryAfterHeader": true
+                }
+            }],
+            "userFlows": [],
+            "stateMachines": [],
+            "acceptanceMatrix": [],
+            "detailCoverage": [],
+            "architectureQuality": {
+                "decisions": [],
+                "nfrs": [{
+                    "nfrId": "nfr-orders-observability",
+                    "category": "observability",
+                    "source": "confirmed_requirement",
+                    "target": "Order provider calls expose correlated metrics and traces.",
+                    "rationale": "External failures must be diagnosable.",
+                    "measurement": {
+                        "indicator": "correlated telemetry",
+                        "workloadOrCondition": "provider request",
+                        "evaluationBoundary": "integration verification"
+                    },
+                    "sourceRefs": {
+                        "scopeRefs": [],
+                        "acceptanceRefs": [],
+                        "requirementDetailRefs": []
+                    },
+                    "architectureRefs": {"decisions": [], "risks": []},
+                    "ownerArtifactRefs": {
+                        "modules": ["module-orders"],
+                        "interfaces": ["api-orders-create"]
+                    },
+                    "verificationStrategy": "Verify correlated telemetry at the provider boundary."
+                }],
+                "risks": []
+            },
+            "handoff": {
+                "readyForTaskPlan": true,
+                "blockingReasons": [],
+                "nextNode": "task_plan"
+            },
+            "createdAt": "2026-07-15T00:00:00Z",
+            "updatedAt": "2026-07-15T00:00:00Z"
+        }))
+        .expect("architecture artifact");
+        let mut task = browser_task(1);
+        task.task_kind = TaskKind::InterfaceIncrement;
+        task.implementation_actions = vec![ImplementationAction::CreateOrUpdateInterface];
+        task.frontend_experience_requirement = None;
+        task.write_boundary.artifact_refs.modules = vec!["module-orders".to_string()];
+        task.write_boundary.artifact_refs.interfaces = vec!["api-orders-create".to_string()];
+        task.write_boundary.artifact_refs.nfrs = vec!["nfr-orders-observability".to_string()];
+
+        let context = code_reference_task_context(&aac, &task);
+        let projected_interactions = compact_application_interactions(&aac);
+        let mut api_policy_only_task = task.clone();
+        api_policy_only_task
+            .write_boundary
+            .artifact_refs
+            .modules
+            .clear();
+        api_policy_only_task.write_boundary.artifact_refs.interfaces =
+            vec!["api-cache-hints-only".to_string()];
+        api_policy_only_task
+            .write_boundary
+            .artifact_refs
+            .nfrs
+            .clear();
+        let api_policy_only_context = code_reference_task_context(&aac, &api_policy_only_task);
+
+        assert!(context.security);
+        assert!(context.async_processing);
+        assert!(context.integration);
+        assert!(context.resilience);
+        assert!(context.observability);
+        assert!(!api_policy_only_context.resilience);
+        assert_eq!(projected_interactions.len(), 2);
+        assert_eq!(
+            projected_interactions[0]["interactionType"],
+            json!("external_adapter")
+        );
+        assert_eq!(
+            projected_interactions[1]["providerModuleRef"],
+            json!("module-orders")
+        );
     }
 
     #[test]

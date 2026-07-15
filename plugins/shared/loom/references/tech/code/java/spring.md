@@ -1,39 +1,100 @@
-# Java Spring Boot Service Quality
+# Java Spring Container Fundamentals
 
-This file focuses on Spring Boot wiring and service delivery, not broad architecture reselection.
+This reference owns Spring container mechanics shared across Spring applications: bean construction, dependency injection, proxies, component scanning, package roots, and lifecycle. Spring Boot web, data, security, runtime, testing, cache, async, integration, and observability behavior belongs to the selected backend references.
 
 ## When To Use
 
-- The task changes Spring Boot controllers, services, configuration, starters, application properties, exception advice, actuator/runtime hooks, or dependency injection wiring.
-- Use it for Spring MVC/Spring Boot service work. For reactive WebFlux chains, also load `tech/code/java/reactive.md` when selected.
-- Do not create a Clean Architecture package tree just because this reference mentions boundaries. Adapt to the repository's current package layout unless the task owns project foundation.
+Use this reference when Java implementation work owns Spring bean construction, dependency injection, component discovery, proxy-backed annotations, configuration classes, or managed lifecycle. It remains applicable across Spring Framework and Spring Boot applications.
+
+Do not use it as a substitute for framework-specific transport, persistence, security, testing, runtime, cache, messaging, or integration guidance. Those concerns require their task-owned backend reference.
 
 ## Implementation Focus
 
-- Keep Spring beans cohesive. A controller should not own repository calls directly when service/use-case code already exists; a service should not parse HTTP details or return transport-only response wrappers.
-- Add starters/dependencies only for behavior the task owns. Do not add OpenAPI, actuator, validation, MapStruct, Lombok, Flyway, or security dependencies just because they appear in reference examples.
-- Use `@ConfigurationProperties` or the project's existing config style for grouped settings. Prefer typed properties over scattered `@Value` when multiple related settings are introduced.
-- When adding `@RestControllerAdvice`, map domain, validation, not-found, conflict, and unexpected failures consistently with existing API error behavior. Do not leak stack traces or persistence messages into product errors.
-- Use Jakarta validation on request DTOs for field-level constraints and keep business validation in services. Do not assume `@Valid` replaces uniqueness, authorization, state, or cross-record checks.
-- Keep `open-in-view` behavior deliberate. If entities are returned to views/API to hide lazy loading problems, fix the query/read model instead.
-- If adding actuator or health endpoints, expose only what the phase/runtime needs. Do not expose broad actuator details by default.
-- Keep CORS local to actual frontend/runtime needs. Do not hardcode one dev origin if the project already externalizes origins.
-- Preserve application startup behavior. New beans should not require unavailable environment variables, external services, or databases unless the task also provides safe local defaults or clear configuration.
-- Use constructor injection and avoid circular dependencies. If a new service creates a cycle, revisit boundary placement rather than adding lazy injection.
-- Use `@Qualifier` only when multiple candidate beans implement the required contract. Keep the qualifier name aligned with the repository's bean naming convention and prove the selected implementation through context startup or a focused wiring test.
-- Keep constructors free of I/O, business workflows, and environment lookups. Constructor injection establishes dependencies; initialization that can fail belongs in an explicit lifecycle or configuration boundary.
-- Keep the Spring Boot application class at or above the task-owned component packages so component scanning, configuration properties, repositories, and controller advice are discovered without broad scan hacks.
-- When starting a new Spring Boot module, choose the base package from existing production packages, build group metadata, or a confirmed namespace. Use `app.<project_slug>` as the neutral fallback and avoid tutorial placeholders such as `com.example` or `org.example`.
+### Package And Scan Boundary
+
+Keep the application/bootstrap class at or above owned component packages. Use the existing production package root or build metadata. For a new repository, use the confirmed namespace, `app.<project_slug>`, or `app.generated`; never create production code under tutorial roots.
+
+Avoid broad `scanBasePackages` or repository/entity scan overrides that hide an incoherent package layout. A new module should remain discoverable through the normal package tree unless it is intentionally imported as configuration.
+
+### Constructor Injection
+
+Use constructor injection for required dependencies. It makes invariants visible, supports immutable fields, and permits plain unit construction.
+
+```java
+@Service
+final class OrderPolicy {
+    private final Clock clock;
+    private final EligibilityRules rules;
+
+    OrderPolicy(Clock clock, EligibilityRules rules) {
+        this.clock = clock;
+        this.rules = rules;
+    }
+}
+```
+
+Avoid field injection, static context access, and service-locator lookups. Do not add `@Autowired` to a single constructor unless the repository convention requires it for clarity or tooling.
+
+Use `@Qualifier` when multiple beans intentionally implement one contract. Prefer a typed custom qualifier for a long-lived boundary over repeating fragile string names.
+
+### Bean Ownership
+
+Use stereotypes to communicate role, not as decoration:
+
+- `@Service` for application/domain-facing operations
+- `@Repository` for persistence adapters and exception translation
+- `@Controller`/`@RestController` for transport adapters
+- `@Configuration` for bean assembly
+- plain Java classes for values, domain behavior, and helpers that do not need container services
+
+Do not turn every class into a bean. Keep framework-independent logic constructible without a Spring context.
+
+### Proxy Semantics
+
+Spring annotations such as transactions, method security, caching, and async execution commonly rely on proxies. The call must cross the proxy:
+
+- same-class self-invocation bypasses advice
+- private/final methods may not be valid advised entry points depending on proxy mode
+- objects created with `new` are not container-managed
+- annotation order/composition can alter transaction, cache, and security timing
+
+Put advised operations on clear public boundaries and test the framework behavior through the owning Spring Boot reference. Do not add self-injection to force proxy traversal.
+
+### Bean Lifecycle
+
+Keep constructors deterministic and free of I/O. Use explicit initialization only for bounded validation/preparation. Startup calls to databases or external services must follow the runtime dependency contract.
+
+Own resources through the container and close them through supported lifecycle callbacks. Destruction hooks should release resources, not start business workflows.
+
+Avoid circular dependencies. Repair responsibility placement or introduce an explicit contract rather than using `@Lazy` as a structural fix.
+
+### Configuration Classes
+
+Keep configuration classes cohesive. Bean methods should assemble collaborators, not contain business decisions. Conditional beans need an explicit fallback/absence model and tests for each supported condition.
+
+Do not add starters, auto-configurations, Lombok, mapping libraries, validation, security, actuator, or migration dependencies because an example mentions them. Dependencies follow task-owned behavior and the selected baseline.
 
 ## Verification Focus
 
-- Run the Spring build/test target and include context startup coverage when wiring changes can break bean creation.
-- For new controllers or exception advice, verify at least one success response and one validation/business error response.
-- For new configuration properties, test binding or run a startup smoke with default local values.
-- For runtime/actuator changes, probe the exact endpoint or startup path that consumes the new configuration.
-- For new modules or package moves, include a context startup or focused Spring test that proves component scanning still finds controllers, services, repositories, and advice in the chosen package tree.
+Useful container evidence includes:
+
+- plain unit construction for framework-independent logic
+- focused context startup for component scanning and bean selection
+- correct `@Qualifier` resolution when multiple implementations exist
+- absence of circular dependencies and hidden service-locator access
+- proof that an advised call crosses the Spring proxy when relevant
+- package layout under the real production root
 
 ## Evidence Focus
 
-- In the evidence summary, state which Spring boundary was changed: controller mapping, service wiring, configuration binding, exception handling, startup/runtime behavior, or dependency setup.
-- If package layout was created or changed, state how it preserves Spring component scanning without placeholder package roots.
+Record the narrow artifact that proves the owned container behavior: a focused context test for discovery or bean selection, a plain unit test for framework-independent construction, or an integration assertion that advice is applied through the managed proxy. Build success alone does not prove scanning, qualifier selection, lifecycle order, or proxy traversal.
+
+When the implementation changes package roots or configuration imports, include the affected production package and bootstrap configuration in review evidence. When it changes an advised boundary, identify the externally invoked method and the behavior supplied by the advice.
+
+## Unsafe Defaults
+
+- Field injection.
+- Broad component scanning to compensate for a misplaced application class.
+- `@Lazy` as a circular-dependency fix.
+- Same-class calls expected to trigger transactional, async, cache, or security advice.
+- Making pure domain/value classes container-managed without a dependency reason.

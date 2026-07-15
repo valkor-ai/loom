@@ -39,39 +39,29 @@ pub struct CodeReferenceSelection {
     pub unmapped_signals: Vec<CodeStackSignal>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CodeReferenceTaskContext {
+    pub security: bool,
+    pub async_processing: bool,
+    pub integration: bool,
+    pub resilience: bool,
+    pub observability: bool,
+}
+
 pub fn build_code_quality_seed(baseline: &TechnicalBaselineContract) -> Value {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
     if signals.is_empty() {
         return Value::Null;
     }
-    let reference_groups = baseline_reference_groups(&signals);
-    let reference_load_plan = code_reference_load_plan(&reference_groups);
-    let package_naming_policy = package_naming_policy_for_reference_groups(&reference_groups);
+    let required = signals.iter().any(|signal| !signal_is_unmapped(signal));
     json!({
-        "required": !reference_groups.is_empty(),
+        "required": required,
         "qualityLevel": "production_code_implementation",
         "codeStackSignals": signals,
         "unmappedSignals": signals
             .iter()
             .filter(|signal| signal_is_unmapped(signal))
-            .collect::<Vec<_>>(),
-        "techReferenceProfile": {
-            "loadMode": "mcp_reference_load_plan",
-            "groups": {
-                "code": reference_groups
-            },
-            "referenceLoadPlan": reference_load_plan
-        },
-        "packageNamingPolicy": package_naming_policy,
-        "generationRules": [
-            "Use TechnicalBaseline.stack only as the source fact for stack signals; do not reselect or reconfirm the technology stack.",
-            "Use codeStackSignals as derived signals, then select code references by current task scope.",
-            "Read only files listed in techReferenceProfile.referenceLoadPlan; selected code groups are semantic evidence labels, not path maps.",
-            "Do not attach SQL references to every backend task merely because a database exists; attach SQL only for schema, migration, query, reporting, dialect, or optimization work.",
-            "MySQL and PostgreSQL overlays are selected only from accepted dialect signals plus explicit persistence task ownership; do not load database administration or unrelated provider material.",
-            "For JVM production source, derive package names from existing repository package roots, build group metadata, or confirmed organization/project identity; never create com.example/org.example/com.company/demo/sample package roots.",
-            "If a stack signal is low confidence or unmapped, preserve existing repository style and verification instead of guessing a nearby language profile."
-        ]
+            .collect::<Vec<_>>()
     })
 }
 
@@ -80,7 +70,7 @@ pub fn code_quality_enum_refs() -> Value {
         "knownReferenceGroups": {
             "code": {
                 "java": ["core", "spring", "persistence", "security", "reactive", "testing"],
-                "springboot": ["web", "data", "security", "testing", "runtime", "cloud"],
+                "springboot": ["web", "data", "security", "testing", "runtime", "async", "cache", "integration", "resilience", "cloud", "observability"],
                 "django": ["models", "serializers", "views", "security", "testing"],
                 "fastapi": ["schemas", "data", "routing", "security", "testing", "migration"],
                 "aspnetcore": ["minimal", "architecture", "data", "security", "testing", "runtime"],
@@ -108,7 +98,7 @@ pub fn code_quality_enum_refs() -> Value {
                 ]
             }
         },
-        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "reactive", "cache", "performance", "configuration", "runtime", "integration", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
+        "focusTag": ["api", "api_client", "frontend", "persistence", "security", "async", "reactive", "cache", "performance", "configuration", "runtime", "integration", "resilience", "observability", "cloud", "migration", "architecture", "testing", "sql", "sql_schema", "sql_query", "sql_transaction", "sql_test", "generics", "analytics", "memory", "hooks", "state", "server_components", "react19", "app_router", "server_actions", "data_fetching", "build_tooling", "mobile", "nuxt", "routing", "rxjs", "ngrx", "riverpod", "bloc", "list_performance", "storage"],
         "confidence": ["high", "medium", "low"]
     })
 }
@@ -117,11 +107,28 @@ pub fn code_reference_selection_for_task(
     baseline: &TechnicalBaselineContract,
     task: &TaskDefinition,
 ) -> Option<CodeReferenceSelection> {
+    code_reference_selection_for_task_with_context(
+        baseline,
+        task,
+        &CodeReferenceTaskContext::default(),
+    )
+}
+
+pub fn code_reference_selection_for_task_with_context(
+    baseline: &TechnicalBaselineContract,
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
+) -> Option<CodeReferenceSelection> {
     let signals = code_stack_signals_from_baseline(&baseline.stack);
     if signals.is_empty() {
         return None;
     }
-    let focus_tags = task_focus_tags(task);
+    let stack_frameworks = signals
+        .iter()
+        .flat_map(|signal| signal.frameworks.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut focus_tags = task_focus_tags(task);
+    extend_focus_tags_from_context(&mut focus_tags, context);
     let mut selected_signals = Vec::new();
     let mut reference_groups = BTreeMap::<String, BTreeSet<String>>::new();
     let mut unmapped_signals = Vec::new();
@@ -138,7 +145,13 @@ pub fn code_reference_selection_for_task(
         } else {
             BTreeSet::new()
         };
-        let backend_items = backend_reference_items_for_signal(&signal, &focus_tags);
+        let backend_items = backend_reference_items_for_signal(
+            &signal,
+            &stack_frameworks,
+            &focus_tags,
+            task,
+            context,
+        );
         let frontend_items = frontend_reference_items_for_signal(&signal, &focus_tags);
         if !items.is_empty() || !backend_items.is_empty() || !frontend_items.is_empty() {
             selected_signals.push(signal.clone());
@@ -231,34 +244,6 @@ pub fn code_stack_signals_from_baseline(stack: &Value) -> Vec<CodeStackSignal> {
     dedupe_signals(signals)
 }
 
-fn baseline_reference_groups(signals: &[CodeStackSignal]) -> BTreeMap<String, Vec<String>> {
-    let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
-    let focus_tags = vec![
-        "api".to_string(),
-        "frontend".to_string(),
-        "persistence".to_string(),
-        "configuration".to_string(),
-    ];
-    for signal in signals {
-        if let Some(language) = &signal.language {
-            groups
-                .entry(language.clone())
-                .or_default()
-                .extend(reference_items_for_signal(signal, &focus_tags));
-        }
-        for (framework, items) in backend_reference_items_for_signal(signal, &focus_tags) {
-            groups.entry(framework).or_default().extend(items);
-        }
-        for (framework, items) in frontend_reference_items_for_signal(signal, &focus_tags) {
-            groups.entry(framework).or_default().extend(items);
-        }
-    }
-    groups
-        .into_iter()
-        .map(|(language, items)| (language, items.into_iter().collect()))
-        .collect()
-}
-
 fn stack_track_selection(value: &Value) -> Option<String> {
     let status = value
         .get("status")
@@ -337,33 +322,11 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         ) {
             push_unique(&mut roles, "backend");
         }
-    } else if contains_any(&haystack, &["java", "spring", "jpa", "hibernate"]) {
+    } else if contains_any(&haystack, &["java", "spring", "jpa", "hibernate"])
+        && !contains_any(&haystack, &["kotlin", "ktor", "android", "kmp"])
+    {
         language = Some("java".to_string());
-        push_if_contains(
-            &haystack,
-            &mut frameworks,
-            "spring_boot",
-            &["spring boot", "springboot", "spring"],
-        );
-        push_if_contains(
-            &haystack,
-            &mut frameworks,
-            "spring_cloud",
-            &[
-                "spring cloud",
-                "cloud gateway",
-                "spring cloud gateway",
-                "config server",
-                "spring cloud config",
-                "eureka",
-            ],
-        );
-        push_if_contains(
-            &haystack,
-            &mut frameworks,
-            "spring_data_jpa",
-            &["spring data", "jpa", "hibernate"],
-        );
+        push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
         push_backend_unless_persistence_track(&mut roles);
     } else if contains_any(
         &haystack,
@@ -451,6 +414,22 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_if_contains(&haystack, &mut frameworks, "ktor", &["ktor"]);
         push_if_contains(&haystack, &mut frameworks, "compose", &["compose"]);
         push_if_contains(&haystack, &mut frameworks, "kmp", &["kmp", "multiplatform"]);
+        push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
+        if frameworks.iter().any(|framework| {
+            matches!(
+                framework.as_str(),
+                "spring_boot"
+                    | "spring_framework"
+                    | "spring_cloud"
+                    | "spring_data_jpa"
+                    | "jpa_orm"
+                    | "spring_webflux"
+                    | "project_reactor"
+                    | "r2dbc"
+            )
+        }) {
+            push_backend_unless_persistence_track(&mut roles);
+        }
     } else if contains_any(&haystack, &["php", "laravel", "symfony"]) {
         language = Some("php".to_string());
         push_if_contains(&haystack, &mut frameworks, "laravel", &["laravel"]);
@@ -610,6 +589,28 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     }
     if matches!(task.task_kind, TaskKind::ConfigurationSupport) {
         push_unique(&mut tags, "configuration");
+    }
+    for action in &task.implementation_actions {
+        match action {
+            ImplementationAction::AddOrUpdateConfig => push_unique(&mut tags, "configuration"),
+            ImplementationAction::ImplementAuthenticationOrAuthorization => {
+                push_unique(&mut tags, "security")
+            }
+            ImplementationAction::ImplementAsyncProcessing => push_unique(&mut tags, "async"),
+            ImplementationAction::ImplementCachePolicy => push_unique(&mut tags, "cache"),
+            ImplementationAction::ImplementExternalServiceIntegration => {
+                push_unique(&mut tags, "integration")
+            }
+            ImplementationAction::ImplementResiliencePolicy => push_unique(&mut tags, "resilience"),
+            ImplementationAction::ConfigureServiceRoutingOrDiscovery => {
+                push_unique(&mut tags, "cloud")
+            }
+            ImplementationAction::ImplementObservability => push_unique(&mut tags, "observability"),
+            ImplementationAction::ImplementRuntimeDeliveryContract => {
+                push_unique(&mut tags, "runtime")
+            }
+            _ => {}
+        }
     }
     let text = normalized(&format!(
         "{} {} {:?}",
@@ -939,39 +940,6 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     if contains_any(
         &text,
         &[
-            "auth",
-            "security",
-            "login",
-            "jwt",
-            "oauth",
-            "permission",
-            "权限",
-            "认证",
-            "授权",
-        ],
-    ) {
-        push_unique(&mut tags, "security");
-    }
-    if !task_is_frontend_task(task)
-        && (task_is_backend_task(task) || matches!(task.task_kind, TaskKind::ConfigurationSupport))
-        && contains_any(
-            &text,
-            &[
-                "reactive",
-                "webflux",
-                "reactor",
-                "mono",
-                "flux",
-                "r2dbc",
-                "响应式",
-            ],
-        )
-    {
-        push_unique(&mut tags, "reactive");
-    }
-    if contains_any(
-        &text,
-        &[
             "async",
             "concurrent",
             "queue",
@@ -1177,6 +1145,20 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     tags
 }
 
+fn extend_focus_tags_from_context(tags: &mut Vec<String>, context: &CodeReferenceTaskContext) {
+    for (selected, tag) in [
+        (context.security, "security"),
+        (context.async_processing, "async"),
+        (context.integration, "integration"),
+        (context.resilience, "resilience"),
+        (context.observability, "observability"),
+    ] {
+        if selected {
+            push_unique(tags, tag);
+        }
+    }
+}
+
 fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bool {
     let roles = signal
         .roles
@@ -1208,6 +1190,7 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                     || has_focus("integration")
                     || has_focus("migration")
                     || has_focus("architecture")
+                    || has_focus("testing")
             } else if roles.contains("persistence") {
                 has_focus("persistence")
             } else {
@@ -1229,16 +1212,31 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
     match signal.language.as_deref() {
         Some("java") => {
             items.insert("core".to_string());
-            if has_focus("api") || signal.frameworks.iter().any(|item| item == "spring_boot") {
+            if signal
+                .frameworks
+                .iter()
+                .any(|item| item == "spring_framework")
+            {
                 items.insert("spring".to_string());
             }
-            if has_focus("persistence") {
+            if has_focus("persistence") && signal.frameworks.iter().any(|item| item == "jpa_orm") {
                 items.insert("persistence".to_string());
             }
             if has_focus("security") {
                 items.insert("security".to_string());
             }
-            if has_focus("reactive") {
+            if has_focus("reactive")
+                || (has_focus("api")
+                    && signal
+                        .frameworks
+                        .iter()
+                        .any(|item| item == "spring_webflux"))
+                || ((has_focus("api") || has_focus("persistence"))
+                    && signal
+                        .frameworks
+                        .iter()
+                        .any(|item| matches!(item.as_str(), "project_reactor" | "r2dbc")))
+            {
                 items.insert("reactive".to_string());
             }
             if has_focus("testing") {
@@ -1331,7 +1329,7 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
             if has_focus("async") {
                 items.insert("coroutines".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "ktor") || has_focus("api") {
+            if signal.frameworks.iter().any(|item| item == "ktor") {
                 items.insert("ktor".to_string());
             }
             if signal.frameworks.iter().any(|item| item == "compose") || has_focus("frontend") {
@@ -1457,33 +1455,18 @@ fn reference_items_for_signal(signal: &CodeStackSignal, focus_tags: &[String]) -
 
 fn backend_reference_items_for_signal(
     signal: &CodeStackSignal,
+    stack_frameworks: &BTreeSet<String>,
     focus_tags: &[String],
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let has_focus = |tag: &str| focus_tags.iter().any(|item| item == tag);
     let mut groups = BTreeMap::<String, BTreeSet<String>>::new();
     if signal.frameworks.iter().any(|item| item == "spring_boot") {
-        let items = groups.entry("springboot".to_string()).or_default();
-        if has_focus("testing") {
-            items.insert("testing".to_string());
-        }
-        if has_focus("api") {
-            items.insert("web".to_string());
-        }
-        if has_focus("persistence") {
-            items.insert("data".to_string());
-        }
-        if has_focus("security") {
-            items.insert("security".to_string());
-        }
-        if has_focus("configuration")
-            || has_focus("runtime")
-            || has_focus("async")
-            || has_focus("cache")
-        {
-            items.insert("runtime".to_string());
-        }
-        if has_focus("integration") || signal.frameworks.iter().any(|item| item == "spring_cloud") {
-            items.insert("cloud".to_string());
+        let mut items = BTreeSet::new();
+        extend_spring_boot_task_references(&mut items, stack_frameworks, task, context);
+        if !items.is_empty() {
+            groups.insert("springboot".to_string(), items);
         }
     }
     if signal.frameworks.iter().any(|item| item == "django") {
@@ -1569,6 +1552,74 @@ fn backend_reference_items_for_signal(
         }
     }
     groups
+}
+
+fn extend_spring_boot_task_references(
+    items: &mut BTreeSet<String>,
+    stack_frameworks: &BTreeSet<String>,
+    task: &TaskDefinition,
+    context: &CodeReferenceTaskContext,
+) {
+    if task_owns_test_implementation(task) {
+        items.insert("testing".to_string());
+    }
+    if task_owns_api_contract(task) {
+        items.insert("web".to_string());
+    }
+    if task_owns_persistence(task) && stack_frameworks.contains("spring_data_jpa") {
+        items.insert("data".to_string());
+    }
+    if context.security
+        || task_has_action(
+            task,
+            ImplementationAction::ImplementAuthenticationOrAuthorization,
+        )
+    {
+        items.insert("security".to_string());
+    }
+    if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+        || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+        || task_has_action(task, ImplementationAction::ImplementRuntimeDeliveryContract)
+    {
+        items.insert("runtime".to_string());
+    }
+    if context.async_processing
+        || task_has_action(task, ImplementationAction::ImplementAsyncProcessing)
+    {
+        items.insert("async".to_string());
+    }
+    if task_has_action(task, ImplementationAction::ImplementCachePolicy) {
+        items.insert("cache".to_string());
+    }
+    if context.integration
+        || task_has_action(
+            task,
+            ImplementationAction::ImplementExternalServiceIntegration,
+        )
+    {
+        items.insert("integration".to_string());
+    }
+    if context.resilience || task_has_action(task, ImplementationAction::ImplementResiliencePolicy)
+    {
+        items.insert("resilience".to_string());
+    }
+    if task_has_action(
+        task,
+        ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+    ) && stack_frameworks.contains("spring_cloud")
+    {
+        items.insert("cloud".to_string());
+    }
+    if context.observability || task_has_action(task, ImplementationAction::ImplementObservability)
+    {
+        items.insert("observability".to_string());
+    }
+}
+
+fn task_has_action(task: &TaskDefinition, expected: ImplementationAction) -> bool {
+    task.implementation_actions
+        .iter()
+        .any(|action| *action == expected)
 }
 
 fn frontend_reference_items_for_signal(
@@ -1822,6 +1873,13 @@ fn task_is_backend_task(task: &TaskDefinition) -> bool {
                 | ImplementationAction::ImplementAnalyticalQuery
                 | ImplementationAction::AddOrUpdatePersistenceTests
                 | ImplementationAction::ImplementEntityLifecycle
+                | ImplementationAction::ImplementAuthenticationOrAuthorization
+                | ImplementationAction::ImplementAsyncProcessing
+                | ImplementationAction::ImplementCachePolicy
+                | ImplementationAction::ImplementExternalServiceIntegration
+                | ImplementationAction::ImplementResiliencePolicy
+                | ImplementationAction::ConfigureServiceRoutingOrDiscovery
+                | ImplementationAction::ImplementObservability
                 | ImplementationAction::RefactorSupportingCode
         )
     })
@@ -2053,6 +2111,54 @@ fn selection_mentions_flutter_framework(haystack: &str) -> bool {
     contains_any(haystack, &["flutter", "riverpod", "go router", "gorouter"])
 }
 
+fn push_spring_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<String>) {
+    push_if_contains(haystack, frameworks, "spring_framework", &["spring"]);
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_boot",
+        &["spring boot", "springboot"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_cloud",
+        &[
+            "spring cloud",
+            "cloud gateway",
+            "spring cloud gateway",
+            "config server",
+            "spring cloud config",
+            "eureka",
+        ],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_data_jpa",
+        &["spring data jpa", "spring-data-jpa"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "jpa_orm",
+        &["jpa", "hibernate", "eclipselink"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "spring_webflux",
+        &["spring webflux", "webflux"],
+    );
+    push_if_contains(
+        haystack,
+        frameworks,
+        "project_reactor",
+        &["project reactor", "reactor"],
+    );
+    push_if_contains(haystack, frameworks, "r2dbc", &["r2dbc"]);
+}
+
 fn push_unique(output: &mut Vec<String>, value: &str) {
     if !output.iter().any(|item| item == value) {
         output.push(value.to_string());
@@ -2234,11 +2340,6 @@ mod tests {
         assert!(policy
             .forbidden_package_prefixes
             .contains(&"com.example".to_string()));
-        let seed = build_code_quality_seed(&baseline);
-        assert_eq!(
-            seed["packageNamingPolicy"]["fallbackPackageTemplate"],
-            json!("app.<project_slug>")
-        );
     }
 
     #[test]
@@ -2256,13 +2357,7 @@ mod tests {
                 .map(Vec::len),
             Some(0)
         );
-        assert!(seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .any(|item| item.get("path").and_then(Value::as_str)
-                == Some("tech/frontend/react/core.md")));
+        assert!(seed.get("techReferenceProfile").is_none());
         let mut task = task(
             TaskKind::UiFlowIncrement,
             vec![
@@ -2309,13 +2404,7 @@ mod tests {
             }
         }));
         let seed = build_code_quality_seed(&baseline);
-        assert!(!seed["techReferenceProfile"]["referenceLoadPlan"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["path"]
-                .as_str()
-                .is_some_and(|path| path.ends_with("/testing.md"))));
+        assert!(seed.get("techReferenceProfile").is_none());
 
         let mut implementation_task = task(
             TaskKind::UiFlowIncrement,
@@ -2754,10 +2843,7 @@ mod tests {
         let seed = build_code_quality_seed(&baseline);
         assert_eq!(seed["required"], false);
         assert_eq!(seed["unmappedSignals"][0]["confidence"], "low");
-        assert!(seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty));
+        assert!(seed.get("techReferenceProfile").is_none());
     }
 
     #[test]
@@ -2849,12 +2935,14 @@ mod tests {
                 "dataAccess": {"selection": "Spring Data JPA"}
             }
         }));
-        let mut task = task(
+        let security_task = task(
             TaskKind::InterfaceIncrement,
-            vec![ImplementationAction::CreateOrUpdateInterface],
+            vec![
+                ImplementationAction::CreateOrUpdateInterface,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            ],
         );
-        task.objective = "Add JWT login endpoint and role-based permission checks.".to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let selection = code_reference_selection_for_task(&baseline, &security_task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"security".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"security".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -2870,6 +2958,16 @@ mod tests {
         assert!(load_plan
             .iter()
             .any(|item| item.ref_id == "bk.spring.security"));
+
+        let mut prose_only = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        prose_only.objective =
+            "Add JWT login and role-based permission checks to the endpoint.".to_string();
+        let prose_selection = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        assert!(!prose_selection.reference_groups["java"].contains(&"security".to_string()));
+        assert!(!prose_selection.reference_groups["springboot"].contains(&"security".to_string()));
     }
 
     #[test]
@@ -2910,44 +3008,103 @@ mod tests {
     }
 
     #[test]
-    fn spring_boot_async_and_cache_task_loads_runtime_without_reactive_or_testing() {
+    fn spring_boot_testing_reference_requires_test_implementation_ownership() {
         let baseline = baseline(json!({
             "tracks": {
                 "backend": {"selection": "Java + Spring Boot"}
             }
         }));
-        let mut task = task(
-            TaskKind::RefactorSupport,
-            vec![ImplementationAction::RefactorSupportingCode],
+        let test_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
         );
-        task.objective =
-            "Implement Spring @Async processing with Spring Cache keys, TTL, and invalidation."
-                .to_string();
+
+        let selection = code_reference_selection_for_task(&baseline, &test_task).unwrap();
+
+        assert!(selection.reference_groups["java"].contains(&"testing".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"testing".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
+    }
+
+    #[test]
+    fn spring_boot_async_and_cache_task_loads_only_owned_framework_references() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let task = task(
+            TaskKind::RefactorSupport,
+            vec![
+                ImplementationAction::ImplementAsyncProcessing,
+                ImplementationAction::ImplementCachePolicy,
+            ],
+        );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
-        assert!(selection.reference_groups["springboot"].contains(&"runtime".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"async".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"cache".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan
             .iter()
-            .any(|item| item.path == "tech/backend/springboot/runtime.md"));
+            .any(|item| item.path == "tech/backend/springboot/async.md"));
+        assert!(load_plan
+            .iter()
+            .any(|item| item.path == "tech/backend/springboot/cache.md"));
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/code/java/reactive.md"));
     }
 
     #[test]
-    fn spring_boot_reactive_task_loads_reactive_without_runtime() {
+    fn structured_task_context_selects_owned_spring_capabilities() {
         let baseline = baseline(json!({
             "tracks": {
                 "backend": {"selection": "Java + Spring Boot"}
             }
         }));
-        let mut task = task(
+        let task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        let context = CodeReferenceTaskContext {
+            security: true,
+            async_processing: true,
+            integration: true,
+            resilience: true,
+            observability: true,
+        };
+
+        let selection =
+            code_reference_selection_for_task_with_context(&baseline, &task, &context).unwrap();
+        let spring = &selection.reference_groups["springboot"];
+
+        for expected in [
+            "security",
+            "async",
+            "integration",
+            "resilience",
+            "observability",
+        ] {
+            assert!(spring.contains(&expected.to_string()));
+        }
+        assert!(!spring.contains(&"cloud".to_string()));
+    }
+
+    #[test]
+    fn spring_boot_reactive_task_loads_reactive_without_runtime() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot + WebFlux"}
+            }
+        }));
+        let task = task(
             TaskKind::InterfaceIncrement,
             vec![ImplementationAction::CreateOrUpdateInterface],
         );
-        task.objective = "Expose a WebFlux endpoint returning Mono and Flux values.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
@@ -2956,6 +3113,24 @@ mod tests {
         assert!(load_plan
             .iter()
             .any(|item| item.path == "tech/code/java/reactive.md"));
+    }
+
+    #[test]
+    fn project_reactor_does_not_imply_spring_boot_or_webflux() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Project Reactor"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(selection.reference_groups["java"].contains(&"reactive".to_string()));
+        assert!(!selection.reference_groups.contains_key("springboot"));
     }
 
     #[test]
@@ -2982,6 +3157,53 @@ mod tests {
     }
 
     #[test]
+    fn spring_data_reference_requires_spring_data_stack_selection() {
+        let hibernate_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "Hibernate ORM"}
+            }
+        }));
+        let jooq_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "jOOQ"}
+            }
+        }));
+        let spring_data_jdbc_baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"},
+                "dataAccess": {"selection": "Spring Data JDBC"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateEntityRepository],
+        );
+
+        let hibernate = code_reference_selection_for_task(&hibernate_baseline, &task).unwrap();
+        let jooq = code_reference_selection_for_task(&jooq_baseline, &task).unwrap();
+        let spring_data_jdbc =
+            code_reference_selection_for_task(&spring_data_jdbc_baseline, &task).unwrap();
+
+        assert!(hibernate.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!hibernate
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+        assert!(!jooq.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!jooq
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+        assert!(!spring_data_jdbc.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!spring_data_jdbc
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"data".to_string())));
+    }
+
+    #[test]
     fn spring_boot_runtime_reference_is_configuration_scoped() {
         let baseline = baseline(json!({
             "tracks": {
@@ -3005,26 +3227,173 @@ mod tests {
     }
 
     #[test]
-    fn spring_boot_cloud_reference_is_integration_scoped() {
+    fn spring_boot_integration_resilience_and_cloud_are_independently_scoped() {
         let baseline = baseline(json!({
             "tracks": {
-                "backend": {"selection": "Java + Spring Boot + Spring Cloud"}
+                "backend": {"selection": "Java + Spring Boot"},
+                "cloud": {"selection": "Spring Cloud"}
             }
         }));
-        let mut task = task(
-            TaskKind::InterfaceIncrement,
-            vec![ImplementationAction::CreateOrUpdateInterface],
+        let task = task(
+            TaskKind::IntegrationIncrement,
+            vec![
+                ImplementationAction::ImplementExternalServiceIntegration,
+                ImplementationAction::ImplementResiliencePolicy,
+                ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+            ],
         );
-        task.objective =
-            "Add WebClient downstream integration with timeout retry and gateway fallback."
-                .to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        assert!(selection.reference_groups["springboot"].contains(&"integration".to_string()));
+        assert!(selection.reference_groups["springboot"].contains(&"resilience".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"cloud".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"web".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.integration"
+                && item.path == "tech/backend/springboot/integration.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "bk.spring.resilience"
+                && item.path == "tech/backend/springboot/resilience.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.spring.cloud" && item.path == "tech/backend/springboot/cloud.md"
         }));
+    }
+
+    #[test]
+    fn integration_task_kind_does_not_imply_external_spring_integration() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot"}
+            }
+        }));
+        let task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(!selection
+            .reference_groups
+            .get("springboot")
+            .is_some_and(|items| items.contains(&"integration".to_string())));
+    }
+
+    #[test]
+    fn spring_cloud_baseline_does_not_attach_cloud_to_data_task() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Java + Spring Boot + Spring Cloud"},
+                "dataAccess": {"selection": "Spring Data JPA"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateEntityRepository],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"cloud".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"integration".to_string()));
+    }
+
+    #[test]
+    fn non_spring_boot_stacks_never_receive_spring_boot_references() {
+        for selection in [
+            "Java + Spring Framework",
+            "Java + Quarkus",
+            "Kotlin + Ktor",
+            "C# + ASP.NET Core",
+            "Python + Django",
+        ] {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": selection}}
+            }));
+            let task = task(
+                TaskKind::InterfaceIncrement,
+                vec![
+                    ImplementationAction::CreateOrUpdateInterface,
+                    ImplementationAction::ImplementAuthenticationOrAuthorization,
+                    ImplementationAction::ImplementAsyncProcessing,
+                    ImplementationAction::ImplementCachePolicy,
+                    ImplementationAction::ImplementExternalServiceIntegration,
+                    ImplementationAction::ImplementResiliencePolicy,
+                    ImplementationAction::ConfigureServiceRoutingOrDiscovery,
+                    ImplementationAction::ImplementObservability,
+                ],
+            );
+            let selected = code_reference_selection_for_task(&baseline, &task);
+            assert!(selected
+                .as_ref()
+                .is_none_or(|selected| !selected.reference_groups.contains_key("springboot")));
+        }
+    }
+
+    #[test]
+    fn kotlin_spring_boot_uses_kotlin_and_spring_boot_references() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "Kotlin + Spring Boot + Spring WebFlux"}
+            }
+        }));
+        let task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(selection.reference_groups.contains_key("kotlin"));
+        assert!(selection.reference_groups.contains_key("springboot"));
+        assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["kotlin"].contains(&"ktor".to_string()));
+        assert!(!selection.reference_groups.contains_key("java"));
+    }
+
+    #[test]
+    fn java_api_without_spring_does_not_load_spring_container_reference() {
+        for stack in ["Java 21", "Java + Quarkus"] {
+            let baseline = baseline(json!({
+                "tracks": {"backend": {"selection": stack}}
+            }));
+            let task = task(
+                TaskKind::InterfaceIncrement,
+                vec![ImplementationAction::CreateOrUpdateInterface],
+            );
+
+            let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+            assert!(!selection.reference_groups["java"].contains(&"spring".to_string()));
+            assert!(!selection.reference_groups.contains_key("springboot"));
+        }
+    }
+
+    #[test]
+    fn spring_boot_observability_requires_structured_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Java + Spring Boot"}}
+        }));
+        let observability_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::ImplementObservability],
+        );
+        let ordinary_config_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+
+        let observability =
+            code_reference_selection_for_task(&baseline, &observability_task).unwrap();
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_config_task).unwrap();
+
+        assert!(observability.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(!ordinary.reference_groups["springboot"].contains(&"observability".to_string()));
+        assert!(ordinary.reference_groups["springboot"].contains(&"runtime".to_string()));
     }
 
     #[test]
@@ -3258,18 +3627,20 @@ mod tests {
             .pointer("/unmappedSignals")
             .and_then(Value::as_array)
             .is_some_and(Vec::is_empty));
-        let load_plan = seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .unwrap();
+        assert!(seed.get("techReferenceProfile").is_none());
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
-            item.get("refId").and_then(Value::as_str) == Some("fe.react.core")
-                && item.get("path").and_then(Value::as_str) == Some("tech/frontend/react/core.md")
+            item.ref_id == "fe.react.core" && item.path == "tech/frontend/react/core.md"
         }));
-        assert!(!load_plan.iter().any(|item| item
-            .get("path")
-            .and_then(Value::as_str)
-            .is_some_and(|path| path.starts_with("tech/code/typescript/"))));
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path.starts_with("tech/code/typescript/")));
     }
 
     #[test]
@@ -3355,20 +3726,13 @@ mod tests {
     }
 
     #[test]
-    fn baseline_seed_does_not_load_vendor_overlays() {
+    fn baseline_seed_does_not_expose_reference_routes() {
         let baseline = baseline(json!({
             "tracks": {"persistence": {"selection": "PostgreSQL"}}
         }));
         let seed = build_code_quality_seed(&baseline);
-        let load_plan = seed
-            .pointer("/techReferenceProfile/referenceLoadPlan")
-            .and_then(Value::as_array)
-            .unwrap();
-        assert!(!load_plan.iter().any(|item| {
-            item.get("path")
-                .and_then(Value::as_str)
-                .is_some_and(|path| path.contains("/mysql/") || path.contains("/postgresql/"))
-        }));
+        assert_eq!(seed["required"], true);
+        assert!(seed.get("techReferenceProfile").is_none());
     }
 
     #[test]

@@ -113,8 +113,13 @@ const BACKEND_REFERENCE_FILES: &[&str] = &[
     "nestjs/security",
     "nestjs/services",
     "nestjs/testing",
+    "springboot/async",
+    "springboot/cache",
     "springboot/cloud",
     "springboot/data",
+    "springboot/integration",
+    "springboot/observability",
+    "springboot/resilience",
     "springboot/runtime",
     "springboot/security",
     "springboot/testing",
@@ -1277,9 +1282,14 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     assert!(java_spring.contains("app.<project_slug>"));
     assert!(java_spring.contains("@Qualifier"));
     let spring_runtime = fs::read_to_string(backend_root.join("springboot/runtime.md")).unwrap();
-    assert!(spring_runtime.contains("@Async"));
-    assert!(spring_runtime.contains("Spring Cache"));
-    assert!(spring_runtime.contains("Do not introduce Redis, Caffeine"));
+    assert!(spring_runtime.contains("@ConfigurationProperties"));
+    assert!(spring_runtime.contains("graceful shutdown"));
+    let spring_async = fs::read_to_string(backend_root.join("springboot/async.md")).unwrap();
+    assert!(spring_async.contains("@Async"));
+    assert!(spring_async.contains("same-class self-invocation"));
+    let spring_cache = fs::read_to_string(backend_root.join("springboot/cache.md")).unwrap();
+    assert!(spring_cache.contains("@Cacheable"));
+    assert!(spring_cache.contains("source of truth"));
 
     let mut backend_files = Vec::new();
     collect_markdown_files(&backend_root, &mut backend_files);
@@ -1290,22 +1300,38 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     for path in backend_files {
         let content = fs::read_to_string(&path).unwrap();
         let line_count = content.lines().count();
+        let is_spring_boot = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            == Some("springboot");
+        let minimum_lines = if is_spring_boot { 65 } else { 25 };
         assert!(
-            line_count >= 25,
+            line_count >= minimum_lines,
             "{} is too thin to act as a backend framework reference: {line_count} lines",
             path.display()
         );
-        for required in [
-            "When To Use",
-            "Implementation Focus",
-            "Verification Focus",
-            "Evidence Focus",
-        ] {
-            assert!(
-                content.contains(required),
-                "{} missing backend framework reference section or boundary {required}",
-                path.display()
-            );
+        if is_spring_boot {
+            for required in ["Verification Focus", "Unsafe Defaults"] {
+                assert!(
+                    content.contains(required),
+                    "{} missing Spring Boot engineering section {required}",
+                    path.display()
+                );
+            }
+        } else {
+            for required in [
+                "When To Use",
+                "Implementation Focus",
+                "Verification Focus",
+                "Evidence Focus",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing backend framework reference section or boundary {required}",
+                    path.display()
+                );
+            }
         }
         for forbidden in [
             "referenceLoadPlan",

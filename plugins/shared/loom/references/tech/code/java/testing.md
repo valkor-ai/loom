@@ -1,34 +1,94 @@
-# Java Testing Quality
+# Java Unit And Component Testing
 
-This file guides test selection for Java/Spring tasks; it is not a requirement to add every test type.
+This reference owns JUnit 5, AssertJ, Mockito, parameterized tests, deterministic fixtures, and framework-independent component tests. Spring context tests, slices, MockMvc/WebTestClient, Spring Security tests, and Boot Testcontainers integration belong to Spring Boot testing.
 
 ## When To Use
 
-- The task changes Java behavior and needs compile/test evidence, or it adds/modifies test infrastructure.
-- Use the smallest test scope that proves the behavior. Unit tests are enough for pure domain/service logic; repository/API/security/runtime wiring needs a slice or integration test.
-- Follow existing test libraries and naming conventions: JUnit 5, AssertJ, Mockito, Spring test slices, Testcontainers, Gradle/Maven tasks, or local equivalents.
+Use this reference only when the accepted task owns Java test creation or modification with JUnit, AssertJ, Mockito, parameterized tests, deterministic fixtures, or framework-independent component tests. Production implementation work does not receive testing guidance solely because the selected language is Java.
+
+Use the Spring Boot testing reference for context loading, test slices, framework security, HTTP adapters, or provider-backed Boot integration. This file remains focused on Java test design and tools.
 
 ## Implementation Focus
 
-- For service/domain rules, write focused JUnit tests with clear setup, action, assertion, and verification of important collaborator calls. Do not boot Spring for pure domain logic.
-- For controllers, use `MockMvc`, `WebTestClient`, or existing API test style to verify request validation, status code, response shape, and error shape.
-- For repositories, use `@DataJpaTest` or existing integration style. Test query filters, projections, pagination/count behavior, and empty/not-found outcomes with real persisted rows.
-- For database-specific behavior, prefer Testcontainers or the project's target dialect. H2/SQLite tests are not enough when SQL type, migration, or dialect behavior is the risk.
-- For security, test allowed and denied requests with realistic roles/tokens. Do not only test the happy login path.
-- For reactive code, use `StepVerifier` and `WebTestClient`; do not assert `Mono`/`Flux` by blocking unless the repository has that convention for tests.
-- For migrations, run the migration/startup path and assert mappings still validate. If a migration changes data shape, include at least one fixture row or write/read proof.
-- Keep test data builders local and readable. Avoid huge fixture JSON or shared mutable fixtures that make business failures hard to diagnose.
-- Do not mark tests disabled or relax assertions to pass CI. If a test cannot run locally, record the blocked command and reason in known gaps.
-- When fixing a bug, add a regression test that fails for the old behavior whenever feasible.
+### Test Shape
+
+Structure tests around observable behavior:
+
+- arrange only the inputs and collaborators needed by the scenario
+- invoke one behavior boundary
+- assert returned state, thrown error, durable effect, or collaborator contract
+- name the business condition and outcome
+
+Avoid tests that only mirror implementation lines or assert private methods.
+
+### JUnit 5
+
+Use lifecycle hooks sparingly and keep fixtures isolated. Parameterized tests are useful for validation tables, state transitions, parsers, and value boundaries.
+
+```java
+@ParameterizedTest
+@CsvSource({"0,false", "1,true", "10,true"})
+void quantityEligibility(int quantity, boolean accepted) {
+    assertThat(policy.accepts(quantity)).isEqualTo(accepted);
+}
+```
+
+Use `assertThrows`/AssertJ exception assertions for expected failures and verify stable domain fields, not only message prose.
+
+### Mockito
+
+Mock owned ports and external collaborators, not values, entities, collections, or the class under test. Prefer real small collaborators when setup is simpler than mocking.
+
+Use strict stubbing where supported. Verify important side effects and absence of unsafe calls, but avoid asserting every internal interaction. Captors are useful when the command sent to a dependency is part of the contract.
+
+Do not mock static/global state as a default design. Inject `Clock`, ID generators, and external ports.
+
+### Assertions
+
+Assert complete meaningful outcomes:
+
+- state transition and retained invariants
+- stable error code/type
+- collection ordering and contents
+- monetary/time values with correct comparison semantics
+- no duplicate side effect on retry
+
+Avoid assertions that only check non-null, collection size without content, or that no exception was thrown.
+
+### Fixtures
+
+Use builders/factories that expose scenario-relevant values and safe defaults. Keep mutable fixtures per test. Avoid giant shared JSON and hidden random data.
+
+Fix time through an injected `Clock`. Seed randomness when randomness is part of the behavior. Generate unique data deterministically enough to diagnose failures.
+
+### Test Levels
+
+Plain unit tests suit domain and application logic without framework wiring. Component/integration tests suit real serializers, persistence providers, HTTP clients, messaging, and framework configuration. Select the narrowest boundary that proves the risk.
+
+No universal coverage percentage is imposed. Use coverage to locate untested branches, then prioritize business blockers, failures, concurrency, and contracts.
 
 ## Verification Focus
 
-- Run the project command that matches the touched scope: unit test class, module test, `./gradlew test`, `./gradlew check`, `./mvnw test`, or `./mvnw verify`.
-- For behavior changes, prove at least one success path and one important failure/business-blocking path.
-- For API-visible changes, prove HTTP status and response body, not only service return values.
-- For persistence changes, prove write/read or query behavior against the configured test database.
-- For security changes, prove both authorization success and denial.
+Useful Java test evidence includes:
+
+- regression scenario for the old defect
+- important success and failure/business-blocking branches
+- deterministic clock/ID/external collaborators
+- meaningful state and side-effect assertions
+- parameterized boundary cases where appropriate
+- targeted and module-level test commands
 
 ## Evidence Focus
 
-- In the evidence summary, name the test level used, commands run, and why that level was sufficient for the changed Java behavior.
+Record the test class or case that proves each owned behavior and the command that executed it. A passing module command is useful only when the relevant test is included and its assertions prove a business outcome, contract failure, state transition, or side effect.
+
+For defect fixes, preserve a regression case that fails for the old behavior. For parameterized tests, name or display the input boundary so failures remain diagnosable. Do not treat coverage percentage, test count, or context startup alone as proof of behavior.
+
+## Unsafe Defaults
+
+- Booting a framework for pure Java behavior.
+- Mocking the class under test or value objects.
+- Shared mutable fixtures and order-dependent tests.
+- Arbitrary sleeps.
+- Weak non-null/no-exception assertions.
+- Disabling tests or lowering assertions to pass.
