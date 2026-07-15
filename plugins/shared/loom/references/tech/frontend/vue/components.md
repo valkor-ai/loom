@@ -1,32 +1,81 @@
-# Vue Component Quality
+# Vue Component Contracts
 
-This file applies Vue component-contract rules to task-owned props, emits, slots, `v-model`, provide/inject, Teleport, dynamic components, and async components.
+Apply component guidance when the task owns Vue props, emits, models, slots, dependency injection, dynamic/kept-alive components, Teleport, transitions, or reusable component boundaries.
 
-## When To Use
+## Ownership Boundary
 
-- The task changes Vue component APIs, props, emitted events, slots, scoped slots, `v-model`, modal/overlay rendering, dynamic components, or reusable UI components.
-- Use this when component boundaries and parent-child contracts affect correctness or reuse.
-- If the task only changes a private component implementation with no contract impact, keep this file secondary to Vue core rules.
+Feature components may know product state and commands; reusable UI primitives receive values and emit intent without importing domain API/store/router logic.
 
-## Implementation Focus
+Split components around independent state, behavior, accessibility, rendering cost, and reuse. Avoid a single component controlled by many unrelated booleans or a component per markup fragment.
 
-- Define typed props with `defineProps<T>()` and defaults with `withDefaults()` when needed. Keep optional props truly optional in runtime behavior.
-- Define typed emits with `defineEmits<T>()`. Do not emit loosely shaped objects when the parent workflow depends on specific fields.
-- Use `v-model` for controlled two-way input contracts; name multiple models explicitly and avoid mutating props to simulate two-way binding.
-- Use slots for layout extension and scoped slots when the child owns data that the parent must render. Keep slot props small and typed.
-- Use provide/inject for stable cross-tree dependencies, not routine prop drilling. Prefer typed `InjectionKey<T>` and readonly state where consumers should not mutate.
-- Use Teleport for modals, toasts, command palettes, and overlays that need DOM placement outside the component hierarchy. Preserve focus, labels, and close behavior.
-- Use dynamic components and `KeepAlive` only when preserving component state across view switches is part of the product behavior.
-- Use `defineAsyncComponent` or route-level lazy loading for heavy optional areas, with loading and error states.
-- Keep reusable components domain-neutral only when they are genuinely reusable. Do not generalize a one-off business component prematurely.
+Model component APIs from runtime use. Backend DTOs rarely make safe editable form/view models when values may be partial, formatted, invalid, or pending.
 
-## Verification Focus
+## Props And Defaults
 
-- Test props, emitted payloads, `v-model` updates, slot rendering, disabled states, and accessible labels touched by the task.
-- Verify modal/Teleport focus behavior, close behavior, and action targeting.
-- For async components, verify loading and error states as well as the loaded state.
-- Run typecheck so prop, emit, slot, and injection contracts stay aligned.
+Use the repository's TypeScript or runtime prop convention. Keep required/optional/null behavior exact and use factory defaults for mutable arrays/objects where runtime declarations require it.
 
-## Evidence Focus
+Do not mutate props. Derive values with computed state, emit an update, or keep an explicit local draft with rules for parent refresh/reset.
 
-- In the evidence summary, name the component decision: typed props, typed emits, `v-model`, scoped slot, provide/inject, Teleport, dynamic component, async component, or reusable boundary.
+Avoid copying props into local refs without synchronization semantics. A draft must define when it initializes, rebases, discards, and survives backend failure.
+
+## Emits And Commands
+
+Declare emitted events and payloads. Event names should describe intent/result rather than DOM mechanics, and payloads must carry stable target identity plus all command inputs.
+
+Do not emit a generic object bag or make the parent read mutable selected state to infer the target. Do not use component emits as a global event bus.
+
+Validate runtime payloads when JavaScript/external consumers can violate static types and the component boundary is public.
+
+## Model Contracts
+
+Use `v-model`/`defineModel` only when the installed Vue version and repository convention support a controlled value/update contract. Name multiple models and define modifiers/normalization deliberately.
+
+Keep invalid editable text representable. Converting every input immediately to a domain number/date can erase intermediate values and make validation impossible.
+
+Avoid two sources of truth between parent model, internal ref, form library, and store. Emit final normalized values at the agreed boundary.
+
+## Slots
+
+Use slots for layout/content extension and scoped slots when the child owns data/actions the parent renders. Keep slot props small, stable, typed where tooling supports it, and semantically documented through usage.
+
+Provide useful default slot content only when omission is valid. Do not make accessibility labels, required actions, or business state disappear silently because a slot was absent.
+
+Stable domain keys still apply inside generic list/table slots; index keys are unsafe for mutable collections.
+
+## Provide And Inject
+
+Use provide/inject for stable cross-tree dependencies such as form, theme, compound component, or plugin context, not as an invisible substitute for ordinary feature data flow.
+
+Use a typed `InjectionKey`, provide refs/readonly state when reactivity is required, and fail clearly when required context is missing. Providing `readonly(user.value)` captures a plain current value; provide the readonly ref/reactive owner instead.
+
+Keep mutations in provider-owned commands rather than allowing descendants to mutate shared state freely.
+
+## Teleport, Dialogs, And Dynamic Content
+
+Teleport changes DOM placement, not Vue ownership. Dialogs/menus/toasts need correct labels, focus entry/trap/return, escape/outside behavior, scroll locking, stacking, and target availability.
+
+Use `KeepAlive` only when preserved component state is product behavior. Define include/exclude/key/cache bounds and lifecycle handling with activated/deactivated hooks.
+
+Async/dynamic components require stable loading, failure, retry, and ready states. Transitions must respect reduced motion and must not gate correctness on animation completion.
+
+## Verification
+
+- Test prop defaults/nullability, emitted payload and stable target identity, model updates, modifiers, and invalid intermediate values.
+- Exercise named/scoped/default slots and missing required context.
+- Verify Teleport dialog focus, close behavior, action target, stacking, and restored focus.
+- Test KeepAlive activation/deactivation and dynamic/async loading-error-retry behavior when owned.
+- Run SFC type/build checks for prop/emit/slot/injection/model consumers.
+
+## Delivery Evidence
+
+Name the public component contract and the consumer-visible assertion proving it. A mounted component or snapshot does not establish model ownership, emitted target integrity, injected reactivity, Teleport accessibility, or kept-alive lifecycle behavior.
+
+## Unsafe Defaults
+
+- Props copied into local state with no rebase/reset policy.
+- Broad object emits requiring parents to infer intent.
+- `v-model` layered over another independent source of truth.
+- Provide/inject used as an untyped hidden global store.
+- Plain snapshot values provided when reactive updates are expected.
+- Teleported overlays without focus and close semantics.
+- KeepAlive or async components enabled without lifecycle/error behavior.

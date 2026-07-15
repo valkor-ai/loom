@@ -1469,8 +1469,9 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
         let is_nextjs = frontend_profile == Some("nextjs");
         let is_react = frontend_profile == Some("react");
         let is_react_native = frontend_profile == Some("react-native");
+        let is_vue = frontend_profile == Some("vue");
         let is_enhanced_frontend =
-            is_angular || is_flutter || is_nextjs || is_react || is_react_native;
+            is_angular || is_flutter || is_nextjs || is_react || is_react_native || is_vue;
         let minimum_lines = if is_enhanced_frontend { 65 } else { 25 };
         assert!(
             line_count >= minimum_lines,
@@ -1638,6 +1639,30 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let rn_testing = fs::read_to_string(frontend_root.join("react-native/testing.md")).unwrap();
     assert!(rn_testing.contains("React Native Testing Library"));
     assert!(rn_testing.contains("both-platform coverage"));
+    let vue_core = fs::read_to_string(frontend_root.join("vue/core.md")).unwrap();
+    assert!(vue_core.contains("watchEffect"));
+    assert!(vue_core.contains("effectScope"));
+    let vue_components = fs::read_to_string(frontend_root.join("vue/components.md")).unwrap();
+    assert!(vue_components.contains("defineModel"));
+    assert!(vue_components.contains("InjectionKey"));
+    let vue_state = fs::read_to_string(frontend_root.join("vue/state.md")).unwrap();
+    assert!(vue_state.contains("storeToRefs"));
+    assert!(vue_state.contains("process-global"));
+    let vue_typescript = fs::read_to_string(frontend_root.join("vue/typescript.md")).unwrap();
+    assert!(vue_typescript.contains("vue-tsc"));
+    assert!(vue_typescript.contains("defineExpose"));
+    let vue_nuxt = fs::read_to_string(frontend_root.join("vue/nuxt.md")).unwrap();
+    assert!(vue_nuxt.contains("useAsyncData"));
+    assert!(vue_nuxt.contains("runtimeConfig.public"));
+    let vue_build = fs::read_to_string(frontend_root.join("vue/build.md")).unwrap();
+    assert!(vue_build.contains("VITE_*"));
+    assert!(vue_build.contains("Manual chunks"));
+    let vue_mobile = fs::read_to_string(frontend_root.join("vue/mobile.md")).unwrap();
+    assert!(vue_mobile.contains("Capacitor"));
+    assert!(vue_mobile.contains("network-only"));
+    let vue_testing = fs::read_to_string(frontend_root.join("vue/testing.md")).unwrap();
+    assert!(vue_testing.contains("Vue Test Utils"));
+    assert!(vue_testing.contains("testing Pinia"));
 }
 
 #[test]

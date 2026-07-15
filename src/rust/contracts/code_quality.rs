@@ -1778,29 +1778,58 @@ fn frontend_reference_items_for_signal(
         groups.insert("react".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "vue") {
-        let items = groups.entry("vue".to_string()).or_default();
-        items.insert("core".to_string());
-        items.insert("components".to_string());
-        items.insert("state".to_string());
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        let owns_vue_component = task_owns_frontend_surface(task)
+            || task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation)
+            || task_has_action(task, ImplementationAction::ImplementReactiveClientFlow)
+            || task_has_action(task, ImplementationAction::ImplementSharedClientState)
+            || task_has_action(task, ImplementationAction::OptimizeFrontendPerformance)
+            || task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementFrontendFrameworkVersionFeature,
+            );
+        if owns_vue_component {
+            items.insert("core".to_string());
+        }
+        if task_owns_frontend_surface(task) {
+            items.insert("components".to_string());
+        }
+        if task_uses_api_client_binding(task)
+            || task_has_action(task, ImplementationAction::ImplementSharedClientState)
+            || task_has_action(task, ImplementationAction::ImplementClientStorage)
+        {
+            items.insert("state".to_string());
+        }
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if signal.language.as_deref() == Some("typescript") {
+        if signal.language.as_deref() == Some("typescript") && owns_vue_component {
             items.insert("typescript".to_string());
         }
-        if has_focus("nuxt") || signal.frameworks.iter().any(|item| item == "nuxt") {
+        if signal.frameworks.iter().any(|item| item == "nuxt")
+            && (task_has_action(task, ImplementationAction::CreateOrUpdateFrontendNavigation)
+                || task_has_action(task, ImplementationAction::ImplementServerRenderedComponent)
+                || task_has_action(task, ImplementationAction::ImplementServerMutation)
+                || task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+                || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation))
+        {
             items.insert("nuxt".to_string());
         }
-        if has_focus("build_tooling")
-            || has_focus("runtime")
-            || has_focus("configuration")
-            || has_focus("performance")
+        if task_has_action(task, ImplementationAction::AddOrUpdateConfig)
+            || task_has_action(task, ImplementationAction::MigrateFrameworkImplementation)
         {
             items.insert("build".to_string());
         }
-        if has_focus("mobile") {
+        if signal
+            .frameworks
+            .iter()
+            .any(|item| matches!(item.as_str(), "quasar" | "capacitor" | "pwa"))
+            && task_has_action(task, ImplementationAction::ImplementMobilePlatformBehavior)
+        {
             items.insert("mobile".to_string());
         }
+        groups.insert("vue".to_string(), items);
     }
     if signal.frameworks.iter().any(|item| item == "angular") {
         let mut items = BTreeSet::new();
@@ -2326,6 +2355,14 @@ fn push_frontend_frameworks_from_haystack(haystack: &str, frameworks: &mut Vec<S
     );
     push_if_contains(haystack, frameworks, "vue", &["vue", "nuxt"]);
     push_if_contains(haystack, frameworks, "nuxt", &["nuxt"]);
+    push_if_contains(haystack, frameworks, "quasar", &["quasar"]);
+    push_if_contains(haystack, frameworks, "capacitor", &["capacitor"]);
+    push_if_contains(
+        haystack,
+        frameworks,
+        "pwa",
+        &["progressive web app", " pwa ", "pwa+", "+pwa"],
+    );
     push_if_contains(haystack, frameworks, "angular", &["angular", "ngrx"]);
     push_if_contains(haystack, frameworks, "ngrx", &["ngrx"]);
     push_if_contains(haystack, frameworks, "svelte", &["svelte"]);
@@ -2750,7 +2787,6 @@ mod tests {
             vec![ImplementationAction::AddOrUpdateTests],
         );
         testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-
         let prose = code_reference_selection_for_task(&specialized_baseline, &prose_only).unwrap();
         let unsupported_selection =
             code_reference_selection_for_task(&react18_baseline, &unsupported).unwrap();
@@ -2913,10 +2949,13 @@ mod tests {
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementSharedClientState,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Build a Vue 3 Composition API purchase request list with typed props, Pinia store state, and component tests.".to_string();
+        task.objective = "Implement the accepted Vue purchase request workflow.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups.contains_key("vue"));
         assert!(selection.reference_groups["vue"].contains(&"core".to_string()));
@@ -2955,15 +2994,21 @@ mod tests {
     fn nuxt_specialized_refs_are_task_scoped_to_vue() {
         let baseline = baseline(json!({
             "tracks": {
-                "web": {"selection": "Nuxt 3 + TypeScript"}
+                "web": {"selection": "Nuxt 3 + Quasar + Capacitor + PWA + TypeScript"}
             }
         }));
         let mut task = task(
             TaskKind::UiFlowIncrement,
-            vec![ImplementationAction::CreateOrUpdateUiFlow],
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::CreateOrUpdateFrontendNavigation,
+                ImplementationAction::ImplementServerRenderedComponent,
+                ImplementationAction::AddOrUpdateConfig,
+                ImplementationAction::ImplementMobilePlatformBehavior,
+            ],
         );
         task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        task.objective = "Implement a Nuxt page with useFetch, runtimeConfig, ClientOnly hydration guard, Vite build optimization, and mobile PWA offline state.".to_string();
+        task.objective = "Implement the accepted Nuxt hybrid application boundary.".to_string();
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         let vue_refs = &selection.reference_groups["vue"];
         assert!(vue_refs.contains(&"nuxt".to_string()));
@@ -2982,6 +3027,69 @@ mod tests {
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "fe.vue.mobile" && item.path == "tech/frontend/vue/mobile.md"
         }));
+    }
+
+    #[test]
+    fn vue_specialized_references_ignore_prose_and_require_owned_capabilities() {
+        let specialized_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Nuxt 3 + Quasar + Capacitor + PWA + TypeScript"}}
+        }));
+        let vue_baseline = baseline(json!({
+            "tracks": {"web": {"selection": "Vue 3 + TypeScript"}}
+        }));
+        let mut prose_only = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_only.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_only.objective =
+            "Add Pinia, Nuxt SSR routes, Vite optimization, Capacitor PWA behavior, and tests."
+                .to_string();
+        let mut unsupported_mobile = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::ImplementMobilePlatformBehavior,
+            ],
+        );
+        unsupported_mobile.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let mut testing = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        testing.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let server_mutation = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementServerMutation],
+        );
+        let performance = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::OptimizeFrontendPerformance],
+        );
+
+        let prose = code_reference_selection_for_task(&specialized_baseline, &prose_only).unwrap();
+        let unsupported =
+            code_reference_selection_for_task(&vue_baseline, &unsupported_mobile).unwrap();
+        let tests = code_reference_selection_for_task(&vue_baseline, &testing).unwrap();
+        let server =
+            code_reference_selection_for_task(&specialized_baseline, &server_mutation).unwrap();
+        let performance_selection =
+            code_reference_selection_for_task(&vue_baseline, &performance).unwrap();
+
+        for specialized in ["state", "nuxt", "build", "mobile", "testing"] {
+            assert!(!prose.reference_groups["vue"].contains(&specialized.to_string()));
+        }
+        assert!(!unsupported.reference_groups["vue"].contains(&"mobile".to_string()));
+        assert!(tests.reference_groups["vue"].contains(&"testing".to_string()));
+        assert!(!tests.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(!tests.reference_groups["vue"].contains(&"components".to_string()));
+        assert!(!tests.reference_groups["vue"].contains(&"typescript".to_string()));
+        assert!(server.reference_groups["vue"].contains(&"nuxt".to_string()));
+        assert!(!server.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(!server.reference_groups["vue"].contains(&"components".to_string()));
+        assert!(!server.reference_groups["vue"].contains(&"typescript".to_string()));
+        assert!(performance_selection.reference_groups["vue"].contains(&"core".to_string()));
+        assert!(!performance_selection.reference_groups["vue"].contains(&"build".to_string()));
     }
 
     #[test]

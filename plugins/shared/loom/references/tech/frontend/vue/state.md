@@ -1,31 +1,81 @@
-# Vue State Quality
+# Vue State And Pinia
 
-This file applies Vue and Pinia state-management rules to task-owned local state, global stores, server data, persisted state, and action-driven workflows.
+Apply state guidance only when the task owns shared client state, API-backed state, client persistence, selected/draft workflow state, optimistic transitions, or store lifetime. Static/presentational Vue work should not create a store.
 
-## When To Use
+## Choose The Owner
 
-- The task creates or changes Pinia stores, local UI state, shared workflow state, selected records, form drafts, filters, pagination, optimistic updates, or persisted settings.
-- Use this when state ownership, reactivity, store boundaries, or action side effects affect the delivered behavior.
-- If the task only renders static content, do not add a store because this file exists.
+Keep state local to a component/composable when one surface owns it. Use a Pinia store for cross-component/route workflows, authenticated identity, shared commands, or state with an application-level lifetime.
 
-## Implementation Focus
+Keep remote cached data in the repository's query/data layer when present. Do not duplicate the same resource in an effect ref, query cache, and Pinia store without a defined source of truth.
 
-- Keep state local when it belongs to one component or route. Use Pinia only for shared workflow state, authenticated user state, cross-route data, or durable product settings.
-- Prefer Pinia setup stores for new work in Composition API projects. Keep options stores only when the repository already uses them consistently.
-- Use `storeToRefs()` when destructuring store state or getters. Actions can be destructured directly.
-- Keep API/server data, editable drafts, selected snapshots, filters, optimistic values, and persisted settings separate when they change at different times.
-- Put business actions in stores only when multiple components need the same workflow. Keep purely presentational toggles local.
-- Keep persistence explicit and narrow. Validate persisted values before trusting them, and avoid persisting sensitive user data unless the architecture requires it.
-- Model loading, error, ready, empty, and business-blocking states explicitly. Do not collapse all failures into one string when API outcomes differ.
-- Reset or preserve state deliberately when route params, selected records, authenticated user, or modal open target changes.
+Separate server records, editable drafts, selected snapshots, filters/page, pending commands, validation errors, optimistic overlays, and persisted preferences according to lifetime.
 
-## Verification Focus
+## Store Design
 
-- Test store actions, getters, state reset, persisted-state validation, and cross-store interactions when touched.
-- Test UI flows that can drift: select row then submit, edit then cancel, retry after failure, submit twice, change filters while pending, and close/reopen modal.
-- Use isolated Pinia instances in tests so stores do not leak state across cases.
-- Verify cache invalidation, refetch, or visible readback after successful mutations.
+Preserve the repository's setup/options store convention. Organize stores by product capability and ownership rather than one store per component or one application-wide mega-store.
 
-## Evidence Focus
+State is serializable/inspectable where practical; getters derive values; actions own transitions and side effects shared by consumers. Presentational toggles usually remain local.
 
-- In the evidence summary, name the state decision: local state, Pinia store, `storeToRefs`, server-data split, selected snapshot, persisted state, optimistic update, or state reset proof.
+Use `storeToRefs` when destructuring reactive state/getters; actions can be destructured directly. Avoid copying store refs into separate refs that drift.
+
+Return readonly state from composables/providers when callers should use commands rather than direct mutation.
+
+## API And Async State
+
+Model idle/loading/refreshing/ready/empty/error/mutating states without erasing usable data during refresh. Preserve distinct validation, forbidden, not-found, conflict, unavailable, and unexpected failures where user action differs.
+
+Key requests/cache by every resource, filter, page, tenant, identity, and locale dimension affecting results. Cancel or sequence superseded requests and prevent old responses from replacing a newer route/filter/account.
+
+Actions receive stable target identity in their payload. Never derive a mutation target from mutable global selection after confirmation or async delay.
+
+After mutation, reconcile returned ID/version/status/normalized values and invalidate/refetch only affected resources. A success toast without visible readback is incomplete.
+
+## Optimistic Transitions
+
+Use optimistic state only when reversible and understandable. Track operation identity and prior state so overlapping writes can reconcile independently.
+
+Define success, validation rejection, authorization failure, conflict, network uncertainty, out-of-order completion, and server-normalized response behavior.
+
+Do not let an optimistic client transition authorize an action or permanently hide a failed command.
+
+## Store Lifetime And SSR
+
+Create isolated Pinia instances per application/request/test. In SSR/Nuxt, never use a process-global mutable store that leaks data across requests/users.
+
+Hydrate only serializable intended state and avoid server/client divergence from browser-only values. Identity/account changes must reset or re-scope incompatible stores and caches.
+
+Dispose store-created watchers/subscriptions when their owner ends. Component `storeToRefs` cleanup does not automatically stop watchers created in a long-lived store.
+
+## Persistence
+
+Persist only explicit durable slices. Version and validate stored data, namespace by identity/environment, represent hydration, and define migration/expiry/logout/account-switch cleanup.
+
+Do not persist loading flags, transient errors, open dialogs, in-flight operations, or sensitive data to ordinary browser/device storage. A persistence plugin still needs schema and identity policy.
+
+## Cross-Store Dependencies
+
+Keep dependency direction clear and avoid cyclic initialization/action chains. Pass data into actions or extract a lower-level service when two stores would otherwise call each other recursively.
+
+For plugins/subscriptions, define ordering, error behavior, and disposal. Do not hide business commands in generic persistence/logging plugins.
+
+## Verification
+
+- Test getters/actions/transitions through isolated active Pinia instances.
+- Prove request/cache dimensions, supersession, targeted invalidation, and no cross-user/request leakage.
+- Exercise selection changes, duplicate submit, optimistic overlap/rollback, conflict, and returned readback.
+- Test persisted missing/corrupt/old/expired data plus logout/account/environment cleanup when owned.
+- Verify store watcher/subscription disposal and SSR hydration consistency.
+
+## Delivery Evidence
+
+Name the state owner/lifetime/key/action, transition table, and assertion proving visible consistency. Store existence or a successful fetch does not prove isolation, target correctness, invalidation, rollback, persistence, or SSR safety.
+
+## Unsafe Defaults
+
+- Pinia introduced for local one-component state.
+- Remote data duplicated across refs, Pinia, and query cache.
+- Store actions reading mutable selected state instead of payload targets.
+- Request keys omitting identity/filter dimensions.
+- Optimistic updates without operation identity and rollback.
+- Persisted or SSR state shared across users/tests.
+- Long-lived store watchers never disposed.
