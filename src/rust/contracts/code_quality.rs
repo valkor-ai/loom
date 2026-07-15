@@ -1178,7 +1178,8 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
         }
         Some("typescript") | Some("javascript") => {
             has_focus("frontend")
-                || (roles.contains("backend") && (has_focus("api") || has_focus("backend")))
+                || (roles.contains("backend")
+                    && (has_focus("api") || has_focus("backend") || has_focus("testing")))
         }
         Some(_) => {
             if roles.contains("frontend") {
@@ -1549,23 +1550,31 @@ fn backend_reference_items_for_signal(
         }
     }
     if signal.frameworks.iter().any(|item| item == "nestjs") {
-        let items = groups.entry("nestjs".to_string()).or_default();
-        if has_focus("testing") {
+        let mut items = BTreeSet::new();
+        if task_owns_test_implementation(task) {
             items.insert("testing".to_string());
         }
-        if has_focus("api") {
+        if task_owns_api_contract(task) {
             items.insert("controllers".to_string());
             items.insert("dtos".to_string());
             items.insert("services".to_string());
         }
-        if has_focus("backend") || has_focus("persistence") || has_focus("architecture") {
+        if task_owns_nest_service_boundary(task) {
             items.insert("services".to_string());
         }
-        if has_focus("security") {
+        if context.security
+            || task_has_action(
+                task,
+                ImplementationAction::ImplementAuthenticationOrAuthorization,
+            )
+        {
             items.insert("security".to_string());
         }
-        if has_focus("migration") {
+        if task_has_action(task, ImplementationAction::MigrateFrameworkImplementation) {
             items.insert("migration".to_string());
+        }
+        if !items.is_empty() {
+            groups.insert("nestjs".to_string(), items);
         }
     }
     groups
@@ -1944,6 +1953,26 @@ fn task_owns_persistence(task: &TaskDefinition) -> bool {
                     | ImplementationAction::AddOrUpdatePersistenceTests
             )
         })
+}
+
+fn task_owns_nest_service_boundary(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::ImplementPersistenceTransaction
+                | ImplementationAction::ImplementEntityLifecycle
+                | ImplementationAction::ImplementAsyncProcessing
+                | ImplementationAction::ImplementCachePolicy
+                | ImplementationAction::ImplementExternalServiceIntegration
+                | ImplementationAction::ImplementResiliencePolicy
+                | ImplementationAction::ImplementObservability
+                | ImplementationAction::RefactorSupportingCode
+        )
+    })
 }
 
 fn task_owns_sql_schema(task: &TaskDefinition) -> bool {
@@ -3706,20 +3735,80 @@ mod tests {
                 "backend": {"selection": "TypeScript + NestJS"}
             }
         }));
-        let mut task = task(
+        let migration_task = task(
             TaskKind::IntegrationIncrement,
-            vec![ImplementationAction::RefactorSupportingCode],
+            vec![ImplementationAction::MigrateFrameworkImplementation],
         );
-        task.objective =
-            "Migrate existing Express routers and middleware into NestJS modules and controllers."
-                .to_string();
-        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let selection = code_reference_selection_for_task(&baseline, &migration_task).unwrap();
         assert!(selection.reference_groups["nestjs"].contains(&"migration".to_string()));
-        assert!(selection.reference_groups["nestjs"].contains(&"services".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "bk.nest.migration" && item.path == "tech/backend/nestjs/migration.md"
         }));
+
+        let mut prose_only = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::RefactorSupportingCode],
+        );
+        prose_only.objective =
+            "Migrate existing Express routers and middleware into NestJS modules and controllers."
+                .to_string();
+        let prose_selection = code_reference_selection_for_task(&baseline, &prose_only).unwrap();
+        assert!(!prose_selection.reference_groups["nestjs"].contains(&"migration".to_string()));
+        assert!(prose_selection.reference_groups["nestjs"].contains(&"services".to_string()));
+    }
+
+    #[test]
+    fn nestjs_testing_and_security_references_require_owned_actions() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "TypeScript + NestJS"}
+            }
+        }));
+        let testing_task = task(
+            TaskKind::VerificationIncrement,
+            vec![ImplementationAction::AddOrUpdateTests],
+        );
+        let security_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::ImplementAuthenticationOrAuthorization],
+        );
+
+        let testing = code_reference_selection_for_task(&baseline, &testing_task).unwrap();
+        let security = code_reference_selection_for_task(&baseline, &security_task).unwrap();
+
+        assert!(testing.reference_groups["nestjs"].contains(&"testing".to_string()));
+        assert!(testing.reference_groups["typescript"].contains(&"testing".to_string()));
+        assert!(!testing.reference_groups["nestjs"].contains(&"security".to_string()));
+        assert!(security.reference_groups["nestjs"].contains(&"security".to_string()));
+        assert!(!security.reference_groups["nestjs"].contains(&"testing".to_string()));
+    }
+
+    #[test]
+    fn nestjs_entity_only_task_does_not_assume_service_or_transport_work() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "backend": {"selection": "TypeScript + NestJS + TypeORM"}
+            }
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![ImplementationAction::CreateOrUpdateEntity],
+        );
+
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+
+        assert!(!selection
+            .reference_groups
+            .get("nestjs")
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    matches!(
+                        item.as_str(),
+                        "controllers" | "dtos" | "services" | "testing"
+                    )
+                })
+            }));
     }
 
     #[test]

@@ -1305,8 +1305,11 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str());
         let is_spring_boot = backend_profile == Some("springboot");
-        let minimum_lines = if matches!(backend_profile, Some("springboot" | "fastapi" | "django"))
-        {
+        let is_nestjs = backend_profile == Some("nestjs");
+        let minimum_lines = if matches!(
+            backend_profile,
+            Some("springboot" | "fastapi" | "django" | "nestjs")
+        ) {
             65
         } else {
             25
@@ -1321,6 +1324,18 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
                 assert!(
                     content.contains(required),
                     "{} missing Spring Boot engineering section {required}",
+                    path.display()
+                );
+            }
+        } else if is_nestjs {
+            for required in [
+                "## Verification",
+                "## Delivery Evidence",
+                "## Unsafe Defaults",
+            ] {
+                assert!(
+                    content.contains(required),
+                    "{} missing NestJS engineering section {required}",
                     path.display()
                 );
             }
@@ -1396,6 +1411,24 @@ fn loom_code_references_are_operational_and_load_plan_driven() {
     let django_testing = fs::read_to_string(backend_root.join("django/testing.md")).unwrap();
     assert!(django_testing.contains("TransactionTestCase"));
     assert!(django_testing.contains("assertNumQueries"));
+    let nest_controllers = fs::read_to_string(backend_root.join("nestjs/controllers.md")).unwrap();
+    assert!(nest_controllers.contains("ParseUUIDPipe"));
+    assert!(nest_controllers.contains("@Res()"));
+    let nest_dtos = fs::read_to_string(backend_root.join("nestjs/dtos.md")).unwrap();
+    assert!(nest_dtos.contains("PartialType"));
+    assert!(nest_dtos.contains("bigint"));
+    let nest_services = fs::read_to_string(backend_root.join("nestjs/services.md")).unwrap();
+    assert!(nest_services.contains("useExisting"));
+    assert!(nest_services.contains("forwardRef"));
+    let nest_security = fs::read_to_string(backend_root.join("nestjs/security.md")).unwrap();
+    assert!(nest_security.contains("getAllAndOverride"));
+    assert!(nest_security.contains("APP_GUARD"));
+    let nest_testing = fs::read_to_string(backend_root.join("nestjs/testing.md")).unwrap();
+    assert!(nest_testing.contains("TestingModule"));
+    assert!(nest_testing.contains("app.getHttpServer()"));
+    let nest_migration = fs::read_to_string(backend_root.join("nestjs/migration.md")).unwrap();
+    assert!(nest_migration.contains("parity matrix"));
+    assert!(nest_migration.contains("routing owner"));
 
     let mut frontend_files = Vec::new();
     collect_markdown_files(&frontend_root, &mut frontend_files);
