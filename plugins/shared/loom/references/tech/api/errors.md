@@ -52,19 +52,16 @@ For write APIs, error contracts should distinguish field-level and cross-field v
 
 Keep stable machine-readable `code` values even when visible messages are localized or translated by the client.
 
-## Request Tracking And Retry Guidance
+## Error Code Ownership
 
-When the API touches critical state, background work, or external dependencies, include or preserve a request id so failures can be correlated with logs:
+- Define stable error codes for validation, business blocking, conflicts, not-found behavior, and auth failures that clients handle programmatically.
+- Keep one code catalog or source of truth when multiple endpoints share the same error. Do not create different codes for the same business condition in controller, documentation, and frontend code.
+- Document the error categories and codes applicable to each interface when a separate contract file is selected. Do not claim every global error on every endpoint.
+- Keep user-visible messages actionable and safe. Clients should branch on stable codes, not parse translated prose.
 
-- response header such as `X-Request-ID`
-- error body field such as `requestId` or `request_id`
-- log correlation in the backend implementation
+## Operational Policy Link
 
-For retryable failures, declare retry behavior in the accepted API contract or implementation evidence:
-
-- `429` should include `Retry-After` when a meaningful delay exists
-- `503` may include `Retry-After` for maintenance or dependency recovery
-- business conflicts such as `409` should explain the blocking state instead of asking clients to blindly retry
+This reference owns error categories, codes, fields, and safe messages. When `tech/api/operations.md` is selected, use its request-id, retry, rate-limit, and availability policy without restating or inventing a second operational contract here.
 
 ## Must Not
 
@@ -72,8 +69,7 @@ For retryable failures, declare retry behavior in the accepted API contract or i
 - Do not collapse business blocking into generic `500`.
 - Do not make frontend code infer business errors by parsing English prose only.
 - Do not return success with an error message body for a failed business operation.
-- Do not expose stack traces, SQL messages, class names, filesystem paths, tokens, or dependency internals.
 
 ## Implementation Evidence
 
-For API tasks, implementation evidence should mention the important error categories covered by code or tests. If the selected interface includes retry, rate-limit, request-id, or dependency-unavailable behavior, name the covered paths and any known gaps.
+For API tasks, implementation evidence should mention the important error categories and stable codes covered by code or tests. When an operations policy is selected, cite its evidence separately rather than duplicating it in the error summary.

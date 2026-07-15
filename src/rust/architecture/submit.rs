@@ -637,17 +637,66 @@ fn validate_structured_communication_boundaries(
                 ));
             }
         }
-        if interaction_type == "http_api"
-            && object
-                .get("qualityTraits")
-                .and_then(Value::as_object)
-                .is_none()
-        {
-            issues.push(issue(
-                "HTTP_INTERACTION_QUALITY_TRAITS_REQUIRED",
-                &format!("{path}.qualityTraits"),
-                "HTTP interactions must declare structured qualityTraits for API contract generation.",
-            ));
+        if interaction_type == "http_api" {
+            let Some(traits) = object.get("qualityTraits").and_then(Value::as_object) else {
+                issues.push(issue(
+                    "HTTP_INTERACTION_QUALITY_TRAITS_REQUIRED",
+                    &format!("{path}.qualityTraits"),
+                    "HTTP interactions must declare structured qualityTraits for API contract generation.",
+                ));
+                continue;
+            };
+            let auth_requirement = traits
+                .get("authRequirement")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !matches!(
+                auth_requirement,
+                "not_applicable" | "required" | "optional" | "deferred_with_risk"
+            ) {
+                issues.push(issue(
+                    "HTTP_INTERACTION_AUTH_REQUIREMENT_INVALID",
+                    &format!("{path}.qualityTraits.authRequirement"),
+                    "authRequirement must be not_applicable, required, optional, or deferred_with_risk.",
+                ));
+            }
+            for key in [
+                "paginationRequired",
+                "contractArtifactRequired",
+                "compatibilityRequired",
+            ] {
+                if !traits.get(key).is_some_and(Value::is_boolean) {
+                    issues.push(issue(
+                        "HTTP_INTERACTION_QUALITY_TRAIT_BOOLEAN_REQUIRED",
+                        &format!("{path}.qualityTraits.{key}"),
+                        &format!("{key} must be an explicit boolean."),
+                    ));
+                }
+            }
+            let allowed_policies =
+                BTreeSet::from(["idempotency", "cache", "retry", "rate_limit", "request_id"]);
+            let Some(policies) = traits.get("operationalPolicies").and_then(Value::as_array) else {
+                issues.push(issue(
+                    "HTTP_INTERACTION_OPERATIONAL_POLICIES_REQUIRED",
+                    &format!("{path}.qualityTraits.operationalPolicies"),
+                    "operationalPolicies must be an array, including an empty array when no operational API policy applies.",
+                ));
+                continue;
+            };
+            for (policy_index, policy) in policies.iter().enumerate() {
+                if policy
+                    .as_str()
+                    .is_none_or(|policy| !allowed_policies.contains(policy))
+                {
+                    issues.push(issue(
+                        "HTTP_INTERACTION_OPERATIONAL_POLICY_INVALID",
+                        &format!(
+                            "{path}.qualityTraits.operationalPolicies[{policy_index}]"
+                        ),
+                        "Operational policy must be idempotency, cache, retry, rate_limit, or request_id.",
+                    ));
+                }
+            }
         }
     }
     issues
@@ -2293,6 +2342,108 @@ mod tests {
         build_ui_quality_seed, ui_surface_decision_candidate_template,
         validate_ui_surface_decision_contract,
     };
+
+    fn foundation_candidate(interaction: Value) -> ArchitectureSectionCandidateAgentWritable {
+        ArchitectureSectionCandidateAgentWritable {
+            schema_version: String::new(),
+            request_id: String::new(),
+            delivery_id: String::new(),
+            phase_id: String::new(),
+            section: ArchitectureSectionGroup::Foundation,
+            status: ArchitectureSectionStatus::Ready,
+            content: json!({
+                "engineeringBoundary": {
+                    "applicationInteractions": [interaction]
+                }
+            }),
+            blocked_reasons: vec![],
+            created_at: String::new(),
+        }
+    }
+
+    fn http_interaction(quality_traits: Value) -> Value {
+        json!({
+            "interactionId": "interaction-orders",
+            "providerApplicationRef": "app-api",
+            "consumerApplicationRefs": ["app-web"],
+            "providerModuleRef": "module-orders",
+            "interactionType": "http_api",
+            "qualityTraits": quality_traits
+        })
+    }
+
+    #[test]
+    fn complete_http_quality_traits_pass_foundation_validation() {
+        let candidate = foundation_candidate(http_interaction(json!({
+            "authRequirement": "required",
+            "paginationRequired": true,
+            "contractArtifactRequired": true,
+            "compatibilityRequired": false,
+            "operationalPolicies": ["idempotency", "request_id"]
+        })));
+
+        assert!(
+            validate_structured_communication_boundaries(&candidate).is_empty(),
+            "complete structured HTTP quality traits must pass"
+        );
+    }
+
+    #[test]
+    fn incomplete_http_quality_traits_report_exact_field_paths() {
+        let candidate = foundation_candidate(http_interaction(json!({
+            "contractArtifactRequired": true,
+            "compatibilityRequired": false
+        })));
+        let issues = validate_structured_communication_boundaries(&candidate);
+        let issue_keys = issues
+            .iter()
+            .map(|issue| (issue.code.clone(), issue.field_path.clone()))
+            .collect::<BTreeSet<_>>();
+        let base = "content.engineeringBoundary.applicationInteractions[0].qualityTraits";
+
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_AUTH_REQUIREMENT_INVALID".to_string(),
+            Some(format!("{base}.authRequirement"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_QUALITY_TRAIT_BOOLEAN_REQUIRED".to_string(),
+            Some(format!("{base}.paginationRequired"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_OPERATIONAL_POLICIES_REQUIRED".to_string(),
+            Some(format!("{base}.operationalPolicies"))
+        )));
+    }
+
+    #[test]
+    fn invalid_http_quality_trait_values_report_exact_field_paths() {
+        let candidate = foundation_candidate(http_interaction(json!({
+            "authRequirement": "sometimes",
+            "paginationRequired": "yes",
+            "contractArtifactRequired": true,
+            "compatibilityRequired": false,
+            "operationalPolicies": ["circuit_breaker"]
+        })));
+        let issues = validate_structured_communication_boundaries(&candidate);
+        let issue_keys = issues
+            .iter()
+            .map(|issue| (issue.code.clone(), issue.field_path.clone()))
+            .collect::<BTreeSet<_>>();
+        let base = "content.engineeringBoundary.applicationInteractions[0].qualityTraits";
+
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_AUTH_REQUIREMENT_INVALID".to_string(),
+            Some(format!("{base}.authRequirement"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_QUALITY_TRAIT_BOOLEAN_REQUIRED".to_string(),
+            Some(format!("{base}.paginationRequired"))
+        )));
+        assert!(issue_keys.contains(&(
+            "HTTP_INTERACTION_OPERATIONAL_POLICY_INVALID".to_string(),
+            Some(format!("{base}.operationalPolicies[0]"))
+        )));
+    }
 
     #[test]
     fn frontend_submit_normalization_writes_surface_decision_contract() {

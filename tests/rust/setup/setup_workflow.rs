@@ -1434,6 +1434,72 @@ fn loom_review_references_are_operational_without_protocol_duplication() {
 }
 
 #[test]
+fn loom_api_references_preserve_production_contract_depth_without_policy_duplication() {
+    let root = repo_root().join("plugins/shared/loom/references/tech/api");
+    let contract = fs::read_to_string(root.join("contract.md")).unwrap();
+    for required in [
+        "Operation Objects",
+        "OpenAPI 3.1 Schema Semantics",
+        "Validation And Generation",
+        "operationId",
+        "additionalProperties",
+        "do not use the OpenAPI 3.0 `nullable` keyword",
+    ] {
+        assert!(
+            contract.contains(required),
+            "API contract reference missing production rule {required}"
+        );
+    }
+
+    let resource = fs::read_to_string(root.join("resource.md")).unwrap();
+    for required in [
+        "Method Semantics",
+        "Success Status And Headers",
+        "`202`",
+        "`204`",
+        "JSON Merge Patch",
+        "Content-Type",
+    ] {
+        assert!(
+            resource.contains(required),
+            "API resource reference missing HTTP rule {required}"
+        );
+    }
+
+    let pagination = fs::read_to_string(root.join("pagination.md")).unwrap();
+    for required in [
+        "Cursor And Keyset Contract",
+        "unique tie-breaker",
+        "opaque client tokens",
+        "cursor/filter or cursor/sort mismatch",
+        "malformed or tampered cursors",
+    ] {
+        assert!(
+            pagination.contains(required),
+            "API pagination reference missing production rule {required}"
+        );
+    }
+
+    let errors = fs::read_to_string(root.join("errors.md")).unwrap();
+    let operations = fs::read_to_string(root.join("operations.md")).unwrap();
+    assert!(errors.contains("Error Code Ownership"));
+    assert!(errors.contains("This reference owns error categories"));
+    for duplicated_policy in [
+        "## Request Tracking And Retry Guidance",
+        "X-Request-ID",
+        "Retry-After",
+    ] {
+        assert!(
+            !errors.contains(duplicated_policy),
+            "errors.md must not duplicate operational policy {duplicated_policy}"
+        );
+    }
+    assert!(operations.contains("This file owns operational policy"));
+    assert!(operations.contains("Retry And Availability Responses"));
+    assert!(operations.contains("Request Tracing"));
+}
+
+#[test]
 fn loom_tech_references_do_not_duplicate_mcp_contract_terms() {
     let repo = repo_root();
     let tech_root = repo.join("plugins/shared/loom/references/tech");

@@ -1,6 +1,6 @@
 # API Operational Semantics
 
-Use this reference for API behavior that affects repeated calls, retries, caching, rate limiting, request tracing, or conditional updates. These rules are not mandatory for every endpoint; apply them only when the current phase, repository convention, or accepted API contract needs them.
+Use this reference for API behavior that affects repeated calls, retries, caching, rate limiting, request tracing, or conditional updates. These rules are not mandatory for every endpoint; apply them only when the current phase, repository convention, or accepted API contract needs them. This file owns operational policy; `errors.md` owns error categories, codes, fields, and safe client messages.
 
 ## Idempotency
 

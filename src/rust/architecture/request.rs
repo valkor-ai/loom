@@ -882,6 +882,7 @@ fn section_content_shape(
                     "protocol": "string",
                     "interfaceRefs": ["string for an existing project API contract interface"],
                     "qualityTraits": {
+                        "authRequirement": "not_applicable | required | optional | deferred_with_risk",
                         "paginationRequired": "boolean",
                         "contractArtifactRequired": "boolean",
                         "compatibilityRequired": "boolean",
@@ -1750,6 +1751,9 @@ pub(crate) fn section_generation_rules(
             "Define the engineering boundary and current-phase modules only.".to_string(),
             "Declare every current-phase cross-application or cross-module communication boundary in engineeringBoundary.applicationInteractions. Choose interactionType from the structured protocol kinds; do not rely on API, backend, or framework words in business prose to activate later interface design.".to_string(),
             "For an existing accepted interface, use interfaceRefs. For a new boundary, leave interfaceRefs empty and provide provider/consumer ownership plus qualityTraits so MCP can generate the precise DomainContract reference plan.".to_string(),
+            "For each http_api interaction, write the complete qualityTraits object. Set authRequirement from current actor/permission requirements or an existing interface policy; use not_applicable only when the current interface is intentionally unauthenticated, and use deferred_with_risk when protection is required but deferred.".to_string(),
+            "Set paginationRequired only for a collection that can grow beyond a bounded current-phase list or whose confirmed data view requires paging. Set contractArtifactRequired only for an existing contract file, an explicit OpenAPI/documentation request, code generation, or a separately consumed/public contract. Set compatibilityRequired only when changing an interface with an existing or separately deployed consumer.".to_string(),
+            "List operationalPolicies only for current idempotency, cache, retry, rate-limit, or request-id behavior supported by requirements, accepted architecture, or an existing API convention; use an empty array otherwise.".to_string(),
             "Read only files listed in architectureQualitySeed.techReferenceProfile.referenceLoadPlan; selected architecture groups are evidence labels only and do not copy reference prose into the candidate.".to_string(),
             "Describe why the chosen module and application boundary is sufficient for this phase and where later phases may extend without implementing deferred scope.".to_string(),
             "Follow the existing project and technical baseline shape before introducing a new module, adapter, or abstraction.".to_string(),
@@ -1954,5 +1958,48 @@ mod tests {
             group["selectors"].to_string().contains("apiQualitySeed"),
             "the dedicated group must expose the seed fields to MCP repair logic"
         );
+    }
+
+    #[test]
+    fn foundation_request_requires_complete_structured_api_quality_traits() {
+        let content_shape =
+            section_content_shape(ArchitectureSectionGroup::Foundation, false, &Value::Null);
+        let traits = content_shape
+            .pointer("/engineeringBoundary/applicationInteractions/0/qualityTraits")
+            .expect("foundation qualityTraits shape");
+        assert_eq!(
+            traits["authRequirement"],
+            json!("not_applicable | required | optional | deferred_with_risk")
+        );
+        for field in [
+            "paginationRequired",
+            "contractArtifactRequired",
+            "compatibilityRequired",
+        ] {
+            assert_eq!(traits[field], json!("boolean"), "missing {field}");
+        }
+        assert!(traits["operationalPolicies"].is_array());
+    }
+
+    #[test]
+    fn foundation_generation_rules_explain_each_api_reference_signal() {
+        let rules =
+            section_generation_rules(ArchitectureSectionGroup::Foundation, false, &Value::Null)
+                .join("\n");
+
+        for signal in [
+            "authRequirement",
+            "paginationRequired",
+            "contractArtifactRequired",
+            "compatibilityRequired",
+            "operationalPolicies",
+        ] {
+            assert!(
+                rules.contains(signal),
+                "foundation generation rules must explain {signal}"
+            );
+        }
+        assert!(rules.contains("use an empty array otherwise"));
+        assert!(rules.contains("existing or separately deployed consumer"));
     }
 }
