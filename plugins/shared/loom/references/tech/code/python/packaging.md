@@ -19,12 +19,22 @@
 - Include non-Python package data deliberately through the existing backend's package-data mechanism. Do not rely on files being present because they exist in the repo.
 - Keep import paths stable for consumers; moving modules needs compatibility exports or explicit migration when the package is public.
 
+## Decision Rules
+
+- Treat `pyproject.toml` as the selected build/configuration source of truth. Do not switch Poetry, Hatch, setuptools, uv, pip-tools, or plain requirements because an external template uses another backend.
+- Keep runtime, optional, test, lint, docs, and build dependencies in their existing scopes. A package needed only for tests must not become a production dependency.
+- Preserve the existing `src/` or flat layout and namespace. When adding a package, verify importability from an installed build, not only from the repository working directory.
+- Add `py.typed` and package-data declarations only when the project intentionally exposes typed APIs or non-Python resources. Confirm the build backend includes them.
+- Keep one version source and update lock files only when dependency metadata changes require it. Source-only changes should not churn lock files.
+- Treat CLI entry points and public import paths as compatibility contracts. Test the installed/local command and retain explicit migration behavior for renamed modules.
+
 ## Verification Focus
 
 - Run an import smoke test for changed package/module paths.
 - Run the repository's build command when packaging metadata, package data, entry points, or dependencies changed.
 - Validate CLI entry points by invoking the installed or local command when added or changed.
 - Confirm runtime dependencies, optional/dev dependencies, lock files, and package data changed only for task-relevant reasons.
+- Verify a clean-environment install when packaging metadata or entry points change; a local import can be satisfied by undeclared repository files.
 
 ## Evidence Focus
 

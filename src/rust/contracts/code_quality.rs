@@ -1286,11 +1286,17 @@ fn reference_items_for_signal(
             }
         }
         Some("python") => {
-            items.extend(["core", "typing", "packaging"].map(str::to_string));
+            items.extend(["core", "typing"].map(str::to_string));
+            if matches!(task.task_kind, TaskKind::ConfigurationSupport)
+                || task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature)
+                || task_has_action(task, ImplementationAction::RefactorModuleStructure)
+            {
+                items.insert("packaging".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") || signal.frameworks.iter().any(|item| item == "fastapi") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("async".to_string());
             }
         }
@@ -4686,7 +4692,8 @@ mod tests {
             vec![ImplementationAction::CreateOrUpdateInterface],
         );
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
-        assert!(selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!selection.reference_groups["python"].contains(&"packaging".to_string()));
         assert!(selection.reference_groups["fastapi"].contains(&"routing".to_string()));
         assert!(selection.reference_groups["fastapi"].contains(&"schemas".to_string()));
         assert!(!selection.reference_groups["fastapi"].contains(&"testing".to_string()));
@@ -4702,6 +4709,89 @@ mod tests {
         assert!(!load_plan
             .iter()
             .any(|item| item.path == "tech/backend/fastapi/data.md"));
+    }
+
+    #[test]
+    fn python_specialized_references_require_owned_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Python 3.11"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+        assert!(ordinary.reference_groups["python"].contains(&"core".to_string()));
+        assert!(ordinary.reference_groups["python"].contains(&"typing".to_string()));
+        assert!(!ordinary.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!ordinary.reference_groups["python"].contains(&"packaging".to_string()));
+        assert!(!ordinary.reference_groups["python"].contains(&"testing".to_string()));
+
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection = code_reference_selection_for_task(&baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["python"].contains(&"async".to_string()));
+        assert!(!async_selection.reference_groups["python"].contains(&"packaging".to_string()));
+
+        let packaging_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+        let packaging = code_reference_selection_for_task(&baseline, &packaging_task).unwrap();
+        assert!(packaging.reference_groups["python"].contains(&"packaging".to_string()));
+        assert!(!packaging.reference_groups["python"].contains(&"async".to_string()));
+    }
+
+    #[test]
+    fn python_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/python/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/typing.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/async.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/packaging.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/python/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]

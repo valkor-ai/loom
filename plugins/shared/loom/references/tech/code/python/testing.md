@@ -19,6 +19,15 @@
 - Keep coverage focused on changed behavior and meaningful error paths. Do not add coverage excludes to hide untested new code.
 - Clean up environment variables, temp files, monkeypatches, event loops, background tasks, and database state after tests.
 
+## Decision Rules
+
+- Choose the narrowest proof for the changed contract: unit tests for pure transformations, integration tests for adapters/persistence, framework tests for routing, and async tests for event-loop behavior.
+- Keep fixtures explicit and typed enough to reject invalid data. Use `tmp_path`, `monkeypatch`, finalizers, and factories instead of shared global state or order-dependent setup.
+- Use parameterization for finite validation/state matrices and name cases where the expected outcome is not obvious. Assert exception type and meaningful message/attributes when callers depend on them.
+- Mock external boundaries, not the domain logic under test. For async code use `AsyncMock`/the configured plugin and verify cancellation, awaited calls, and resource cleanup when relevant.
+- Keep integration markers explicit for databases, Docker, network, credentials, and slow tests. Record the marker/command used rather than pretending a unit test proves provider behavior.
+- Report changed-branch and error-path evidence rather than imposing a universal coverage percentage. Coverage exclusions must have an owned reason.
+
 ## Verification Focus
 
 - Run the configured pytest command or the narrowest package command that covers changed Python behavior.

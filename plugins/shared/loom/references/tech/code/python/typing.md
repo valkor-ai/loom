@@ -19,6 +19,15 @@
 - Preserve callable signatures with `ParamSpec` only for decorators or wrappers where call-site type safety matters. Do not add advanced generics for one-off helpers.
 - Type checking does not replace runtime validation for network, file, env, CLI, or user input boundaries.
 
+## Decision Rules
+
+- Type public functions, methods, class attributes, callbacks, and fixture factories that cross a module or framework boundary. Let obvious local variables infer unless an annotation clarifies a non-obvious contract.
+- Use `Protocol` for a small structural seam such as a repository, clock, HTTP client, or notifier. Keep the protocol owned by the consumer and avoid creating an inheritance hierarchy for one implementation.
+- Use `TypedDict` for a stable dictionary that remains a dictionary at runtime; use a dataclass, Pydantic model, or domain class when validation, normalization, or behavior belongs with the data.
+- Keep `Any`, `cast`, and `type: ignore` at external or legacy boundaries. Convert untrusted values before they reach business logic, and include the narrow reason or error code for an unavoidable suppression.
+- Use `Literal` or enums for finite modes and statuses, and keep static exhaustiveness aligned with runtime validation. `X | None` is appropriate only when the supported Python version permits it.
+- Use `ParamSpec` and advanced generic bounds for decorators/wrappers where call-site safety matters; do not add type machinery that obscures a one-off helper.
+
 ## Verification Focus
 
 - Run the configured type checker such as `mypy`, `pyright`, or the repository's validation script when available.
