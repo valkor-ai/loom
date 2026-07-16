@@ -1131,29 +1131,6 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     if contains_any(
         &text,
         &[
-            "analytics",
-            "report",
-            "window function",
-            "row number",
-            "rank",
-            "dense rank",
-            "lag",
-            "lead",
-            "running total",
-            "cohort",
-            "percentile",
-            "top n",
-            "报表",
-            "统计",
-            "排名",
-            "窗口函数",
-        ],
-    ) {
-        push_unique(&mut tags, "analytics");
-    }
-    if contains_any(
-        &text,
-        &[
             "memory",
             "allocation",
             "retain cycle",
@@ -1459,51 +1436,46 @@ fn reference_items_for_signal(
             }
         }
         Some("sql") => {
-            let task_scoped_sql = has_focus("sql_schema")
-                || has_focus("sql_query")
-                || has_focus("sql_transaction")
-                || has_focus("sql_test");
-            if has_focus("sql_schema") || (has_focus("persistence") && !task_scoped_sql) {
+            let owns_schema = task_owns_sql_schema(task);
+            let owns_query = task_owns_sql_query(task);
+            let owns_transaction = task_owns_sql_transaction(task);
+            let owns_tests = task_owns_sql_tests(task);
+            let owns_performance = task_owns_sql_performance(task);
+            let owns_analytics = task_owns_sql_analytics(task);
+            let task_scoped_sql = owns_schema || owns_query || owns_transaction || owns_tests;
+            if owns_schema || (task_owns_persistence(task) && !task_scoped_sql) {
                 items.insert("schema".to_string());
+            }
+            if owns_schema
+                || owns_query
+                || owns_transaction
+                || owns_tests
+                || owns_performance
+                || owns_analytics
+            {
                 items.insert("dialects".to_string());
             }
-            if has_focus("sql_query") {
+            if owns_query {
                 items.insert("queries".to_string());
             }
-            if has_focus("performance") {
+            if owns_performance {
                 items.insert("optimization".to_string());
             }
-            if has_focus("analytics") {
+            if owns_analytics {
                 items.insert("windows".to_string());
             }
-            if has_focus("sql_test") {
-                items.insert("schema".to_string());
-                items.insert("queries".to_string());
-                items.insert("dialects".to_string());
-            }
-            if has_focus("sql_query") || has_focus("analytics") {
+            if owns_query || owns_analytics || owns_tests {
                 items.insert("queries".to_string());
             }
-            if has_focus("sql_transaction") {
-                items.insert("dialects".to_string());
-            }
-            if has_focus("sql_schema")
-                || has_focus("sql_query")
-                || has_focus("sql_transaction")
-                || has_focus("sql_test")
-            {
+            if owns_schema || owns_query || owns_transaction || owns_tests {
                 if signal.dialects.iter().any(|dialect| dialect == "mysql") {
-                    if has_focus("sql_schema") || has_focus("sql_test") {
+                    if owns_schema || owns_tests {
                         items.insert("mysql.schema".to_string());
                     }
-                    if has_focus("sql_query")
-                        || has_focus("performance")
-                        || has_focus("analytics")
-                        || has_focus("sql_test")
-                    {
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
                         items.insert("mysql.queries".to_string());
                     }
-                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                    if owns_transaction || owns_tests {
                         items.insert("mysql.transactions".to_string());
                     }
                 }
@@ -1512,17 +1484,13 @@ fn reference_items_for_signal(
                     .iter()
                     .any(|dialect| dialect == "postgresql")
                 {
-                    if has_focus("sql_schema") || has_focus("sql_test") {
+                    if owns_schema || owns_tests {
                         items.insert("postgresql.schema".to_string());
                     }
-                    if has_focus("sql_query")
-                        || has_focus("performance")
-                        || has_focus("analytics")
-                        || has_focus("sql_test")
-                    {
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
                         items.insert("postgresql.queries".to_string());
                     }
-                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                    if owns_transaction || owns_tests {
                         items.insert("postgresql.transactions".to_string());
                     }
                 }
@@ -1531,32 +1499,24 @@ fn reference_items_for_signal(
                     .iter()
                     .any(|dialect| dialect == "sql_server")
                 {
-                    if has_focus("sql_schema") || has_focus("sql_test") {
+                    if owns_schema || owns_tests {
                         items.insert("sqlserver.schema".to_string());
                     }
-                    if has_focus("sql_query")
-                        || has_focus("performance")
-                        || has_focus("analytics")
-                        || has_focus("sql_test")
-                    {
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
                         items.insert("sqlserver.queries".to_string());
                     }
-                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                    if owns_transaction || owns_tests {
                         items.insert("sqlserver.transactions".to_string());
                     }
                 }
                 if signal.dialects.iter().any(|dialect| dialect == "oracle") {
-                    if has_focus("sql_schema") || has_focus("sql_test") {
+                    if owns_schema || owns_tests {
                         items.insert("oracle.schema".to_string());
                     }
-                    if has_focus("sql_query")
-                        || has_focus("performance")
-                        || has_focus("analytics")
-                        || has_focus("sql_test")
-                    {
+                    if owns_query || owns_performance || owns_analytics || owns_tests {
                         items.insert("oracle.queries".to_string());
                     }
-                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                    if owns_transaction || owns_tests {
                         items.insert("oracle.transactions".to_string());
                     }
                 }
@@ -2296,7 +2256,6 @@ fn task_owns_sql_transaction(task: &TaskDefinition) -> bool {
             ImplementationAction::CreateOrUpdatePersistence
                 | ImplementationAction::CreateEntityRepository
                 | ImplementationAction::CreateEntityCrud
-                | ImplementationAction::CreateOrUpdatePersistenceQuery
                 | ImplementationAction::ImplementPersistenceTransaction
         )
     })
@@ -3857,13 +3816,28 @@ mod tests {
             baseline(json!({"tracks": {"persistence": {"selection": "PostgreSQL"}}}));
         let mut sql_task = task(
             TaskKind::FeatureIncrement,
-            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+            vec![ImplementationAction::ImplementAnalyticalQuery],
         );
         sql_task.objective =
             "Add reporting query with window function ranking and running total.".to_string();
         let sql_selection = code_reference_selection_for_task(&sql_baseline, &sql_task).unwrap();
         assert!(sql_selection.reference_groups["sql"].contains(&"queries".to_string()));
         assert!(sql_selection.reference_groups["sql"].contains(&"windows".to_string()));
+        assert!(sql_selection.reference_groups["sql"].contains(&"dialects".to_string()));
+        assert!(sql_selection.reference_groups["sql"].contains(&"postgresql.queries".to_string()));
+    }
+
+    #[test]
+    fn sql_reference_selection_does_not_infer_subject_from_prose() {
+        let baseline = baseline(json!({"tracks": {"persistence": {"selection": "PostgreSQL"}}}));
+        let mut prose_only = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        prose_only.objective =
+            "Add a reporting query with a window function and running total.".to_string();
+
+        assert!(code_reference_selection_for_task(&baseline, &prose_only).is_none());
     }
 
     #[test]
@@ -5009,7 +4983,7 @@ mod tests {
     }
 
     #[test]
-    fn postgresql_query_task_loads_query_and_transaction_overlays_without_schema() {
+    fn postgresql_query_task_loads_query_without_transaction_or_schema_overlays() {
         let baseline = baseline(json!({
             "tracks": {"persistence": {"selection": "PostgreSQL 16"}}
         }));
@@ -5022,9 +4996,37 @@ mod tests {
         assert!(sql.contains(&"queries".to_string()));
         assert!(sql.contains(&"dialects".to_string()));
         assert!(sql.contains(&"postgresql.queries".to_string()));
-        assert!(sql.contains(&"postgresql.transactions".to_string()));
+        assert!(!sql.contains(&"postgresql.transactions".to_string()));
         assert!(!sql.contains(&"schema".to_string()));
         assert!(!sql.contains(&"postgresql.schema".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/sql/postgresql/transactions.md"));
+    }
+
+    #[test]
+    fn postgresql_transaction_task_loads_transaction_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "PostgreSQL 16"}}
+        }));
+        let task = task(
+            TaskKind::IntegrationIncrement,
+            vec![ImplementationAction::ImplementPersistenceTransaction],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"postgresql.transactions".to_string()));
+        assert!(!sql.contains(&"postgresql.schema".to_string()));
+        assert!(!sql.contains(&"postgresql.queries".to_string()));
+        assert!(code_reference_load_plan(&selection.reference_groups)
+            .iter()
+            .any(|item| {
+                item.ref_id == "tech.code.sql.postgresql.transactions"
+                    && item.path == "tech/code/sql/postgresql/transactions.md"
+            }));
     }
 
     #[test]
@@ -5056,7 +5058,7 @@ mod tests {
     }
 
     #[test]
-    fn oracle_query_task_loads_query_and_transaction_overlays_without_schema() {
+    fn oracle_query_task_loads_query_without_transaction_or_schema_overlays() {
         let baseline = baseline(json!({
             "tracks": {"persistence": {"selection": "Oracle Database 19c"}}
         }));
@@ -5068,19 +5070,18 @@ mod tests {
         let sql = &selection.reference_groups["sql"];
         assert!(sql.contains(&"queries".to_string()));
         assert!(sql.contains(&"oracle.queries".to_string()));
-        assert!(sql.contains(&"oracle.transactions".to_string()));
+        assert!(!sql.contains(&"oracle.transactions".to_string()));
         assert!(!sql.contains(&"schema".to_string()));
         assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
         assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
         assert!(!sql.iter().any(|item| item.starts_with("sqlserver.")));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(!load_plan
+            .iter()
+            .any(|item| item.path == "tech/code/sql/oracle/transactions.md"));
         assert!(load_plan.iter().any(|item| {
             item.ref_id == "tech.code.sql.oracle.queries"
                 && item.path == "tech/code/sql/oracle/queries.md"
-        }));
-        assert!(load_plan.iter().any(|item| {
-            item.ref_id == "tech.code.sql.oracle.transactions"
-                && item.path == "tech/code/sql/oracle/transactions.md"
         }));
     }
 
@@ -5224,8 +5225,13 @@ mod tests {
             ),
             (
                 "plugins/shared/loom/references/tech/code/sql/dialects.md",
-                50,
-                &["## Provider Overlays", "SQL Server", "Oracle"][..],
+                60,
+                &[
+                    "## Provider Decision Matrix",
+                    "## Provider Overlays",
+                    "SQL Server",
+                    "Oracle",
+                ][..],
             ),
         ];
 
