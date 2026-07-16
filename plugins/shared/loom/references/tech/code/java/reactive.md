@@ -50,6 +50,18 @@ Use reactive repositories/drivers for reactive persistence. Reactive transaction
 
 Do not pass mutable entities across concurrent operators. Define write ordering and conflict behavior explicitly.
 
+### R2DBC Mapping Boundary
+
+Use the selected R2DBC mapping model consistently: table and identifier annotations, column names, nullability, converters, generated-key behavior, and migration SQL must agree. Do not mix JPA annotations or lazy-association assumptions into an R2DBC entity. Immutable records are useful when the repository convention supports them, but mapping convenience must not weaken domain invariants.
+
+Keep reactive repositories and database clients behind an application-owned boundary. A repository method should expose the cardinality and empty-result semantics of the operation; it should not return an unbounded stream when the caller needs a bounded page or summary.
+
+### Reactive Client Boundary
+
+`WebClient` composition belongs here only at the Reactor boundary: return the publisher, map provider status before decoding the body, apply timeouts at the operation boundary, and preserve cancellation. Client construction, base URLs, credentials, connection pools, payload limits, and provider error contracts belong to the selected framework/integration reference. For Spring Boot, use the dedicated external-service integration reference.
+
+Retry only operations declared retry-safe by the integration/resilience contract. A reactive retry must have an attempt budget and must not duplicate a non-idempotent write. Do not use `.block()` to bridge a reactive client into a request path.
+
 ### Cancellation
 
 Cancellation is a normal terminal signal. Ensure resources close and avoid side effects that continue invisibly after the caller cancels unless the operation is intentionally durable and decoupled.
@@ -64,6 +76,8 @@ Use `StepVerifier` and virtual time for:
 - backpressure/bounded collection behavior
 - cancellation and cleanup
 - reactive transaction commit/rollback
+- R2DBC mapping and migration round-trip with the selected provider
+- client status/error mapping, timeout, cancellation, and retry-attempt bounds
 - absence of blocking calls when detection tooling exists
 
 ## Evidence Focus
@@ -80,3 +94,5 @@ For non-blocking claims, include a boundary-specific check or detector result wh
 - `onErrorResume` that returns empty/fake success.
 - Unbounded `collectList`, buffers, or fan-out concurrency.
 - Assuming ThreadLocal or imperative transaction state propagates.
+- Mixing JPA mapping/lifecycle assumptions into an R2DBC model.
+- Retrying non-idempotent client writes without an idempotency or deduplication contract.

@@ -47,6 +47,33 @@ Multiple collection fetch joins can create cartesian multiplication. Collection 
 
 Keep Open Session in View deliberate. Business/API mapping should normally load required data inside an owned service/query boundary.
 
+### Query Shape And Pagination
+
+Choose the fetch plan from the read model rather than from the entity graph:
+
+| Read need | Preferred shape | Boundary to verify |
+|---|---|---|
+| List or summary | DTO/projection with only required columns | deterministic ordering and bounded page size |
+| Detail with one bounded association | entity graph or one fetch join | no lazy access after the service boundary |
+| Detail with multiple collections | staged queries, batch fetching, or explicit read model | no row multiplication or duplicate aggregates |
+| Dynamic filters | criteria/specification with an allowlisted field map | no client-controlled property or sort expression |
+
+For paged queries, keep the data query and count query semantically aligned. Do not combine collection fetch joins with pageable results without proving aggregate-level page boundaries. Add a stable tie-breaker to ordering, and keep page size limits in the accepted API/runtime contract.
+
+Treat query tuning as an evidence-backed change: inspect the generated SQL and provider query plan, then change the fetch shape or index contract. Do not use a global eager mapping or a cache annotation as a substitute for understanding the access path.
+
+### Batch And Bulk Boundaries
+
+For large writes, use a bounded batch size and flush/clear the persistence context at a deliberate boundary. The exact batching setting and identifier strategy must be compatible with the selected provider; generated identity strategies can change batching behavior.
+
+Bulk JPQL/native updates bypass managed entities, entity callbacks, and normal dirty checking. After a bulk operation, clear or refresh affected managed state before it is read or returned, and verify the committed database result. Streaming large reads requires a transaction/resource scope that remains open for the stream and closes it deterministically.
+
+### Cache And Measurement
+
+Second-level or query caching is a provider-level optimization, not a default JPA feature. Enable it only when the accepted performance requirement defines cache scope, invalidation, tenant/authorization isolation, staleness, and memory bounds. Never cache mutable entities or sensitive data globally by default.
+
+Measure before and after changes using SQL count/latency, allocation or result size, and the provider query plan. A generic AOP timer or a passing unit test is not proof that an N+1 query, a paging plan, or a cache invalidation problem was fixed.
+
 ### Persistence Context
 
 Understand managed, detached, removed, and transient states. Bulk JPQL/native updates bypass managed entity state and callbacks. Flush timing can expose constraints before commit; tests that only inspect in-memory entities do not prove database state.
@@ -71,6 +98,9 @@ Useful JPA evidence includes:
 - relationship helper and cascade/orphan behavior
 - write/flush/clear/read round-trip
 - lazy/fetch behavior for owned read paths
+- query shape, SQL count, deterministic ordering, and page/count agreement for list paths
+- bulk update visibility after clearing or refreshing the persistence context
+- bounded batch flush/clear behavior for large writes
 - stale-version or lock conflict behavior
 - provider-compatible schema validation
 
@@ -88,3 +118,6 @@ For mapping changes, identify the entity field, migration column, provider, and 
 - `CascadeType.ALL` without lifecycle ownership.
 - JPA callbacks that invoke external or repository work.
 - Hiding provider differences behind an in-memory test database.
+- Collection fetch joins combined with pageable results without aggregate-level evidence.
+- Bulk updates followed by reads from stale managed entities.
+- Global second-level/query caching without an invalidation and isolation contract.

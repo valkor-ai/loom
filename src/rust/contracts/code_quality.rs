@@ -2636,6 +2636,7 @@ mod tests {
         assert!(selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"schema".to_string()));
         assert!(selection.reference_groups["sql"].contains(&"dialects".to_string()));
@@ -3887,6 +3888,7 @@ mod tests {
         assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"testing".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(!selection.reference_groups["java"].contains(&"persistence".to_string()));
         assert!(!selection.reference_groups.contains_key("sql"));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
@@ -4009,6 +4011,8 @@ mod tests {
         let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
         assert!(selection.reference_groups["java"].contains(&"reactive".to_string()));
         assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
+        assert!(!selection.reference_groups["java"].contains(&"persistence".to_string()));
+        assert!(!selection.reference_groups["springboot"].contains(&"data".to_string()));
         assert!(!selection.reference_groups["springboot"].contains(&"runtime".to_string()));
         let load_plan = code_reference_load_plan(&selection.reference_groups);
         assert!(load_plan
@@ -4963,5 +4967,96 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn java_references_are_complete_and_keep_framework_boundaries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/java/core.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/spring.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/persistence.md",
+                &[
+                    "## Query Shape And Pagination",
+                    "## Batch And Bulk Boundaries",
+                    "## Cache And Measurement",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/reactive.md",
+                &[
+                    "## R2DBC Mapping Boundary",
+                    "## Reactive Client Boundary",
+                    "## Verification Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/security.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/java/testing.md",
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                    "## Evidence Focus",
+                ][..],
+            ),
+        ];
+
+        for (relative, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 38,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+
+        let persistence = fs::read_to_string(
+            root.join("plugins/shared/loom/references/tech/code/java/persistence.md"),
+        )
+        .expect("read Java persistence reference");
+        assert!(persistence.contains("Spring Data repositories"));
+        assert!(persistence.contains("selected provider"));
+
+        let reactive = fs::read_to_string(
+            root.join("plugins/shared/loom/references/tech/code/java/reactive.md"),
+        )
+        .expect("read Java reactive reference");
+        assert!(reactive.contains("dedicated external-service integration reference"));
+        assert!(reactive.contains("StepVerifier"));
     }
 }
