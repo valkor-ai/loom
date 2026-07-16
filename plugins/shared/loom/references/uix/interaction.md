@@ -96,6 +96,35 @@ Keep technical errors, validation errors, and business-rule blocks visually dist
 - Hover states must have focus/touch equivalents.
 - Escape/back behavior should close transient layers before abandoning the whole workflow.
 
+## Interaction Composition
+
+Choose the smallest interaction surface that preserves context:
+
+| Situation | Preferred composition |
+| --- | --- |
+| Quick field edit | Inline edit with field validation and cancel/recovery. |
+| Row or record inspection | Detail panel or route that preserves list context. |
+| Short confirmation | Dialog with explicit consequence and focused primary action. |
+| Multi-field or deep workflow | Dedicated route or step flow with back/cancel and summary. |
+| Temporary supporting choice | Popover, menu, or sheet with keyboard and touch exit. |
+| Long-running mutation | Source action stays visible with pending, retry, and readback state. |
+
+Do not use a modal as the default container for every interaction. Choose a layer
+from the amount of context, text, validation, and navigation the user needs.
+
+## Transition And Reconciliation
+
+- Define the allowed transition before styling the control: eligible, pending,
+  succeeded, failed, blocked, and unavailable are distinct states.
+- Disable only the action that cannot safely repeat. Keep navigation, cancellation,
+  and unaffected work available when the product allows it.
+- Reconcile optimistic UI with the returned server state. On failure, restore the
+  prior value or show the server result and the recovery path.
+- Keep selected identity, filters, draft input, and active tab stable across a
+  retry or a route transition when those values define the user's context.
+- Test rapid repeated input, double activation, escape/back, refresh during pending,
+  and a failure after a visible optimistic update when the flow is asynchronous.
+
 ## Workflow Continuity
 
 - Preserve selected rows, filters, active tabs, and entered values across refreshes and failed mutations when technically possible.

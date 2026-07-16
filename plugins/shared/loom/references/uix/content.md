@@ -56,6 +56,34 @@ Label pattern:
 - Tooltips should clarify controls, not contain critical information that mobile users cannot access.
 - Long help text belongs in a side panel, detail section, or docs route rather than inside every row.
 
+## Surface Copy Modes
+
+Choose the copy pattern from the user's reading job:
+
+| Surface | Copy rule |
+| --- | --- |
+| Workbench/data | Short labels, explicit status, actionable empty/error text, compact help. |
+| Docs/prose | Explanatory hierarchy, examples, headings, code labels, and navigable context. |
+| Marketing/corporate | Value proposition, proof, differentiation, and conversion language. |
+| Consumer flow | Familiar action labels, trust/risk explanation, confirmation and recovery. |
+| Developer tool | Technical terms are allowed only when they are the product subject. |
+
+Do not apply workbench brevity to documentation or marketing, and do not put
+marketing narrative into an operational screen. The scenario defines the copy
+density; the product language defines the terms.
+
+## Localization And Long Content
+
+- Test labels at their longest supported locale and with realistic business names,
+  identifiers, dates, amounts, and status text.
+- Keep translations in the project's established message source. Do not place
+  repeated user-visible strings in component logic when the project has a locale
+  system.
+- Preserve product names, identifiers, code, and units according to the locale
+  policy. Do not translate values that users must copy or compare.
+- Define wrapping, truncation, tooltip, or detail-view behavior for long labels;
+  never hide a required action to keep a sample string on one line.
+
 ## Copy Evidence
 
 Evidence should cite changed files or screens that prove:
@@ -64,3 +92,4 @@ Evidence should cite changed files or screens that prove:
 - Empty, error, validation, success, and business-blocking copy exist where those states are in scope.
 - Page headings and action labels use business language.
 - Long messages wrap without hiding controls.
+- The checked locale and longest-content case are recorded when copy or layout changed.

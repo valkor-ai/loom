@@ -2851,6 +2851,71 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cross_cutting_uix_references_keep_decision_and_evidence_depth() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "content.md",
+                &["## Surface Copy Modes", "## Localization And Long Content"][..],
+            ),
+            (
+                "data.md",
+                &[
+                    "## Volume And View Selection",
+                    "## Query And Readback States",
+                ][..],
+            ),
+            (
+                "interaction.md",
+                &[
+                    "## Interaction Composition",
+                    "## Transition And Reconciliation",
+                ][..],
+            ),
+            (
+                "mobile.md",
+                &[
+                    "## Viewport And Platform Behavior",
+                    "## Touch And Gesture Rules",
+                ][..],
+            ),
+            (
+                "web-implementation.md",
+                &["## Browser Boundary Decisions", "## Evidence Checklist"][..],
+            ),
+            (
+                "frameworks.md",
+                &[
+                    "## Boundary With Technical Guidance",
+                    "## Existing Project Adaptation",
+                ][..],
+            ),
+            (
+                "verification.md",
+                &["## Review Coverage", "## Environment-Blocked Inspection"][..],
+            ),
+        ];
+
+        for (relative, required_sections) in references {
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= 80,
+                "cross-cutting UIX reference {relative} is too thin"
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{relative} must contain {section}"
+                );
+            }
+        }
+    }
+
     fn known_group_items() -> Vec<(String, String)> {
         let groups = known_ui_reference_groups();
         groups

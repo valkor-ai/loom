@@ -107,6 +107,34 @@ Use cards for narrow screens when the table's purpose is selection or action. Ke
 - Metrics must include context: period, unit, comparison, or source.
 - Avoid decorative charts that do not support a user decision.
 
+## Volume And View Selection
+
+Select the data view from the user's job and expected volume:
+
+| Need | Preferred view |
+| --- | --- |
+| Find or compare many records | Table with declared fields, sorting, filtering, and bounded paging. |
+| Select and act on a small set | List or cards with identity, status, key facts, and row action. |
+| Inspect one record | Detail route, drawer, or split view that preserves source context. |
+| Observe trends | Chart paired with labels, units, range, comparison, and a readable data summary. |
+| Inspect technical output | Bounded log/result surface with copy, search, filtering, and failure state. |
+
+Do not add a chart, KPI grid, export control, or summary panel unless it supports
+the accepted user decision. Do not use a card grid to avoid defining table fields
+or pagination for a growing collection.
+
+## Query And Readback States
+
+- Show the active filter, sort, range, or query context near the result count.
+- Preserve query context when opening detail, changing a record, retrying, or
+  returning from a detail route.
+- Distinguish no matching results from no records, unavailable data, stale data,
+  and permission-limited data.
+- After a mutation, update the owning row/detail/metric or explicitly mark the
+  readback as pending. A success toast without updated data is incomplete.
+- For large or remote data, define paging, continuation, virtualization, or
+  bounded loading before implementing the result view.
+
 ## Business Feedback
 
 - Business-blocking rules should attach to the affected row, detail, or action region.
