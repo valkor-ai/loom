@@ -204,6 +204,7 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/code/kotlin/compose.md",
     "plugins/shared/loom/references/tech/code/kotlin/core.md",
     "plugins/shared/loom/references/tech/code/kotlin/coroutines.md",
+    "plugins/shared/loom/references/tech/code/kotlin/dsl.md",
     "plugins/shared/loom/references/tech/code/kotlin/ktor.md",
     "plugins/shared/loom/references/tech/code/kotlin/multiplatform.md",
     "plugins/shared/loom/references/tech/code/kotlin/testing.md",

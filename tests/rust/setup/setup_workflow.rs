@@ -45,6 +45,7 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "kotlin/compose",
     "kotlin/core",
     "kotlin/coroutines",
+    "kotlin/dsl",
     "kotlin/ktor",
     "kotlin/multiplatform",
     "kotlin/testing",

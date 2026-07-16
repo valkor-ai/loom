@@ -19,6 +19,14 @@
 - For libraries, follow explicit API mode if configured: public declarations need deliberate visibility, return types, and KDoc where they form an external contract.
 - Avoid magic companion objects, singletons, or top-level mutable state for dependencies that should be injected or lifecycle-owned.
 
+## Boundary Decisions
+
+- Treat Kotlin's platform types from Java as untrusted at the boundary. Normalize nullability and exceptional behavior once in an adapter instead of spreading defensive checks through domain code.
+- Keep `data`, `sealed`, and `value` types focused on contracts. Do not use a data class as a mutable service, or a value class as a substitute for validation that the caller can bypass.
+- Prefer a narrow extension on an owned domain type over a utility namespace. If an extension changes security, persistence, serialization, transaction, or lifecycle behavior, keep it behind the owning service or adapter.
+- Enable explicit API mode for published libraries or shared modules when the repository uses it. Make public visibility, return types, and KDoc deliberate; do not apply library visibility rules to an internal application without repository evidence.
+- When Kotlin interoperates with Java, preserve existing annotations, bean conventions, checked-exception expectations, and framework proxy requirements before applying a Kotlin-only idiom.
+
 ## Verification Focus
 
 - Run the configured Gradle build/test command for changed modules.

@@ -88,7 +88,7 @@ pub fn code_quality_enum_refs() -> Value {
                 "go": ["core", "concurrency", "interfaces", "structure", "generics", "testing"],
                 "csharp": ["core", "modern", "persistence", "blazor", "performance", "testing"],
                 "cpp": ["core", "modern", "templates", "performance", "concurrency", "build", "testing"],
-                "kotlin": ["core", "coroutines", "ktor", "compose", "multiplatform", "testing"],
+                "kotlin": ["core", "coroutines", "ktor", "compose", "multiplatform", "dsl", "testing"],
                 "php": ["core", "laravel", "symfony", "async", "testing"],
                 "rust": ["core", "ownership", "traits", "errors", "async", "testing"],
                 "swift": ["core", "swiftui", "concurrency", "protocols", "memory", "testing"],
@@ -418,7 +418,11 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         push_unique(&mut roles, "frontend");
     } else if contains_any(&haystack, &["kotlin", "ktor", "android", "compose", "kmp"]) {
         language = Some("kotlin".to_string());
-        push_if_contains(&haystack, &mut frameworks, "ktor", &["ktor"]);
+        if contains_any(&haystack, &["ktor client", "ktor-client"]) {
+            push_unique(&mut frameworks, "ktor_client");
+        } else {
+            push_if_contains(&haystack, &mut frameworks, "ktor", &["ktor"]);
+        }
         push_if_contains(&haystack, &mut frameworks, "compose", &["compose"]);
         push_if_contains(&haystack, &mut frameworks, "kmp", &["kmp", "multiplatform"]);
         push_spring_frameworks_from_haystack(&haystack, &mut frameworks);
@@ -1389,11 +1393,14 @@ fn reference_items_for_signal(
             if signal.frameworks.iter().any(|item| item == "ktor") {
                 items.insert("ktor".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "compose") || has_focus("frontend") {
+            if signal.frameworks.iter().any(|item| item == "compose") {
                 items.insert("compose".to_string());
             }
             if signal.frameworks.iter().any(|item| item == "kmp") {
                 items.insert("multiplatform".to_string());
+            }
+            if task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction) {
+                items.insert("dsl".to_string());
             }
         }
         Some("php") => {
@@ -4270,6 +4277,132 @@ mod tests {
         assert!(selection.reference_groups["springboot"].contains(&"web".to_string()));
         assert!(!selection.reference_groups["kotlin"].contains(&"ktor".to_string()));
         assert!(!selection.reference_groups.contains_key("java"));
+    }
+
+    #[test]
+    fn kotlin_dsl_reference_requires_owned_generic_abstraction() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Kotlin + Ktor"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let dsl_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementGenericTypeAbstraction],
+        );
+
+        let ordinary = code_reference_selection_for_task(&baseline, &ordinary_task).unwrap();
+        let dsl = code_reference_selection_for_task(&baseline, &dsl_task).unwrap();
+
+        assert!(!ordinary.reference_groups["kotlin"].contains(&"dsl".to_string()));
+        assert!(dsl.reference_groups["kotlin"].contains(&"dsl".to_string()));
+        assert!(code_reference_load_plan(&dsl.reference_groups)
+            .iter()
+            .any(|item| {
+                item.ref_id == "tech.code.kotlin.dsl" && item.path == "tech/code/kotlin/dsl.md"
+            }));
+    }
+
+    #[test]
+    fn kotlin_framework_references_require_selected_frameworks() {
+        let ktor_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Kotlin + Ktor"}}
+        }));
+        let ktor_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let ktor = code_reference_selection_for_task(&ktor_baseline, &ktor_task).unwrap();
+        assert!(ktor.reference_groups["kotlin"].contains(&"ktor".to_string()));
+        assert!(!ktor.reference_groups["kotlin"].contains(&"compose".to_string()));
+        assert!(!ktor.reference_groups["kotlin"].contains(&"multiplatform".to_string()));
+        assert!(!ktor.reference_groups["kotlin"].contains(&"testing".to_string()));
+
+        let compose_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Kotlin + Jetpack Compose"}}
+        }));
+        let mut compose_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        compose_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let compose = code_reference_selection_for_task(&compose_baseline, &compose_task).unwrap();
+        assert!(compose.reference_groups["kotlin"].contains(&"compose".to_string()));
+        assert!(!compose.reference_groups["kotlin"].contains(&"ktor".to_string()));
+
+        let kmp_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Kotlin Multiplatform + Ktor Client"}}
+        }));
+        let kmp_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        let kmp = code_reference_selection_for_task(&kmp_baseline, &kmp_task).unwrap();
+        assert!(kmp.reference_groups["kotlin"].contains(&"multiplatform".to_string()));
+        assert!(!kmp.reference_groups["kotlin"].contains(&"ktor".to_string()));
+        assert!(!kmp.reference_groups["kotlin"].contains(&"compose".to_string()));
+    }
+
+    #[test]
+    fn kotlin_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/coroutines.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/ktor.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/compose.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/multiplatform.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/dsl.md",
+                30,
+                &["## Implementation Focus", "## Failure Modes"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/kotlin/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
