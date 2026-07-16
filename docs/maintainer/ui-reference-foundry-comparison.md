@@ -11,16 +11,16 @@ must never be requested by an agent during delivery.
 | `uix/core.md` | UI production baseline and `uiProductionBrief` bridge | `SKILL.md`, command workflow | retained as Loom-specific |
 | `uix/system.md` | semantic tokens, shared primitives, token consumption | `tokens`, `unify` | Batch 1 complete |
 | `uix/surface-decision.md` | known/hybrid/custom surface implementation | `scenario`, `forge` | Batch 6 audit |
-| `uix/verification.md` | rendered, state, visual, interaction evidence | `audit`, `verify-output` | Batch 6 audit |
-| `uix/web-implementation.md` | browser semantics, layout resilience, hydration | stack and audit references | Batch 2 audit |
+| `uix/verification.md` | rendered, state, visual, interaction evidence | `audit`, `verify-output` | Batch 2 complete; Batch 6 audit |
+| `uix/web-implementation.md` | browser semantics, layout resilience, hydration | stack and audit references | Batch 2 complete |
 | `uix/anti-patterns.md` | product-boundary and AI-slop constraints | `anti-patterns` | retained and audited |
-| `uix/content.md` | product copy and forbidden content boundary | scenario references | Batch 2 |
-| `uix/data.md` | business data surfaces and readback | admin/fintech scenarios | Batch 2 |
-| `uix/interaction.md` | actions, forms, feedback, continuity | scenario and audit references | Batch 2 |
-| `uix/mobile.md` | responsive and touch behavior | mobile scenarios and layout tokens | Batch 2 |
+| `uix/content.md` | product copy and forbidden content boundary | scenario references | Batch 2 complete |
+| `uix/data.md` | business data surfaces and readback | admin/fintech scenarios | Batch 2 complete |
+| `uix/interaction.md` | actions, forms, feedback, continuity | scenario and audit references | Batch 2 complete |
+| `uix/mobile.md` | responsive and touch behavior | mobile scenarios and layout tokens | Batch 2 complete |
 | `uix/frameworks.md` | UIX/framework boundary | stack references | Batch 4 |
 | `uix/tokens/*` | semantic visual primitives and layout decisions | `references/tokens/*` | Batch 1 complete |
-| `uix/scenarios/*` | product-surface anatomy and states | `references/scenarios/*` | Batch 3 |
+| `uix/scenarios/*` | product-surface anatomy, workflow continuity, risk states, and responsive behavior | `references/scenarios/*` | Batch 3 complete |
 | `uix/stacks/*` | UIX implementation structure per stack | `references/stacks/*` | Batch 4 |
 | `uix/templates/*` | adaptable CSS/Tailwind token starting points | `templates/*` | Batch 1 complete |
 
@@ -43,14 +43,14 @@ must never be requested by an agent during delivery.
 
 ## Batch Progress
 
-| Batch | Scope | Required evidence |
-| --- | --- | --- |
-| 1 | tokens, templates, system | 13 UI quality tests, template resolution, UIX duplication test |
-| 2 | cross-cutting UIX guidance | scoped UI quality seed and reference-routing tests |
-| 3 | business and presentation scenarios | scenario completeness and positive/negative scenario routing |
-| 4 | UIX stacks and frontend boundary | stack routing and duplicate-load tests |
-| 5 | Foundry workflow capability translation | disposition coverage and ownership tests |
-| 6 | MCP integration and global audit | load-plan, evidence, duplication, and full UIX integration tests |
+| Batch | Scope | Status | Required evidence |
+| --- | --- | --- | --- |
+| 1 | tokens, templates, system | complete | 13 UI quality tests, template resolution, UIX duplication test |
+| 2 | cross-cutting UIX guidance | complete | scoped UI quality seed and reference-routing tests |
+| 3 | business and presentation scenarios | complete | scenario completeness and positive/negative scenario routing |
+| 4 | UIX stacks and frontend boundary | pending | stack routing and duplicate-load tests |
+| 5 | Foundry workflow capability translation | pending | disposition coverage and ownership tests |
+| 6 | MCP integration and global audit | pending | load-plan, evidence, duplication, and full UIX integration tests |
 
 ## Rules For Updates
 

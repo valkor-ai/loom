@@ -2916,6 +2916,150 @@ mod tests {
         }
     }
 
+    #[test]
+    fn scenario_references_cover_product_specific_rules_and_proof() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let expectations = [
+            (
+                "scenarios/admin-dashboard.md",
+                &[
+                    "## Required Patterns",
+                    "## Quality Gate Index",
+                    "## Filter, Selection, And Mutation Continuity",
+                ][..],
+                "data-region=\"results\"",
+            ),
+            (
+                "scenarios/consumer-app.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Browse, Detail, And Commit",
+                ][..],
+                "data-region=\"selected-detail\"",
+            ),
+            (
+                "scenarios/corporate-site.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Proof And Conversion Continuity",
+                    "## Responsive Identity",
+                ][..],
+                "data-region=\"identity-hero\"",
+            ),
+            (
+                "scenarios/data-console.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Query Lifecycle",
+                    "## Result Accessibility",
+                ][..],
+                "type QueryState<T>",
+            ),
+            (
+                "scenarios/developer-tool.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Safe Technical Output",
+                    "## Keyboard Workflow",
+                ][..],
+                "data-region=\"diagnostic-output\"",
+            ),
+            (
+                "scenarios/docs-site.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Reading And Code Interaction",
+                    "## Responsive Reading",
+                ][..],
+                "data-region=\"code-example\"",
+            ),
+            (
+                "scenarios/fintech-consumer-app.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Money And Risk Display",
+                    "## Transaction Feedback",
+                ][..],
+                "data-region=\"transaction-review\"",
+            ),
+            (
+                "scenarios/fintech-workstation.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Dense Financial Workbench",
+                    "## Risk And Audit Continuity",
+                ][..],
+                "data-region=\"decision-panel\"",
+            ),
+            (
+                "scenarios/immersive-3d.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification",
+                    "## Loading, Fallback, And Performance",
+                ][..],
+                "interactive scene",
+            ),
+            (
+                "scenarios/marketing-site.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Scroll Rhythm And Proof",
+                    "## Media And Interaction",
+                ][..],
+                "offer/object",
+            ),
+            (
+                "scenarios/mobile-native.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification",
+                    "## Platform Resolution",
+                ][..],
+                "| Safe area |",
+            ),
+            (
+                "scenarios/mobile-responsive.md",
+                &[
+                    "## Required Patterns",
+                    "## Verification Signals",
+                    "## Keyboard, Orientation, And Recovery",
+                ][..],
+                "100dvh",
+            ),
+        ];
+
+        for (relative, sections, concrete_marker) in expectations {
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            for section in sections {
+                assert!(
+                    content.contains(section),
+                    "{relative} must contain the scenario-specific section {section}"
+                );
+            }
+            assert!(
+                content.contains("```"),
+                "{relative} must contain a concrete implementation example"
+            );
+            assert!(
+                content.contains(concrete_marker),
+                "{relative} must contain the concrete scenario marker {concrete_marker}"
+            );
+        }
+    }
+
     fn known_group_items() -> Vec<(String, String)> {
         let groups = known_ui_reference_groups();
         groups

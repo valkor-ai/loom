@@ -101,3 +101,29 @@ Use when a web product must work well on phones and tablets without being a nati
 - Font sizes below 16px for primary mobile inputs.
 - Desktop-style centered modals for important mobile actions.
 - Disabling user zoom.
+
+## Keyboard, Orientation, And Recovery
+
+Responsive behavior includes transient device states, not only a breakpoint. The
+primary task must remain recoverable while the keyboard, orientation, or browser
+chrome changes the available space.
+
+```css
+.mobile-task {
+  min-height: 100dvh;
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom));
+}
+
+.mobile-actionbar {
+  position: sticky;
+  bottom: 0;
+  padding: var(--space-3) var(--space-4) env(safe-area-inset-bottom);
+}
+```
+
+- Focused inputs scroll into view above the virtual keyboard; the submit or next action must not be covered.
+- Preserve draft values, filters, and selected item when the device rotates or the viewport changes.
+- Recalculate fixed or sticky regions after orientation changes instead of relying on an initial viewport height.
+- Keep tap targets, labels, error messages, and confirmation results usable at the narrowest supported width.
+- Replace hover-dependent disclosure with tap/focus disclosure and provide a clear back path from detail to list.
+- When network loss or a request failure occurs, keep the user's context and expose retry or correction near the affected action.

@@ -107,3 +107,36 @@ Use for customer-facing financial, trading, banking, wallet, or investment exper
 - Confirming risky actions only through a disappearing toast.
 - Dark or "premium" styling that harms legibility.
 - Hiding fees, limits, or irreversible consequences.
+
+## Money And Risk Display
+
+Financial information must be legible before the user commits. Show the value,
+currency, direction, timing, status, and relevant fee or limit in the same
+decision path.
+
+```text
+account or counterparty -> amount + currency -> fee/rate/limit -> timing
+-> risk or eligibility message -> review action
+```
+
+- Format currency with an explicit currency context; never rely on color or a bare number to communicate debit versus credit.
+- Keep pending, completed, failed, reversed, and blocked states distinct and explain the next available action.
+- Show dates and time zones when timing affects the decision. Avoid ambiguous relative dates for settlements or deadlines.
+- Keep sensitive identifiers partially masked while preserving enough identity for confirmation.
+- Do not hide fees, exchange rates, limits, or eligibility reasons behind a secondary interaction when they affect approval.
+
+## Transaction Feedback
+
+```html
+<section data-region="transaction-review">
+  <dl data-region="transaction-facts"></dl>
+  <p data-region="risk-message"></p>
+  <div data-region="submit-feedback" aria-live="polite"></div>
+  <button data-action="confirm" data-state="ready"></button>
+</section>
+```
+
+- Disable duplicate submission while the request is pending and keep the review facts visible.
+- On success, show a durable transaction identity, updated status, and the route to history or support.
+- On failure, preserve the entered values and distinguish a correctable validation issue from a declined or unavailable operation.
+- A success toast may supplement the result but cannot be the only confirmation of a money movement.
