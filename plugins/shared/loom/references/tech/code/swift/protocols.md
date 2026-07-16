@@ -19,6 +19,15 @@ This file applies protocol-oriented design to Swift task changes.
 - Retroactive conformances for external types should be rare and local. Avoid making standard/library types conform globally when it can conflict with other modules.
 - Conditional conformance is useful for collection/wrapper types, but only when the behavior truly depends on element constraints.
 
+## Decision Rules
+
+- Define a capability protocol around the methods the consumer needs. Do not reproduce every method on a concrete service or create a protocol when there is no substitution, platform, or test boundary.
+- Use associated types/generics when the concrete type relationship matters at compile time; use type erasure only when heterogeneous values must be stored or passed uniformly.
+- Prefer protocol composition and visible constraints over broad inheritance. Keep default behavior in extensions only when it is valid for every conformer and does not hide state or invariants.
+- Use `some Protocol` when implementation identity can remain hidden and heterogeneous storage is not required. Use `any Protocol`/type erasure when the runtime needs a value with unknown concrete type.
+- Keep dependency protocols near the boundary they abstract, and keep retroactive conformances local and justified to avoid global behavior conflicts.
+- Verify conditional conformance and associated-type constraints with representative conformers, not only by compiling the protocol declaration.
+
 ## Verification Focus
 
 - Compile all conformers and call sites after protocol changes; generic/protocol errors often surface away from the edited file.

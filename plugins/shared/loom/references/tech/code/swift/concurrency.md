@@ -20,6 +20,15 @@ This file applies to Swift async/await and concurrency isolation.
 - Continuations must resume exactly once on every success, failure, cancellation, and early-return branch. Prefer checked continuations unless the repository has a measured reason not to.
 - Make cross-task data `Sendable` when safe, and fix compiler warnings rather than hiding them.
 
+## Decision Rules
+
+- Use structured `async let` for a small fixed set of child operations and task groups for dynamic fan-out. State whether first failure cancels siblings, whether partial results are valid, and how result order is preserved.
+- Use actors for mutable shared state and keep actor methods small. Mark UI state and view-model mutation `@MainActor`; do not move network, parsing, or heavy computation to the main actor without a reason.
+- Give every long-lived `Task` an owner and cancellation path. Detached tasks require an explicit lifetime and Sendable boundary because they escape normal structured concurrency.
+- Treat continuation bridging as a one-resume proof: resume exactly once for success, failure, cancellation, and early return. Prefer native async APIs where available.
+- Make `AsyncSequence` termination and resource cleanup explicit, and re-propagate cancellation after cleanup. A completed stream, timeout, and cancellation are distinct outcomes.
+- Treat Sendable warnings as boundary design feedback. Fix the data ownership or actor isolation instead of globally suppressing the warning.
+
 ## Verification Focus
 
 - Run `swift build`/target build and the repository's async tests.

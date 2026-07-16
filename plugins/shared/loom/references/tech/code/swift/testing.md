@@ -19,6 +19,15 @@ This file applies Swift testing guidance to task-owned changes.
 - Keep tests independent. Reset shared stores, keychain/user defaults, files, caches, and app state between tests using the repository's helpers.
 - Name tests around behavior and condition, not implementation details. One test can contain multiple assertions when they prove one behavior.
 
+## Decision Rules
+
+- Select the narrowest proof: XCTest/Swift Testing for pure logic, async/actor tests for concurrency, UI tests for critical interactions, and performance tests for an owned hot path.
+- Inject protocols, URL protocols, clocks, storage adapters, and fakes at boundaries so tests do not depend on real networks, device state, keychain, user defaults, or global stores.
+- Test async success, failure, cancellation, timeout, actor isolation, and stream termination without arbitrary sleeps. Use expectations, test clocks, streams, or deterministic timeout helpers.
+- Keep UI assertions on user-visible behavior and include error/empty/disabled states when they exist. Snapshot tests are supplementary unless the repository treats them as an established contract.
+- Reset files, caches, stores, user defaults, keychain, and app state between tests. Name tests after behavior and condition rather than implementation details.
+- Report changed-branch and platform evidence instead of imposing a universal coverage percentage; record simulator/device limitations when they prevent the required test.
+
 ## Verification Focus
 
 - Run the targeted Swift test command and platform build required for the changed target.

@@ -20,6 +20,15 @@ This file applies SwiftUI implementation guidance to task-owned UI changes.
 - For lists/grids, provide stable identities, avoid expensive work in row `body`, and page/lazy-load data when the expected collection is large.
 - Treat previews as design aids, not verification. A preview that compiles is not proof that state, async, navigation, or accessibility works.
 
+## Decision Rules
+
+- Choose one state owner per value: local `@State`, parent-owned `@Binding`, injected observable model, or environment dependency. Do not maintain competing copies of the same screen state.
+- Keep business decisions outside `body`. Use `task(id:)`, `refreshable`, and view-model/service actions to own asynchronous work, and make identity changes cancel/restart the right operation.
+- Mark UI mutation `@MainActor` and keep expensive parsing/network work outside the main actor. State updates should be deliberate crossing points, not incidental background mutations.
+- Use stable identities for lists/grids and avoid expensive work in row rendering. Use preference keys/custom layouts only when standard containers cannot express the accepted layout.
+- Treat environment values as local dependency/theme/locale boundaries, not a global mutable store. Keep accessibility labels, roles, and enabled/disabled state part of the interaction contract.
+- Verify loading, empty, error, success, disabled, navigation, and cancellation states that the task owns; a preview of one state is not a workflow proof.
+
 ## Verification Focus
 
 - Build the target platform and run available SwiftUI/UI tests or snapshot tests when the changed surface is user-facing.

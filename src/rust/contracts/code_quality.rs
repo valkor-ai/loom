@@ -1141,21 +1141,6 @@ fn task_focus_tags(task: &TaskDefinition) -> Vec<String> {
     ) {
         push_unique(&mut tags, "generics");
     }
-    if contains_any(
-        &text,
-        &[
-            "memory",
-            "allocation",
-            "retain cycle",
-            "arc",
-            "instruments",
-            "leak",
-            "内存",
-            "泄漏",
-        ],
-    ) {
-        push_unique(&mut tags, "memory");
-    }
     tags
 }
 
@@ -1469,17 +1454,22 @@ fn reference_items_for_signal(
             }
         }
         Some("swift") => {
-            items.extend(["core", "protocols"].map(str::to_string));
+            items.insert("core".to_string());
+            if task_has_action(task, ImplementationAction::ImplementDependencyAbstraction)
+                || task_has_action(task, ImplementationAction::ImplementGenericTypeAbstraction)
+            {
+                items.insert("protocols".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
-            if has_focus("async") {
+            if task_has_action(task, ImplementationAction::ImplementAsyncProcessing) {
                 items.insert("concurrency".to_string());
             }
-            if has_focus("performance") || has_focus("memory") {
+            if task_has_action(task, ImplementationAction::OptimizeRuntimePerformance) {
                 items.insert("memory".to_string());
             }
-            if signal.frameworks.iter().any(|item| item == "swiftui") || has_focus("frontend") {
+            if signal.frameworks.iter().any(|item| item == "swiftui") {
                 items.insert("swiftui".to_string());
             }
         }
@@ -3854,8 +3844,10 @@ mod tests {
             vec![ImplementationAction::CreateOrUpdateUiFlow],
         );
         swift_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
-        swift_task.objective =
-            "Fix memory leak and retain cycle in SwiftUI detail flow.".to_string();
+        swift_task.objective = "Fix SwiftUI detail flow state.".to_string();
+        swift_task
+            .implementation_actions
+            .push(ImplementationAction::OptimizeRuntimePerformance);
         let swift_selection =
             code_reference_selection_for_task(&swift_baseline, &swift_task).unwrap();
         assert!(swift_selection.reference_groups["swift"].contains(&"memory".to_string()));
@@ -4632,6 +4624,113 @@ mod tests {
             ),
             (
                 "plugins/shared/loom/references/tech/code/rust/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn swift_references_are_capability_and_framework_scoped() {
+        let ui_baseline = baseline(json!({
+            "tracks": {"app": {"selection": "Swift + SwiftUI"}}
+        }));
+        let mut ui_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        ui_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let ui = code_reference_selection_for_task(&ui_baseline, &ui_task).unwrap();
+        assert!(ui.reference_groups["swift"].contains(&"core".to_string()));
+        assert!(ui.reference_groups["swift"].contains(&"swiftui".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"protocols".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"concurrency".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"memory".to_string()));
+        assert!(!ui.reference_groups["swift"].contains(&"testing".to_string()));
+
+        let backend_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "Swift + Vapor"}}
+        }));
+        let protocol_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementDependencyAbstraction],
+        );
+        let protocols =
+            code_reference_selection_for_task(&backend_baseline, &protocol_task).unwrap();
+        assert!(protocols.reference_groups["swift"].contains(&"protocols".to_string()));
+        assert!(!protocols.reference_groups["swift"].contains(&"swiftui".to_string()));
+
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection =
+            code_reference_selection_for_task(&backend_baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["swift"].contains(&"concurrency".to_string()));
+        assert!(!async_selection.reference_groups["swift"].contains(&"protocols".to_string()));
+
+        let mut performance_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateUiFlow,
+                ImplementationAction::OptimizeRuntimePerformance,
+            ],
+        );
+        performance_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let performance =
+            code_reference_selection_for_task(&ui_baseline, &performance_task).unwrap();
+        assert!(performance.reference_groups["swift"].contains(&"memory".to_string()));
+    }
+
+    #[test]
+    fn swift_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/swift/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/protocols.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/concurrency.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/memory.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/swiftui.md",
+                35,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/swift/testing.md",
                 35,
                 &["## Decision Rules", "## Evidence Focus"][..],
             ),
