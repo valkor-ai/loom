@@ -58,6 +58,31 @@ Do not scale font size directly with viewport width. Use breakpoint-specific lay
 - Docs shell with left nav, content, and optional right TOC.
 - Scene-first layout for 3D/canvas experiences, with controls overlaid or docked without covering the scene.
 
+## Container And Overflow Decisions
+
+- Use a centered max-width container for prose, marketing, and corporate surfaces;
+  use a full-width shell for operational surfaces and constrain only the panels
+  that need readable content or comparison width.
+- Use `minmax(0, 1fr)` for grid tracks that contain user or API text. Without it,
+  long identifiers can force the page wider than the viewport.
+- Give a table, code block, chart, or log its own scroll boundary and accessible
+  label when horizontal overflow is necessary. Never hide page overflow to mask a
+  child layout defect.
+- Use container queries only when a component genuinely changes by its available
+  panel width rather than by viewport width. Keep the fallback readable when the
+  project tooling does not support them.
+- Reserve a minimum width for comparison tables and define the mobile fallback in
+  the scenario or data reference. A minimum width alone is not a responsive plan.
+
+## Layer And Safe-Area Rules
+
+- Keep a single layer scale for dropdown, sticky, fixed, modal, popover, tooltip,
+  and notification surfaces. Do not create local z-index values for each screen.
+- Add `env(safe-area-inset-*)` to fixed mobile actions and headers when the target
+  device posture includes an edge-to-edge viewport.
+- Test sticky headers, drawers, tables, and bottom actions together. A layout passes
+  only when the primary content and action remain reachable while layers are open.
+
 ## Workbench Shell
 
 ```css
@@ -111,3 +136,5 @@ Stable dimensions prevent hover, loading text, validation text, and long labels 
 - Content does not overlap navigation, sticky bars, side panels, or mobile safe areas.
 - Wide desktop does not stretch text or forms into unreadable lines.
 - The implemented page contains the actual task surface in the first visible viewport for its scenario.
+- The chosen container, overflow boundary, layer level, and mobile fallback are
+  recorded in implementation evidence when they are part of the changed surface.

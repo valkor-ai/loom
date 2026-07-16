@@ -29,6 +29,22 @@ Avoid motion for:
 - Route or large panel transition: 220-360ms.
 - Loading skeleton shimmer: subtle and optional; prefer stable skeleton blocks.
 
+Use the shortest duration that preserves orientation. Repeated workbench actions
+should feel immediate; large spatial changes may use a longer transition only when
+the source and destination remain clear.
+
+## Interaction Mapping
+
+| Interaction | Motion requirement |
+| --- | --- |
+| Hover/focus/pressed | Small color, opacity, or transform response without layout movement. |
+| Drawer/sheet | Enter from its owning edge and return to the same context on close. |
+| Modal/dialog | Establish the blocked background and return focus to the trigger. |
+| List update | Preserve row identity and avoid animating every row during a mutation. |
+| Success/undo | Confirm the affected object or action; do not use a decorative burst. |
+| Loading | Preserve final dimensions and show progress at the waiting region. |
+| Route/detail change | Maintain spatial relationship when the user can return to the previous context. |
+
 ## CSS Token Skeleton
 
 ```css
@@ -61,6 +77,11 @@ Avoid motion for:
 - Keep animation definitions close to design tokens or existing animation utilities.
 - Loading skeletons should preserve layout dimensions; animation is secondary to stable structure.
 - Long-running operations should expose progress or pending state at the region that is waiting, not through a global decorative spinner.
+- Do not start motion automatically when it competes with a destructive decision,
+  text entry, data comparison, or assistive technology announcement.
+- Stop, reverse, or settle motion when the user changes selection, closes a layer,
+  navigates away, or receives a server result. A stale animation must not imply a
+  state that is no longer true.
 
 ## Self-Check
 
@@ -69,3 +90,5 @@ Avoid motion for:
 - Long-running operations show progress without blocking the page.
 - No animation causes layout jump, scroll jump, or visual overlap.
 - Motion evidence notes reduced-motion support when new transitions or animations were added.
+- Evidence names the trigger, affected region, duration token, and reduced-motion
+  behavior for non-trivial motion.

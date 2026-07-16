@@ -43,6 +43,22 @@ Prefer borders and surface contrast for normal workbench hierarchy. Use shadow/e
 - Modal/drawer: scrim plus clear elevation.
 - Toast/notification: elevated, but never blocks core workflow longer than necessary.
 
+## Component Combinations
+
+| Component | Radius direction | Elevation direction |
+| --- | --- | --- |
+| Dense table/list | none or small | border and row contrast |
+| Form field/control | small or medium | normally none; focus uses ring |
+| Workbench panel | medium | border or subtle raised surface |
+| Dropdown/popover | medium | border plus popover shadow |
+| Drawer/sheet | large only when the product style supports it | scrim plus directional elevation |
+| Modal/dialog | medium | scrim plus modal elevation |
+| Toast | medium | elevated and time-bounded |
+
+Do not use elevation to compensate for weak layout hierarchy. First establish
+region ownership, spacing, and surface contrast; then add a layer effect only when
+the component is actually above another interactive surface.
+
 ## Layering Rules
 
 - A card inside a card is usually a layout mistake. Use sections, tables, rows, or panels instead.
@@ -50,6 +66,8 @@ Prefer borders and surface contrast for normal workbench hierarchy. Use shadow/e
 - Floating controls must not cover table rows, form submit buttons, chart legends, or mobile safe areas.
 - Elevation must communicate interaction depth, not decoration.
 - Use scrims for modals/sheets when background interaction is blocked. Do not use blurred glass as the default surface style.
+- Keep the active layer's focus and scroll boundary visible. A shadow that visually
+  separates a drawer but leaves its close action unreachable is not a usable layer.
 
 ## Implementation
 
@@ -57,10 +75,14 @@ Prefer borders and surface contrast for normal workbench hierarchy. Use shadow/e
 - Keep border color tied to color tokens.
 - Avoid random shadow values per component.
 - Use z-index tokens for dropdown, sticky, fixed, modal, popover, tooltip, and notification layers.
+- Keep the z-index scale shared by shell, data surfaces, overlays, and notifications;
+  document an intentional exception in the existing system asset instead of a page file.
 
 ## Self-Check
 
 - Radius and elevation are consistent across controls.
 - Layered surfaces remain readable on light and dark backgrounds.
+- Component combinations use the declared radius/elevation role instead of a local
+  shadow or radius value that creates a new visual dialect.
 - Modals, drawers, and popovers do not create hidden scroll traps.
 - Nested cards are absent from normal page sections unless there is a clear repeated item structure.

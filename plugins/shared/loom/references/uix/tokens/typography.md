@@ -10,6 +10,22 @@ Load this file when creating or changing headings, tables, forms, dashboards, ma
 - Avoid making Inter, Roboto, Arial, or `system-ui` the only design decision in a new product unless the existing repo already standardizes on it.
 - Do not load remote fonts when the environment or product constraints make that risky; local/system fallbacks are acceptable when chosen intentionally.
 
+## Font Selection Decision
+
+Choose a font direction from the surface's reading job:
+
+| Surface | Primary concern | Typical direction |
+| --- | --- | --- |
+| Workbench/data | scan speed, compact labels, numeric alignment | sans with tabular figures |
+| Docs/prose | long-form reading and code contrast | readable sans or serif plus mono |
+| Marketing/corporate | brand voice and display hierarchy | brand-approved display plus readable body |
+| Developer tool | dense code, identifiers, logs | sans UI plus mono data layer |
+| Native mobile | platform familiarity and dynamic type | platform font and platform scale |
+
+Do not select a display font solely because it looks distinctive in a screenshot.
+The decision must survive long labels, localized text, numeric values, and the
+required viewport widths.
+
 ## Scale
 
 Use a small, stable type scale. Suggested web baseline:
@@ -51,6 +67,18 @@ Use tabular numeric variants for finance, tables, metrics, and logs when the sta
 - Marketing: expressive headline scale is allowed, but supporting copy must stay readable and responsive.
 - Mobile: text must not depend on desktop line length; controls and labels must wrap cleanly.
 - Data/status labels should be short and consistent. Use helper text or detail panels for explanations rather than stuffing paragraphs into table rows.
+- Keep one role per type scale: page title, section title, field label, body,
+  metadata, status, and code/data. Do not use font size as the only status signal.
+- For mixed CJK/Latin content, check fallback glyph height and baseline alignment;
+  nominally equal `font-size` values do not guarantee equal visual height.
+
+## Loading And Rendering
+
+- Prefer existing local fonts or system fallbacks when network loading can delay
+  the first visible surface. If a web font is required, define the loading and
+  fallback behavior in the existing asset pipeline.
+- Use stable font metrics and avoid layout shifts when a font swaps. Check headings,
+  buttons, table columns, and error messages after the final font is active.
 
 ## Implementation
 
@@ -66,3 +94,5 @@ Use tabular numeric variants for finance, tables, metrics, and logs when the sta
 - Tables align numbers and statuses.
 - Error/help text is readable at the smallest supported viewport.
 - Font families are declared in one token/theme location or follow the existing project system.
+- Font choice evidence names the surface reading job, fallback stack, and checked
+  long-content or localization case when typography changed materially.
