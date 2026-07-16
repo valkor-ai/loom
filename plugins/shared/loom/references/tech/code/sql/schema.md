@@ -23,6 +23,18 @@ This file applies to portable relational schema and migration work. Load the sel
 - Keep transaction ownership and state-transition invariants in the service/application boundary defined by Architecture. The schema enforces durable invariants; it does not replace domain workflow logic.
 - Treat provider-specific type and index choices as a separate dialect decision. Do not duplicate PostgreSQL or MySQL syntax in this common file.
 
+### Temporal, Audit, And Soft-Delete Data
+
+- Use a history table or valid-time columns when the requirement is to answer what was true at a past time. Define interval boundaries, overlap rules, current-row uniqueness, and the read path; do not add history columns without a historical query contract.
+- Keep business audit events distinct from technical migration or database log records. An audit record needs actor/system identity, operation, time, affected subject, and a redaction policy for old/new values. Do not make triggers the only source of business meaning when the application owns the state transition.
+- Soft delete is a query and uniqueness contract, not only a nullable timestamp. Define the active predicate, restore behavior, foreign-key behavior, retention, and indexes/unique constraints for active rows. Every owned read path must apply the same visibility rule.
+
+### Migration Compatibility
+
+- Classify a schema change as additive, backfill, compatible rewrite, or destructive removal before writing the migration.
+- For existing data, define the expand/backfill/contract order and the state the application can read at each intermediate step. Add defaults or nullable staging columns only when their temporary semantics are explicit.
+- Verify clean installation and upgrade from a representative prior schema. A migration that succeeds on an empty database does not prove compatibility with existing rows, indexes, constraints, or application read paths.
+
 ## Verification Focus
 
 - Run migration/app initialization for the target test database and verify schema validation when an ORM is present.
@@ -30,6 +42,7 @@ This file applies to portable relational schema and migration work. Load the sel
 - For ORM-backed changes, prove write/read mapping, enum/state conversion, nullable/default handling, and relation loading needed by the task.
 - For soft delete/audit/history changes, test active query behavior and recorded historical data.
 - Run the repository's migration validation path from a clean schema when migration files changed. Do not validate only that the migration file parses.
+- For a compatibility migration, verify the intermediate schema during backfill and the final schema after the old representation is removed.
 
 ## Evidence Focus
 
@@ -41,3 +54,5 @@ This file applies to portable relational schema and migration work. Load the sel
 - Adding a provider-specific column type without target-provider verification.
 - Using UI validation as the only protection for a durable invariant.
 - Adding indexes without a known filter, join, uniqueness, or ordering path.
+- Adding history, audit, or soft-delete columns without defining their read, restore, retention, and uniqueness semantics.
+- Treating a clean-database migration run as proof that an upgrade path is safe.

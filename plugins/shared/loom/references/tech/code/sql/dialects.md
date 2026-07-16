@@ -31,8 +31,10 @@ MCP maps the selected SQL reference group to a provider overlay only when the ta
 |---|---|
 | MySQL | `mysql.schema`, `mysql.queries`, `mysql.transactions` |
 | PostgreSQL | `postgresql.schema`, `postgresql.queries`, `postgresql.transactions` |
+| SQL Server | `sqlserver.schema`, `sqlserver.queries`, `sqlserver.transactions` |
+| Oracle | `oracle.schema`, `oracle.queries`, `oracle.transactions` |
 
-MariaDB remains a separate provider signal. It must not silently load the MySQL overlay without an explicit compatibility decision.
+MariaDB remains a separate provider signal. It must not silently load the MySQL overlay without an explicit compatibility decision. SQLite and other providers use the portable rules until a dedicated overlay is available; the result must record the provider-specific behavior that was not verified.
 
 ## Verification Focus
 
@@ -51,3 +53,4 @@ Name the selected provider and decision proved: type mapping, identity, time sem
 - Treating a provider name as permission to add provider-only features.
 - Claiming dialect compatibility from a different database such as SQLite or H2.
 - Hiding version, extension, ORM, or migration incompatibility behind a generic successful unit test.
+- Treating a recognized provider without a selected overlay as fully provider-verified.

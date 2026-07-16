@@ -95,7 +95,9 @@ pub fn code_quality_enum_refs() -> Value {
                 "sql": [
                     "schema", "queries", "dialects", "optimization", "windows",
                     "mysql.schema", "mysql.queries", "mysql.transactions",
-                    "postgresql.schema", "postgresql.queries", "postgresql.transactions"
+                    "postgresql.schema", "postgresql.queries", "postgresql.transactions",
+                    "sqlserver.schema", "sqlserver.queries", "sqlserver.transactions",
+                    "oracle.schema", "oracle.queries", "oracle.transactions"
                 ]
             }
         },
@@ -1524,6 +1526,40 @@ fn reference_items_for_signal(
                         items.insert("postgresql.transactions".to_string());
                     }
                 }
+                if signal
+                    .dialects
+                    .iter()
+                    .any(|dialect| dialect == "sql_server")
+                {
+                    if has_focus("sql_schema") || has_focus("sql_test") {
+                        items.insert("sqlserver.schema".to_string());
+                    }
+                    if has_focus("sql_query")
+                        || has_focus("performance")
+                        || has_focus("analytics")
+                        || has_focus("sql_test")
+                    {
+                        items.insert("sqlserver.queries".to_string());
+                    }
+                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                        items.insert("sqlserver.transactions".to_string());
+                    }
+                }
+                if signal.dialects.iter().any(|dialect| dialect == "oracle") {
+                    if has_focus("sql_schema") || has_focus("sql_test") {
+                        items.insert("oracle.schema".to_string());
+                    }
+                    if has_focus("sql_query")
+                        || has_focus("performance")
+                        || has_focus("analytics")
+                        || has_focus("sql_test")
+                    {
+                        items.insert("oracle.queries".to_string());
+                    }
+                    if has_focus("sql_transaction") || has_focus("sql_test") {
+                        items.insert("oracle.transactions".to_string());
+                    }
+                }
             }
         }
         _ => {}
@@ -2021,12 +2057,14 @@ fn reference_load_plan_item(group_key: &str, group: &str) -> ReferenceLoadPlanIt
     }
     if group_key == "sql" {
         if let Some((provider, subject)) = group.split_once('.') {
-            if matches!(provider, "mysql" | "postgresql")
+            if matches!(provider, "mysql" | "postgresql" | "sqlserver" | "oracle")
                 && matches!(subject, "schema" | "queries" | "transactions")
             {
                 let label = match provider {
                     "mysql" => "MySQL",
-                    _ => "PostgreSQL",
+                    "postgresql" => "PostgreSQL",
+                    "sqlserver" => "SQL Server",
+                    _ => "Oracle",
                 };
                 return ReferenceLoadPlanItem {
                     ref_id: format!("tech.code.sql.{provider}.{subject}"),
@@ -4875,6 +4913,63 @@ mod tests {
     }
 
     #[test]
+    fn sqlserver_schema_task_loads_only_sqlserver_overlay() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "SQL Server 2022"}}
+        }));
+        let task = task(
+            TaskKind::DataModelIncrement,
+            vec![
+                ImplementationAction::CreateOrUpdateEntity,
+                ImplementationAction::CreateEntityMigration,
+            ],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"schema".to_string()));
+        assert!(sql.contains(&"dialects".to_string()));
+        assert!(sql.contains(&"sqlserver.schema".to_string()));
+        assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("oracle.")));
+        assert!(!sql.contains(&"queries".to_string()));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.sqlserver.schema"
+                && item.path == "tech/code/sql/sqlserver/schema.md"
+        }));
+    }
+
+    #[test]
+    fn oracle_query_task_loads_query_and_transaction_overlays_without_schema() {
+        let baseline = baseline(json!({
+            "tracks": {"persistence": {"selection": "Oracle Database 19c"}}
+        }));
+        let task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdatePersistenceQuery],
+        );
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let sql = &selection.reference_groups["sql"];
+        assert!(sql.contains(&"queries".to_string()));
+        assert!(sql.contains(&"oracle.queries".to_string()));
+        assert!(sql.contains(&"oracle.transactions".to_string()));
+        assert!(!sql.contains(&"schema".to_string()));
+        assert!(!sql.iter().any(|item| item.starts_with("mysql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("postgresql.")));
+        assert!(!sql.iter().any(|item| item.starts_with("sqlserver.")));
+        let load_plan = code_reference_load_plan(&selection.reference_groups);
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.oracle.queries"
+                && item.path == "tech/code/sql/oracle/queries.md"
+        }));
+        assert!(load_plan.iter().any(|item| {
+            item.ref_id == "tech.code.sql.oracle.transactions"
+                && item.path == "tech/code/sql/oracle/transactions.md"
+        }));
+    }
+
+    #[test]
     fn generic_tests_do_not_load_sql_references() {
         let baseline = baseline(json!({
             "tracks": {"persistence": {"selection": "MySQL"}}
@@ -4922,6 +5017,12 @@ mod tests {
             "plugins/shared/loom/references/tech/code/sql/postgresql/schema.md",
             "plugins/shared/loom/references/tech/code/sql/postgresql/queries.md",
             "plugins/shared/loom/references/tech/code/sql/postgresql/transactions.md",
+            "plugins/shared/loom/references/tech/code/sql/sqlserver/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/sqlserver/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/sqlserver/transactions.md",
+            "plugins/shared/loom/references/tech/code/sql/oracle/schema.md",
+            "plugins/shared/loom/references/tech/code/sql/oracle/queries.md",
+            "plugins/shared/loom/references/tech/code/sql/oracle/transactions.md",
         ];
         let excluded_operations = [
             "replication",
@@ -4963,6 +5064,69 @@ mod tests {
                 assert!(
                     !lower.contains(term),
                     "{} contains excluded operation {term}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sql_common_references_cover_design_query_plan_and_analytics_boundaries() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/sql/schema.md",
+                50,
+                &[
+                    "## Temporal, Audit, And Soft-Delete Data",
+                    "## Migration Compatibility",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/queries.md",
+                45,
+                &[
+                    "### Subqueries And Set Operations",
+                    "### Mutation Result Boundary",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/optimization.md",
+                55,
+                &[
+                    "### Plan Reading",
+                    "### Before And After Proof",
+                    "## Risks To Avoid",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/windows.md",
+                45,
+                &[
+                    "### Function And Frame Selection",
+                    "### Analytic Cost Boundary",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/sql/dialects.md",
+                50,
+                &["## Provider Overlays", "SQL Server", "Oracle"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
                     path.display()
                 );
             }

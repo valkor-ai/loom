@@ -20,13 +20,42 @@ This file applies to query and schema changes made for performance.
 - Keep statistics and plan stability in mind. A plan with large estimated-vs-actual row gaps may need statistics refresh or a more selective predicate, not just another index.
 - Preserve correctness while optimizing: null semantics, duplicate rows, tie ordering, authorization/tenant filters, and pagination stability cannot change silently.
 
+### Plan Reading
+
+Read the plan as evidence about the changed query, not as a list of universally good operators:
+
+| Signal | Question to answer |
+|---|---|
+| Sequential/table scan | Is the relation small, or is a selective access path missing for the actual predicates? |
+| Index scan/seek | Does the index match equality, range, join, and ordering predicates, or is residual filtering still large? |
+| Join strategy | Do estimated and actual cardinalities support the join choice and expected concurrency? |
+| Sort/hash/materialization | Is the work required by the result contract, or did query shape/index order create avoidable memory or spill cost? |
+| Estimated versus actual rows | Is a statistics, cast, predicate, or data-distribution mismatch driving the plan? |
+
+Do not reject a sequential scan without checking relation size and selectivity. Do not add an index solely because a plan contains a scan, and do not force an index until the provider-specific overlay and measured evidence justify it.
+
+### Before And After Proof
+
+Capture the query shape, representative data assumptions, result equivalence, plan observations, and timing or resource metric before and after an optimization. There is no universal latency or scan target: the accepted NFR, data volume, provider, and workload define the threshold. If production-scale data is unavailable, record the remaining volume risk instead of claiming a completed performance improvement.
+
+### High-Cost Choices
+
+Partitioning, materialized views, denormalization, cache tables, and optimizer hints require an explicit ownership and lifecycle decision. Define refresh or invalidation, write cost, migration impact, and fallback behavior before adding them. Keep database administration, statistics maintenance jobs, replication, backup, and storage tuning outside this application implementation reference.
+
 ## Verification Focus
 
 - Capture plan evidence for optimization claims when the database supports it: `EXPLAIN`, `EXPLAIN ANALYZE`, buffers, estimated vs actual rows, or the repository's equivalent.
 - Verify result equivalence with representative fixtures, especially after rewriting joins, aggregations, windows, or pagination.
 - Record before/after timing or plan shape when feasible. If production-scale data is unavailable, say what was verified and what remains a volume risk.
 - Run affected integration/repository/API tests to ensure the optimized path still returns the expected user-facing data.
+- For a plan change, verify both the chosen access path and the no-regression result shape on a representative provider path.
 
 ## Evidence Focus
 
 - In the evidence summary, name the optimization decision: query rewrite, index design, plan finding, set-based replacement, partial index, materialized view, partitioning, statistics, or measured proof.
+
+## Risks To Avoid
+
+- Treating one plan operator or an arbitrary latency target as a universal quality rule.
+- Adding a covering, partial, or filtered index without measuring write, storage, and migration cost.
+- Introducing partitioning, materialized views, or hints without an ownership, refresh, invalidation, and rollback boundary.

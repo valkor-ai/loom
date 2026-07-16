@@ -23,6 +23,16 @@ This file applies to portable hand-written SQL and query-builder logic. Load the
 - Parameterize user input through the framework/driver. Do not concatenate values into SQL strings.
 - Keep provider-specific operators, casts, conflict syntax, and index hints in the selected dialect overlay. Do not hide a provider dependency inside a supposedly portable query rule.
 
+### Subqueries And Set Operations
+
+- A scalar or correlated subquery in a row-producing path can repeat work for every outer row. Compare it with a grouped join or a window calculation when the result semantics allow that rewrite, and verify duplicate behavior before changing it.
+- Use `UNION` only when duplicate elimination is part of the result contract. Use `UNION ALL` when duplicates are valid and the extra sort/distinct work is unnecessary. Align column count, compatible types, nullability, and ordering at the set boundary.
+- Portable pivot behavior should use explicit conditional aggregation when the output columns are known. Provider pivot operators, extensions, and dynamic-column generation belong in the selected dialect overlay.
+
+### Mutation Result Boundary
+
+For `INSERT`, `UPDATE`, and `DELETE`, define affected-row semantics, no-op behavior, generated values, and the state that downstream code must read back. Do not infer success from the absence of a driver exception when a zero-row update can mean a missing, stale, unauthorized, or already-completed record.
+
 ## Verification Focus
 
 - Test the query against representative fixtures that include empty results, duplicate-prone joins, null values, boundary dates/numbers, and authorization/tenant filters when relevant.
@@ -30,6 +40,7 @@ This file applies to portable hand-written SQL and query-builder logic. Load the
 - For pagination and sorting, test stable order across multiple rows with same primary sort value.
 - For recursive, aggregate, or reporting queries, include fixtures that prove the edge case the query was introduced to handle.
 - For query-plan changes, record the provider, query shape, relevant indexes, and plan evidence. Do not claim performance improvement from a query that was never executed against representative data.
+- For subquery rewrites and set operations, compare row counts, duplicates, null behavior, and ordering against the prior query on representative fixtures.
 
 ## Evidence Focus
 
@@ -41,3 +52,5 @@ This file applies to portable hand-written SQL and query-builder logic. Load the
 - Replacing a provider-specific query with a different dialect and calling it compatible.
 - Using `EXPLAIN ANALYZE` on a mutating statement without a controlled verification boundary.
 - Treating a passing mock repository test as proof of provider-specific query behavior.
+- Replacing a correlated subquery with a join without checking one-to-many multiplication.
+- Using a provider pivot feature when a portable result shape is sufficient and the provider capability is not accepted.
