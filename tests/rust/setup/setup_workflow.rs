@@ -51,6 +51,7 @@ const CODE_REFERENCE_FILES: &[&str] = &[
     "kotlin/testing",
     "php/async",
     "php/core",
+    "php/modern",
     "php/laravel",
     "php/symfony",
     "php/testing",

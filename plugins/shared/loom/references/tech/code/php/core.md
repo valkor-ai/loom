@@ -21,6 +21,15 @@ This file turns modern PHP language guidance into task-level implementation rule
 - Throw domain-specific exceptions or return explicit result objects for business failures. Do not return `false`, mixed arrays, or magic strings from new service APIs.
 - Preserve Composer autoloading, namespace conventions, PSR-12 formatting, and local static-analysis annotations instead of inventing a parallel layout.
 
+## Boundary Decisions
+
+- Treat `declare(strict_types=1)` as a file-level boundary, not a substitute for validating external input. Normalize request, queue, and decoded JSON data before passing it to typed domain APIs.
+- Use a backed enum when the state has a stable storage/API representation. Keep unknown external values on an explicit error or unmapped path instead of silently coercing them to a valid case.
+- Use readonly DTOs/value objects for data that should not change after construction. Keep ORM entities, proxy-managed objects, and framework lifecycle objects mutable when their integration requires it.
+- Use attributes only when the active framework consumes them. Choose one source of truth between attributes, configuration, serializer groups, and validation metadata.
+- Keep `mixed`, array shapes, and PHPDoc generics at integration boundaries where PHP cannot express the contract. Do not let them leak through service APIs without a documented reason.
+- Name the Composer namespace and autoload path from repository facts. Do not copy an `App\\` namespace or demo package layout into an existing project with a different convention.
+
 ## Verification Focus
 
 - Run the repository's PHP test command: PHPUnit, Pest, or framework feature tests.

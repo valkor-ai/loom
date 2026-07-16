@@ -21,12 +21,21 @@ This file applies Laravel conventions to task-owned behavior.
 - Queue jobs should carry stable identifiers or serialized DTOs, not large Eloquent object graphs. Define retry, timeout, and idempotency expectations for externally visible side effects.
 - Migrations should encode database constraints that protect important business invariants, not rely only on request validation.
 
+## Delivery Decisions
+
+- Keep the request pipeline ordered: authentication/authorization, Form Request validation, DTO or action conversion, domain/service execution, and Resource serialization. Do not use a controller as the place where these boundaries are implicitly mixed.
+- Choose Eloquent eager loading, `withCount`, scoped queries, or a read model from the exact endpoint result shape. Prove that the selected relation strategy avoids both N+1 queries and over-fetching.
+- Keep transaction scope around durable state transitions and required side effects. Dispatch jobs/events after commit only when consumers must not observe rolled-back state; make pre-commit behavior explicit when the event is part of the transaction contract.
+- Keep queue payloads versionable and small. Load current state by stable identifier in the handler and classify missing, stale, duplicate, and retryable cases.
+- Use policies/gates for who may act and services/actions for whether the business state allows the action. A policy should not become a second state machine.
+
 ## Verification Focus
 
 - Run Laravel feature tests for API/controller changes and unit tests for service/action changes.
 - Prove validation failure, authorization denial, successful write/read response shape, and relevant database state with assertions.
 - For queues/events, use the repository's fake/test helpers to prove dispatch timing and payload, and test handler behavior when the handler owns business work.
 - For Eloquent queries, test filters, pagination, sorting, relationship loading/counts, and empty/not-found behavior touched by the task.
+- For a migration or state transition, verify database constraints and read-back behavior instead of accepting only a successful request response.
 
 ## Evidence Focus
 

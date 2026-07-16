@@ -89,7 +89,7 @@ pub fn code_quality_enum_refs() -> Value {
                 "csharp": ["core", "modern", "persistence", "blazor", "performance", "testing"],
                 "cpp": ["core", "modern", "templates", "performance", "concurrency", "build", "testing"],
                 "kotlin": ["core", "coroutines", "ktor", "compose", "multiplatform", "dsl", "testing"],
-                "php": ["core", "laravel", "symfony", "async", "testing"],
+                "php": ["core", "modern", "laravel", "symfony", "async", "testing"],
                 "rust": ["core", "ownership", "traits", "errors", "async", "testing"],
                 "swift": ["core", "swiftui", "concurrency", "protocols", "memory", "testing"],
                 "sql": [
@@ -445,6 +445,15 @@ fn signal_from_selection(track: &str, source_path: &str, raw_selection: &str) ->
         language = Some("php".to_string());
         push_if_contains(&haystack, &mut frameworks, "laravel", &["laravel"]);
         push_if_contains(&haystack, &mut frameworks, "symfony", &["symfony"]);
+        push_if_contains(&haystack, &mut frameworks, "swoole", &["swoole"]);
+        push_if_contains(
+            &haystack,
+            &mut frameworks,
+            "reactphp",
+            &["reactphp", "react php"],
+        );
+        push_if_contains(&haystack, &mut frameworks, "amphp", &["amphp", "amp php"]);
+        push_if_contains(&haystack, &mut frameworks, "fibers", &["fiber", "fibers"]);
         push_unique(&mut roles, "backend");
     } else if contains_any(&haystack, &["swift", "swiftui", "vapor"]) {
         language = Some("swift".to_string());
@@ -1405,6 +1414,9 @@ fn reference_items_for_signal(
         }
         Some("php") => {
             items.insert("core".to_string());
+            if task_has_action(task, ImplementationAction::ImplementLanguageVersionFeature) {
+                items.insert("modern".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
@@ -4420,6 +4432,109 @@ mod tests {
 
             assert!(!selection.reference_groups["java"].contains(&"spring".to_string()));
             assert!(!selection.reference_groups.contains_key("springboot"));
+        }
+    }
+
+    #[test]
+    fn php_references_are_framework_and_capability_scoped() {
+        let laravel_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "PHP 8.3 + Laravel"}}
+        }));
+        let ordinary_task = task(
+            TaskKind::FeatureIncrement,
+            vec![ImplementationAction::CreateOrUpdateBusinessRule],
+        );
+        let ordinary =
+            code_reference_selection_for_task(&laravel_baseline, &ordinary_task).unwrap();
+        assert!(ordinary.reference_groups["php"].contains(&"core".to_string()));
+        assert!(ordinary.reference_groups["php"].contains(&"laravel".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"modern".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"testing".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"async".to_string()));
+        assert!(!ordinary.reference_groups["php"].contains(&"symfony".to_string()));
+
+        let modern_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementLanguageVersionFeature],
+        );
+        let modern = code_reference_selection_for_task(&laravel_baseline, &modern_task).unwrap();
+        assert!(modern.reference_groups["php"].contains(&"modern".to_string()));
+        assert!(code_reference_load_plan(&modern.reference_groups)
+            .iter()
+            .any(|item| item.path == "tech/code/php/modern.md"));
+
+        let async_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "PHP 8.3 + Swoole"}}
+        }));
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+        let async_selection =
+            code_reference_selection_for_task(&async_baseline, &async_task).unwrap();
+        assert!(async_selection.reference_groups["php"].contains(&"async".to_string()));
+
+        let symfony_baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "PHP 8.3 + Symfony"}}
+        }));
+        let symfony = code_reference_selection_for_task(&symfony_baseline, &ordinary_task).unwrap();
+        assert!(symfony.reference_groups["php"].contains(&"core".to_string()));
+        assert!(symfony.reference_groups["php"].contains(&"symfony".to_string()));
+        assert!(!symfony.reference_groups["php"].contains(&"laravel".to_string()));
+    }
+
+    #[test]
+    fn php_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/php/core.md",
+                35,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/modern.md",
+                30,
+                &["## Implementation Focus", "## Failure Modes"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/async.md",
+                35,
+                &["## Runtime Selection", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/laravel.md",
+                35,
+                &["## Delivery Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/symfony.md",
+                35,
+                &["## Delivery Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/php/testing.md",
+                35,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
         }
     }
 

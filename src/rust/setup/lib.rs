@@ -210,6 +210,7 @@ const REQUIRED_SHARED_REFERENCE_FILES: &[&str] = &[
     "plugins/shared/loom/references/tech/code/kotlin/testing.md",
     "plugins/shared/loom/references/tech/code/php/async.md",
     "plugins/shared/loom/references/tech/code/php/core.md",
+    "plugins/shared/loom/references/tech/code/php/modern.md",
     "plugins/shared/loom/references/tech/code/php/laravel.md",
     "plugins/shared/loom/references/tech/code/php/symfony.md",
     "plugins/shared/loom/references/tech/code/php/testing.md",
