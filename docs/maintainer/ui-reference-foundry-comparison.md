@@ -26,20 +26,20 @@ must never be requested by an agent during delivery.
 
 ## Capability Disposition Matrix
 
-| Foundry capability | Loom destination | Disposition | Runtime consumer |
+| Foundry capability | Loom destination | Disposition and boundary | Runtime consumer |
 | --- | --- | --- | --- |
-| Scenario baseline | `uix/scenarios`, `surface-decision.md` | translate decision rules, do not copy CLI output | UI quality seed and surface contract |
-| Stack guidance | `uix/stacks`, `tech/frontend`, `tech/code` | split by UIX, framework, and language ownership | reference routing |
-| Token system | `uix/tokens`, `uix/templates`, `designTokenAssetPlan` | adapt into one token authority | Execution and TaskResult |
-| Anti-patterns | `uix/anti-patterns.md` | absorb and preserve product boundary rules | UI quality rules and Review |
-| Render/audit checks | `uix/verification.md`, Review | translate evidence requirements | Review matrix |
-| `detect-stack` | Technical Baseline | already represented by structured stack signals | MCP seed generation |
-| `extract-tokens` | style evidence and token plan | capability gap to evaluate | Architecture/Execution |
-| `match-profile` | surface/scenario decision | capability gap to evaluate | Architecture/Execution |
-| `unify` | system and token convergence rules | capability gap to evaluate | Execution/Review |
-| `optimize` | UI optimization workflow | capability gap to evaluate | future MCP responsibility |
-| `brand` | no direct runtime equivalent | do not import the full brand library; design a separate decision model if needed | future UI planning |
-| Foundry command files | no direct runtime copy | translate underlying decisions only | MCP and references |
+| Scenario baseline | `uix/scenarios`, `surface-decision.md` | Translated into product-surface rules and a structured surface decision. Foundry scenario command output is not copied. | UI quality seed and surface contract |
+| Stack guidance | `uix/stacks`, `tech/frontend`, `tech/code` | Split by ownership: rendered composition in UIX, framework/runtime in `tech/frontend`, language rules in `tech/code`. | Reference routing |
+| Token system | `uix/tokens`, `uix/templates`, `designTokenAssetPlan` | Translated into one semantic token authority with existing-style evidence, merge policy, and explicit no-parallel-system policy. | Architecture, Execution, TaskResult, Review |
+| Anti-patterns | `uix/anti-patterns.md` | Absorbed as product-boundary and anti-demo rules. Foundry wording and command names are excluded. | UI quality rules and Review |
+| Render/audit checks | `uix/verification.md`, Review | Translated into product-surface, state/interaction, visual-system, and rendered-runtime evidence dimensions. | Review matrix |
+| `detect-stack` | Technical Baseline | Reused only as structured stack signals. UIX does not implement a second stack detector. | MCP seed generation |
+| `extract-tokens` | `designTokenAssetPlan.existingStyleEvidence` | Translated as repository evidence fields and token convergence decisions. No external extraction command is run by the Agent workflow. | Architecture candidate and Execution token plan |
+| `match-profile` | `surfaceDecisionCandidate.patternRankings`, `uiSurfaceDecisionContract.patternDecision` | Implemented as ranked known/hybrid/custom surface reasoning. Custom mode requires complete semantic and layout facts. | Architecture submit normalization |
+| `unify` | `system.md`, token references, `designTokenAssetPlan.mergePolicy` | Implemented as reuse/extend rules and a single token authority. No parallel Foundry token registry is introduced. | Execution and Review |
+| `optimize` | `uix/verification.md`, UI quality rules, Review | Translated into repeatable inspection and evidence expectations. It is not a separate post-hoc command that can replace production guidance. | Execution evidence and Review |
+| `brand` | None | Explicitly omitted from current runtime. Loom has no accepted brand-profile input, so no default brand palette or brand library is injected into unrelated products. | Maintainer-only future consideration |
+| Foundry command files | None | Explicitly omitted. Commands, installation, CLI workflow, and external paths are not Agent-facing UIX knowledge. | None |
 
 ## Batch Progress
 
@@ -58,3 +58,10 @@ must never be requested by an agent during delivery.
 - Mark a capability as omitted only with a technical reason and an owner for any future work.
 - Treat reference prose, MCP request instructions, and derived contract fields as separate sources of authority.
 - Remove superseded or duplicated guidance in the same change that adds its replacement.
+
+## Translation Acceptance Criteria
+
+- A translated capability must have one runtime owner and one maintainer record.
+- A capability is not considered migrated because a similarly named paragraph was copied; it must change a generated decision, an implementation choice, or an evidence requirement.
+- An omitted capability must name the missing Loom input or responsibility. It must not be represented by a relaxed default.
+- UIX references must remain consumable without this document, the external Foundry tree, or Foundry command knowledge.

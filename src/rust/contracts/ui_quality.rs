@@ -1080,6 +1080,7 @@ pub fn validate_ui_surface_decision_contract(frontend_experience: &Value) -> Vec
     validate_surface_semantic_facts(contract, &mut issues);
     validate_surface_regions_actions_states(contract, &mut issues);
     validate_surface_content_boundary(contract, &mut issues);
+    validate_design_token_asset_plan(contract, &mut issues);
     require_string_in(
         contract,
         "/semanticTokenPolicy",
@@ -1384,6 +1385,137 @@ fn validate_surface_content_boundary(contract: &Value, issues: &mut Vec<RepairIs
         "UI_SURFACE_COPY_RULE_REQUIRED",
         issues,
     );
+}
+
+fn validate_design_token_asset_plan(contract: &Value, issues: &mut Vec<RepairIssue>) {
+    let Some(plan) = contract.get("designTokenAssetPlan") else {
+        issues.push(issue(
+            "UI_DESIGN_TOKEN_PLAN_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan",
+            "uiSurfaceDecisionContract requires one designTokenAssetPlan as the token authority.",
+        ));
+        return;
+    };
+    if !plan.is_object() {
+        issues.push(issue(
+            "UI_DESIGN_TOKEN_PLAN_INVALID",
+            "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan",
+            "designTokenAssetPlan must be an object.",
+        ));
+        return;
+    }
+    require_string_in(
+        plan,
+        "/strategy",
+        "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.strategy",
+        &UI_DESIGN_TOKEN_STRATEGIES,
+        "UI_DESIGN_TOKEN_STRATEGY_INVALID",
+        issues,
+    );
+    require_string_in(
+        plan,
+        "/mergePolicy",
+        "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.mergePolicy",
+        &UI_DESIGN_TOKEN_MERGE_POLICIES,
+        "UI_DESIGN_TOKEN_MERGE_POLICY_INVALID",
+        issues,
+    );
+    require_string_in(
+        plan,
+        "/duplicationPolicy",
+        "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.duplicationPolicy",
+        &UI_DESIGN_TOKEN_DUPLICATION_POLICIES,
+        "UI_DESIGN_TOKEN_DUPLICATION_POLICY_INVALID",
+        issues,
+    );
+    validate_string_array_field(
+        plan,
+        "/targetFiles",
+        "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.targetFiles",
+        "UI_DESIGN_TOKEN_TARGET_FILES_INVALID",
+        issues,
+    );
+
+    if let Some(template_id) = plan.get("templateId") {
+        if !template_id.is_null()
+            && !template_id
+                .as_str()
+                .is_some_and(|value| UI_DESIGN_TOKEN_TEMPLATE_IDS.contains(&value))
+        {
+            issues.push(issue(
+                "UI_DESIGN_TOKEN_TEMPLATE_INVALID",
+                "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.templateId",
+                "templateId must be a known token template or null.",
+            ));
+        }
+    }
+
+    let Some(evidence) = plan.get("existingStyleEvidence") else {
+        issues.push(issue(
+            "UI_DESIGN_TOKEN_STYLE_EVIDENCE_REQUIRED",
+            "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.existingStyleEvidence",
+            "existingStyleEvidence is required so token reuse or extension is traceable.",
+        ));
+        return;
+    };
+    if !evidence.is_object() {
+        issues.push(issue(
+            "UI_DESIGN_TOKEN_STYLE_EVIDENCE_INVALID",
+            "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.existingStyleEvidence",
+            "existingStyleEvidence must be an object.",
+        ));
+        return;
+    }
+    for key in [
+        "tailwindConfigRefs",
+        "tokenFileRefs",
+        "globalStyleRefs",
+        "componentThemeRefs",
+    ] {
+        validate_string_array_field(
+            evidence,
+            &format!("/{key}"),
+            &format!(
+                "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.existingStyleEvidence.{key}"
+            ),
+            "UI_DESIGN_TOKEN_STYLE_EVIDENCE_INVALID",
+            issues,
+        );
+    }
+    require_non_empty_string(
+        evidence,
+        "/summary",
+        "content.frontendExperience.uiSurfaceDecisionContract.designTokenAssetPlan.existingStyleEvidence.summary",
+        "UI_DESIGN_TOKEN_STYLE_SUMMARY_REQUIRED",
+        issues,
+    );
+}
+
+fn validate_string_array_field(
+    root: &Value,
+    pointer: &str,
+    field_path: &str,
+    code: &str,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let Some(items) = root.pointer(pointer).and_then(Value::as_array) else {
+        issues.push(issue(
+            code,
+            field_path,
+            "field must be an array of strings.",
+        ));
+        return;
+    };
+    if items
+        .iter()
+        .any(|item| !item.as_str().is_some_and(|value| !value.trim().is_empty()))
+    {
+        issues.push(issue(
+            code,
+            field_path,
+            "field must contain only non-empty strings.",
+        ));
+    }
 }
 
 fn validate_surface_reference_plan(contract: &Value, issues: &mut Vec<RepairIssue>) {
@@ -3184,6 +3316,106 @@ mod tests {
                     "{stack} must not select unrelated UIX stack reference {item}; got {actual:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn foundry_translation_keeps_token_convergence_and_single_reference_authority() {
+        let seed = build_ui_quality_seed(None, None);
+        let token_plan = seed
+            .get("designTokenAssetPlan")
+            .expect("UI quality seed must include the token asset plan");
+        for pointer in [
+            "/existingStyleEvidence/tailwindConfigRefs",
+            "/existingStyleEvidence/tokenFileRefs",
+            "/existingStyleEvidence/globalStyleRefs",
+            "/existingStyleEvidence/componentThemeRefs",
+            "/existingStyleEvidence/summary",
+            "/mergePolicy",
+            "/duplicationPolicy",
+        ] {
+            assert!(
+                token_plan.pointer(pointer).is_some(),
+                "token asset plan must carry translated convergence field {pointer}"
+            );
+        }
+        assert_eq!(
+            token_plan.get("duplicationPolicy").and_then(Value::as_str),
+            Some("do_not_create_parallel_token_system")
+        );
+
+        let mut frontend = json!({
+            "required": true,
+            "surfaceDecisionCandidate": filled_surface_candidate()
+        });
+        assert!(normalize_ui_surface_decision_contract_for_persist(
+            &mut frontend,
+            &seed
+        ));
+        let contract = frontend
+            .get("uiSurfaceDecisionContract")
+            .expect("normalization must write the authoritative contract");
+        assert!(contract.get("referencePlan").is_some());
+        assert!(contract.get("qualityRules").is_some());
+        assert!(contract.get("designTokenAssetPlan").is_some());
+        for legacy in ["referenceProfile", "referenceLoadPlan", "qualityGates"] {
+            assert!(
+                contract.get(legacy).is_none(),
+                "translated UI contract must not retain a parallel legacy authority {legacy}"
+            );
+        }
+
+        let mut invalid = frontend.clone();
+        invalid["uiSurfaceDecisionContract"]["designTokenAssetPlan"]["duplicationPolicy"] =
+            json!("allow_parallel_tokens");
+        let issues = validate_ui_surface_decision_contract(&invalid);
+        assert!(
+            issues
+                .iter()
+                .any(|item| item.code == "UI_DESIGN_TOKEN_DUPLICATION_POLICY_INVALID"),
+            "MCP must reject a token plan that allows a parallel visual system: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn foundry_disposition_matrix_is_maintainer_only_and_complete() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let matrix_path = repo_root.join("docs/maintainer/ui-reference-foundry-comparison.md");
+        let matrix = fs::read_to_string(&matrix_path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", matrix_path.display()));
+        for capability in [
+            "Scenario baseline",
+            "Stack guidance",
+            "Token system",
+            "Anti-patterns",
+            "Render/audit checks",
+            "`detect-stack`",
+            "`extract-tokens`",
+            "`match-profile`",
+            "`unify`",
+            "`optimize`",
+            "`brand`",
+            "Foundry command files",
+        ] {
+            assert!(
+                matrix.contains(capability),
+                "maintainer disposition matrix must cover {capability}"
+            );
+        }
+        assert!(matrix.contains("## Translation Acceptance Criteria"));
+
+        for (group, item) in known_group_items() {
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(reference_file_for_item(&group, &item));
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            assert!(
+                !content.contains("frontend-ui-foundry") && !content.contains("Foundry"),
+                "Agent-facing UIX reference {}.{} must not contain maintainer migration metadata",
+                group,
+                item
+            );
         }
     }
 
