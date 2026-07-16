@@ -19,6 +19,14 @@
 - Use fuzzing for untrusted parsers/protocol inputs when the task touches security or robustness-sensitive parsing.
 - Clean up temp files, spawned tasks, test databases, environment variables, and global state through RAII/test fixtures.
 
+## Decision Rules
+
+- Choose unit tests for private/pure logic, integration tests for public crate contracts, doctests for public examples, and runtime tests for async/resource behavior. Do not use a mock to claim provider or executor behavior was verified.
+- Match async test macros and runtime to the crate. Assert cancellation, task completion, channel closure, and cleanup when those are part of the changed contract.
+- Use property tests for parsers, encoders, state machines, or invariants with broad input space; use examples/fixtures for a finite business matrix. Keep generated cases diagnosable.
+- Use snapshots only for stable complex output and keep update review explicit. Keep benchmarks and fuzz targets separate from correctness tests.
+- Report changed branches and risk evidence rather than imposing a universal coverage percentage. Miri, sanitizer, benchmark, or fuzz evidence should be added when the changed risk actually requires it.
+
 ## Verification Focus
 
 - Run `cargo test` for the changed crate/workspace or a narrower configured command.

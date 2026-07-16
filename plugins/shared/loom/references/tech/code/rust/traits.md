@@ -19,6 +19,15 @@
 - Use marker traits only for real compile-time guarantees, and document safety/invariant requirements for unsafe marker traits.
 - Be mindful of coherence/orphan rules when designing impls across crate boundaries; do not paint the crate into an API corner with overly broad blanket impls.
 
+## Decision Rules
+
+- Use a small capability trait for a real seam. A trait that mirrors one concrete type or combines unrelated responsibilities creates indirection without substitutability.
+- Choose associated types when each implementation has one natural related type; use generic parameters when callers need to combine multiple concrete types. Document the choice when it affects object safety or inference.
+- Prefer static dispatch for hot, closed generic code and `dyn Trait` for heterogeneous collections or runtime plugin boundaries. Verify object safety before exposing a trait object.
+- Use `From`/`TryFrom`, `AsRef`, `Borrow`, `Iterator`, `Display`, `Error`, and repository-standard derive traits when their semantics match. Do not invent parallel conversion or formatting contracts.
+- Seal traits when external implementations could violate invariants or make future evolution unsafe. Keep extension traits narrowly named to avoid surprising method pollution.
+- Respect coherence and orphan rules at crate boundaries; avoid broad blanket implementations that make downstream implementations impossible.
+
 ## Verification Focus
 
 - Build examples or tests that use the trait through the intended boundary: generic static dispatch, trait object, conversion, or extension method.

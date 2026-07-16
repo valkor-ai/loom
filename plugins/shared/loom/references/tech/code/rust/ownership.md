@@ -19,6 +19,15 @@
 - Do not leak memory intentionally (`Box::leak`, `mem::forget`) unless process-lifetime ownership is explicitly part of the design and documented.
 - Keep builders and state machines ownership-aware: consuming builders are good for required fields; mutable builders are fine when repository convention prefers them.
 
+## Decision Rules
+
+- Choose `&T`/`&mut T` when the callee borrows, owned `T` when it stores or consumes, and `Cow` when the common path borrows but normalization sometimes requires ownership. State the lifetime relationship only when it changes the API contract.
+- Use `Box`, `Rc`, and `Arc` for different ownership models, not as generic escape hatches. Select thread-safe sharing only when cross-thread ownership is actually required.
+- Keep `Arc<Mutex<T>>` lock scopes short, never call user code while holding a lock, and use an async-aware lock only when the runtime and await boundary require it.
+- Use `Pin` only for self-referential or future-movement invariants. Do not hand-write pin projections when a repository-supported abstraction can express the same boundary.
+- Let RAII/drop cleanup cover early returns and error paths. `Drop` implementations should be small, deterministic, and non-panicking.
+- For consuming builders, encode required fields in the type/state transition when that prevents invalid construction; use a mutable builder when the repository values simpler call sites and validates at `build`.
+
 ## Verification Focus
 
 - Let compilation prove basic borrow/lifetime correctness, then add runtime tests for ownership-sensitive behavior such as cleanup, shared mutation, builder consumption, or dropped resources.
