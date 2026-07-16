@@ -1172,7 +1172,15 @@ fn signal_applies_to_task(signal: &CodeStackSignal, focus_tags: &[String]) -> bo
                 || has_focus("performance")
                 || has_focus("analytics")
         }
-        Some("typescript") | Some("javascript") => {
+        Some("typescript") => {
+            has_focus("frontend")
+                || has_focus("configuration")
+                || has_focus("runtime")
+                || has_focus("migration")
+                || (roles.contains("backend")
+                    && (has_focus("api") || has_focus("backend") || has_focus("testing")))
+        }
+        Some("javascript") => {
             has_focus("frontend")
                 || (roles.contains("backend")
                     && (has_focus("api") || has_focus("backend") || has_focus("testing")))
@@ -1247,7 +1255,16 @@ fn reference_items_for_signal(
             }
         }
         Some("typescript") => {
-            items.extend(["core", "types", "config", "patterns"].map(str::to_string));
+            items.insert("core".to_string());
+            if task_owns_typescript_type_modeling(task) {
+                items.insert("types".to_string());
+            }
+            if task_owns_typescript_configuration(task) {
+                items.insert("config".to_string());
+            }
+            if task_owns_typescript_pattern(task) {
+                items.insert("patterns".to_string());
+            }
             if has_focus("testing") {
                 items.insert("testing".to_string());
             }
@@ -2222,6 +2239,54 @@ fn task_uses_api_client_binding(task: &TaskDefinition) -> bool {
                 .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi)))
 }
 
+fn task_owns_typescript_type_modeling(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateEntity
+                | ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::CreateOrUpdateBusinessRule
+                | ImplementationAction::ImplementGenericTypeAbstraction
+                | ImplementationAction::AddReferenceField
+                | ImplementationAction::ValidateReferenceFormat
+                | ImplementationAction::WireReferenceInApiOrUi
+        )
+    })
+}
+
+fn task_owns_typescript_configuration(task: &TaskDefinition) -> bool {
+    matches!(task.task_kind, TaskKind::ConfigurationSupport)
+        || task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::AddOrUpdateConfig
+                    | ImplementationAction::ImplementLanguageVersionFeature
+                    | ImplementationAction::RefactorModuleStructure
+                    | ImplementationAction::MigrateFrameworkImplementation
+            )
+        })
+}
+
+fn task_owns_typescript_pattern(task: &TaskDefinition) -> bool {
+    task.implementation_actions.iter().any(|action| {
+        matches!(
+            action,
+            ImplementationAction::CreateOrUpdateInterface
+                | ImplementationAction::CreateOrUpdateStateMachine
+                | ImplementationAction::ImplementSharedClientState
+                | ImplementationAction::ImplementGenericTypeAbstraction
+                | ImplementationAction::ImplementDependencyAbstraction
+                | ImplementationAction::WireReferenceInApiOrUi
+                | ImplementationAction::CreateEntityCrud
+                | ImplementationAction::CreateEntityRepository
+                | ImplementationAction::CreateOrUpdatePersistenceQuery
+                | ImplementationAction::ImplementExternalServiceIntegration
+                | ImplementationAction::ImplementResiliencePolicy
+        )
+    })
+}
+
 fn task_owns_persistence(task: &TaskDefinition) -> bool {
     matches!(task.task_kind, TaskKind::DataModelIncrement)
         || task.implementation_actions.iter().any(|action| {
@@ -2790,6 +2855,131 @@ mod tests {
         assert!(load_plan
             .iter()
             .any(|item| item.path == "tech/frontend/react/testing.md"));
+    }
+
+    #[test]
+    fn typescript_references_are_scoped_to_owned_capabilities() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React + TypeScript"}
+            }
+        }));
+
+        let mut ui_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        ui_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let ui = code_reference_selection_for_task(&baseline, &ui_task).unwrap();
+        let typescript = &ui.reference_groups["typescript"];
+        assert!(typescript.contains(&"core".to_string()));
+        assert!(!typescript.contains(&"types".to_string()));
+        assert!(!typescript.contains(&"config".to_string()));
+        assert!(!typescript.contains(&"patterns".to_string()));
+        assert!(!typescript.contains(&"guards".to_string()));
+
+        let mut api_client_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::WireReferenceInApiOrUi],
+        );
+        api_client_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let api_client = code_reference_selection_for_task(&baseline, &api_client_task).unwrap();
+        let api_typescript = &api_client.reference_groups["typescript"];
+        assert!(api_typescript.contains(&"core".to_string()));
+        assert!(api_typescript.contains(&"types".to_string()));
+        assert!(api_typescript.contains(&"guards".to_string()));
+        assert!(api_typescript.contains(&"patterns".to_string()));
+        assert!(!api_typescript.contains(&"config".to_string()));
+
+        let config_task = task(
+            TaskKind::ConfigurationSupport,
+            vec![ImplementationAction::AddOrUpdateConfig],
+        );
+        let config = code_reference_selection_for_task(&baseline, &config_task).unwrap();
+        let config_typescript = &config.reference_groups["typescript"];
+        assert!(config_typescript.contains(&"core".to_string()));
+        assert!(config_typescript.contains(&"config".to_string()));
+        assert!(!config_typescript.contains(&"types".to_string()));
+        assert!(!config_typescript.contains(&"patterns".to_string()));
+        assert!(!config_typescript.contains(&"testing".to_string()));
+    }
+
+    #[test]
+    fn typescript_specialized_references_ignore_prose_without_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {
+                "web": {"selection": "React + TypeScript"}
+            }
+        }));
+        let mut prose_task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        prose_task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        prose_task.objective =
+            "Use advanced generics, utility types, a builder, and a strict tsconfig.".to_string();
+
+        let selection = code_reference_selection_for_task(&baseline, &prose_task).unwrap();
+        let typescript = &selection.reference_groups["typescript"];
+        assert!(typescript.contains(&"core".to_string()));
+        assert!(!typescript.contains(&"types".to_string()));
+        assert!(!typescript.contains(&"config".to_string()));
+        assert!(!typescript.contains(&"patterns".to_string()));
+    }
+
+    #[test]
+    fn typescript_references_are_complete_and_decision_oriented() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/typescript/core.md",
+                40,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/types.md",
+                40,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/guards.md",
+                40,
+                &["## Boundary Decisions", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/config.md",
+                40,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/patterns.md",
+                40,
+                &["## Decision Rules", "## Verification Focus"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/typescript/testing.md",
+                40,
+                &["## Decision Rules", "## Evidence Focus"][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
