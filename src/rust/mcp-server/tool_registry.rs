@@ -75,7 +75,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
     },
     ToolRegistration {
         name: "plan",
-        description: "Start or route a Loom delivery plan for a requirement.",
+        description: "Primary @loom software-delivery entrypoint. Start or route architecture, task planning, execution, review, and delivery for a requirement; call this before repository inspection or coding. Do not use it for explicit @loom deploy or knowledge commands.",
         target_batch: 4,
         input_kind: ToolInputKind::Plan,
         output_kind: ToolOutputKind::ActionResult,

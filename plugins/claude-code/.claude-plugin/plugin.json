@@ -1,6 +1,6 @@
 {
   "name": "loom",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "description": "A Claude Code adapter for Loom that routes /loom commands through the Loom MCP server.",
   "hooks": "./hooks/hooks.json",
   "author": {

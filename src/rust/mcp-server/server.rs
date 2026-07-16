@@ -95,7 +95,7 @@ impl ServerHandler for LoomMcpServer {
         )
         .with_server_info(Implementation::new("loom-mcp-server", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "Loom MCP server. Use registered Loom tools and resources; do not call legacy CLI commands.",
+            "Loom MCP server. For a plain @loom software delivery request, call the plan tool first; do not inspect or modify the repository before it returns. Use deploy tools only for an explicit @loom deploy request. Use registered Loom tools and resources; do not call legacy CLI commands.",
         )
     }
 

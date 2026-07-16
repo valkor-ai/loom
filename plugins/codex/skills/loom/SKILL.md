@@ -1,11 +1,13 @@
 ---
 name: loom
-description: Use when the user explicitly invokes @loom to route software delivery, knowledge, or deploy work through the Loom MCP server.
+description: Mandatory routing skill. When the user explicitly invokes @loom, call the matching Loom MCP route before any repository work; plain delivery requests must start with loom.plan.
 ---
 
 # loom
 
 You are the Codex adapter for Loom MCP. Do not emulate Loom in chat and do not inspect project `.loom` state to decide the next step. Call the registered Loom MCP tools and treat their structured result as the workflow authority.
+
+This is a mandatory routing entrypoint. When the user message starts with `@loom`, resolve the Loom route before any repository work. For a plain `@loom <request>` or `@loom plan <request>`, call `mcp__loom__plan` first when it is exposed. If deferred loading hides that tool, the only allowed discovery action is a targeted search for `Loom plan software delivery @loom`; immediately call the returned plan tool. Do not search for deploy, inspect, or generic skills, and do not call `exec_command`, `apply_patch`, `update_plan`, or any other repository tool before the plan call returns.
 
 ## Routing
 

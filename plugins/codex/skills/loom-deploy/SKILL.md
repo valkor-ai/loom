@@ -1,11 +1,13 @@
 ---
 name: loom-deploy
-description: Use when the user explicitly invokes @loom deploy or asks Loom to prepare, run, inspect, validate, stop, bootstrap, or repair a deployment through MCP.
+description: Use only for an explicit @loom deploy request or deployment operation; do not select this skill for a plain @loom software-delivery request.
 ---
 
 # loom-deploy
 
 Deployment is a Loom MCP workflow. Route deploy requests to the registered `loom.deploy*` tools.
+
+This skill is not the route for a plain `@loom <request>`. Plain delivery requests must go through the `loom` skill and `loom.plan`; use this skill only when the user explicitly requests deployment.
 
 - `@loom deploy` -> `loom.deployRun`.
 - `@loom deploy prepare` -> `loom.deployPrepare`.

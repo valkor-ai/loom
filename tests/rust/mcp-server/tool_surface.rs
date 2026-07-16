@@ -82,6 +82,14 @@ fn batch_2_tool_surface_is_registered_without_cli_fields() {
         ]
     );
 
+    let plan = tools
+        .iter()
+        .find(|tool| tool.name.as_ref() == "plan")
+        .expect("plan tool");
+    let plan_description = plan.description.as_ref().expect("plan description");
+    assert!(plan_description.contains("Primary @loom software-delivery entrypoint"));
+    assert!(plan_description.contains("before repository inspection or coding"));
+
     for tool in tools {
         let value = serde_json::to_value(&tool).expect("tool json");
         assert_no_forbidden_keys(&value);

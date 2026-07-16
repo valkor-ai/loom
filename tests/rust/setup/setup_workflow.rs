@@ -368,7 +368,9 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
         .exists());
     assert!(fixture
         .user_home
-        .join(".codex/plugins/cache/local-plugins/loom/0.1.0/skills/loom/SKILL.md")
+        .join(format!(
+            ".codex/plugins/cache/local-plugins/loom/{VERSION}/skills/loom/SKILL.md"
+        ))
         .exists());
     assert!(!fixture.loom_home.join("bin/loom-cli").exists());
     assert!(!env.agent_mcp_registration_path(AgentKind::Codex).exists());
@@ -397,6 +399,36 @@ fn install_cleans_confirmed_legacy_and_writes_mcp_registration() {
             .status,
         "passed"
     );
+    assert_eq!(
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == "codex.pluginVersion")
+            .unwrap()
+            .status,
+        "passed"
+    );
+}
+
+#[test]
+fn install_rejects_agent_plugin_version_drift() {
+    let fixture = Fixture::new("plugin_version_drift");
+    fixture.write_package();
+    write_json(
+        &fixture
+            .package_root
+            .join("plugins/codex/.codex-plugin/plugin.json"),
+        &serde_json::json!({"name": "loom", "version": "0.2.4"}),
+    );
+
+    let error = install(&fixture.env(), &[AgentKind::Codex]).unwrap_err();
+    match error {
+        SetupError::InvalidArgument(message) => {
+            assert!(message.contains("agent plugin manifest"));
+            assert!(message.contains(&format!("expected {VERSION}")));
+        }
+        other => panic!("expected plugin version validation error, got {other:?}"),
+    }
 }
 
 #[test]
@@ -972,6 +1004,44 @@ fn plugin_templates_do_not_expose_legacy_protocol_terms() {
             );
         }
     }
+
+    for file in [
+        "codex/.codex-plugin/plugin.json",
+        "claude-code/.claude-plugin/plugin.json",
+    ] {
+        let value = read_json(&plugin_root.join(file));
+        assert_eq!(value["name"], "loom", "{file} must identify Loom");
+        assert_eq!(
+            value["version"].as_str(),
+            Some(VERSION),
+            "{file} must match the MCP runtime version"
+        );
+    }
+}
+
+#[test]
+fn codex_delivery_skill_requires_the_loom_plan_first() {
+    let skill = fs::read_to_string(repo_root().join("plugins/codex/skills/loom/SKILL.md")).unwrap();
+    for required in [
+        "mandatory routing entrypoint",
+        "resolve the Loom route before any repository work",
+        "mcp__loom__plan",
+        "deferred loading hides that tool",
+        "Loom plan software delivery @loom",
+        "Do not search for deploy",
+        "exec_command",
+        "apply_patch",
+    ] {
+        assert!(
+            skill.contains(required),
+            "Codex Loom skill missing {required}"
+        );
+    }
+
+    let deploy_skill =
+        fs::read_to_string(repo_root().join("plugins/codex/skills/loom-deploy/SKILL.md")).unwrap();
+    assert!(deploy_skill.contains("only for an explicit @loom deploy request"));
+    assert!(deploy_skill.contains("not the route for a plain `@loom <request>`"));
 }
 
 #[test]
@@ -2374,7 +2444,7 @@ impl Fixture {
             &self
                 .package_root
                 .join("plugins/codex/.codex-plugin/plugin.json"),
-            &serde_json::json!({"name":"loom","version":"0.1.0"}),
+            &serde_json::json!({"name":"loom","version":VERSION}),
         );
         write_file(
             &self.package_root.join("plugins/codex/skills/loom/SKILL.md"),
@@ -2387,7 +2457,7 @@ impl Fixture {
             &self
                 .package_root
                 .join("plugins/claude-code/.claude-plugin/plugin.json"),
-            &serde_json::json!({"name":"loom","version":"0.1.0"}),
+            &serde_json::json!({"name":"loom","version":VERSION}),
         );
         write_file(
             &self
