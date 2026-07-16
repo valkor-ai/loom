@@ -19,12 +19,21 @@
 - Use worker threads only for CPU-bound work or isolation that justifies the overhead. Terminate workers and propagate worker errors to the owner.
 - Do not log secrets, tokens, full environment dumps, or sensitive filesystem paths in normal runtime output.
 
+### Process And Child Boundaries
+
+Validate environment and CLI input before opening files, binding ports, spawning children, or mutating state. Use argument arrays and explicit working directories for child processes; set timeout/abort behavior, bound collected output, and terminate the child and descendants when the owner stops. Do not turn a shell command into a string interpolation boundary.
+
+### HTTP And Stream Boundaries
+
+Define request body, header, response, and connection limits for a Node HTTP server. Return a stable error response after parsing or routing failures and avoid writing headers twice. Use backpressure-aware stream composition and propagate request aborts to downstream work. Graceful shutdown must stop admission, drain bounded work, close servers/watchers/workers, and report failures without forcing an unsafe process loop.
+
 ## Verification Focus
 
 - Run Node tests or runtime smoke commands for changed entry points.
 - Verify startup fails clearly for missing required configuration and succeeds with valid overrides.
 - For servers or long-running processes, test or manually smoke shutdown behavior if lifecycle code changed.
 - For filesystem, stream, child-process, or worker changes, cover error paths and cleanup of temporary resources.
+- For HTTP or process lifecycle changes, verify malformed input, abort/timeout, bounded output, shutdown, and repeated-signal behavior where owned.
 
 ## Evidence Focus
 

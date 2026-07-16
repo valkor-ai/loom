@@ -18,12 +18,37 @@
 - Use `finally` or equivalent cleanup for locks, loading state, subscriptions, timers, temporary files, and active operation markers.
 - For streams, prefer backpressure-aware APIs such as `pipeline` in Node or readable stream iteration where supported. Do not buffer large streams into memory unless the data size is bounded.
 
+### Combinator And Failure Selection
+
+Choose the combinator from the business outcome:
+
+| Outcome | Pattern | Failure meaning |
+|---|---|---|
+| All independent results are required | `Promise.all` | first rejection fails the operation; define cleanup for other work |
+| Each result is useful independently | `Promise.allSettled` | return or record per-item success and failure |
+| First successful source is acceptable | `Promise.any` | reject only after every candidate fails; preserve `AggregateError` context |
+| First settlement ends the race | `Promise.race` | the losing operation still needs cancellation when it can continue running |
+| Ordered dependency | sequential `await` or `for await` | later work must not start before prior state is valid |
+
+Do not use `Promise.all` as an unbounded batch scheduler. For large or user-controlled collections, add a bounded queue, define whether failures stop or continue the batch, and preserve input-to-result correlation.
+
+### Timeout And Cancellation Ownership
+
+Timeout, abort, and retry are separate decisions. A timeout must stop or detach the underlying operation, clear its timer, and return an error category callers can distinguish from validation or business rejection. Pass one `AbortSignal` through the complete call chain; do not create a controller in a helper that no owner can abort.
+
+Retry only transient failures and keep the attempt budget outside the operation's business result. Backoff must be cancellable. A retry around a non-idempotent write requires an idempotency key or an equivalent deduplication contract.
+
+### Queue And Stream Boundaries
+
+An async generator should define page/cursor advancement, termination, duplicate handling, and cleanup when iteration stops early. A concurrency queue should release waiters in a `finally` path and define behavior when queued work is cancelled. For Node streams, use `pipeline` or equivalent propagation so source, transform, destination, and abort all share failure and cleanup semantics.
+
 ## Verification Focus
 
 - Test success, failure, timeout, cancellation, and cleanup paths for changed async flows.
 - Test ordering when operations must be sequential and independence when operations are intentionally parallel.
 - Check that rejected promises are observed by tests or callers; no new unhandled rejection should appear in runtime output.
 - For retries, verify retry count, backoff/stop condition, and non-retry behavior for unsafe or non-retryable errors.
+- For combinators and queues, verify partial-failure policy, bounded concurrency, input/result correlation, early iterator termination, and cleanup of losing or cancelled work.
 
 ## Evidence Focus
 

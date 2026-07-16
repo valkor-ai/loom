@@ -18,12 +18,19 @@
 - Keep side-effect imports limited to bootstrap, polyfills, global styles, or explicit registration modules. A normal utility module should not mutate global state at import time.
 - When changing module boundaries, preserve test and build runner compatibility; Jest/Vitest/Node/bundlers often resolve ESM and CommonJS differently.
 
+### Resolution And Publication
+
+Treat `package.json` `type`, `exports`, `imports`, file extensions, and bundler aliases as one resolution contract. For a package with multiple consumers, define which conditions (`import`, `require`, `node`, `browser`, or the repository's supported condition) resolve to which artifact, and keep declaration/source maps aligned where they are owned.
+
+Do not expose a source directory merely to make a test import pass. Add a public export only when the symbol is a supported API, and verify deep-import failures for paths that must remain private. Import maps and aliases are browser/build configuration; they do not change Node's package resolution unless the runtime explicitly supports them.
+
 ## Verification Focus
 
 - Run build or bundle commands that exercise the changed import graph.
 - Add or run an import smoke test for public package entry points, CLI entry modules, or dynamically imported modules.
 - Verify both Node and browser targets when the module is consumed in both environments.
 - Confirm no unintended circular dependency, missing extension, broken `exports` path, or default/named export mismatch was introduced.
+- Verify each declared package entry under its supported runtime condition and run an import smoke test from the package boundary, not only from an internal relative path.
 
 ## Evidence Focus
 

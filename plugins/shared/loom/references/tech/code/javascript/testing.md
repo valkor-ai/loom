@@ -17,6 +17,7 @@
 - Add module import smoke tests when changing ESM/CommonJS boundaries, dynamic imports, package exports, or CLI entry modules.
 - Avoid snapshot-only coverage for interactive or business behavior. Assertions should name the observable result, error, side effect, or state transition.
 - Keep fixtures realistic enough to catch validation and defaulting bugs; malformed input fixtures are required when parser or boundary code changed.
+- Treat coverage as risk evidence rather than a universal percentage. Prioritize changed contracts, failure/cleanup paths, concurrency boundaries, and regressions; do not weaken assertions or add artificial tests only to reach a fixed number.
 
 ## Verification Focus
 

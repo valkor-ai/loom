@@ -1283,7 +1283,7 @@ fn reference_items_for_signal(
         Some("javascript") => {
             items.insert("core".to_string());
             items.insert("modules".to_string());
-            if has_focus("async") || has_focus("api") || has_focus("api_client") {
+            if has_focus("async") {
                 items.insert("async".to_string());
             }
             if signal.roles.iter().any(|role| role == "frontend") {
@@ -4818,6 +4818,121 @@ mod tests {
                     )
                 })
             }));
+    }
+
+    #[test]
+    fn javascript_async_reference_requires_async_task_ownership() {
+        let baseline = baseline(json!({
+            "tracks": {"backend": {"selection": "JavaScript + Node.js"}}
+        }));
+        let api_task = task(
+            TaskKind::InterfaceIncrement,
+            vec![ImplementationAction::CreateOrUpdateInterface],
+        );
+        let async_task = task(
+            TaskKind::RefactorSupport,
+            vec![ImplementationAction::ImplementAsyncProcessing],
+        );
+
+        let api = code_reference_selection_for_task(&baseline, &api_task).unwrap();
+        let async_selection = code_reference_selection_for_task(&baseline, &async_task).unwrap();
+
+        assert!(api.reference_groups["javascript"].contains(&"core".to_string()));
+        assert!(api.reference_groups["javascript"].contains(&"modules".to_string()));
+        assert!(api.reference_groups["javascript"].contains(&"node".to_string()));
+        assert!(!api.reference_groups["javascript"].contains(&"async".to_string()));
+        assert!(async_selection.reference_groups["javascript"].contains(&"async".to_string()));
+    }
+
+    #[test]
+    fn javascript_frontend_task_loads_browser_without_node_reference() {
+        let baseline = baseline(json!({
+            "tracks": {"web": {"selection": "JavaScript"}}
+        }));
+        let mut task = task(
+            TaskKind::UiFlowIncrement,
+            vec![ImplementationAction::CreateOrUpdateUiFlow],
+        );
+        task.frontend_experience_requirement = Some(json!({"uiTaskScope": {}}));
+        let selection = code_reference_selection_for_task(&baseline, &task).unwrap();
+        let javascript = &selection.reference_groups["javascript"];
+
+        assert!(javascript.contains(&"browser".to_string()));
+        assert!(!javascript.contains(&"node".to_string()));
+    }
+
+    #[test]
+    fn javascript_references_are_complete_and_task_scoped() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let references = [
+            (
+                "plugins/shared/loom/references/tech/code/javascript/core.md",
+                30,
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/async.md",
+                45,
+                &[
+                    "### Combinator And Failure Selection",
+                    "### Timeout And Cancellation Ownership",
+                    "### Queue And Stream Boundaries",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/browser.md",
+                40,
+                &[
+                    "### Worker And Observer Ownership",
+                    "### Storage And Cache Evolution",
+                    "### Permission And Main-Thread Boundaries",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/modules.md",
+                35,
+                &["### Resolution And Publication"][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/node.md",
+                35,
+                &[
+                    "### Process And Child Boundaries",
+                    "### HTTP And Stream Boundaries",
+                ][..],
+            ),
+            (
+                "plugins/shared/loom/references/tech/code/javascript/testing.md",
+                30,
+                &[
+                    "## When To Use",
+                    "## Implementation Focus",
+                    "## Verification Focus",
+                ][..],
+            ),
+        ];
+
+        for (relative, minimum_lines, required_sections) in references {
+            let path = root.join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            assert!(
+                content.lines().count() >= minimum_lines,
+                "{} is too thin",
+                path.display()
+            );
+            for section in required_sections {
+                assert!(
+                    content.contains(section),
+                    "{} missing {section}",
+                    path.display()
+                );
+            }
+        }
     }
 
     #[test]
