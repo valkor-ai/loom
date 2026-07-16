@@ -2418,7 +2418,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        build_ui_quality_seed, known_ui_reference_groups,
+        build_ui_quality_seed, infer_stack_reference_items, known_ui_reference_groups,
         normalize_ui_surface_decision_contract_for_persist, scenario_supporting_reference_items,
         ui_surface_decision_candidate_shape, ui_surface_decision_candidate_template,
         ui_surface_decision_contract_shape, ui_surface_decision_enum_refs,
@@ -3057,6 +3057,133 @@ mod tests {
                 content.contains(concrete_marker),
                 "{relative} must contain the concrete scenario marker {concrete_marker}"
             );
+        }
+    }
+
+    #[test]
+    fn stack_references_keep_ui_implementation_boundaries() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let expectations = [
+            (
+                "stacks/native-mobile.md",
+                &[
+                    "## Platform Implementation Boundary",
+                    "## Screen State And Restoration",
+                ][..],
+                "platform navigation",
+            ),
+            (
+                "stacks/plain-html.md",
+                &["## Entry, Asset, And Enhancement Boundary"][..],
+                "document entry",
+            ),
+            (
+                "stacks/react.md",
+                &["## Route And Data Boundary", "## Token And State Ownership"][..],
+                "query/mutation adapter",
+            ),
+            (
+                "stacks/svelte.md",
+                &["## Page Load And Action Boundary"][..],
+                "page data state",
+            ),
+            (
+                "stacks/threejs.md",
+                &["## Scene, Asset, And Overlay Boundary"][..],
+                "asset lifecycle",
+            ),
+            (
+                "stacks/uniapp.md",
+                &["## Cross-Target Page Boundary"][..],
+                "pages.json route",
+            ),
+            (
+                "stacks/vue.md",
+                &["## Page, Composable, And Runtime Boundary"][..],
+                "composable/data adapter",
+            ),
+        ];
+
+        for (relative, sections, concrete_marker) in expectations {
+            let path = repo_root
+                .join("plugins/shared/loom/references/uix")
+                .join(relative);
+            let content = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+            for section in sections {
+                assert!(
+                    content.contains(section),
+                    "{relative} must contain the stack-specific section {section}"
+                );
+            }
+            assert!(
+                content.contains(concrete_marker),
+                "{relative} must contain the concrete stack boundary {concrete_marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_stack_routing_matches_frontend_runtime_signals() {
+        let cases = [
+            (
+                "React + Tailwind",
+                &["react"][..],
+                &["native-mobile", "vue", "svelte"][..],
+            ),
+            (
+                "Next.js + React",
+                &["react"][..],
+                &["native-mobile", "plain-html"][..],
+            ),
+            ("Vue + Nuxt", &["vue"][..], &["native-mobile", "svelte"][..]),
+            (
+                "SvelteKit",
+                &["svelte"][..],
+                &["native-mobile", "react"][..],
+            ),
+            (
+                "HTML + Tailwind",
+                &["plain-html"][..],
+                &["react", "native-mobile"][..],
+            ),
+            (
+                "Flutter + Dart",
+                &["native-mobile"][..],
+                &["react", "vue", "svelte"][..],
+            ),
+            (
+                "React Native + TypeScript",
+                &["native-mobile"][..],
+                &["react", "vue"][..],
+            ),
+            (
+                "Three.js + WebGL",
+                &["threejs"][..],
+                &["native-mobile", "plain-html"][..],
+            ),
+            (
+                "Vue + UniApp",
+                &["uniapp", "vue"][..],
+                &["react", "svelte"][..],
+            ),
+        ];
+
+        for (stack, expected, forbidden) in cases {
+            let baseline = technical_baseline_with_stack(json!(stack));
+            let actual = infer_stack_reference_items(Some(&baseline));
+            for item in expected {
+                assert!(
+                    actual.iter().any(|candidate| candidate == item),
+                    "{stack} must select UIX stack reference {item}; got {actual:?}"
+                );
+            }
+            for item in forbidden {
+                assert!(
+                    !actual.iter().any(|candidate| candidate == item),
+                    "{stack} must not select unrelated UIX stack reference {item}; got {actual:?}"
+                );
+            }
         }
     }
 

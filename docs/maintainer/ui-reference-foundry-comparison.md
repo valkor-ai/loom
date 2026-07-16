@@ -21,7 +21,7 @@ must never be requested by an agent during delivery.
 | `uix/frameworks.md` | UIX/framework boundary | stack references | Batch 4 |
 | `uix/tokens/*` | semantic visual primitives and layout decisions | `references/tokens/*` | Batch 1 complete |
 | `uix/scenarios/*` | product-surface anatomy, workflow continuity, risk states, and responsive behavior | `references/scenarios/*` | Batch 3 complete |
-| `uix/stacks/*` | UIX implementation structure per stack | `references/stacks/*` | Batch 4 |
+| `uix/stacks/*` | UIX implementation structure per stack, state ownership, and platform rendering boundary | `references/stacks/*` | Batch 4 complete |
 | `uix/templates/*` | adaptable CSS/Tailwind token starting points | `templates/*` | Batch 1 complete |
 
 ## Capability Disposition Matrix
@@ -48,7 +48,7 @@ must never be requested by an agent during delivery.
 | 1 | tokens, templates, system | complete | 13 UI quality tests, template resolution, UIX duplication test |
 | 2 | cross-cutting UIX guidance | complete | scoped UI quality seed and reference-routing tests |
 | 3 | business and presentation scenarios | complete | scenario completeness and positive/negative scenario routing |
-| 4 | UIX stacks and frontend boundary | pending | stack routing and duplicate-load tests |
+| 4 | UIX stacks and frontend boundary | complete | stack routing and duplicate-load tests |
 | 5 | Foundry workflow capability translation | pending | disposition coverage and ownership tests |
 | 6 | MCP integration and global audit | pending | load-plan, evidence, duplication, and full UIX integration tests |
 

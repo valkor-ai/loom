@@ -51,3 +51,21 @@ ui/
 - Confirm assets load and controls respond.
 - Verify the app remains interactive after resizing or route changes.
 - For generated scenes, inspect both canvas pixels and overlay controls; one without the other is incomplete.
+
+## Scene, Asset, And Overlay Boundary
+
+Keep the render loop, assets, controls, and product UI as separate owners. The
+scene provides spatial context; DOM or native overlay components provide labels,
+forms, status, and business actions.
+
+```text
+scene root -> canvas/camera/controls -> selected object
+                                   \\-> overlay context/action/feedback
+asset lifecycle -> loading -> ready | fallback | retry
+```
+
+- Scene state owns camera, selection, framing, and interaction mode; business records and form drafts stay in the UI/data boundary.
+- Overlay panels must preserve readable contrast, pointer/keyboard access, safe placement, and the same semantic tokens as the surrounding product.
+- Loading and capability failure need a stable, actionable fallback that keeps the product task understandable without the canvas.
+- Asset URLs, preload policy, pixel ratio, disposal, and animation throttling follow the repository's rendering/runtime conventions; do not invent a second asset registry in a component.
+- A resize or route change must reconcile camera framing and overlay dimensions without losing selected identity or pending action state.

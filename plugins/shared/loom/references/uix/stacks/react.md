@@ -77,3 +77,35 @@ Do not collapse business blocking into generic `error`. Keep it as a domain stat
 | Gate | Pass signal | Fail signal |
 | --- | --- | --- |
 | `react.split.workflow_regions` | React page orchestration is separated from reusable feature components, data/API modules, formatters, state views, and token-consuming styles. | Page component owns all fetching, form, table, modal/drawer, state rendering, and styling once the workflow has multiple regions. |
+
+## Route And Data Boundary
+
+The UIX stack decides how the visible page is composed; the repository's React,
+Next.js, router, data, and API references decide how code crosses runtime
+boundaries.
+
+```text
+route/layout -> page orchestration -> feature view -> shared primitive
+                           \\-> query/mutation adapter -> state view -> readback
+```
+
+- Keep route/layout responsible for shell and navigation context, page orchestration responsible for task scope, and feature components responsible for visible regions and actions.
+- Keep API clients, query keys, serializers, and mutations in the existing data boundary. Do not fetch from every presentational component.
+- For Next.js, preserve server/client boundaries, hydration determinism, loading/error/not-found behavior, and direct route refresh. For Vite or a client-only app, preserve the accepted router and same-origin/API configuration.
+- Pass stable record identity and explicit action callbacks into row/detail/form components; do not let a stale global selection decide a mutation target.
+
+## Token And State Ownership
+
+```tsx
+<FeaturePage>
+  <PageHeader />
+  <FilterBar value={query} onChange={setQuery} />
+  <ResultRegion state={resultState} />
+  <DetailPanel record={selectedRecord} onAction={handleAction} />
+</FeaturePage>
+```
+
+Use one app-level token source and one state owner per concern. A feature can
+extend semantic tokens when its product surface needs a new role, but it must
+not create component-local color, spacing, or state conventions that conflict
+with the shared system.
