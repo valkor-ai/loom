@@ -1941,11 +1941,43 @@ fn loom_uix_references_do_not_duplicate_mcp_contract_terms() {
         "TaskPlan",
         "frontendQualitySelfCheck",
         "frontendExperienceRequirement",
+        "uiProductionBrief",
+        "uiSurfaceDecisionContract",
+        "surfaceDecisionContract",
+        "surfaceDecisionCandidate",
         "uiQualityContract",
         "uiTaskQualityGates",
         "gateResults",
         "referenceGroupsChecked",
         "referenceFilesChecked",
+        "referencePlanFilesChecked",
+        "surfaceRegionEvidence",
+        "surfaceActionEvidence",
+        "surfaceStateEvidence",
+        "surfaceQualityRuleEvidence",
+        "contentBoundaryEvidence",
+        "productIntent",
+        "layoutContract",
+        "informationContract",
+        "actionContract",
+        "stateContract",
+        "visualContract",
+        "contentBoundary",
+        "mustShow",
+        "scanPriority",
+        "identityFields",
+        "statusFields",
+        "longContentPolicy",
+        "dataViews",
+        "primaryActions",
+        "contextualActions",
+        "dangerousActions",
+        "placementRule",
+        "postSuccessUpdate",
+        "regionsInScope",
+        "actionsInScope",
+        "statesInScope",
+        "qualityRulesInScope",
         "designTokenEvidence",
         "designTokenAssetPlan",
         "requestRef",
@@ -1980,6 +2012,30 @@ fn loom_uix_references_do_not_duplicate_mcp_contract_terms() {
                 relative
             );
         }
+    }
+}
+
+#[test]
+fn loom_agent_adapters_use_current_ui_reference_evidence_field() {
+    let repo = repo_root();
+    let files = [
+        repo.join("plugins/codex/skills/loom/SKILL.md"),
+        repo.join("plugins/claude-code/skills/loom/SKILL.md"),
+        repo.join("plugins/opencode/.opencode/commands/loom.md"),
+    ];
+
+    for path in files {
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(
+            content.contains("referencePlanFilesChecked"),
+            "{} must use the current UI reference evidence field",
+            path.display()
+        );
+        assert!(
+            !content.contains("referenceFilesChecked"),
+            "{} must not teach the removed UI reference evidence field",
+            path.display()
+        );
     }
 }
 

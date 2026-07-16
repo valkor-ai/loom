@@ -15,12 +15,12 @@ When this scenario is selected, map scenario rules into the task brief this way:
 
 | Brief area | Admin dashboard extraction |
 | --- | --- |
-| `layoutContract` | Sidebar/topbar/main/detail regions, workbench density, desktop split layout, tablet rail/drawer, mobile list-to-detail fallback. |
-| `informationContract` | Record identity, status, key decision fields, filters/search/sort/pagination, selected-detail summary, update/history context. |
-| `actionContract` | Primary create/submit/approve action near the working region; row/detail contextual actions; destructive actions with confirmation or recovery. |
-| `stateContract` | Results-region loading/empty/error, form validation, action pending/success, and business-blocking near row/detail/action. |
-| `visualContract` | Restrained operational surfaces, tokenized spacing/type/status colors, compact app identity, no hero/marketing/filler sections. |
-| `contentBoundary` | Product copy only: labels, status, validation, filters, actions, and help route. No runtime, delivery, stack, or verification language. |
+| Layout | Sidebar/topbar/main/detail regions, workbench density, desktop split layout, tablet rail/drawer, mobile list-to-detail fallback. |
+| Information | Record identity, status, key decision fields, filters/search/sort/pagination, selected-detail summary, update/history context. |
+| Actions | Primary create/submit/approve action near the working region; row/detail contextual actions; destructive actions with confirmation or recovery. |
+| States | Results-region loading/empty/error, form validation, action pending/success, and business-blocking near row/detail/action. |
+| Visual system | Restrained operational surfaces, tokenized spacing/type/status colors, compact app identity, no hero/marketing/filler sections. |
+| Content boundary | Product copy only: labels, status, validation, filters, actions, and help route. No runtime, delivery, stack, or verification language. |
 
 ## Required Patterns
 

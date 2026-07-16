@@ -2141,6 +2141,7 @@ pub fn section_generation_rules(
         ArchitectureSectionGroup::FrontendExperience => vec![
             "Read frontendExperienceSource before writing this section.".to_string(),
             "Read uiQualitySeed before writing the UI surface decision candidate.".to_string(),
+            "Treat uiQualitySeed.requiredReferenceGroups, uiQualitySeed.referenceLoadPlan, and uiQualitySeed.qualityRulePreview as read-only pre-submit hints for selecting and reading UIX references. Do not copy them into the candidate or repeat them in uiSurfaceRegistry; after submit, MCP recomputes the final reference plan and quality rules from the selected surface decision and stack signals.".to_string(),
             "Preserve the confirmed/current frontend target instead of rediscovering it.".to_string(),
             "Use RepositoryContext and TechnicalBaseline only as implementation facts.".to_string(),
             "Write surfaceDecisionCandidate as the semantic UI decision input: ranked known patterns, selected known/hybrid/custom mode, semantic facts, layout anatomy, regions, information, actions, states, composition constraints, and content boundary.".to_string(),
@@ -2280,6 +2281,12 @@ mod tests {
         assert!(
             rules.iter().any(|rule| rule.contains("MCP owns reference")),
             "reference and rule derivation must stay MCP-owned"
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule.contains("read-only pre-submit hints")),
+            "frontend rules must distinguish seed hints from the final MCP-derived plan"
         );
     }
 

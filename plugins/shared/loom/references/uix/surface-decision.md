@@ -1,6 +1,8 @@
 # UIX Surface Decision
 
-Load this file when a task includes `uiProductionBrief.surfaceDecisionContract`, `surfaceDecisionCandidate`, custom UI pattern work, or any page/screen whose product shape does not fit a single obvious scenario.
+Load this file when a task includes a structured surface decision, custom UI
+pattern work, or any page/screen whose product shape does not fit a single
+obvious scenario.
 
 This file explains how to turn a surface decision into implementation. It does not ask you to derive reference plans, quality rules, or schema fields. Those arrive in the task context. Your job is to make the rendered product surface match the selected decision.
 
@@ -52,7 +54,7 @@ For `custom`, do all of the following:
 
 ## Region Implementation
 
-Treat `regionsInScope` as the visible work map.
+Treat the declared task-owned regions as the visible work map.
 
 ```html
 <main data-surface="task">
@@ -98,12 +100,12 @@ Use the surface contract states as acceptance targets:
 
 When writing UI quality evidence:
 
-- `surfaceRegionEvidence` names changed UI files and the region implemented.
-- `surfaceActionEvidence` names changed UI files and how the action behaves through pending/success/error/disabled states.
-- `surfaceStateEvidence` names changed UI files and where each state is rendered.
-- `surfaceQualityRuleEvidence` names changed UI files or rendered checks that prove each quality rule.
-- `contentBoundaryEvidence` states what product copy was checked and whether forbidden internal/process content appears.
-- `referencePlanFilesChecked` lists only the UIX reference files actually read for this task.
+- Region evidence names changed UI files and the region implemented.
+- Action evidence names changed UI files and how the action behaves through pending/success/error/disabled states.
+- State evidence names changed UI files and where each state is rendered.
+- Quality-rule evidence names changed UI files or rendered checks that prove each quality rule.
+- Content-boundary evidence states what product copy was checked and whether forbidden internal/process content appears.
+- Read-reference evidence lists only the selected UIX files actually read for this task.
 
 Evidence is not a prose compliment. It must point to concrete files, states, actions, or rendered checks.
 

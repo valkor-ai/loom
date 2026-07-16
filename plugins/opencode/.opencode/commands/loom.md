@@ -52,7 +52,7 @@ Protocol:
 - Read reference files only from `referenceLoadPlan` arrays in the current MCP request/result.
 - Treat any selected group fields as semantic labels for scope and evidence, not as path mappings.
 - If a referenced file is not selected by the MCP contract and is not needed by the current action, leave it unread.
-- In quality self-checks, report selected groups plus the exact `referenceFilesChecked` paths from the load plan; do not paste reference prose or template bodies.
+- In quality self-checks, report the exact `referencePlanFilesChecked` paths from the selected load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
 - Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` relative to `../references/loom/` from this command/plugin location, not relative to the project workspace.

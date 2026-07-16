@@ -15,14 +15,15 @@ Load this when the frontend shows lists, tables, details, charts, logs, metrics,
 
 ## Brief Mapping
 
-When `uiProductionBrief.informationContract` is present, use it as the minimum data surface contract:
+When the task brief includes an information contract, use it as the minimum data
+surface contract:
 
-- `mustShow` becomes visible fields, summaries, table columns, detail facts, or chart labels.
-- `scanPriority` determines visual order before decorative grouping or local component preference.
-- `identityFields` stay visible during selection, mutation, loading, and error states.
-- `statusFields` stay close to available actions so users can understand eligibility.
-- `longContentPolicy` controls wrapping, truncation, drill-down, overflow, or responsive card fallback.
-- `dataViews` names the exact views this task should implement or preserve; do not add unrelated dashboards or summaries.
+- Required fields become visible fields, summaries, table columns, detail facts, or chart labels.
+- Scan priority determines visual order before decorative grouping or local component preference.
+- Identity fields stay visible during selection, mutation, loading, and error states.
+- Status fields stay close to available actions so users can understand eligibility.
+- Long-content policy controls wrapping, truncation, drill-down, overflow, or responsive card fallback.
+- The selected data views name the exact views this task should implement or preserve; do not add unrelated dashboards or summaries.
 
 ## Record Workbench Pattern
 

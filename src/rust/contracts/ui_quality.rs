@@ -701,7 +701,7 @@ pub fn build_ui_quality_seed(
         "designTokenAssetPlan": design_token_seed,
         "forbiddenUserVisibleContent": UI_FORBIDDEN_USER_VISIBLE_CONTENT,
         "requiredUiStates": UI_REQUIRED_STATES,
-        "selectionRule": "Use these candidates only as hints while writing surfaceDecisionCandidate. Do not write referenceProfile, referenceLoadPlan, or derived rule lists inside the candidate; MCP derives uiSurfaceDecisionContract.qualityRules during submit."
+        "selectionRule": "Use these candidates only as read-only hints while writing surfaceDecisionCandidate. Do not write requiredReferenceGroups, referenceLoadPlan, referenceProfile, or derived rule lists inside the candidate; MCP recomputes uiSurfaceDecisionContract.referencePlan and qualityRules during submit from the selected surface decision and stack signals."
     })
 }
 
@@ -2546,6 +2546,7 @@ fn issue(code: &str, field_path: &str, message: &str) -> RepairIssue {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
 
@@ -3416,6 +3417,47 @@ mod tests {
                 group,
                 item
             );
+        }
+    }
+
+    #[test]
+    fn ui_reference_load_plan_has_unique_resolved_paths() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let baselines = [
+            None,
+            Some(technical_baseline_with_stack(json!("React + TypeScript"))),
+            Some(technical_baseline_with_stack(json!("Flutter + Dart"))),
+            Some(technical_baseline_with_stack(json!("Three.js + WebGL"))),
+        ];
+
+        for baseline in baselines {
+            let seed = build_ui_quality_seed(None, baseline.as_ref());
+            let plan = seed
+                .get("referenceLoadPlan")
+                .and_then(Value::as_array)
+                .expect("UI quality seed must include a reference load plan");
+            let mut paths = BTreeSet::new();
+            for entry in plan {
+                let path = entry
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .expect("reference plan entry must include a path");
+                assert!(
+                    path.starts_with("uix/"),
+                    "UI reference load plan must contain only UIX paths: {path}"
+                );
+                assert!(
+                    paths.insert(path.to_string()),
+                    "UI reference load plan must not duplicate {path}"
+                );
+                assert!(
+                    repo_root
+                        .join("plugins/shared/loom/references")
+                        .join(path)
+                        .exists(),
+                    "UI reference load plan path must resolve: {path}"
+                );
+            }
         }
     }
 
