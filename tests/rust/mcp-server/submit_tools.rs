@@ -1,8 +1,8 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     process::Command,
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use delivery_core::{
@@ -111,7 +111,7 @@ fn brainstorm_phase_scope_rejects_single_wide_capability_closure_query() {
     let fixture = Fixture::new("brainstorm-phase-scope-single-wide-knowledge");
     let server = LoomMcpServer::default();
     let request_ref = start_brainstorm_request(&fixture);
-    read_required_request_groups(&server, &fixture, &request_ref);
+    read_required_request_groups(&fixture, &request_ref);
 
     for (step_id, query_id) in [
         ("phase_scope_dependency_order", None),
@@ -5991,8 +5991,9 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
         .contains(&"task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult".to_string()));
     assert!(!read_fields.contains(&"task.runtimeDeliveryRequirement.forbiddenActions".to_string()));
     assert!(!read_fields.contains(&"task.runtimeDeliveryRequirement".to_string()));
-    assert!(!read_fields
-        .contains(&"executionRules.frontendImplementationOrganizationRules".to_string()));
+    assert!(
+        read_fields.contains(&"executionRules.frontendImplementationOrganizationRules".to_string())
+    );
 
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
@@ -6038,11 +6039,24 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
         .as_array()
         .expect("required top-level fields")
         .contains(&json!("runtimeDeliveryEvidence")));
-    assert!(!fields["outputContract.requiredTopLevelFields"]
+    assert!(fields["outputContract.requiredTopLevelFields"]
         .value
         .as_array()
         .expect("required top-level fields")
         .contains(&json!("frontendExperienceSelfCheck")));
+    assert!(fields["outputContract.requiredTopLevelFields"]
+        .value
+        .as_array()
+        .expect("required top-level fields")
+        .contains(&json!("frontendQualitySelfCheck")));
+    assert!(fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendExperienceSelfCheck")
+        .is_some());
+    assert!(fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendQualitySelfCheck")
+        .is_some());
     assert!(!fields["outputContract.requiredTopLevelFields"]
         .value
         .as_array()
@@ -6054,9 +6068,8 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/runtime.ts"]);
-    complete_architecture_quality_evidence_for_test(&mut result);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
     result["verificationResults"][0]["evidenceType"] = json!("static_check");
-    complete_browser_check_evidence_for_test(&mut result);
     result["runtimeDeliveryEvidence"]["requirementRef"] = json!("wrong-runtime-ref");
     result["runtimeDeliveryEvidence"]["checkedFields"] = json!(["wrong-field"]);
     result["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"] =
@@ -6105,6 +6118,8 @@ fn runtime_task_execution_request_uses_field_level_runtime_rules() {
         persisted["runtimeDeliveryEvidence"]["codeLevelChecks"][0]["checkId"],
         json!("rd-closure-runtimesurfaces")
     );
+    assert!(persisted.get("frontendExperienceSelfCheck").is_some());
+    assert!(persisted.get("frontendQualitySelfCheck").is_some());
 }
 
 #[test]
@@ -6165,6 +6180,7 @@ fn task_result_repair_template_restores_missing_runtime_evidence() {
         .expect("result file");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
     result["changedFiles"] = json!(["src/runtime.ts"]);
+    complete_frontend_quality_token_evidence_for_test(&mut result);
     result["runtimeDeliveryEvidence"]["codeLevelChecks"] = json!([]);
     write_json_atomic(&fixture.root.join(result_file), &result).expect("write bad task result");
 
@@ -6201,6 +6217,14 @@ fn task_result_repair_template_restores_missing_runtime_evidence() {
             .expect("serialize issue conflicts")
             .contains("rd-closure-runtimesurfaces")
     );
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendExperienceSelfCheck")
+        .is_some());
+    assert!(repair_fields["outputContract.resultTemplate"]
+        .value
+        .get("frontendQualitySelfCheck")
+        .is_some());
 }
 
 #[test]
@@ -9389,21 +9413,12 @@ fn call_submit_with_read_mode(
     let server = LoomMcpServer::default();
     if read_required_groups {
         for group in inspected.read_groups.iter().filter(|group| group.required) {
-            server
-                .invoke_tool(
-                    "loom.readFieldGroup",
-                    Some(
-                        json!({
-                            "projectRoot": project_root,
-                            "requestRef": request_ref,
-                            "groupId": group.group_id
-                        })
-                        .as_object()
-                        .expect("read group arguments")
-                        .clone(),
-                    ),
-                )
-                .expect("read required request group");
+            state::read_field_group(ReadFieldGroupInput {
+                project_root: project_root.to_string(),
+                request_ref: request_ref.to_string(),
+                group_id: group.group_id.clone(),
+            })
+            .expect("read required request group");
         }
     }
     let written_target_ids = inspected
@@ -9580,7 +9595,7 @@ fn confirm_brainstorm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
-    read_required_request_groups(server, fixture, request_ref);
+    read_required_request_groups(fixture, request_ref);
     if block != "final_summary" {
         run_knowledge_context(server, fixture, request_ref, block);
     }
@@ -9613,7 +9628,7 @@ fn skip_brainstorm_block(
     block: &str,
     reason: &str,
 ) -> Value {
-    read_required_request_groups(server, fixture, request_ref);
+    read_required_request_groups(fixture, request_ref);
     run_knowledge_context(server, fixture, request_ref, block);
     let arguments = json!({
         "projectRoot": fixture.root_str(),
@@ -9638,28 +9653,19 @@ fn skip_brainstorm_block(
     result
 }
 
-fn read_required_request_groups(server: &LoomMcpServer, fixture: &Fixture, request_ref: &str) {
+fn read_required_request_groups(fixture: &Fixture, request_ref: &str) {
     let inspected = state::inspect_request(InspectRequestInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
     })
     .expect("inspect request before confirmation");
     for group in inspected.read_groups.iter().filter(|group| group.required) {
-        server
-            .invoke_tool(
-                "readFieldGroup",
-                Some(
-                    json!({
-                        "projectRoot": fixture.root_str(),
-                        "requestRef": request_ref,
-                        "groupId": group.group_id
-                    })
-                    .as_object()
-                    .expect("read group arguments")
-                    .clone(),
-                ),
-            )
-            .expect("read required request group");
+        state::read_field_group(ReadFieldGroupInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: request_ref.to_string(),
+            group_id: group.group_id.clone(),
+        })
+        .expect("read required request group");
     }
 }
 
@@ -9746,24 +9752,14 @@ fn run_knowledge_context(
     request_ref: &str,
     block: &str,
 ) {
-    let knowledge_plan = server
-        .invoke_tool(
-            "loom.readFieldGroup",
-            Some(
-                json!({
-                    "projectRoot": fixture.root_str(),
-                    "requestRef": request_ref,
-                    "groupId": "knowledge_context_plan"
-                })
-                .as_object()
-                .expect("arguments object")
-                .clone(),
-            ),
-        )
-        .expect("read knowledge context plan")
-        .structured_content
-        .expect("structured content");
-    let steps = knowledge_plan["fields"]["knowledgeQueryPlan"]["blocks"][block]["executionOrder"]
+    let knowledge_plan = state::read_field_group(ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        group_id: "knowledge_context_plan".to_string(),
+    })
+    .expect("read knowledge context plan");
+    let steps = knowledge_plan.fields.as_value()["knowledgeQueryPlan"]["blocks"][block]
+        ["executionOrder"]
         .as_array()
         .expect("knowledge executionOrder");
     for step in steps {
@@ -9841,6 +9837,27 @@ fn start_existing_project_architecture_flow_with_candidate(
     fixture: &Fixture,
     candidate: Value,
 ) -> String {
+    let cache_key = serde_json::to_string(&candidate).expect("serialize architecture candidate");
+    if let Some(snapshot) = architecture_flow_cache()
+        .lock()
+        .expect("lock architecture flow cache")
+        .get(&cache_key)
+        .cloned()
+    {
+        restore_project_snapshot(fixture, &snapshot);
+        return snapshot.request_ref;
+    }
+
+    let request_ref = build_existing_project_architecture_flow(fixture, &candidate);
+    let snapshot = capture_project_snapshot(fixture, request_ref.clone());
+    architecture_flow_cache()
+        .lock()
+        .expect("lock architecture flow cache")
+        .insert(cache_key, snapshot);
+    request_ref
+}
+
+fn build_existing_project_architecture_flow(fixture: &Fixture, candidate: &Value) -> String {
     write_json_atomic(
         &fixture.root.join("package.json"),
         &json!({ "name": "loom-fixture", "private": true }),
@@ -9857,7 +9874,7 @@ fn start_existing_project_architecture_flow_with_candidate(
         fixture,
         candidate.get("frontendExperience").is_some(),
     );
-    write_candidate_target(fixture, &request_ref, &candidate);
+    write_candidate_target(fixture, &request_ref, candidate);
 
     let brainstorm_result = call_submit(
         "loom.brainstormAcceptFile",
@@ -9915,6 +9932,64 @@ fn start_existing_project_architecture_flow_with_candidate(
         .as_str()
         .expect("architecture requestRef")
         .to_string()
+}
+
+#[derive(Clone)]
+struct ProjectSnapshot {
+    request_ref: String,
+    files: Vec<(PathBuf, Vec<u8>)>,
+}
+
+fn architecture_flow_cache() -> &'static Mutex<BTreeMap<String, ProjectSnapshot>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, ProjectSnapshot>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn capture_project_snapshot(fixture: &Fixture, request_ref: String) -> ProjectSnapshot {
+    let mut files = Vec::new();
+    collect_project_files(&fixture.root, &fixture.root, &mut files);
+    ProjectSnapshot { request_ref, files }
+}
+
+fn collect_project_files(
+    root: &std::path::Path,
+    current: &std::path::Path,
+    files: &mut Vec<(PathBuf, Vec<u8>)>,
+) {
+    let mut entries = std::fs::read_dir(current)
+        .unwrap_or_else(|error| panic!("read snapshot directory {}: {error}", current.display()))
+        .map(|entry| entry.expect("read snapshot entry"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(std::fs::DirEntry::path);
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry.file_type().expect("read snapshot file type");
+        if file_type.is_dir() {
+            collect_project_files(root, &path, files);
+        } else if file_type.is_file() {
+            let relative = path
+                .strip_prefix(root)
+                .expect("snapshot path under project root")
+                .to_path_buf();
+            files.push((
+                relative,
+                std::fs::read(&path).unwrap_or_else(|error| {
+                    panic!("read snapshot file {}: {error}", path.display())
+                }),
+            ));
+        }
+    }
+}
+
+fn restore_project_snapshot(fixture: &Fixture, snapshot: &ProjectSnapshot) {
+    for (relative, contents) in &snapshot.files {
+        let path = fixture.root.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create snapshot parent");
+        }
+        std::fs::write(path, contents).expect("restore snapshot file");
+    }
+    state::initialize_project(fixture.root_str()).expect("register restored project snapshot");
 }
 
 fn complete_architecture_sections(fixture: &Fixture, architecture_request_ref: &str) -> Value {
@@ -11776,6 +11851,32 @@ fn start_planned_task_execution_without_runtime_closure(fixture: &Fixture) -> St
 }
 
 fn start_planned_task_execution_with_candidate(fixture: &Fixture, candidate: Value) -> String {
+    let cache_key = serde_json::to_string(&candidate).expect("serialize execution candidate");
+    if let Some(snapshot) = planned_execution_cache()
+        .lock()
+        .expect("lock planned execution cache")
+        .get(&cache_key)
+        .cloned()
+    {
+        restore_project_snapshot(fixture, &snapshot);
+        return snapshot.request_ref;
+    }
+
+    let execution_request_ref = build_planned_task_execution(fixture, candidate);
+    let snapshot = capture_project_snapshot(fixture, execution_request_ref.clone());
+    planned_execution_cache()
+        .lock()
+        .expect("lock planned execution cache")
+        .insert(cache_key, snapshot);
+    execution_request_ref
+}
+
+fn planned_execution_cache() -> &'static Mutex<BTreeMap<String, ProjectSnapshot>> {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, ProjectSnapshot>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn build_planned_task_execution(fixture: &Fixture, candidate: Value) -> String {
     let architecture_request_ref =
         start_existing_project_architecture_flow_with_candidate(fixture, candidate);
     let taskplan_result = complete_architecture_sections(fixture, &architecture_request_ref);

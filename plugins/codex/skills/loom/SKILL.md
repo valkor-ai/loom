@@ -67,7 +67,7 @@ Protocol:
 - In quality self-checks, report the exact `referencePlanFilesChecked` paths from the selected load plan; do not paste reference prose or template bodies.
 
 Reference profiles:
-- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. In this Codex skill, resolve `path` as `references/<path>` relative to this `SKILL.md` directory, not relative to the project workspace.
+- Each `referenceLoadPlan` entry contains `refId`, `path`, and `reason`. Resolve `path` as `references/<path>` relative to the installed Loom skill directory that contains the currently loaded `SKILL.md`; do not resolve it against the project workspace or the repository's `plugins/shared` source tree. Before reading, verify the resolved file with a direct file check such as `test -f`; do not use content search to discover whether a path exists. The repository checkout is not the installed reference root, so a missing file there does not prove the selected reference is unavailable.
 - Load exactly the listed paths for the current action. Do not derive paths from group names, scan reference directories, or load external language/API/architecture/UI skills.
 - Treat token template paths as merge baselines for project files, not as text to copy into Loom artifacts.
 

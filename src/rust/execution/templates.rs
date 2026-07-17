@@ -573,7 +573,10 @@ pub(crate) fn runtime_delivery_evidence_applies(task: &TaskDefinition) -> bool {
 }
 
 pub(crate) fn frontend_self_check_applies(task: &TaskDefinition) -> bool {
-    task.frontend_experience_requirement.is_some() && !runtime_delivery_evidence_applies(task)
+    // Runtime delivery evidence and frontend workflow evidence describe
+    // independent responsibilities. A browser-facing frontend task may need
+    // both contracts in the same TaskResult.
+    task.frontend_experience_requirement.is_some()
 }
 
 pub(crate) fn frontend_quality_self_check_applies(task: &TaskDefinition) -> bool {

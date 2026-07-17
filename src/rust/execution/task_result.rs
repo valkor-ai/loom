@@ -3751,23 +3751,14 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         .and_then(Value::as_str)
         .unwrap_or(target_file.as_str())
         .to_string();
-    let required_top_level_fields = output_contract
-        .get("requiredTopLevelFields")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| {
-            task_result_required_top_level_fields(&hydrated_task)
-                .into_iter()
-                .map(str::to_string)
-                .collect()
-        });
+    // Rebuild this machine-owned list from the current task contract. Repair
+    // requests can be created from an older execution request whose declared
+    // fields predate a contract fix; carrying that stale list would recreate
+    // the same impossible repair contract.
+    let required_top_level_fields = task_result_required_top_level_fields(&hydrated_task)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     let blocked_output = json!({
         "blockedReasons": output_contract
             .get("blockedReasonOptions")
@@ -3886,6 +3877,22 @@ fn materialize_task_result_repair(
     )?;
     let schema_shape = task_result_schema_shape(&context.task, context.browser_profile.as_ref());
     let result_template = task_result_repair_template(&context, &issues);
+    if let Some(missing_fields) = task_result_repair_contract_missing_fields(
+        &context.task,
+        &context.required_top_level_fields,
+        &schema_shape,
+        &result_template,
+    ) {
+        return Ok(failed(
+            &input.project_root,
+            "TASK_RESULT_REPAIR_CONTRACT_INCONSISTENT",
+            format!(
+                "TaskResult repair contract cannot represent the current task evidence contract: {}.",
+                missing_fields.join(", ")
+            ),
+            "task_result_repair",
+        ));
+    }
     let browser_repair_reference_load_plan = if issues
         .iter()
         .any(|issue| issue.code == "TASK_RESULT_BROWSER_VERIFICATION_INVALID")
@@ -4098,6 +4105,30 @@ fn materialize_task_result_repair(
             }),
         ),
     ))
+}
+
+fn task_result_repair_contract_missing_fields(
+    task: &TaskDefinition,
+    required_top_level_fields: &[String],
+    schema_shape: &Value,
+    result_template: &Value,
+) -> Option<Vec<String>> {
+    let required = required_top_level_fields
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let schema_properties = schema_shape.get("properties").and_then(Value::as_object);
+    let template_object = result_template.as_object();
+    let missing = task_result_required_top_level_fields(task)
+        .into_iter()
+        .filter(|field| {
+            !required.contains(field)
+                || !schema_properties.is_some_and(|properties| properties.contains_key(*field))
+                || !template_object.is_some_and(|template| template.contains_key(*field))
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    (!missing.is_empty()).then_some(missing)
 }
 
 fn previous_persisted_changed_files(

@@ -1126,7 +1126,7 @@ where
     let mut result: ReviewResult = match serde_json::from_value(normalized) {
         Ok(result) => result,
         Err(error) => {
-            return repairable_or_fallback_manual_review(
+            return review_result_repairable(
                 input,
                 authorized,
                 target.path.clone(),
@@ -1150,12 +1150,7 @@ where
     normalize_review_linkage_fields(&mut result, &fields);
     let issues = validate_review_result(&result, &fields);
     if !issues.is_empty() {
-        return repairable_or_fallback_manual_review(
-            input,
-            authorized,
-            target.path.clone(),
-            issues,
-        );
+        return review_result_repairable(input, authorized, target.path.clone(), issues);
     }
     let locator = DeliveryPhaseLocator {
         delivery_id: delivery_id.clone(),
@@ -5414,7 +5409,7 @@ fn value_to_write_target(value: &Value) -> Result<WriteTarget, state::store::Sta
     })
 }
 
-fn repairable_or_fallback_manual_review(
+fn review_result_repairable(
     input: &FileSubmitInput,
     authorized: &AuthorizedWriteSet,
     target_file: String,

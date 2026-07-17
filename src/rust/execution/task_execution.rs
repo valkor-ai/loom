@@ -653,12 +653,10 @@ pub(crate) fn task_execution_rules(
         return rules;
     };
     if task_has_frontend_execution(task) {
-        if !runtime_delivery_evidence_applies(task) {
-            object.insert(
-                "frontendImplementationOrganizationRules".to_string(),
-                frontend_implementation_organization_rules(),
-            );
-        }
+        object.insert(
+            "frontendImplementationOrganizationRules".to_string(),
+            frontend_implementation_organization_rules(),
+        );
         object.insert(
             "interactiveVerificationProbePolicy".to_string(),
             interactive_verification_probe_policy(),
@@ -1112,9 +1110,7 @@ fn task_execution_read_groups(
         ]);
     }
     if has_frontend_execution {
-        if !runtime_delivery_evidence_applies(task) {
-            frontend_fields.push("executionRules.frontendImplementationOrganizationRules");
-        }
+        frontend_fields.push("executionRules.frontendImplementationOrganizationRules");
         frontend_fields.push("executionRules.interactiveVerificationProbePolicy");
     }
 
