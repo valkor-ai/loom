@@ -1730,7 +1730,15 @@ fn validate_verification_results(
         .iter()
         .map(|intent| (intent.verification_id.as_str(), intent))
         .collect::<std::collections::BTreeMap<_, _>>();
+    let mut seen_verification_ids = BTreeSet::new();
     for verification in &result.verification_results {
+        if !seen_verification_ids.insert(verification.verification_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_REF_INVALID",
+                "verificationResults[].verificationId",
+                "TaskResult verificationResults must contain each verification id at most once.",
+            ));
+        }
         let Some(intent) = intents.get(verification.verification_id.as_str()) else {
             issues.push(issue(
                 "TASK_RESULT_REF_INVALID",
@@ -1974,7 +1982,21 @@ fn validate_requirement_detail_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_detail_ids = BTreeSet::new();
     for evidence in &result.requirement_detail_evidence {
+        if !seen_detail_ids.insert(evidence.detail_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
+                "requirementDetailEvidence[].detailId",
+                "Requirement detail evidence must contain each assigned detail id at most once.",
+            ));
+        }
         if !required_detail_ids.contains(&evidence.detail_id) {
             issues.push(issue(
                 "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
@@ -1997,6 +2019,18 @@ fn validate_requirement_detail_evidence(
                     "Requirement detail evidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_DETAIL_EVIDENCE_INVALID",
+                "requirementDetailEvidence[].verificationIds",
+                "Satisfied requirement detail evidence must link only to passed verification results.",
+            ));
         }
     }
     if !matches!(
@@ -2130,7 +2164,21 @@ fn validate_architecture_quality_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_requirement_ids = BTreeSet::new();
     for evidence in &result.architecture_quality_evidence {
+        if !seen_requirement_ids.insert(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].requirementId",
+                "Architecture quality evidence must contain each requirement id at most once.",
+            ));
+        }
         if !requirement_refs.contains(evidence.requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
@@ -2153,6 +2201,18 @@ fn validate_architecture_quality_evidence(
                     "architectureQualityEvidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_ARCHITECTURE_QUALITY_INVALID",
+                "architectureQualityEvidence[].verificationIds",
+                "Satisfied architecture quality evidence must link only to passed verification results.",
+            ));
         }
         if evidence.summary.trim().is_empty() {
             issues.push(issue(
@@ -2229,7 +2289,21 @@ fn validate_api_contract_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_requirement_ids = BTreeSet::new();
     for evidence in &result.api_contract_evidence {
+        if !seen_requirement_ids.insert(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].requirementId",
+                "API contract evidence must contain each requirement id at most once.",
+            ));
+        }
         if !requirement_refs.contains(evidence.requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_API_CONTRACT_INVALID",
@@ -2252,6 +2326,18 @@ fn validate_api_contract_evidence(
                     "apiContractEvidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_API_CONTRACT_INVALID",
+                "apiContractEvidence[].verificationIds",
+                "Satisfied API contract evidence must link only to passed verification results.",
+            ));
         }
         for interface_ref in &evidence.interface_refs {
             if !task_interface_refs.is_empty()
@@ -2354,7 +2440,21 @@ fn validate_code_quality_evidence(
         .iter()
         .map(|intent| intent.verification_id.as_str())
         .collect::<BTreeSet<_>>();
+    let passed_verification_ids = result
+        .verification_results
+        .iter()
+        .filter(|verification| verification.status == "passed")
+        .map(|verification| verification.verification_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen_requirement_ids = BTreeSet::new();
     for evidence in &result.code_quality_evidence {
+        if !seen_requirement_ids.insert(evidence.requirement_id.as_str()) {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].requirementId",
+                "Code quality evidence must contain each requirement id at most once.",
+            ));
+        }
         if !requirement_refs.contains(evidence.requirement_id.as_str()) {
             issues.push(issue(
                 "TASK_RESULT_CODE_QUALITY_INVALID",
@@ -2388,6 +2488,18 @@ fn validate_code_quality_evidence(
                     "codeQualityEvidence verificationIds must reference task verification intents.",
                 ));
             }
+        }
+        if evidence.status == "satisfied"
+            && !evidence
+                .verification_ids
+                .iter()
+                .all(|id| passed_verification_ids.contains(id.as_str()))
+        {
+            issues.push(issue(
+                "TASK_RESULT_CODE_QUALITY_INVALID",
+                "codeQualityEvidence[].verificationIds",
+                "Satisfied code quality evidence must link only to passed verification results.",
+            ));
         }
         if evidence.summary.trim().is_empty() {
             issues.push(issue(
@@ -4802,6 +4914,7 @@ fn repairable_with_tool(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -4812,6 +4925,7 @@ fn repairable_with_tool(
         resubmit_tool: resubmit_tool.to_string(),
         fix_scope: Some(fix_scope.to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(resubmit_tool),
     })
 }
 

@@ -159,12 +159,16 @@ pub fn submit_semantic_pack(
             return Ok(LoomMcpActionResult::RepairableError(
                 LoomMcpRepairableErrorResult {
                     project_root: project_root.to_string(),
+                    stop_allowed: false,
                     target_file,
                     issues,
-                    resubmit_tool,
+                    resubmit_tool: resubmit_tool.clone(),
                     fix_scope: Some("current_pack_result_only".to_string()),
                     target_ids,
                     read_groups,
+                    agent_instruction: delivery_core::repairable_error_agent_instruction(
+                        &resubmit_tool,
+                    ),
                 },
             ));
         }
@@ -219,12 +223,16 @@ pub fn submit_semantic_pack(
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: project_root.to_string(),
+                stop_allowed: false,
                 target_file: target.path.clone(),
                 target_ids: vec![target.target_id.clone()],
                 issues,
                 resubmit_tool: "loom.knowledgeSemanticSubmitFile".to_string(),
                 fix_scope: Some("current_pack_result_only".to_string()),
                 read_groups: authorized.read_groups,
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.knowledgeSemanticSubmitFile",
+                ),
             },
         ));
     }

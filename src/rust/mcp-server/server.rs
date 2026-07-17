@@ -95,7 +95,7 @@ impl ServerHandler for LoomMcpServer {
         )
         .with_server_info(Implementation::new("loom-mcp-server", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "Loom MCP server. For a plain @loom software delivery request, call the plan tool first; do not inspect or modify the repository before it returns. Use deploy tools only for an explicit @loom deploy request. Use registered Loom tools and resources; do not call legacy CLI commands.",
+            "Loom MCP server. For a plain @loom software delivery request, call the plan tool first; do not inspect or modify the repository before it returns. Use deploy tools only for an explicit @loom deploy request. Use registered Loom tools and resources; do not call legacy CLI commands. An auto_runnable result is a required continuation checkpoint: the agent must execute its next action and may not finish with a progress summary. If a local or wrapped tool call fails, recover from the exact failure and continue from the latest Loom state; only user_gate, done, blocked, or failed is terminal.",
         )
     }
 
@@ -537,15 +537,17 @@ fn submit_file_tool(tool_name: &str, input: FileSubmitInput) -> LoomMcpActionRes
         }) => {
             return LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
                 project_root: normalized.display,
+                stop_allowed: false,
                 target_file,
                 target_ids,
                 issues,
-                resubmit_tool,
+                resubmit_tool: resubmit_tool.clone(),
                 fix_scope: Some(
                     "Edit only the authorized artifact JSON target, then resubmit with the same Loom MCP submit tool."
                         .to_string(),
                 ),
                 read_groups,
+                agent_instruction: delivery_core::repairable_error_agent_instruction(&resubmit_tool),
             });
         }
         Err(state::WriteTargetAuthorizationError::Fatal { code, message }) => {

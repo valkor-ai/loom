@@ -326,6 +326,85 @@ fn native_request_read_protocol_resolves_declared_fields() {
 }
 
 #[test]
+fn write_groups_receive_shared_contract_metadata_without_reading_private_schema() {
+    let fixture = Fixture::new("shared-write-contract");
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_shared_contract_1".to_string(),
+            request_kind: "technical_baseline_request".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "outputContract": {
+                    "artifactKind": "technical_baseline_candidate",
+                    "writeMode": "single_json",
+                    "submitTool": "loom.technicalBaselineAcceptFile",
+                    "writeTargets": [{
+                        "targetId": "candidate",
+                        "path": ".loom/agent-writable/candidate.json",
+                        "required": true
+                    }],
+                    "schemaShape": {
+                        "type": "object",
+                        "properties": {
+                            "reasoningSummary": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            }
+                        },
+                        "required": ["reasoningSummary"]
+                    },
+                    "schemaProjection": {
+                        "requiredTopLevelFields": ["reasoningSummary"]
+                    }
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "write_contract",
+                        "required": true,
+                        "purpose": "Read the write contract.",
+                        "whenToRead": "Before writing.",
+                        "selectors": selectors(["outputContract.writeTargets"])
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write request");
+
+    let fields = state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref,
+        group_id: "write_contract".to_string(),
+    })
+    .expect("read write group")
+    .fields;
+    assert_eq!(
+        field(&fields, "outputContract.contractVersion"),
+        &json!("1.0")
+    );
+    assert!(field(&fields, "outputContract.contractFingerprint")
+        .as_str()
+        .is_some_and(|value| value.starts_with("sha256:")));
+    assert_eq!(
+        field(
+            &fields,
+            "outputContract.schemaProjection.fieldContract.properties.reasoningSummary.type"
+        ),
+        &json!("array")
+    );
+    assert_eq!(
+        field(
+            &fields,
+            "outputContract.schemaProjection.fieldContract.properties.reasoningSummary.items.type"
+        ),
+        &json!("string")
+    );
+}
+
+#[test]
 fn native_request_size_thresholds_are_audit_warnings_not_flow_blockers() {
     let fixture = Fixture::new("native-size-warning");
     let large_text = "证券账户开户规则。".repeat(5000);

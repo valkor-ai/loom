@@ -46,6 +46,9 @@ fn action_result_states_have_expected_next_boundaries() {
                         text.contains("Continue immediately")
                             && (text.contains("submit") || text.contains("retryTool"))
                             && text.contains("Do not stop at a progress recap")
+                            && text.contains("required continuation checkpoint")
+                            && text.contains("outer exec wrapper")
+                            && text.contains("local read")
                     }),
                     "auto_runnable must include agentInstruction: {value}"
                 );
@@ -54,7 +57,16 @@ fn action_result_states_have_expected_next_boundaries() {
                     "auto_runnable must include next"
                 );
             }
-            "user_gate" | "done" | "blocked" | "repairable_error" | "failed" => {
+            "repairable_error" => {
+                assert_eq!(value["stopAllowed"], false);
+                assert!(
+                    value["agentInstruction"].as_str().is_some_and(
+                        |text| text.contains("Continue until the repair submit succeeds")
+                    )
+                );
+                assert!(value.get("next").is_none());
+            }
+            "user_gate" | "done" | "blocked" | "failed" => {
                 assert!(
                     value.get("next").is_none(),
                     "{} must not include next",
@@ -74,6 +86,7 @@ fn action_result_states_have_expected_next_boundaries() {
 fn repairable_error_contains_resubmit_contract() {
     let result = LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: "/tmp/project".to_string(),
+        stop_allowed: false,
         target_file: ".loom/agent-writable/result.json".to_string(),
         issues: vec![RepairIssue {
             code: "missing_required_field".to_string(),
@@ -85,11 +98,18 @@ fn repairable_error_contains_resubmit_contract() {
         fix_scope: Some("Only edit the target file.".to_string()),
         target_ids: vec!["candidate".to_string()],
         read_groups: vec![],
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.repairSubmitFile",
+        ),
     });
     let value = serde_json::to_value(result).expect("result json");
     assert_eq!(value["targetFile"], ".loom/agent-writable/result.json");
     assert_eq!(value["resubmitTool"], "loom.repairSubmitFile");
     assert_eq!(value["issues"][0]["code"], "missing_required_field");
+    assert!(value["agentInstruction"]
+        .as_str()
+        .expect("repair instruction")
+        .contains("do not produce a progress summary or final answer"));
 }
 
 #[test]
@@ -146,6 +166,9 @@ fn execute_task_auto_runnable_instruction_forbids_progress_only_stop() {
     assert!(instruction.contains("send a final answer"));
     assert!(instruction.contains("ask the user whether to continue"));
     assert!(instruction.contains("TaskResult submit succeeds"));
+    assert!(instruction.contains("required continuation checkpoint"));
+    assert!(instruction.contains("outer exec wrapper"));
+    assert!(instruction.contains("local read"));
     assert_eq!(value["next"]["kind"], "execute_task");
 }
 
@@ -231,6 +254,7 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
         }),
         LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
             project_root: "/tmp/project".to_string(),
+            stop_allowed: false,
             target_file: ".loom/agent-writable/result.json".to_string(),
             target_ids: vec![],
             issues: vec![RepairIssue {
@@ -242,6 +266,9 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
             resubmit_tool: "loom.repairSubmitFile".to_string(),
             fix_scope: None,
             read_groups: vec![],
+            agent_instruction: delivery_core::repairable_error_agent_instruction(
+                "loom.repairSubmitFile",
+            ),
         }),
         LoomMcpActionResult::Failed(LoomMcpFailureResult {
             project_root: "/tmp/project".to_string(),

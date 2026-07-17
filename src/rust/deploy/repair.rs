@@ -1719,6 +1719,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -1729,6 +1730,9 @@ fn repairable(
         resubmit_tool: "loom.repairSubmitFile".to_string(),
         fix_scope: Some("deploy_execution_repair_result_only".to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(
+            "loom.repairSubmitFile",
+        ),
     })
 }
 

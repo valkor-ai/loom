@@ -29,18 +29,24 @@ function main() {
     }
   }
 
-  if (eventName === "PostToolUse" && isLoomMcpTool(toolName)) {
+  if (eventName === "PostToolUse") {
     const result = extractActionResult(input.tool_response) || extractActionResult(input.tool_result) || extractActionResult(input);
+    if (!isLikelyLoomActionResult(result) || (!isLoomMcpTool(toolName) && !hasNestedLoomResult(input))) {
+      if (!isLoomMcpTool(toolName)) {
+        return;
+      }
+    }
     if (!result) {
       writeSession(sessionId, cwd, { active: true, state: "unknown", stopAllowed: false });
       return;
     }
     const state = String(result.state || "unknown");
+    const explicitStopAllowed = typeof result.stopAllowed === "boolean" ? result.stopAllowed : null;
     writeSession(sessionId, cwd, {
       active: !["done", "blocked", "failed"].includes(state),
       state,
       nextKind: result.next?.kind || null,
-      stopAllowed: ["user_gate", "done", "blocked", "failed", "repairable_error"].includes(state),
+      stopAllowed: explicitStopAllowed ?? ["user_gate", "done", "blocked", "failed"].includes(state),
       updatedAt: new Date().toISOString(),
     });
     return;
@@ -57,6 +63,14 @@ function main() {
     }
     if (session.state === "active_operation") {
       blockStop("Loom MCP has an active operation. Use only the observation tools named by the latest result before stopping.");
+      return;
+    }
+    if (session.state === "repairable_error") {
+      blockStop("Loom MCP returned repairable_error. Repair only the returned target and resubmit it before stopping.");
+      return;
+    }
+    if (session.active) {
+      blockStop("Loom MCP has a non-terminal workflow state. Follow the latest action before stopping.");
     }
   }
 }
@@ -77,6 +91,22 @@ function isLoomPrompt(value) {
 function isLoomMcpTool(toolName) {
   const text = String(toolName || "").toLowerCase();
   return text.includes("loom.") || text.includes("mcp__loom");
+}
+
+function isLikelyLoomActionResult(value) {
+  return Boolean(
+    value &&
+      typeof value.state === "string" &&
+      (typeof value.projectRoot === "string" ||
+        typeof value.stopAllowed === "boolean" ||
+        value.next ||
+        value.agentInstruction),
+  );
+}
+
+function hasNestedLoomResult(input) {
+  const text = JSON.stringify(input || {});
+  return text.includes("mcp__loom") || text.includes("loom.");
 }
 
 function extractActionResult(value) {

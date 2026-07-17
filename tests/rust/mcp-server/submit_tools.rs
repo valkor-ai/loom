@@ -495,7 +495,8 @@ fn brainstorm_submit_derives_glossary_update_ids_instead_of_repairing_agent_outp
     .expect("read candidate write contract");
     let schema = &write_contract.fields["outputContract.schemaProjection"].value;
     assert!(
-        schema["objectShapeRules"]["conceptGrounding.glossaryUpdates[]"]
+        schema["fieldContract"]["properties"]["conceptGrounding"]["properties"]["glossaryUpdates"]
+            ["constraints"][0]
             .as_str()
             .expect("glossary update shape rule")
             .contains("Loom generates updateId")
@@ -867,22 +868,22 @@ fn technical_baseline_accept_routes_existing_project_to_repository_context() {
         "enumRefs.contextCoverage"
     );
     assert!(
-        write_contract.fields["outputContract.schemaProjection"].value["objectShapeRules"]
-            ["technologySignals"]
+        write_contract.fields["outputContract.schemaProjection"].value["fieldContract"]
+            ["properties"]["technologySignals"]["constraints"][0]
             .as_str()
             .expect("technologySignals shape rule")
             .contains("object")
     );
     assert!(
-        write_contract.fields["outputContract.schemaProjection"].value["objectShapeRules"]
-            ["contextQuality.warnings[]"]
+        write_contract.fields["outputContract.schemaProjection"].value["fieldContract"]
+            ["properties"]["contextQuality"]["properties"]["warnings"]["constraints"][0]
             .as_str()
             .expect("contextQuality warnings shape rule")
             .contains("code and message")
     );
     assert!(
-        write_contract.fields["outputContract.schemaProjection"].value["objectShapeRules"]
-            ["warnings[]"]
+        write_contract.fields["outputContract.schemaProjection"].value["fieldContract"]
+            ["properties"]["warnings"]["constraints"][0]
             .as_str()
             .expect("warnings shape rule")
             .contains("code and message")
@@ -1690,6 +1691,12 @@ fn architecture_read_groups_follow_current_section() {
             .pointer("/content/frontendExperience/uiQualityContract")
             .is_none(),
         "architecture outputContract schemaShape must not expose legacy uiQualityContract"
+    );
+    assert_eq!(
+        architecture_output_contract["schemaProjection"]["fieldContract"]["properties"]["content"]
+            ["type"],
+        "object",
+        "shared field contract must materialize manual Architecture pseudo-schema shapes"
     );
     let frontend_result_template =
         &frontend_template["resultTemplate"]["content"]["frontendExperience"];

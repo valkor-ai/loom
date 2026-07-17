@@ -75,7 +75,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
     },
     ToolRegistration {
         name: "plan",
-        description: "Primary @loom software-delivery entrypoint. Start or route architecture, task planning, execution, review, and delivery for a requirement; call this before repository inspection or coding. Do not use it for explicit @loom deploy or knowledge commands.",
+        description: "Primary @loom software-delivery entrypoint. Start or route architecture, task planning, execution, review, and delivery for a requirement; call this before repository inspection or coding. Follow every returned auto_runnable next action in the same turn; do not use progress text as a stopping point. Do not use it for explicit @loom deploy or knowledge commands.",
         target_batch: 4,
         input_kind: ToolInputKind::Plan,
         output_kind: ToolOutputKind::ActionResult,
@@ -83,7 +83,7 @@ pub const BATCH_2_TOOLS: &[ToolRegistration] = &[
     },
     ToolRegistration {
         name: "continue",
-        description: "Continue the active Loom workflow for the current project.",
+        description: "Rehydrate and continue the active Loom workflow for the current project after an interruption or context loss. Follow the returned action immediately; do not finish while it is auto_runnable or stopAllowed is false.",
         target_batch: 4,
         input_kind: ToolInputKind::Project,
         output_kind: ToolOutputKind::ActionResult,

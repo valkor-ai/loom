@@ -203,16 +203,45 @@ fn review_request_matches_current_task_results(
     let fields = state::read_request_fields(delivery_core::ReadRequestFieldsInput {
         project_root: project_root.to_string(),
         request_ref: request_ref.to_string(),
-        fields: vec!["reviewPacket.taskResultSummaries".to_string()],
+        fields: vec![
+            "reviewPacket.taskResultSummaries".to_string(),
+            "reviewPacket.taskResultSnapshotFingerprint".to_string(),
+        ],
     });
     let Ok(fields) = fields else {
         return false;
     };
-    fields
+    let summaries_match = fields
         .fields
         .get("reviewPacket.taskResultSummaries")
         .map(|field| field.value.clone())
-        .is_some_and(|actual| actual == expected)
+        .is_some_and(|actual| actual == expected);
+    let fingerprint_match = fields
+        .fields
+        .get("reviewPacket.taskResultSnapshotFingerprint")
+        .and_then(|field| field.value.as_str())
+        .is_some_and(|actual| actual == task_result_snapshot_fingerprint(task_results));
+    summaries_match && fingerprint_match
+}
+
+fn task_result_snapshot_fingerprint(task_results: &[TaskResult]) -> String {
+    let mut snapshots = task_results
+        .iter()
+        .filter_map(|result| {
+            let mut value = serde_json::to_value(result).ok()?;
+            if let Some(object) = value.as_object_mut() {
+                object.remove("createdAt");
+                object.remove("updatedAt");
+            }
+            Some(value)
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| {
+        left.get("taskResultId")
+            .and_then(Value::as_str)
+            .cmp(&right.get("taskResultId").and_then(Value::as_str))
+    });
+    delivery_core::contract_fingerprint(&Value::Array(snapshots))
 }
 
 fn build_review_request(
@@ -292,6 +321,7 @@ fn build_review_request(
             "groupSummaries": compact_group_summaries(&task_plan.groups),
             "taskSummaries": compact_task_summaries(&task_plan.tasks),
             "taskResultSummaries": compact_task_result_summaries(task_results),
+            "taskResultSnapshotFingerprint": task_result_snapshot_fingerprint(task_results),
             "apiContractContext": compact_api_contract_context(
                 task_plan,
                 architecture_contract,
@@ -435,6 +465,7 @@ fn build_review_request(
                         "reviewPacket.groupSummaries",
                         "reviewPacket.taskSummaries",
                         "reviewPacket.taskResultSummaries",
+                        "reviewPacket.taskResultSnapshotFingerprint",
                         "reviewPacket.apiContractContext"
                     ])
                 },
@@ -5418,6 +5449,7 @@ fn repairable_with_tool(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -5428,6 +5460,7 @@ fn repairable_with_tool(
         resubmit_tool: resubmit_tool.to_string(),
         fix_scope: Some(fix_scope.to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(resubmit_tool),
     })
 }
 
@@ -5644,6 +5677,16 @@ mod tests {
         assert_eq!(
             retried[0]["verificationResults"][0]["browserChecks"][0]["diagnosticArtifactRefs"][0],
             json!("test-results/workflow/trace.zip")
+        );
+    }
+
+    #[test]
+    fn review_snapshot_fingerprint_changes_when_task_result_evidence_changes() {
+        let first = task_result_with_browser_check(1);
+        let second = task_result_with_browser_check(2);
+        assert_ne!(
+            task_result_snapshot_fingerprint(&[first]),
+            task_result_snapshot_fingerprint(&[second])
         );
     }
 

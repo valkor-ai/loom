@@ -1,4 +1,5 @@
 pub mod action_result;
+pub mod agent_contract;
 pub mod canonicalize;
 pub mod context;
 pub mod domain_dispatcher;
@@ -15,6 +16,7 @@ pub mod transition;
 pub mod transition_diagnostics;
 
 pub use action_result::*;
+pub use agent_contract::*;
 pub use canonicalize::*;
 pub use context::*;
 pub use domain_dispatcher::*;

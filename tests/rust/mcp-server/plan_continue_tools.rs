@@ -585,29 +585,33 @@ fn brainstorm_full_confirmation_flow_accepts_and_advances_to_technical_baseline(
             .contains(&json!("empty"))
     );
     assert!(
-        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
-            ["frontendExperience.actions[].resultObservation[]"]
+        write_contract["fields"]["outputContract"]["schemaProjection"]["fieldContract"]
+            ["properties"]["frontendExperience"]["properties"]["actions"]["items"]["properties"]
+            ["resultObservation"]["constraints"][0]
             .as_str()
             .expect("result observation shape rule")
             .contains("empty is not a result observation")
     );
     assert!(
-        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
-            ["frontendExperience.actions[].resultObservation[]"]
+        write_contract["fields"]["outputContract"]["schemaProjection"]["fieldContract"]
+            ["properties"]["frontendExperience"]["properties"]["actions"]["items"]["properties"]
+            ["resultObservation"]["constraints"][0]
             .as_str()
             .expect("result observation shape rule")
             .contains("Do not use frontendInteractionState values here")
     );
     assert!(
-        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
-            ["frontendExperience.operationPaths[].requiredStates[]"]
+        write_contract["fields"]["outputContract"]["schemaProjection"]["fieldContract"]
+            ["properties"]["frontendExperience"]["properties"]["operationPaths"]["items"]
+            ["properties"]["requiredStates"]["constraints"][0]
             .as_str()
             .expect("required states shape rule")
             .contains("empty is valid only here")
     );
     assert!(
-        write_contract["fields"]["outputContract"]["schemaProjection"]["objectShapeRules"]
-            ["frontendExperience.operationPaths[].requiredStates[]"]
+        write_contract["fields"]["outputContract"]["schemaProjection"]["fieldContract"]
+            ["properties"]["frontendExperience"]["properties"]["operationPaths"]["items"]
+            ["properties"]["requiredStates"]["constraints"][0]
             .as_str()
             .expect("required states shape rule")
             .contains("Do not use frontendResultObservationMode values here")

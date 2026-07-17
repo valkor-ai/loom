@@ -30,10 +30,12 @@ Follow `LoomMcpActionResult.state`.
 - `auto_runnable`: continue immediately by executing the returned `next.kind`.
 - `active_operation`: only call the observation tools named by the result.
 - `user_gate`: when `preResponseContract` is present, execute its steps in order before emitting any user-visible response. This means calling `loom.inspectRequest`, reading only the groups from `requestReadPlan.groups` whose `whenToRead` applies before the visible response with `loom.readFieldGroup`, and, for Brainstorm, completing every required `knowledge_context_plan` step before forming options or confirmation. Groups scheduled after user confirmation remain required before the confirm/submit call. The contract is the MCP-side gate for the response; do not answer from `prompt` alone, skip directly to generic options, or call `loom.continue` to bypass it. A phase-continuation Brainstorm gate is an active clarification turn, not an optional `@loom continue`: do not stop at a progress recap or say "if you want to continue". After the contract steps complete, ask the visible current-block question and wait for the user's answer. For a gate without `preResponseContract`, present the returned prompt and wait for the accepted user response.
-- `repairable_error`: edit only the returned target file or target ids, then call the returned resubmit tool.
+- `repairable_error`: `stopAllowed=false`; edit only the returned target file or target ids, then call the returned resubmit tool. The returned `agentInstruction` is part of the repair contract.
 - `done`, `blocked`, `failed`: stop and report the returned user-facing status.
 
-Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
+Do not stop at a recap while `state=auto_runnable` or `stopAllowed=false`. Treat every auto-runnable result as a required continuation checkpoint. Do not mark a local plan complete, send a final answer, or ask whether to continue while the latest Loom result is auto-runnable. A task execution is complete only after the requested result artifact is written and its MCP submit tool succeeds.
+
+Recovery after tool failure is part of the same Loom action. If a shell, `apply_patch`, test, or nested MCP call fails, do not produce a progress summary or final answer: inspect the exact failure, make the smallest corrective edit or retry, and continue from the latest Loom result. When MCP is called inside `exec`, parse the nested `structuredContent` and `state`; the outer `exec` success or failure is not the Loom workflow state. Only `user_gate`, `done`, `blocked`, or `failed` permits a final response.
 
 ## Request Reading
 

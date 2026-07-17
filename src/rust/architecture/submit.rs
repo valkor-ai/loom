@@ -391,11 +391,13 @@ where
             &source_refs,
             &mut section_outputs,
         )?;
+        let agent_field_policies = delivery_core::derive_agent_field_policies(&updated_root);
         update_output_contract_ref(
             &input.project_root,
             &authorized.request_id,
             next_section,
             &next_output,
+            &agent_field_policies,
         )?;
         save_request_root(&input.project_root, &authorized.request_id, &updated_root)?;
         let engine = TransitionEngine {
@@ -4794,6 +4796,7 @@ fn update_output_contract_ref(
     request_id: &str,
     next_section: ArchitectureSectionGroup,
     next_output: &SectionStateOutput,
+    field_policies: &std::collections::BTreeMap<String, delivery_core::AgentFieldPolicy>,
 ) -> Result<(), state::store::StateError> {
     let output_contract_file = output_contract_ref_file(project_root, request_id)?;
     let mut output_contract = state::store::read_json_value(&output_contract_file)?;
@@ -4807,6 +4810,7 @@ fn update_output_contract_ref(
     output_contract["schemaProjection"]["requiredContentKeys"] =
         serde_json::to_value(crate::request::required_content_keys(next_section))
             .map_err(state::store::StateError::Json)?;
+    delivery_core::finalize_output_contract(&mut output_contract, field_policies);
     state::store::write_json_atomic(&output_contract_file, &output_contract)
 }
 
@@ -5325,6 +5329,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -5335,6 +5340,7 @@ fn repairable(
         resubmit_tool: mode.resubmit_tool().to_string(),
         fix_scope: Some(mode.fix_scope().to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(mode.resubmit_tool()),
     })
 }
 

@@ -75,31 +75,36 @@ fn auto_runnable_agent_instruction(next: &LoomMcpNextAction) -> &'static str {
     match next {
         LoomMcpNextAction::WriteArtifact(_) => {
             concat!(
-                "Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress. ",
+                "This is a required continuation checkpoint, not a progress message. Continue immediately: inspect requestRef, read required groups, write the returned artifact target(s), and submit with submitTool before reporting progress. ",
+                "If any local read, edit, or command fails, do not answer or summarize: inspect the exact target, make the smallest corrective edit, and retry. If an outer exec wrapper reports success or failure, parse the nested Loom result and keep following its state. ",
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until Loom returns user_gate, done, blocked, or failed."
             )
         }
         LoomMcpNextAction::ExecuteTask(_) => {
             concat!(
-                "Continue immediately: inspect next.requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress. ",
+                "This is a required continuation checkpoint, not a progress message. Continue immediately: inspect next.requestRef, read required groups, execute only this task, write resultFile, and submit with submitTool before reporting progress. ",
+                "If any local read, edit, test, or command fails, do not answer or summarize: inspect the exact failure, make the smallest corrective edit, and retry. If an outer exec wrapper reports success or failure, parse the nested Loom result and keep following its state. ",
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until the TaskResult submit succeeds or Loom returns user_gate, done, blocked, or failed."
             )
         }
         LoomMcpNextAction::RunLoomTool(_) => {
             concat!(
-                "Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. ",
+                "This is a required continuation checkpoint, not a progress message. Continue immediately: inspect requestRef, read required groups, call the returned Loom MCP tool, then retry the returned retryTool before reporting progress. ",
+                "If any local read or command fails, do not answer or summarize: inspect the exact failure and retry the smallest corrective step. If an outer exec wrapper reports success or failure, parse the nested Loom result and keep following its state. ",
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until Loom returns user_gate, done, blocked, or failed."
             )
         }
         LoomMcpNextAction::GenerateKnowledgeSemantics(_) => {
             concat!(
-                "Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated. ",
+                "This is a required continuation checkpoint, not a progress message. Continue immediately: read the semantic request, fill the returned result template, submit it, and keep following semantic next actions until published, blocked, failed, or user-gated. ",
+                "If any local read, edit, or command fails, do not answer or summarize: inspect the exact failure, make the smallest corrective edit, and retry. If an outer exec wrapper reports success or failure, parse the nested Loom result and keep following its state. ",
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue while a semantic next action remains auto-runnable."
             )
         }
         LoomMcpNextAction::DeployRepairAssets(_) => {
             concat!(
-                "Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress. ",
+                "This is a required continuation checkpoint, not a progress message. Continue immediately: edit only the returned deployment asset targets and retry through the returned deploy tool before reporting progress. ",
+                "If any local read, edit, or command fails, do not answer or summarize: inspect the exact failure, make the smallest corrective edit, and retry. If an outer exec wrapper reports success or failure, parse the nested Loom result and keep following its state. ",
                 "Do not stop at a progress recap. Do not mark the workflow complete, send a final answer, or ask the user whether to continue until Loom returns user_gate, done, blocked, or failed."
             )
         }
@@ -298,6 +303,7 @@ pub struct LoomMcpBlockedResult {
 #[serde(rename_all = "camelCase")]
 pub struct LoomMcpRepairableErrorResult {
     pub project_root: String,
+    pub stop_allowed: bool,
     pub target_file: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub target_ids: Vec<String>,
@@ -306,6 +312,13 @@ pub struct LoomMcpRepairableErrorResult {
     pub fix_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read_groups: Vec<crate::ReadGroupRef>,
+    pub agent_instruction: String,
+}
+
+pub fn repairable_error_agent_instruction(resubmit_tool: &str) -> String {
+    format!(
+        "Repair only the returned target and target ids, then call {resubmit_tool}. Preserve all non-conflicting business content, references, evidence, and structured array entries; do not clear or replace valid content merely to bypass a schema error. Remove a field only when the issue or contract explicitly marks it not_applicable. If a local read, edit, test, or command fails, inspect the exact failure and retry the smallest corrective step; do not produce a progress summary or final answer. If the MCP call is wrapped by exec, parse the nested Loom result and its state. Continue until the repair submit succeeds or Loom returns user_gate, done, blocked, or failed."
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

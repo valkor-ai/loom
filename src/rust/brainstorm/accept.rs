@@ -57,6 +57,7 @@ where
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: input.project_root.clone(),
+                stop_allowed: false,
                 target_file: String::new(),
                 target_ids: vec![],
                 issues: vec![delivery_core::RepairIssue {
@@ -68,6 +69,9 @@ where
                 resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                 fix_scope: Some("brainstorm_candidate_only".to_string()),
                 read_groups: authorized.read_groups.clone(),
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.brainstormAcceptFile",
+                ),
             },
         ));
     };
@@ -99,12 +103,16 @@ where
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: input.project_root.clone(),
+                stop_allowed: false,
                 target_file: target.path.clone(),
                 target_ids: vec![target.target_id.clone()],
                 issues: gate_check.repair_issues,
                 resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                 fix_scope: Some("brainstorm_candidate_only".to_string()),
                 read_groups: authorized.read_groups.clone(),
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.brainstormAcceptFile",
+                ),
             },
         ));
     }
@@ -126,6 +134,7 @@ where
             return Ok(LoomMcpActionResult::RepairableError(
                 LoomMcpRepairableErrorResult {
                     project_root: input.project_root.clone(),
+                    stop_allowed: false,
                     target_file: target.path.clone(),
                     target_ids: vec![target.target_id.clone()],
                     issues: vec![delivery_core::RepairIssue {
@@ -139,6 +148,9 @@ where
                     resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                     fix_scope: Some("brainstorm_candidate_only".to_string()),
                     read_groups: authorized.read_groups.clone(),
+                    agent_instruction: delivery_core::repairable_error_agent_instruction(
+                        "loom.brainstormAcceptFile",
+                    ),
                 },
             ));
         }
@@ -156,12 +168,16 @@ where
         return Ok(LoomMcpActionResult::RepairableError(
             LoomMcpRepairableErrorResult {
                 project_root: input.project_root.clone(),
+                stop_allowed: false,
                 target_file: target.path.clone(),
                 target_ids: vec![target.target_id.clone()],
                 issues,
                 resubmit_tool: "loom.brainstormAcceptFile".to_string(),
                 fix_scope: Some("brainstorm_candidate_only".to_string()),
                 read_groups: authorized.read_groups.clone(),
+                agent_instruction: delivery_core::repairable_error_agent_instruction(
+                    "loom.brainstormAcceptFile",
+                ),
             },
         ));
     }

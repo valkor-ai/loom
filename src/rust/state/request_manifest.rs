@@ -145,43 +145,57 @@ pub fn write_native_request(
     };
     let request_file_relative = to_project_relative(&project_paths.root, &request_file)?;
 
-    let full_bytes = pretty_len(&input.root);
     let mut root = input.root;
-    let root_object = root.as_object_mut().ok_or_else(|| {
-        StateError::InvalidArgument("native request root must be a JSON object".to_string())
-    })?;
-    root_object.insert(
-        "requestId".to_string(),
-        Value::String(input.request_id.clone()),
-    );
-    root_object.insert(
-        "requestKind".to_string(),
-        Value::String(input.request_kind.clone()),
-    );
-    reject_forbidden_root_keys(root_object)?;
-    reject_root_ref_aliases(root_object)?;
-    normalize_output_contract_submit_metadata(root_object)?;
+    {
+        let root_object = root.as_object_mut().ok_or_else(|| {
+            StateError::InvalidArgument("native request root must be a JSON object".to_string())
+        })?;
+        root_object.insert(
+            "requestId".to_string(),
+            Value::String(input.request_id.clone()),
+        );
+        root_object.insert(
+            "requestKind".to_string(),
+            Value::String(input.request_kind.clone()),
+        );
+        reject_forbidden_root_keys(root_object)?;
+        reject_root_ref_aliases(root_object)?;
+        normalize_output_contract_submit_metadata(root_object)?;
+    }
+    let field_policies = delivery_core::derive_agent_field_policies(&root);
+    if let Some(root_object) = root.as_object_mut() {
+        if let Some(output_contract) = root_object.get_mut("outputContract") {
+            delivery_core::finalize_output_contract(output_contract, &field_policies);
+        }
+    }
+    let full_bytes = pretty_len(&root);
 
-    let read_groups = canonicalize_read_plan(
-        root_object,
-        &request_ref,
-        &config.project_id,
-        &input.request_id,
-    )?;
-    canonicalize_context_refs(root_object, &read_groups);
-    let used_ref_keys = used_storage_ref_keys(root_object, &read_groups);
-    let manifest_refs = write_storage_refs(
-        &project_paths.root,
-        &request_file,
-        root_object,
-        &used_ref_keys,
-    )?;
-    let read_plan_warnings = validate_read_plan_contract(
-        &project_paths.root,
-        root_object,
-        &manifest_refs,
-        &read_groups,
-    )?;
+    let (read_groups, manifest_refs, read_plan_warnings) = {
+        let root_object = root.as_object_mut().ok_or_else(|| {
+            StateError::InvalidArgument("native request root must be a JSON object".to_string())
+        })?;
+        let read_groups = canonicalize_read_plan(
+            root_object,
+            &request_ref,
+            &config.project_id,
+            &input.request_id,
+        )?;
+        canonicalize_context_refs(root_object, &read_groups);
+        let used_ref_keys = used_storage_ref_keys(root_object, &read_groups);
+        let manifest_refs = write_storage_refs(
+            &project_paths.root,
+            &request_file,
+            root_object,
+            &used_ref_keys,
+        )?;
+        let read_plan_warnings = validate_read_plan_contract(
+            &project_paths.root,
+            root_object,
+            &manifest_refs,
+            &read_groups,
+        )?;
+        (read_groups, manifest_refs, read_plan_warnings)
+    };
     let ref_count = manifest_refs.len();
     write_storage_manifest(
         &project_paths.root,
@@ -291,7 +305,8 @@ fn canonicalize_read_plan(
         })?;
     let mut canonical_groups = Vec::with_capacity(groups.len());
     for (index, group) in groups.iter().enumerate() {
-        let group_ref = read_group_ref_from_value(group, index + 1, project_id, request_id)?;
+        let mut group_ref = read_group_ref_from_value(group, index + 1, project_id, request_id)?;
+        augment_write_contract_fields(&mut group_ref);
         canonical_groups.push(group_ref);
     }
     let group_values = canonical_groups
@@ -316,6 +331,26 @@ fn canonicalize_read_plan(
         }),
     );
     Ok(canonical_groups)
+}
+
+fn augment_write_contract_fields(group: &mut ReadGroupRef) {
+    let fields = group.expanded_fields();
+    let reads_write_contract = fields.iter().any(|field| {
+        field == "outputContract.resultTemplate"
+            || field == "outputContract.schemaProjection"
+            || field == "outputContract.writeTargets"
+            || field.starts_with("outputContract.")
+                && (field.contains("SchemaShape") || field.ends_with("ResultTemplate"))
+            || field.starts_with("outputContract.schemaShape.properties")
+    });
+    if !reads_write_contract {
+        return;
+    }
+    let mut fields = fields.into_iter().collect::<BTreeSet<_>>();
+    fields.insert("outputContract.contractVersion".to_string());
+    fields.insert("outputContract.contractFingerprint".to_string());
+    fields.insert("outputContract.schemaProjection".to_string());
+    group.selectors = read_selectors_from_paths(fields);
 }
 
 fn read_group_ref_from_value(

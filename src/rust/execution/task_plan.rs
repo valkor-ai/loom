@@ -831,6 +831,13 @@ where
         normalize_api_contract_requirements(&aac, &mut tasks, &allowed_refs);
     let code_quality_requirements =
         normalize_code_quality_requirements(&baseline, &aac, &mut tasks);
+    issues.extend(validate_quality_requirement_ownership(
+        &tasks,
+        &engineering_quality_requirements,
+        &architecture_quality_requirements,
+        &api_contract_requirements,
+        &code_quality_requirements,
+    ));
     normalize_browser_verification_assignments(&mut tasks);
     issues.extend(validate_browser_verification_assignments(&tasks));
     let browser_automation_facts = scan_browser_automation_facts(root, &baseline);
@@ -2274,6 +2281,138 @@ fn validate_runtime_delivery_requirements(
         }
     }
     issues
+}
+
+fn validate_quality_requirement_ownership(
+    tasks: &[TaskDefinition],
+    engineering: &[contracts::EngineeringQualityRequirement],
+    architecture: &[contracts::ArchitectureQualityRequirement],
+    api: &[contracts::ApiContractRequirement],
+    code: &[contracts::CodeQualityRequirement],
+) -> Vec<delivery_core::RepairIssue> {
+    let task_ids = tasks
+        .iter()
+        .map(|task| task.task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut issues = Vec::new();
+
+    for requirement in engineering {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.engineering_quality_requirement_refs.as_slice(),
+            "engineeringQualityRequirements",
+        );
+    }
+    for requirement in architecture {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.architecture_quality_requirement_refs.as_slice(),
+            "architectureQualityRequirements",
+        );
+    }
+    for requirement in api {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.api_contract_requirement_refs.as_slice(),
+            "apiContractRequirements",
+        );
+    }
+    for requirement in code {
+        validate_requirement_task_ownership(
+            &mut issues,
+            &task_ids,
+            &requirement.requirement_id,
+            &requirement.applies_to_task_ids,
+            tasks,
+            |task| task.code_quality_requirement_refs.as_slice(),
+            "codeQualityRequirements",
+        );
+    }
+
+    issues
+}
+
+fn validate_requirement_task_ownership<F>(
+    issues: &mut Vec<delivery_core::RepairIssue>,
+    task_ids: &BTreeSet<&str>,
+    requirement_id: &str,
+    applies_to_task_ids: &[String],
+    tasks: &[TaskDefinition],
+    refs_for_task: F,
+    field_name: &str,
+) where
+    F: Fn(&TaskDefinition) -> &[String] + Copy,
+{
+    if applies_to_task_ids.is_empty() {
+        issues.push(issue(
+            "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+            field_name,
+            "Every derived quality requirement must have at least one owning task.",
+            Some(requirement_id),
+        ));
+        return;
+    }
+    for task_id in applies_to_task_ids {
+        if !task_ids.contains(task_id.as_str()) {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+                field_name,
+                "Quality requirement ownership must reference an existing TaskPlan task.",
+                Some(requirement_id),
+            ));
+            continue;
+        }
+        let Some(task) = tasks.iter().find(|task| task.task_id == *task_id) else {
+            continue;
+        };
+        if !refs_for_task(task)
+            .iter()
+            .any(|reference| reference == requirement_id)
+        {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+                field_name,
+                "A quality requirement must be present in the owning task's derived requirement refs.",
+                Some(task_id),
+            ));
+        }
+        if task.verification_intents.is_empty() {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_VERIFICATION_MISSING",
+                "tasks[].verificationIntents",
+                "Every task owning a quality requirement must provide a verification intent for its evidence.",
+                Some(task_id),
+            ));
+        }
+    }
+    for task in tasks {
+        if refs_for_task(task)
+            .iter()
+            .any(|reference| reference == requirement_id)
+            && !applies_to_task_ids
+                .iter()
+                .any(|task_id| task_id == &task.task_id)
+        {
+            issues.push(issue(
+                "QUALITY_REQUIREMENT_OWNERSHIP_INVALID",
+                field_name,
+                "A task must not claim a quality requirement that does not apply to it.",
+                Some(&task.task_id),
+            ));
+        }
+    }
 }
 
 fn validate_must_acceptance_task_coverage(
@@ -5231,6 +5370,7 @@ fn repairable(
 ) -> LoomMcpActionResult {
     LoomMcpActionResult::RepairableError(LoomMcpRepairableErrorResult {
         project_root: input.project_root.clone(),
+        stop_allowed: false,
         target_file,
         target_ids: authorized
             .targets
@@ -5241,6 +5381,7 @@ fn repairable(
         resubmit_tool: mode.resubmit_tool().to_string(),
         fix_scope: Some(mode.fix_scope().to_string()),
         read_groups: authorized.read_groups.clone(),
+        agent_instruction: delivery_core::repairable_error_agent_instruction(mode.resubmit_tool()),
     })
 }
 
