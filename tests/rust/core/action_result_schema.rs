@@ -149,6 +149,40 @@ fn execute_task_auto_runnable_instruction_forbids_progress_only_stop() {
     assert_eq!(value["next"]["kind"], "execute_task");
 }
 
+#[test]
+fn request_scoped_user_gate_exposes_ordered_pre_response_contract() {
+    let result = LoomMcpUserGateResult::new(
+        "/tmp/project",
+        "Choose the active phase boundary.",
+        vec!["reply_in_chat".to_string()],
+        Some("loom://projects/project_1/requests/brainstorm_1".to_string()),
+        Some("delivery_1".to_string()),
+        Some("phase-1".to_string()),
+        Some(
+            serde_json::json!({"kind": "brainstorm_clarification", "currentBlock": "phase_scope"}),
+        ),
+    )
+    .with_brainstorm_knowledge("phase_scope");
+    let value =
+        serde_json::to_value(LoomMcpActionResult::UserGate(result)).expect("user gate result json");
+
+    assert_eq!(value["state"], "user_gate");
+    assert!(value["agentInstruction"]
+        .as_str()
+        .expect("agent instruction")
+        .contains("preResponseContract"));
+    let steps = value["preResponseContract"]["steps"]
+        .as_array()
+        .expect("pre-response steps");
+    assert_eq!(steps[0]["kind"], "inspect_request");
+    assert_eq!(steps[1]["kind"], "read_required_request_groups");
+    assert_eq!(steps[1]["source"], "requestReadPlan.groups");
+    assert_eq!(steps[2]["kind"], "run_knowledge_context_plan");
+    assert_eq!(steps[2]["toolName"], "loom.knowledgeBrainstormContext");
+    assert_eq!(steps[3]["kind"], "present_gate");
+    assert_eq!(value["preResponseContract"]["required"], true);
+}
+
 fn sample_results() -> Vec<LoomMcpActionResult> {
     vec![
         LoomMcpActionResult::AutoRunnable(LoomMcpAutoRunnableResult::new(
@@ -159,15 +193,15 @@ fn sample_results() -> Vec<LoomMcpActionResult> {
             "/tmp/project",
             sample_run_loom_tool_next(),
         )),
-        LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-            project_root: "/tmp/project".to_string(),
-            prompt: "Confirm scope.".to_string(),
-            accepted_responses: vec!["confirm".to_string()],
-            request_ref: None,
-            delivery_id: None,
-            phase_id: None,
-            gate: None,
-        }),
+        LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+            "/tmp/project",
+            "Confirm scope.",
+            vec!["confirm".to_string()],
+            None,
+            None,
+            None,
+            None,
+        )),
         LoomMcpActionResult::ActiveOperation(LoomMcpActiveOperationResult {
             project_root: "/tmp/project".to_string(),
             operation: ActiveOperationRef {

@@ -22,7 +22,23 @@ fn plan_returns_user_gate_and_creates_brainstorm_delivery() {
 
     assert_eq!(value["state"], "user_gate");
     assert!(value.get("readGroups").is_none());
-    assert!(value.get("requiredBeforeResponse").is_none());
+    assert_eq!(value["preResponseContract"]["required"], true);
+    assert_eq!(
+        value["preResponseContract"]["steps"][0]["kind"],
+        "inspect_request"
+    );
+    assert_eq!(
+        value["preResponseContract"]["steps"][1]["kind"],
+        "read_required_request_groups"
+    );
+    assert_eq!(
+        value["preResponseContract"]["steps"][2]["kind"],
+        "run_knowledge_context_plan"
+    );
+    assert_eq!(
+        value["preResponseContract"]["steps"][3]["kind"],
+        "present_gate"
+    );
     assert!(!value["prompt"]
         .as_str()
         .expect("prompt")
@@ -687,6 +703,7 @@ fn confirm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
+    read_required_request_groups(server, fixture, request_ref);
     if block != "final_summary" {
         run_knowledge_context(server, fixture, request_ref, block);
     }
@@ -704,6 +721,26 @@ fn confirm_block(
             )
             .expect("confirm brainstorm block"),
     )
+}
+
+fn read_required_request_groups(server: &LoomMcpServer, fixture: &Fixture, request_ref: &str) {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect request before confirmation");
+    for group in inspected.read_groups.iter().filter(|group| group.required) {
+        server
+            .invoke_tool(
+                "loom.readFieldGroup",
+                Some(args(json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "groupId": group.group_id
+                }))),
+            )
+            .expect("read required request group");
+    }
 }
 
 fn read_block_rules_text(server: &LoomMcpServer, fixture: &Fixture, request_ref: &str) -> String {
@@ -834,6 +871,7 @@ fn brainstorm_confirm_block_requires_request_scoped_knowledge_context() {
             .expect("plan call"),
     );
     let request_ref = planned["requestRef"].as_str().expect("requestRef");
+    read_required_request_groups(&server, &fixture, request_ref);
     let result = structured(
         server
             .invoke_tool(

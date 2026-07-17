@@ -60,6 +60,63 @@ fn advance_after_submit_updates_phase_and_returns_next_result() {
     assert!(summary.contains("repository_context_request"));
 }
 
+#[test]
+fn advance_after_submit_rejects_a_stale_phase_event() {
+    let mut status = ProjectStatus::empty("1");
+    let delivery = DeliveryIndex {
+        schema_version: 1,
+        delivery_id: "delivery_1".to_string(),
+        active_phase_id: "phase_1".to_string(),
+        status: DeliveryLifecycleStatus::Planning,
+        phases: vec![
+            DeliveryPhaseState {
+                phase_id: "phase_1".to_string(),
+                latest_refs: Default::default(),
+                next_action: None,
+            },
+            DeliveryPhaseState {
+                phase_id: "phase_2".to_string(),
+                latest_refs: Default::default(),
+                next_action: None,
+            },
+        ],
+        updated_at: "1".to_string(),
+    };
+    apply_delivery_index(&mut status, &delivery);
+    let store = MemoryStore::new(status).with_delivery(delivery);
+    let engine = TransitionEngine {
+        store,
+        dispatcher: TestDispatcher,
+    };
+
+    let error = engine
+        .advance_after_submit(
+            OperationContext {
+                project_root: "/tmp/project".to_string(),
+            },
+            SubmitAcceptedEvent {
+                delivery_id: "delivery_1".to_string(),
+                phase_id: "phase_2".to_string(),
+                source_tool: "loom.reviewAcceptFile".to_string(),
+                accepted_artifact_ref: "loom://artifact/stale-review".to_string(),
+                next_action: Some(RouteAction::done("stale")),
+            },
+        )
+        .expect_err("stale phase event must fail");
+
+    assert_eq!(error.code(), "STALE_SUBMIT_PHASE");
+    assert_eq!(
+        engine
+            .store
+            .deliveries
+            .borrow()
+            .get("delivery_1")
+            .expect("delivery")
+            .active_phase_id,
+        "phase_1"
+    );
+}
+
 struct TestDispatcher;
 
 impl DomainDispatcher for TestDispatcher {

@@ -2161,16 +2161,14 @@ fn materialize_manual_review_request(
         &result_ref,
     )?;
     let browser_environment_gate = browser_quality_gate.is_some();
-    Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: input.project_root.clone(),
-        prompt: if browser_environment_gate {
+    Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+        input.project_root.clone(),
+        if browser_environment_gate {
             "Required browser evidence is unavailable. Retry the browser environment, submit external browser evidence, or approve a quality waiver."
-                .to_string()
         } else {
             "Review requires user decision. Reply approve_override to continue with notes, or request_changes with the repair route and change summary."
-                .to_string()
         },
-        accepted_responses: if browser_environment_gate {
+        if browser_environment_gate {
             vec![
                 "retry_browser_environment".to_string(),
                 "submit_external_browser_evidence".to_string(),
@@ -2182,10 +2180,10 @@ fn materialize_manual_review_request(
                 "request_changes".to_string(),
             ]
         },
-        request_ref: Some(stored.request_ref),
-        delivery_id: Some(delivery_id),
-        phase_id: Some(phase_id),
-        gate: Some(json!({
+        Some(stored.request_ref),
+        Some(delivery_id),
+        Some(phase_id),
+        Some(json!({
             "gateId": format!("manual_review_{}", result.review_id),
             "kind": "manual_review",
             "reviewResultRef": result_ref,
@@ -2202,7 +2200,7 @@ fn materialize_manual_review_request(
                     .collect::<Vec<_>>()
             }
         })),
-    }))
+    )))
 }
 
 fn build_manual_review_request(

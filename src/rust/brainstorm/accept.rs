@@ -109,15 +109,15 @@ where
         ));
     }
     if let Some(gate) = gate_check.gate {
-        return Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-            project_root: input.project_root.clone(),
-            prompt: gate.user_message.clone(),
-            accepted_responses: vec!["reply_in_chat".to_string()],
-            request_ref: Some(input.request_ref.clone()),
-            delivery_id: authorized.delivery_id.clone(),
-            phase_id: authorized.phase_id.clone(),
-            gate: Some(to_value(&gate)),
-        }));
+        return Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+            input.project_root.clone(),
+            gate.user_message.clone(),
+            vec!["reply_in_chat".to_string()],
+            Some(input.request_ref.clone()),
+            authorized.delivery_id.clone(),
+            authorized.phase_id.clone(),
+            Some(to_value(&gate)),
+        )));
     }
 
     let candidate: BrainstormCandidateAgentWritable = match serde_json::from_value(raw) {

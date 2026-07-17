@@ -181,15 +181,18 @@ fn start_brainstorm_inner(
         .save_status(&input.project_root, &status)
         .map_err(to_state_error)?;
 
-    Ok(LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: input.project_root.clone(),
-        prompt: "Read the current Brainstorm block request, query request-scoped knowledge for this block, present only active phase boundary options in the user's language, then call loom.brainstormConfirmBlock after the user confirms one boundary.".to_string(),
-        accepted_responses: vec!["reply_in_chat".to_string()],
-        request_ref: Some(stored.request_ref),
-        delivery_id: Some(delivery_id),
-        phase_id: Some(phase_id),
-        gate: Some(to_value(&gate)),
-    }))
+    Ok(LoomMcpActionResult::UserGate(
+        LoomMcpUserGateResult::new(
+            input.project_root.clone(),
+            "Read the current Brainstorm block request, query request-scoped knowledge for this block, present only active phase boundary options in the user's language, then call loom.brainstormConfirmBlock after the user confirms one boundary.",
+            vec!["reply_in_chat".to_string()],
+            Some(stored.request_ref),
+            Some(delivery_id),
+            Some(phase_id),
+            Some(to_value(&gate)),
+        )
+        .with_brainstorm_knowledge("phase_scope"),
+    ))
 }
 
 fn initial_contract(

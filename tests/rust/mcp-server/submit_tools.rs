@@ -54,10 +54,45 @@ fn brainstorm_clarification_request_has_no_candidate_write_contract() {
 }
 
 #[test]
+fn brainstorm_confirmation_requires_request_inspection_and_declared_reads() {
+    let fixture = Fixture::new("brainstorm-request-read-contract");
+    let server = LoomMcpServer::default();
+    let request_ref = start_brainstorm_request(&fixture);
+    let result = server
+        .invoke_tool(
+            "loom.brainstormConfirmBlock",
+            Some(
+                json!({
+                    "projectRoot": fixture.root_str(),
+                    "requestRef": request_ref,
+                    "block": "phase_scope",
+                    "summary": "确认阶段范围。",
+                    "confirmedData": {"scope": {"included": ["核心能力"]}}
+                })
+                .as_object()
+                .expect("confirmation arguments")
+                .clone(),
+            ),
+        )
+        .expect("confirm brainstorm block")
+        .structured_content
+        .expect("structured content");
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(result["next"]["toolName"], "loom.inspectRequest");
+    assert_eq!(result["next"]["retryTool"], "loom.brainstormConfirmBlock");
+    assert!(result["agentInstruction"]
+        .as_str()
+        .expect("agent instruction")
+        .contains("Do not ask the user to reconfirm"));
+}
+
+#[test]
 fn brainstorm_phase_scope_rejects_single_wide_capability_closure_query() {
     let fixture = Fixture::new("brainstorm-phase-scope-single-wide-knowledge");
     let server = LoomMcpServer::default();
     let request_ref = start_brainstorm_request(&fixture);
+    read_required_request_groups(&server, &fixture, &request_ref);
 
     for (step_id, query_id) in [
         ("phase_scope_dependency_order", None),
@@ -9483,6 +9518,7 @@ fn confirm_brainstorm_block(
     summary: &str,
     confirmed_data: Value,
 ) -> Value {
+    read_required_request_groups(server, fixture, request_ref);
     if block != "final_summary" {
         run_knowledge_context(server, fixture, request_ref, block);
     }
@@ -9515,6 +9551,7 @@ fn skip_brainstorm_block(
     block: &str,
     reason: &str,
 ) -> Value {
+    read_required_request_groups(server, fixture, request_ref);
     run_knowledge_context(server, fixture, request_ref, block);
     let arguments = json!({
         "projectRoot": fixture.root_str(),
@@ -9537,6 +9574,31 @@ fn skip_brainstorm_block(
         "{result:#}"
     );
     result
+}
+
+fn read_required_request_groups(server: &LoomMcpServer, fixture: &Fixture, request_ref: &str) {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect request before confirmation");
+    for group in inspected.read_groups.iter().filter(|group| group.required) {
+        server
+            .invoke_tool(
+                "readFieldGroup",
+                Some(
+                    json!({
+                        "projectRoot": fixture.root_str(),
+                        "requestRef": request_ref,
+                        "groupId": group.group_id
+                    })
+                    .as_object()
+                    .expect("read group arguments")
+                    .clone(),
+                ),
+            )
+            .expect("read required request group");
+    }
 }
 
 fn confirm_phase2_brainstorm_to_candidate_write(

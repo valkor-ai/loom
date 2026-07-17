@@ -150,6 +150,86 @@ fn continue_activates_next_phase_before_dispatching() {
     assert!(summary.contains("technical_baseline_request"));
 }
 
+#[test]
+fn continue_rejects_invalid_next_phase_target_before_mutating_delivery() {
+    let mut status = ProjectStatus::empty("1");
+    let delivery = sample_delivery(RouteAction {
+        kind: RouteActionKind::ContinueToNextPhase,
+        source: "review".to_string(),
+        reason: "approved".to_string(),
+        prompt: None,
+        accepted_responses: vec![],
+        request_ref: None,
+        details: None,
+        target_phase_id: Some("phase-missing".to_string()),
+    });
+    apply_delivery_index(&mut status, &delivery);
+    let store = MemoryStore::new(status).with_delivery(delivery);
+    let engine = TransitionEngine {
+        store,
+        dispatcher: TestDispatcher,
+    };
+
+    let error = engine
+        .continue_current(OperationContext {
+            project_root: "/tmp/project".to_string(),
+        })
+        .expect_err("invalid phase target must fail");
+    assert_eq!(error.code(), "PHASE_NOT_FOUND");
+    assert_eq!(
+        engine
+            .store
+            .deliveries
+            .borrow()
+            .get("delivery_1")
+            .expect("delivery")
+            .active_phase_id,
+        "phase_1"
+    );
+}
+
+#[test]
+fn continue_refreshes_brainstorm_gate_consumption_contract() {
+    let mut status = ProjectStatus::empty("1");
+    let request_ref = "loom://projects/project_1/requests/brainstorm_1".to_string();
+    let delivery = sample_delivery(RouteAction {
+        kind: RouteActionKind::BrainstormClarification,
+        source: "repository_context_accept".to_string(),
+        reason: "phase_scope_required".to_string(),
+        prompt: Some("Confirm the active phase boundary.".to_string()),
+        accepted_responses: vec!["reply_in_chat".to_string()],
+        request_ref: Some(request_ref),
+        details: Some(serde_json::json!({
+            "kind": "phase_brainstorm_continuation",
+            "currentBlock": "phase_scope"
+        })),
+        target_phase_id: None,
+    });
+    apply_delivery_index(&mut status, &delivery);
+    let store = MemoryStore::new(status).with_delivery(delivery);
+    let engine = TransitionEngine {
+        store,
+        dispatcher: TestDispatcher,
+    };
+
+    let result = engine
+        .continue_current(OperationContext {
+            project_root: "/tmp/project".to_string(),
+        })
+        .expect("continue result");
+    let LoomMcpActionResult::UserGate(gate) = result else {
+        panic!("expected user gate");
+    };
+    let contract = gate
+        .pre_response_contract
+        .expect("brainstorm pre-response contract");
+    assert!(contract.steps.iter().any(|step| matches!(
+        step,
+        delivery_core::LoomMcpUserGatePreResponseStep::RunKnowledgeContextPlan { block, .. }
+            if block == "phase_scope"
+    )));
+}
+
 fn sample_delivery(next_action: RouteAction) -> DeliveryIndex {
     DeliveryIndex {
         schema_version: 1,

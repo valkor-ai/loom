@@ -14,7 +14,9 @@ use crate::{
     },
     paths::{from_project_relative, project_paths},
     project::read_project_config,
-    read_audit::{now_for_audit, record_field_read_audit, FieldReadAudit},
+    read_audit::{
+        now_for_audit, record_field_read_audit, record_request_inspect_audit, FieldReadAudit,
+    },
     request_index::get_request_index_entry,
     request_manifest::{read_group_refs_from_root, request_storage_ref},
     store::{read_json_value, read_text, StateError, StateResult},
@@ -37,6 +39,16 @@ struct LoadedRequest {
 }
 
 pub fn inspect_request(input: InspectRequestInput) -> StateResult<InspectRequestResult> {
+    let result = inspect_request_inner(&input)?;
+    record_request_inspect_audit(&input.project_root, &result.request_ref, &result.request_id);
+    Ok(result)
+}
+
+pub fn inspect_request_unrecorded(input: InspectRequestInput) -> StateResult<InspectRequestResult> {
+    inspect_request_inner(&input)
+}
+
+fn inspect_request_inner(input: &InspectRequestInput) -> StateResult<InspectRequestResult> {
     let request = load_request(&input.project_root, &input.request_ref)?;
     let output_contract = read_output_contract(&input.project_root, &request)?;
     Ok(InspectRequestResult {
@@ -85,6 +97,7 @@ pub fn read_field_group_flat(input: ReadFieldGroupInput) -> StateResult<ReadRequ
             request_id: &request.request_id,
             fields: &expanded_fields,
             source: "readFieldGroup",
+            group_id: Some(&input.group_id),
             recorded_at: now_for_audit(),
         },
     );
@@ -130,6 +143,7 @@ pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadReq
             request_id: &request.request_id,
             fields: &fields,
             source: "internalReadRequestFields",
+            group_id: None,
             recorded_at: now_for_audit(),
         },
     );

@@ -1539,18 +1539,18 @@ fn technical_baseline_user_gate(
     prompt: String,
     gate_id: String,
 ) -> LoomMcpActionResult {
-    LoomMcpActionResult::UserGate(LoomMcpUserGateResult {
-        project_root: input.project_root.clone(),
+    LoomMcpActionResult::UserGate(LoomMcpUserGateResult::new(
+        input.project_root.clone(),
         prompt,
-        accepted_responses: vec!["reply_in_chat".to_string()],
-        request_ref: Some(input.request_ref.clone()),
-        delivery_id: authorized.delivery_id.clone(),
-        phase_id: authorized.phase_id.clone(),
-        gate: Some(json!({
+        vec!["reply_in_chat".to_string()],
+        Some(input.request_ref.clone()),
+        authorized.delivery_id.clone(),
+        authorized.phase_id.clone(),
+        Some(json!({
             "gateId": gate_id,
             "kind": "technical_baseline_confirmation"
         })),
-    })
+    ))
 }
 
 fn repairable(

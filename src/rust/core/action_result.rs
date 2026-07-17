@@ -120,6 +120,118 @@ pub struct LoomMcpUserGateResult {
     pub phase_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate: Option<Value>,
+    pub agent_instruction: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_response_contract: Option<LoomMcpUserGatePreResponseContract>,
+}
+
+impl LoomMcpUserGateResult {
+    pub fn new(
+        project_root: impl Into<String>,
+        prompt: impl Into<String>,
+        accepted_responses: Vec<String>,
+        request_ref: Option<String>,
+        delivery_id: Option<String>,
+        phase_id: Option<String>,
+        gate: Option<Value>,
+    ) -> Self {
+        let pre_response_contract = request_ref
+            .as_deref()
+            .map(LoomMcpUserGatePreResponseContract::request_scoped);
+        let agent_instruction = if pre_response_contract.is_some() {
+            "Before replying to this user gate, execute preResponseContract in order. When requestRef is present, call loom.inspectRequest first, then call loom.readFieldGroup only for requestReadPlan.groups whose whenToRead applies before the visible response. Groups scheduled after user confirmation remain required before the submit/confirm call. For Brainstorm gates, complete every request-scoped knowledge step required by the returned knowledge_context_plan before presenting options or confirmation. Do not answer from the prompt alone, call loom.continue, or expose internal ids. After the pre-response steps finish, present the returned prompt in the user's language and wait for the user's response.".to_string()
+        } else {
+            "This is a user gate. Present the returned prompt in the user's language and wait for the user's response. Do not invent a continuation action or report the workflow as complete.".to_string()
+        };
+        Self {
+            project_root: project_root.into(),
+            prompt: prompt.into(),
+            accepted_responses,
+            request_ref,
+            delivery_id,
+            phase_id,
+            gate,
+            agent_instruction,
+            pre_response_contract,
+        }
+    }
+
+    pub fn with_brainstorm_knowledge(mut self, block: impl Into<String>) -> Self {
+        let block = block.into();
+        if block != "final_summary" {
+            if let Some(contract) = self.pre_response_contract.as_mut() {
+                contract.steps.insert(
+                    contract.steps.len().saturating_sub(1),
+                    LoomMcpUserGatePreResponseStep::RunKnowledgeContextPlan {
+                        tool_name: "loom.knowledgeBrainstormContext".to_string(),
+                        request_ref: self.request_ref.clone().unwrap_or_default(),
+                        group_id: "knowledge_context_plan".to_string(),
+                        block,
+                    },
+                );
+            }
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LoomMcpUserGatePreResponseContract {
+    pub required: bool,
+    pub steps: Vec<LoomMcpUserGatePreResponseStep>,
+    pub completion_rule: String,
+}
+
+impl LoomMcpUserGatePreResponseContract {
+    fn request_scoped(request_ref: &str) -> Self {
+        Self {
+            required: true,
+            steps: vec![
+                LoomMcpUserGatePreResponseStep::InspectRequest {
+                    tool_name: "loom.inspectRequest".to_string(),
+                    request_ref: request_ref.to_string(),
+                },
+                LoomMcpUserGatePreResponseStep::ReadRequiredRequestGroups {
+                    tool_name: "loom.readFieldGroup".to_string(),
+                    request_ref: request_ref.to_string(),
+                    source: "requestReadPlan.groups".to_string(),
+                    timing: "before_visible_response".to_string(),
+                },
+                LoomMcpUserGatePreResponseStep::PresentGate,
+            ],
+            completion_rule: "Do not present the visible gate response until every preceding step has completed successfully. Read only required groups whose whenToRead applies before the visible response; read post-confirmation groups immediately before submitting the confirmation.".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LoomMcpUserGatePreResponseStep {
+    InspectRequest {
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "requestRef")]
+        request_ref: String,
+    },
+    ReadRequiredRequestGroups {
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "requestRef")]
+        request_ref: String,
+        source: String,
+        timing: String,
+    },
+    RunKnowledgeContextPlan {
+        #[serde(rename = "toolName")]
+        tool_name: String,
+        #[serde(rename = "requestRef")]
+        request_ref: String,
+        #[serde(rename = "groupId")]
+        group_id: String,
+        block: String,
+    },
+    PresentGate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

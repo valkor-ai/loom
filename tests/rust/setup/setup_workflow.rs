@@ -1069,6 +1069,34 @@ fn deploy_plugin_templates_obey_active_operation_policy_fields() {
 }
 
 #[test]
+fn agent_templates_obey_user_gate_pre_response_contract() {
+    let repo = repo_root();
+    let plugin_root = repo.join("plugins");
+    for file in [
+        "codex/skills/loom/SKILL.md",
+        "claude-code/skills/loom/SKILL.md",
+        "opencode/.opencode/commands/loom.md",
+        "codex/skills/loom-deploy/SKILL.md",
+        "claude-code/skills/loom-deploy/SKILL.md",
+        "opencode/.opencode/commands/loom-deploy.md",
+    ] {
+        let content = fs::read_to_string(plugin_root.join(file)).unwrap();
+        assert!(
+            content.contains("preResponseContract"),
+            "{file} must consume the structured user-gate pre-response contract"
+        );
+        assert!(
+            content.contains("requestReadPlan.groups"),
+            "{file} must keep requestReadPlan.groups as the only read contract"
+        );
+        assert!(
+            content.contains("loom.inspectRequest") && content.contains("loom.readFieldGroup"),
+            "{file} must require inspect-then-group-read before a gated response"
+        );
+    }
+}
+
+#[test]
 fn opencode_commands_expose_mcp_result_discipline() {
     let repo = repo_root();
     let command_root = repo.join("plugins/opencode/.opencode/commands");

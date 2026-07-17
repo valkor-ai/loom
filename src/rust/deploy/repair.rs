@@ -209,22 +209,21 @@ pub fn repair_next(project_root: &Path, request: &DeploymentRepairAction) -> Loo
             })
         }
         DeploymentRepairRoute::ManualReview => {
-            LoomMcpActionResult::UserGate(delivery_core::LoomMcpUserGateResult {
-                project_root: project_root.to_string_lossy().into_owned(),
-                prompt: "Deployment failure needs user review before Loom can safely repair it."
-                    .to_string(),
-                accepted_responses: vec!["confirm".to_string()],
-                request_ref: None,
-                delivery_id: None,
-                phase_id: None,
-                gate: Some(json!({
+            LoomMcpActionResult::UserGate(delivery_core::LoomMcpUserGateResult::new(
+                project_root.to_string_lossy().into_owned(),
+                "Deployment failure needs user review before Loom can safely repair it.",
+                vec!["confirm".to_string()],
+                None,
+                None,
+                None,
+                Some(json!({
                     "repairRef": to_project_relative(
                         project_root,
                         &deployment_paths(project_root).repair_action_file
                     ).ok(),
                     "repairSummary": compact_repair_summary(project_root, request)
                 })),
-            })
+            ))
         }
         DeploymentRepairRoute::None => LoomMcpActionResult::Blocked(LoomMcpBlockedResult {
             project_root: project_root.to_string_lossy().into_owned(),
