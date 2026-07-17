@@ -293,7 +293,11 @@ where
         issues.extend(validate_allowed_refs(&candidate.content, &allowed_refs));
     }
     issues.extend(validate_frontend_rules(&candidate, &request_root));
-    issues.extend(validate_runtime_rules(&candidate, &source_refs));
+    issues.extend(validate_runtime_rules(
+        &candidate,
+        &source_refs,
+        &request_root,
+    ));
     if matches!(candidate.section, ArchitectureSectionGroup::Coverage) {
         issues.extend(validate_coverage_section(&candidate.content, &allowed_refs));
         issues.extend(validate_architecture_quality_candidate_plan(
@@ -1761,6 +1765,7 @@ fn runtime_labeled_command_segments(command: &str) -> Vec<String> {
 fn validate_runtime_rules(
     candidate: &ArchitectureSectionCandidateAgentWritable,
     source_refs: &Value,
+    request_root: &Value,
 ) -> Vec<delivery_core::RepairIssue> {
     if !matches!(candidate.section, ArchitectureSectionGroup::RuntimeDelivery) {
         return vec![];
@@ -1861,6 +1866,24 @@ fn validate_runtime_rules(
                         ));
                         continue;
                     };
+                    for field in dependency.keys() {
+                        if !matches!(
+                            field.as_str(),
+                            "dependencyId"
+                                | "kind"
+                                | "requiredFor"
+                                | "startupRequirement"
+                                | "failureBehavior"
+                                | "recoveryStrategy"
+                                | "observability"
+                        ) {
+                            issues.push(issue(
+                                "RUNTIME_DEPENDENCY_FIELD_UNKNOWN",
+                                &format!("{path}.{field}"),
+                                "Runtime dependency fields must come from the current write contract; remove legacy or invented fields.",
+                            ));
+                        }
+                    }
                     for field in [
                         "dependencyId",
                         "kind",
@@ -1942,6 +1965,7 @@ fn validate_runtime_rules(
                 ));
             }
         }
+        validate_runtime_dependency_seed(runtime, request_root, &mut issues);
         require_runtime_string(
             runtime,
             "/httpProbes/previewPath",
@@ -2012,6 +2036,46 @@ fn validate_runtime_rules(
         }
     }
     issues
+}
+
+fn validate_runtime_dependency_seed(
+    runtime: &Value,
+    request_root: &Value,
+    issues: &mut Vec<delivery_core::RepairIssue>,
+) {
+    let Some(candidates) = request_root
+        .pointer("/runtimeDependencySeed/candidates")
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    let dependencies = runtime
+        .get("runtimeDependencies")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for (index, candidate) in candidates.iter().enumerate() {
+        let Some(candidate_id) = candidate.get("dependencyId").and_then(Value::as_str) else {
+            continue;
+        };
+        let matched = dependencies.iter().any(|dependency| {
+            dependency.get("dependencyId").and_then(Value::as_str) == Some(candidate_id)
+                && dependency.get("kind") == candidate.get("kind")
+                && dependency.get("startupRequirement") == candidate.get("startupRequirement")
+        });
+        if !matched {
+            issues.push(issue(
+                "RUNTIME_DEPENDENCY_SEED_UNSATISFIED",
+                &format!("content.runtimeDelivery.runtimeDependencies[{index}]"),
+                &format!(
+                    "MCP derived runtime dependency {candidate_id} must be represented with kind and startupRequirement from runtimeDependencySeed; it cannot be removed or replaced with an unrelated dependency."
+                ),
+            ));
+        }
+    }
 }
 
 fn require_runtime_string(
@@ -4377,6 +4441,40 @@ mod tests {
         assert!(validate_data_architecture(&content)
             .iter()
             .any(|issue| issue.code == "DATA_ARCHITECTURE_ENTRY_INVALID"));
+    }
+
+    #[test]
+    fn runtime_dependency_seed_cannot_be_removed_from_a_modified_delivery() {
+        let request_root = json!({
+            "runtimeDependencySeed": {
+                "candidates": [{
+                    "dependencyId": "runtime_persistence",
+                    "kind": "storage",
+                    "startupRequirement": "required"
+                }]
+            }
+        });
+        let mut issues = Vec::new();
+        validate_runtime_dependency_seed(
+            &json!({"runtimeDependencies": []}),
+            &request_root,
+            &mut issues,
+        );
+        assert_eq!(issues[0].code, "RUNTIME_DEPENDENCY_SEED_UNSATISFIED");
+
+        issues.clear();
+        validate_runtime_dependency_seed(
+            &json!({
+                "runtimeDependencies": [{
+                    "dependencyId": "runtime_persistence",
+                    "kind": "storage",
+                    "startupRequirement": "required"
+                }]
+            }),
+            &request_root,
+            &mut issues,
+        );
+        assert!(issues.is_empty());
     }
 
     #[test]

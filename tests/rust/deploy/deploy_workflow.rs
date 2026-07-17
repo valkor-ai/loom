@@ -4391,6 +4391,7 @@ impl Fixture {
                         .into_iter()
                         .collect(),
                     next_action: None,
+                    pending_repair: None,
                 }],
                 updated_at: now_string(),
             },

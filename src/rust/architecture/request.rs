@@ -229,6 +229,7 @@ fn build_request_root(
         Some(technical_baseline),
     );
     let architecture_quality_seed = build_architecture_quality_seed(current_output.section, None);
+    let runtime_dependency_seed = runtime_dependency_seed(technical_baseline);
     let mut root = json!({
         "schemaVersion": "1.0",
         "requestType": "architecture_sections_generation",
@@ -241,6 +242,7 @@ fn build_request_root(
         "frontendExperienceSource": frontend_experience_source,
         "uiQualitySeed": ui_quality_seed,
         "architectureQualitySeed": architecture_quality_seed,
+        "runtimeDependencySeed": runtime_dependency_seed,
         "allowedRefs": allowed_refs,
         "sectionState": {
             "order": SECTION_ORDER,
@@ -383,6 +385,9 @@ pub(crate) fn architecture_read_groups(
     ]);
     if matches!(section, ArchitectureSectionGroup::Coverage) {
         core_fields.push("architectureQualitySeed.candidatePlan");
+    }
+    if matches!(section, ArchitectureSectionGroup::RuntimeDelivery) {
+        core_fields.push("runtimeDependencySeed");
     }
     if matches!(
         section,
@@ -529,6 +534,65 @@ pub(crate) fn architecture_read_groups(
         }));
     }
     Value::Array(groups)
+}
+
+fn runtime_dependency_seed(technical_baseline: &TechnicalBaselineContract) -> Value {
+    runtime_dependency_seed_from_stack(&technical_baseline.stack)
+}
+
+fn runtime_dependency_seed_from_stack(stack: &Value) -> Value {
+    let Some(tracks) = stack.get("tracks").and_then(Value::as_object) else {
+        return json!({
+            "authority": "technical_baseline.stack.tracks",
+            "candidates": [],
+            "emptyPolicy": "runtimeDependencies may be empty only when candidates is empty"
+        });
+    };
+
+    let mut candidates = Vec::new();
+    if track_is_selected(tracks.get("persistence")) {
+        candidates.push(json!({
+            "dependencyId": "runtime_persistence",
+            "track": "persistence",
+            "kind": "storage",
+            "startupRequirement": "required",
+            "requiredFor": ["current_phase_persistent_capabilities"],
+            "failureBehavior": "Storage failure must prevent false success and preserve write consistency.",
+            "recoveryStrategy": "Restore the configured storage boundary, then restart or retry the affected runtime operation.",
+            "observability": [
+                "Startup exposes storage readiness or failure.",
+                "Affected runtime operations expose an actionable failure signal."
+            ]
+        }));
+    }
+    if track_is_selected(tracks.get("externalServices")) {
+        candidates.push(json!({
+            "dependencyId": "runtime_external_services",
+            "track": "externalServices",
+            "kind": "external_runtime",
+            "startupRequirement": "required",
+            "requiredFor": ["current_phase_external_capabilities"],
+            "failureBehavior": "An unavailable external runtime must produce an explicit failure and must not be reported as a successful operation.",
+            "recoveryStrategy": "Restore the configured external runtime or use the declared fallback before retrying.",
+            "observability": [
+                "Dependency readiness or connection failure is observable.",
+                "Affected runtime operations expose an actionable failure signal."
+            ]
+        }));
+    }
+    json!({
+        "authority": "technical_baseline.stack.tracks",
+        "candidates": candidates,
+        "emptyPolicy": "runtimeDependencies may be empty only when candidates is empty"
+    })
+}
+
+fn track_is_selected(track: Option<&Value>) -> bool {
+    track
+        .and_then(Value::as_object)
+        .and_then(|track| track.get("status"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| matches!(status, "selected" | "user_custom"))
 }
 
 fn has_non_null_key(value: &Value, key: &str) -> bool {
@@ -2169,6 +2233,7 @@ pub fn section_generation_rules(
             "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
                 .to_string(),
             "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state startup requirement, affected capability, failure behavior, recovery strategy, and observable signal. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
+            "Use runtimeDependencySeed as the MCP-derived applicability authority. Preserve each seeded dependencyId, kind, and startupRequirement; complete its current-phase semantics without deleting seeded dependencies or adding legacy fields. runtimeDependencies may be empty only when runtimeDependencySeed.candidates is empty.".to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![
             "Map every current-phase acceptance candidate to AAC artifacts without inventing acceptance ids."
@@ -2220,6 +2285,24 @@ fn to_state_error(error: delivery_core::LoomCoreError) -> state::store::StateErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_dependency_seed_uses_structured_track_statuses() {
+        let seed = runtime_dependency_seed_from_stack(&json!({
+            "tracks": {
+                "persistence": {"status": "selected", "selection": "PostgreSQL"},
+                "externalServices": {"status": "not_needed", "selection": "None"}
+            }
+        }));
+        assert_eq!(seed["authority"], "technical_baseline.stack.tracks");
+        assert_eq!(seed["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(seed["candidates"][0]["kind"], "storage");
+        assert_eq!(seed["candidates"][0]["startupRequirement"], "required");
+        assert_eq!(
+            seed["emptyPolicy"],
+            "runtimeDependencies may be empty only when candidates is empty"
+        );
+    }
 
     #[test]
     fn frontend_request_schema_exposes_surface_decision_candidate() {

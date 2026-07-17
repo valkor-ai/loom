@@ -117,6 +117,10 @@ where
             )
         })?;
 
+        if let Some(pending_repair) = active_phase.pending_repair.as_ref() {
+            return Ok(pending_repair.to_result(ctx.project_root));
+        }
+
         if let Some(existing) = lease.as_mut() {
             if existing.is_fresh_at(self.store.now_millis()) {
                 if active_phase
@@ -322,6 +326,7 @@ where
             .next_action
             .clone()
             .or_else(|| Some(RouteAction::done("submit_accepted")));
+        phase.pending_repair = None;
         delivery.updated_at = self.store.now_string();
         self.store
             .save_delivery_index(&ctx.project_root, &delivery)?;

@@ -35,6 +35,25 @@ fn submit_tool_returns_repairable_error_for_missing_target_file() {
 }
 
 #[test]
+fn submit_tool_rejects_write_without_reading_required_contract() {
+    let fixture = Fixture::new("submit-contract-not-read");
+    let request_ref = start_brainstorm_candidate_write_request(&fixture);
+    write_candidate_target(&fixture, &request_ref, &valid_candidate_json());
+    let result = call_submit_without_required_reads(
+        "loom.brainstormAcceptFile",
+        &request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(result["issues"][0]["code"], "WRITE_CONTRACT_NOT_READ");
+    assert!(result["issues"][0]["fieldPath"]
+        .as_str()
+        .is_some_and(|path| path.starts_with("requestReadPlan.groups.")));
+    assert_eq!(result["resubmitTool"], "brainstormAcceptFile");
+}
+
+#[test]
 fn brainstorm_clarification_request_has_no_candidate_write_contract() {
     let fixture = Fixture::new("submit-user-gate");
     let request_ref = start_brainstorm_request(&fixture);
@@ -9345,18 +9364,54 @@ fn write_brainstorm_request(
 }
 
 fn call_submit(tool_name: &str, request_ref: &str, project_root: &str) -> serde_json::Value {
+    call_submit_with_read_mode(tool_name, request_ref, project_root, true)
+}
+
+fn call_submit_without_required_reads(
+    tool_name: &str,
+    request_ref: &str,
+    project_root: &str,
+) -> serde_json::Value {
+    call_submit_with_read_mode(tool_name, request_ref, project_root, false)
+}
+
+fn call_submit_with_read_mode(
+    tool_name: &str,
+    request_ref: &str,
+    project_root: &str,
+    read_required_groups: bool,
+) -> serde_json::Value {
     let inspected = state::inspect_request(InspectRequestInput {
         project_root: project_root.to_string(),
         request_ref: request_ref.to_string(),
     })
     .expect("inspect request for submit");
+    let server = LoomMcpServer::default();
+    if read_required_groups {
+        for group in inspected.read_groups.iter().filter(|group| group.required) {
+            server
+                .invoke_tool(
+                    "loom.readFieldGroup",
+                    Some(
+                        json!({
+                            "projectRoot": project_root,
+                            "requestRef": request_ref,
+                            "groupId": group.group_id
+                        })
+                        .as_object()
+                        .expect("read group arguments")
+                        .clone(),
+                    ),
+                )
+                .expect("read required request group");
+        }
+    }
     let written_target_ids = inspected
         .write_targets
         .iter()
         .filter_map(|target| target.get("targetId").and_then(Value::as_str))
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let server = LoomMcpServer::default();
     let arguments = json!({
         "projectRoot": project_root,
         "requestRef": request_ref,

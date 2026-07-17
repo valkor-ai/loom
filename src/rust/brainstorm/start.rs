@@ -166,6 +166,7 @@ fn start_brainstorm_inner(
             phase_id: phase_id.clone(),
             latest_refs,
             next_action: Some(route_action),
+            pending_repair: None,
         }],
         updated_at: now.clone(),
     };

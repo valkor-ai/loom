@@ -17,5 +17,6 @@ pub use request_resolver::{
     read_request_fields,
 };
 pub use write_targets::{
-    authorize_write_targets, AuthorizedWriteSet, WriteTargetAuthorizationError,
+    authorize_write_targets, record_pending_repair, record_pending_repair_for_request,
+    AuthorizedWriteSet, WriteTargetAuthorizationError,
 };

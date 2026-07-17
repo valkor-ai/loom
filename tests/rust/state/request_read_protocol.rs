@@ -830,6 +830,13 @@ fn native_submit_authorizes_declared_write_targets() {
     .expect("read submit private manifest");
     assert!(storage_manifest["refs"]["outputContract"].is_object());
 
+    state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        group_id: "core".to_string(),
+    })
+    .expect("read submit write contract");
+
     let authorized = state::authorize_write_targets(
         &delivery_core::FileSubmitInput {
             project_root: fixture.root_str().to_string(),
@@ -846,6 +853,90 @@ fn native_submit_authorizes_declared_write_targets() {
     );
     assert_eq!(authorized.targets[0].target_id, "candidate");
     assert_eq!(authorized.submit_tool, "loom.brainstormAcceptFile");
+}
+
+#[test]
+fn native_submit_rejects_a_read_from_an_older_contract_fingerprint() {
+    let fixture = Fixture::new("submit-stale-contract");
+    write_json_atomic(
+        &fixture.root.join(".loom/agent-writable/candidate.json"),
+        &json!({ "summary": "ok" }),
+    )
+    .expect("write target");
+    let stored = write_native_request(
+        fixture.root_str(),
+        NativeRequestInput {
+            request_id: "req_submit_stale_contract".to_string(),
+            request_kind: "brainstorm_candidate".to_string(),
+            request_file: None,
+            delivery_id: Some("delivery_1".to_string()),
+            phase_id: Some("phase_1".to_string()),
+            root: json!({
+                "outputContract": {
+                    "artifactKind": "brainstorm_candidate",
+                    "submitTool": "loom.brainstormAcceptFile",
+                    "writeMode": "single_json",
+                    "writeTargets": [{
+                        "targetId": "candidate",
+                        "path": ".loom/agent-writable/candidate.json",
+                        "required": true,
+                        "description": "Brainstorm candidate JSON."
+                    }]
+                },
+                "requestReadPlan": {
+                    "groups": [{
+                        "groupId": "core",
+                        "required": true,
+                        "purpose": "Read core fields.",
+                        "whenToRead": "Before writing.",
+                        "selectors": selectors(["outputContract.writeTargets"])
+                    }]
+                }
+            }),
+        },
+    )
+    .expect("write request");
+
+    state::read_field_group(delivery_core::ReadFieldGroupInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: stored.request_ref.clone(),
+        group_id: "core".to_string(),
+    })
+    .expect("read initial write contract");
+
+    let manifest = read_json_value(
+        &fixture
+            .root
+            .join(".loom/requests/req_submit_stale_contract.manifest.json"),
+    )
+    .expect("read request manifest");
+    let output_contract_ref = manifest["refs"]["outputContract"]["ref"]
+        .as_str()
+        .expect("output contract ref");
+    let output_contract_file = fixture.root.join(output_contract_ref);
+    let mut output_contract = read_json_value(&output_contract_file).expect("read output contract");
+    output_contract["schemaProjection"]["requiredTopLevelFields"] = json!(["summary"]);
+    delivery_core::finalize_output_contract(
+        &mut output_contract,
+        &std::collections::BTreeMap::new(),
+    );
+    write_json_atomic(&output_contract_file, &output_contract).expect("rewrite output contract");
+
+    let error = state::authorize_write_targets(
+        &delivery_core::FileSubmitInput {
+            project_root: fixture.root_str().to_string(),
+            request_ref: stored.request_ref,
+            written_target_ids: Some(vec!["candidate".to_string()]),
+        },
+        "loom.brainstormAcceptFile",
+    )
+    .expect_err("stale contract read must not authorize submit");
+    match error {
+        state::WriteTargetAuthorizationError::Repairable { issues, .. } => assert!(issues
+            .iter()
+            .any(|issue| issue.code == "WRITE_CONTRACT_NOT_READ")),
+        other => panic!("expected repairable stale-contract error, got {other:?}"),
+    }
 }
 
 struct Fixture {

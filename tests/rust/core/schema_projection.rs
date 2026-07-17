@@ -1,7 +1,8 @@
 use delivery_core::{
     apply_machine_owned_fields, compact_agent_field_contract, derive_agent_field_policies,
-    finalize_output_contract, strip_machine_owned_fields, validate_typed, AgentFieldApplicability,
-    ContractProjection, RepairIssue, SubmitValidationContext,
+    finalize_output_contract, strip_machine_owned_fields, validate_agent_write_contract,
+    validate_typed, AgentFieldApplicability, ContractProjection, RepairIssue,
+    SubmitValidationContext,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -144,6 +145,134 @@ fn finalize_output_contract_adds_version_fingerprint_and_compact_projection() {
         output["schemaProjection"]["fieldContract"]["properties"]["summary"]["type"],
         "string"
     );
+}
+
+#[test]
+fn write_contract_validation_uses_result_template_for_sparse_nested_fields() {
+    let mut output = json!({
+        "schemaShape": {
+            "type": "object",
+            "properties": {
+                "requestSummary": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"}
+                    },
+                    "required": ["title"]
+                }
+            },
+            "required": ["requestSummary"]
+        },
+        "resultTemplate": {
+            "requestSummary": {"title": ""}
+        },
+        "schemaProjection": {
+            "requiredTopLevelFields": ["requestSummary"]
+        },
+        "writeTargets": [{"targetId": "candidate", "path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    let issues = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"requestSummary": {"title": "Account opening"}}),
+    );
+    assert!(issues.is_empty(), "{issues:#?}");
+}
+
+#[test]
+fn write_contract_allows_only_declared_mcp_normalized_fields() {
+    let mut output = json!({
+        "artifactKind": "brainstorm_candidate",
+        "schemaShape": {
+            "type": "object",
+            "properties": {"summary": {"type": "string"}},
+            "required": ["summary"]
+        },
+        "resultTemplate": {"summary": ""},
+        "schemaProjection": {"requiredTopLevelFields": ["summary"]},
+        "writeTargets": [{"targetId": "candidate", "path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    assert!(output["mcpNormalizedFields"]
+        .as_array()
+        .expect("normalized fields")
+        .contains(&json!("clarificationProgress")));
+    let accepted = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"summary": "ok", "clarificationProgress": {"finalSummaryConfirmed": true}}),
+    );
+    assert!(accepted.is_empty(), "{accepted:#?}");
+
+    let rejected = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"summary": "ok", "undeclaredBusinessData": "must not be discarded"}),
+    );
+    assert_eq!(rejected[0].code, "WRITE_CONTRACT_FIELD_UNKNOWN");
+}
+
+#[test]
+fn architecture_content_is_validated_by_the_architecture_domain() {
+    let mut output = json!({
+        "artifactKind": "architecture_section_candidate",
+        "schemaShape": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "content": {
+                    "type": "object",
+                    "properties": {"modules": {"type": "array", "items": {"type": "object"}}}
+                }
+            },
+            "required": ["status", "content"]
+        },
+        "resultTemplate": {"status": "ready", "content": {"modules": []}},
+        "schemaProjection": {"requiredTopLevelFields": ["status", "content"]},
+        "writeTargets": [{"targetId": "candidate", "path": ".loom/agent-writable/candidate.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    let accepted = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"status": "ready", "content": {"sectionSpecificModel": {"owner": "architecture"}}}),
+    );
+    assert!(accepted.is_empty(), "{accepted:#?}");
+
+    let rejected = validate_agent_write_contract(
+        &output,
+        "candidate",
+        &json!({"status": "ready", "content": {}, "unexpectedEnvelopeField": true}),
+    );
+    assert_eq!(rejected[0].code, "WRITE_CONTRACT_FIELD_UNKNOWN");
+}
+
+#[test]
+fn normalized_task_results_defer_schema_validation_to_the_execution_domain() {
+    let mut output = json!({
+        "artifactKind": "task_result",
+        "schemaShape": {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"]
+        },
+        "resultTemplate": {"status": "completed"},
+        "schemaProjection": {"requiredTopLevelFields": ["status"]},
+        "writeTargets": [{"targetId": "result", "path": ".loom/agent-writable/task-result.json"}]
+    });
+    finalize_output_contract(&mut output, &BTreeMap::new());
+
+    assert_eq!(output["domainValidationPaths"], json!(["$"]));
+    assert!(validate_agent_write_contract(
+        &output,
+        "result",
+        &json!({"executionDomainCandidate": true}),
+    )
+    .is_empty());
 }
 
 #[test]

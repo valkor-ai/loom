@@ -185,6 +185,7 @@ pub fn materialize_next_phase_from_preview(
             phase_id: handoff.phase_id.clone(),
             latest_refs,
             next_action: Some(next_action),
+            pending_repair: None,
         });
     }
     delivery.status = DeliveryLifecycleStatus::Planning;

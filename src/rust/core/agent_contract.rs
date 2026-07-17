@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+
+use crate::RepairIssue;
 use sha2::{Digest, Sha256};
 
 /// The external request protocol stays `outputContract` plus
@@ -238,6 +240,26 @@ pub fn finalize_output_contract(
         .expect("schemaProjection is an object")
         .remove("objectShapeRules");
     contract.insert("schemaProjection".to_string(), projection);
+    if let Some(artifact_kind) = contract
+        .get("artifactKind")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    {
+        let normalized_fields = mcp_normalized_fields_for_artifact(&artifact_kind);
+        if !normalized_fields.is_empty() {
+            contract.insert(
+                "mcpNormalizedFields".to_string(),
+                Value::Array(normalized_fields.iter().map(|field| json!(field)).collect()),
+            );
+        }
+        let delegated_paths = domain_validation_paths_for_artifact(&artifact_kind);
+        if !delegated_paths.is_empty() {
+            contract.insert(
+                "domainValidationPaths".to_string(),
+                Value::Array(delegated_paths.iter().map(|path| json!(path)).collect()),
+            );
+        }
+    }
     let mut fingerprint_source = Value::Object(contract.clone());
     remove_volatile_contract_fields(&mut fingerprint_source);
     contract.insert(
@@ -411,6 +433,353 @@ pub fn contract_fingerprint(value: &Value) -> String {
     let canonical = canonical_json(value);
     let digest = Sha256::digest(canonical.as_bytes());
     format!("sha256:{digest:x}")
+}
+
+pub fn contract_fingerprint_matches(value: &Value) -> bool {
+    let Some(expected) = value.get("contractFingerprint").and_then(Value::as_str) else {
+        return false;
+    };
+    let mut source = value.clone();
+    remove_volatile_contract_fields(&mut source);
+    contract_fingerprint(&source) == expected
+}
+
+pub fn validate_agent_write_contract(
+    output_contract: &Value,
+    target_id: &str,
+    candidate: &Value,
+) -> Vec<RepairIssue> {
+    let Some(contract) = validation_contract_for_target(output_contract, target_id) else {
+        return vec![RepairIssue {
+            code: "WRITE_CONTRACT_SCHEMA_MISSING".to_string(),
+            message: "The current write contract does not expose a field contract for this target."
+                .to_string(),
+            target_id: Some(target_id.to_string()),
+            field_path: None,
+        }];
+    };
+    let mcp_normalized_fields = output_contract
+        .get("mcpNormalizedFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    let domain_validation_paths = output_contract
+        .get("domainValidationPaths")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    let mut issues = Vec::new();
+    validate_contract_node(
+        candidate,
+        &contract,
+        "candidate",
+        true,
+        &mcp_normalized_fields,
+        &domain_validation_paths,
+        &mut issues,
+    );
+    issues
+}
+
+fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static str] {
+    match artifact_kind {
+        "brainstorm_candidate" => &[
+            "userConfirmation",
+            "clarificationProgress",
+            "roadmap.currentPhaseId",
+            "phasePlan.current.phaseId",
+            "conceptGrounding.glossaryUpdates[].updateId",
+        ],
+        "repository_context_candidate" => &["source", "requestLens"],
+        "architecture_section_candidate" => &[
+            "schemaVersion",
+            "requestId",
+            "deliveryId",
+            "phaseId",
+            "section",
+            "createdAt",
+            "content.source",
+        ],
+        "task_plan_candidate" => &[
+            "schemaVersion",
+            "requestId",
+            "deliveryId",
+            "phaseId",
+            "taskPlanId",
+            "createdAt",
+        ],
+        "task_result" | "task_result_repair" => &[
+            "schemaVersion",
+            "taskResultId",
+            "taskPlanId",
+            "taskId",
+            "createdAt",
+            "updatedAt",
+        ],
+        "review_result" => &[
+            "schemaVersion",
+            "reviewId",
+            "source",
+            "createdAt",
+            "updatedAt",
+        ],
+        "manual_review_resolution" => &[
+            "schemaVersion",
+            "manualReviewResolutionId",
+            "manualReviewRequestId",
+            "deliveryId",
+            "phaseId",
+            "createdAt",
+        ],
+        "deploy_execution_repair_result" => &["schemaVersion", "repairId", "deploymentFailureRef"],
+        _ => &[],
+    }
+}
+
+fn domain_validation_paths_for_artifact(artifact_kind: &str) -> &'static [&'static str] {
+    match artifact_kind {
+        "architecture_section_candidate" => &["content"],
+        "task_plan_candidate"
+        | "task_result"
+        | "task_result_repair"
+        | "review_result"
+        | "manual_review_resolution"
+        | "taskplan_repair"
+        | "architecture_artifact_repair"
+        | "deploy_execution_repair_result" => &["$"],
+        _ => &[],
+    }
+}
+
+fn validation_contract_for_target(output_contract: &Value, target_id: &str) -> Option<Value> {
+    let projected = output_contract
+        .pointer(&format!(
+            "/schemaProjection/fieldContractByTarget/{target_id}"
+        ))
+        .or_else(|| output_contract.pointer("/schemaProjection/fieldContract"))?;
+    let schema_shape = output_contract
+        .get(&format!("{target_id}SchemaShape"))
+        .or_else(|| output_contract.get("schemaShape"));
+    let mut contract = schema_shape
+        .filter(|value| value.is_object())
+        .map(|schema| {
+            compact_agent_field_contract_with_required(
+                schema,
+                &required_top_level_fields(output_contract),
+                &BTreeMap::new(),
+                None,
+            )
+        })
+        .unwrap_or_else(|| projected.clone());
+    merge_contract_nodes(&mut contract, projected);
+
+    // The agent-facing projection is intentionally sparse to keep read groups
+    // small. The result template is the same contract's concrete tree and
+    // supplies nested fields that schemars omitted from the compact projection
+    // (including fields intentionally skipped from the Rust schema metadata).
+    if let Some(template) = output_contract
+        .get("resultTemplate")
+        .filter(|value| value.is_object())
+    {
+        let template_contract =
+            compact_manual_node(template, "candidate", false, &BTreeMap::new(), 0, None);
+        merge_contract_nodes(&mut contract, &template_contract);
+    }
+    Some(contract)
+}
+
+fn required_top_level_fields(output_contract: &Value) -> Vec<String> {
+    output_contract
+        .pointer("/schemaProjection/requiredTopLevelFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn merge_contract_nodes(base: &mut Value, supplement: &Value) {
+    let (Some(base_object), Some(supplement_object)) =
+        (base.as_object_mut(), supplement.as_object())
+    else {
+        return;
+    };
+
+    if base_object
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "unknown")
+    {
+        if let Some(kind) = supplement_object.get("type") {
+            base_object.insert("type".to_string(), kind.clone());
+        }
+    }
+
+    if let Some(supplement_properties) = supplement_object
+        .get("properties")
+        .and_then(Value::as_object)
+    {
+        let base_properties = base_object
+            .entry("properties".to_string())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("contract properties must be an object");
+        for (name, supplement_child) in supplement_properties {
+            match base_properties.get_mut(name) {
+                Some(base_child) => merge_contract_nodes(base_child, supplement_child),
+                None => {
+                    base_properties.insert(name.clone(), supplement_child.clone());
+                }
+            }
+        }
+    }
+
+    if !base_object.contains_key("items") {
+        if let Some(items) = supplement_object.get("items") {
+            base_object.insert("items".to_string(), items.clone());
+        }
+    } else if let (Some(base_items), Some(supplement_items)) =
+        (base_object.get_mut("items"), supplement_object.get("items"))
+    {
+        merge_contract_nodes(base_items, supplement_items);
+    }
+}
+
+fn validate_contract_node(
+    value: &Value,
+    contract: &Value,
+    path: &str,
+    root: bool,
+    mcp_normalized_fields: &BTreeSet<String>,
+    domain_validation_paths: &BTreeSet<String>,
+    issues: &mut Vec<RepairIssue>,
+) {
+    let expected_type = contract.get("type").and_then(Value::as_str);
+    if let Some(expected_type) = expected_type.filter(|kind| *kind != "unknown") {
+        let valid = match expected_type {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            _ if expected_type.starts_with("object:") => value.is_object(),
+            _ => true,
+        };
+        if !valid {
+            issues.push(RepairIssue {
+                code: "WRITE_CONTRACT_TYPE_INVALID".to_string(),
+                message: format!("{path} must be a {expected_type}."),
+                target_id: Some("candidate".to_string()),
+                field_path: Some(path.to_string()),
+            });
+            return;
+        }
+    }
+    if let Some(enum_values) = contract.get("enum").and_then(Value::as_array) {
+        if !enum_values.iter().any(|item| item == value) {
+            issues.push(RepairIssue {
+                code: "WRITE_CONTRACT_ENUM_INVALID".to_string(),
+                message: format!(
+                    "{path} must use one of the values declared by the current write contract."
+                ),
+                target_id: Some("candidate".to_string()),
+                field_path: Some(path.to_string()),
+            });
+        }
+    }
+    if is_domain_validation_path(path, domain_validation_paths) {
+        return;
+    }
+    if let (Some(object), Some(properties)) = (
+        value.as_object(),
+        contract.get("properties").and_then(Value::as_object),
+    ) {
+        if let Some(required) = contract.get("required").and_then(Value::as_array) {
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
+                    issues.push(RepairIssue {
+                        code: "WRITE_CONTRACT_FIELD_REQUIRED".to_string(),
+                        message: format!(
+                            "{path}.{field} is required by the current write contract."
+                        ),
+                        target_id: Some("candidate".to_string()),
+                        field_path: Some(format!("{path}.{field}")),
+                    });
+                }
+            }
+        }
+        for (field, field_value) in object {
+            let child_path = format!("{path}.{field}");
+            let Some(child_contract) = properties.get(field) else {
+                if (root && crate::MACHINE_OWNED_FIELDS.contains(&field.as_str()))
+                    || is_mcp_normalized_field(&child_path, mcp_normalized_fields)
+                {
+                    continue;
+                }
+                issues.push(RepairIssue {
+                    code: "WRITE_CONTRACT_FIELD_UNKNOWN".to_string(),
+                    message: format!("{child_path} is not declared by the current write contract."),
+                    target_id: Some("candidate".to_string()),
+                    field_path: Some(child_path),
+                });
+                continue;
+            };
+            validate_contract_node(
+                field_value,
+                child_contract,
+                &child_path,
+                false,
+                mcp_normalized_fields,
+                domain_validation_paths,
+                issues,
+            );
+        }
+    }
+    if let (Some(items), Some(item_contract)) = (value.as_array(), contract.get("items")) {
+        for (index, item) in items.iter().enumerate() {
+            validate_contract_node(
+                item,
+                item_contract,
+                &format!("{path}.{index}"),
+                false,
+                mcp_normalized_fields,
+                domain_validation_paths,
+                issues,
+            );
+        }
+    }
+}
+
+fn is_mcp_normalized_field(path: &str, fields: &BTreeSet<String>) -> bool {
+    let mut normalized: Vec<String> = Vec::new();
+    for part in path.strip_prefix("candidate.").unwrap_or(path).split('.') {
+        if part.parse::<usize>().is_ok() {
+            if let Some(previous) = normalized.last_mut() {
+                previous.push_str("[]");
+            }
+        } else {
+            normalized.push(part.to_string());
+        }
+    }
+    fields.contains(&normalized.join("."))
+}
+
+fn is_domain_validation_path(path: &str, paths: &BTreeSet<String>) -> bool {
+    if paths.contains("$") {
+        return true;
+    }
+    let normalized = path.strip_prefix("candidate.").unwrap_or(path);
+    paths.iter().any(|candidate| {
+        normalized == candidate || normalized.starts_with(&format!("{candidate}."))
+    })
 }
 
 fn compact_schema_node(

@@ -20,6 +20,7 @@ fn advance_after_submit_updates_phase_and_returns_next_result() {
             phase_id: "phase_1".to_string(),
             latest_refs: Default::default(),
             next_action: None,
+            pending_repair: None,
         }],
         updated_at: "1".to_string(),
     };
@@ -73,11 +74,13 @@ fn advance_after_submit_rejects_a_stale_phase_event() {
                 phase_id: "phase_1".to_string(),
                 latest_refs: Default::default(),
                 next_action: None,
+                pending_repair: None,
             },
             DeliveryPhaseState {
                 phase_id: "phase_2".to_string(),
                 latest_refs: Default::default(),
                 next_action: None,
+                pending_repair: None,
             },
         ],
         updated_at: "1".to_string(),

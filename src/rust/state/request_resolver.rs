@@ -90,6 +90,9 @@ pub fn read_field_group_flat(input: ReadFieldGroupInput) -> StateResult<ReadRequ
         .clone();
     let expanded_fields = group.expanded_fields();
     let fields = resolve_fields(&input.project_root, &request, &expanded_fields)?;
+    let contract_fingerprint = fields
+        .get("outputContract.contractFingerprint")
+        .and_then(|result| result.value.as_str());
     record_field_read_audit(
         &input.project_root,
         FieldReadAudit {
@@ -98,6 +101,7 @@ pub fn read_field_group_flat(input: ReadFieldGroupInput) -> StateResult<ReadRequ
             fields: &expanded_fields,
             source: "readFieldGroup",
             group_id: Some(&input.group_id),
+            contract_fingerprint,
             recorded_at: now_for_audit(),
         },
     );
@@ -136,6 +140,9 @@ pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadReq
         )));
     }
     let resolved = resolve_fields(&input.project_root, &request, &fields)?;
+    let contract_fingerprint = resolved
+        .get("outputContract.contractFingerprint")
+        .and_then(|result| result.value.as_str());
     record_field_read_audit(
         &input.project_root,
         FieldReadAudit {
@@ -144,6 +151,7 @@ pub fn read_request_fields(input: ReadRequestFieldsInput) -> StateResult<ReadReq
             fields: &fields,
             source: "internalReadRequestFields",
             group_id: None,
+            contract_fingerprint,
             recorded_at: now_for_audit(),
         },
     );

@@ -39,6 +39,8 @@ pub struct FieldReadAudit<'a> {
     pub source: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_fingerprint: Option<&'a str>,
     pub recorded_at: String,
 }
 
@@ -60,6 +62,7 @@ pub fn record_request_inspect_audit(project_root: &str, request_ref: &str, reque
             fields: &[],
             source: "inspectRequest",
             group_id: None,
+            contract_fingerprint: None,
             recorded_at: now_for_audit(),
         },
     );
@@ -95,6 +98,50 @@ pub fn required_groups_not_read(
         .filter(|group_id| !read_groups.contains(*group_id))
         .cloned()
         .collect()
+}
+
+pub fn required_groups_not_read_at_fingerprint(
+    project_root: &str,
+    request_ref: &str,
+    required_group_ids: &[String],
+    contract_group_ids: &[String],
+    contract_fingerprint: Option<&str>,
+) -> Vec<String> {
+    let entries = read_audit_entries(project_root);
+    let read_groups = entries
+        .iter()
+        .filter(|entry| {
+            entry.get("requestRef").and_then(serde_json::Value::as_str) == Some(request_ref)
+                && entry.get("source").and_then(serde_json::Value::as_str) == Some("readFieldGroup")
+        })
+        .filter_map(|entry| {
+            let group_id = entry.get("groupId").and_then(serde_json::Value::as_str)?;
+            Some(group_id.to_string())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut missing = required_group_ids
+        .iter()
+        .filter(|group_id| !read_groups.contains(*group_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(contract_fingerprint) = contract_fingerprint {
+        for group_id in contract_group_ids {
+            let matched = entries.iter().any(|entry| {
+                entry.get("requestRef").and_then(serde_json::Value::as_str) == Some(request_ref)
+                    && entry.get("source").and_then(serde_json::Value::as_str)
+                        == Some("readFieldGroup")
+                    && entry.get("groupId").and_then(serde_json::Value::as_str) == Some(group_id)
+                    && entry
+                        .get("contractFingerprint")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(contract_fingerprint)
+            });
+            if !matched && !missing.contains(group_id) {
+                missing.push(group_id.clone());
+            }
+        }
+    }
+    missing
 }
 
 fn read_audit_entries(project_root: &str) -> Vec<serde_json::Value> {

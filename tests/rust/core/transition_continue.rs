@@ -3,9 +3,9 @@ use std::{cell::RefCell, collections::BTreeMap};
 use delivery_core::{
     apply_delivery_index, DeliveryIndex, DeliveryLifecycleStatus, DeliveryPhaseState,
     DomainDispatcher, LoomCoreError, LoomMcpActionResult, LoomMcpDoneResult, LoomResult,
-    OperationContext, OperationLease, OperationLeaseStatus, OperationType, ProjectStatus,
-    RouteAction, RouteActionKind, TransitionDiagnostic, TransitionEngine, TransitionStore,
-    ValidatedPlanInput,
+    OperationContext, OperationLease, OperationLeaseStatus, OperationType, PendingRepair,
+    ProjectStatus, RepairIssue, RouteAction, RouteActionKind, TransitionDiagnostic,
+    TransitionEngine, TransitionStore, ValidatedPlanInput,
 };
 use serde_json::json;
 
@@ -92,6 +92,43 @@ fn continue_returns_active_operation_for_fresh_lease() {
 }
 
 #[test]
+fn continue_cannot_finish_while_a_repair_is_pending() {
+    let mut status = ProjectStatus::empty("1");
+    let mut delivery = sample_delivery(RouteAction::done("should not be reached"));
+    delivery.phases[0].pending_repair = Some(PendingRepair {
+        request_ref: "loom://projects/project_1/requests/repair_1".to_string(),
+        target_file: ".loom/agent-writable/result.json".to_string(),
+        target_ids: vec!["candidate".to_string()],
+        issues: vec![RepairIssue {
+            code: "INVALID_SCHEMA".to_string(),
+            message: "repair required".to_string(),
+            target_id: Some("candidate".to_string()),
+            field_path: Some("content".to_string()),
+        }],
+        resubmit_tool: "loom.repairSubmitFile".to_string(),
+        fix_scope: Some("candidate_only".to_string()),
+        read_groups: vec![],
+    });
+    apply_delivery_index(&mut status, &delivery);
+    let store = MemoryStore::new(status).with_delivery(delivery);
+    let engine = TransitionEngine {
+        store,
+        dispatcher: TestDispatcher,
+    };
+
+    let result = engine
+        .continue_current(OperationContext {
+            project_root: "/tmp/project".to_string(),
+        })
+        .expect("continue result");
+    let LoomMcpActionResult::RepairableError(repair) = result else {
+        panic!("expected pending repair result");
+    };
+    assert!(!repair.stop_allowed);
+    assert_eq!(repair.resubmit_tool, "loom.repairSubmitFile");
+}
+
+#[test]
 fn continue_activates_next_phase_before_dispatching() {
     let mut status = ProjectStatus::empty("1");
     let delivery = DeliveryIndex {
@@ -113,6 +150,7 @@ fn continue_activates_next_phase_before_dispatching() {
                     details: None,
                     target_phase_id: Some("phase_2".to_string()),
                 }),
+                pending_repair: None,
             },
             DeliveryPhaseState {
                 phase_id: "phase_2".to_string(),
@@ -127,6 +165,7 @@ fn continue_activates_next_phase_before_dispatching() {
                     details: None,
                     target_phase_id: None,
                 }),
+                pending_repair: None,
             },
         ],
         updated_at: "1".to_string(),
@@ -240,6 +279,7 @@ fn sample_delivery(next_action: RouteAction) -> DeliveryIndex {
             phase_id: "phase_1".to_string(),
             latest_refs: Default::default(),
             next_action: Some(next_action),
+            pending_repair: None,
         }],
         updated_at: "1".to_string(),
     }
