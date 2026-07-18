@@ -17,6 +17,7 @@ pub enum DeliveryLifecycleStatus {
     Reviewing,
     Repairing,
     Completed,
+    CompletedWithOverride,
     Blocked,
 }
 
@@ -137,7 +138,7 @@ pub fn apply_delivery_index(status: &mut ProjectStatus, delivery: &DeliveryIndex
         status.deliveries.push(entry);
     }
     match delivery.status {
-        DeliveryLifecycleStatus::Completed => {
+        DeliveryLifecycleStatus::Completed | DeliveryLifecycleStatus::CompletedWithOverride => {
             status.active_delivery_id = None;
             status.last_completed_delivery_id = Some(delivery.delivery_id.clone());
         }

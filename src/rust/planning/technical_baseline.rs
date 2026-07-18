@@ -977,6 +977,7 @@ where
     };
     let baseline_file = technical_baseline_file(project_root, &delivery_id);
     state::store::write_json_atomic(&baseline_file, &persisted)?;
+    state::store::remove_file_if_exists(&candidate_file)?;
     let baseline_ref = to_project_relative(project_root, &baseline_file)?;
 
     let store = FileTransitionStore;

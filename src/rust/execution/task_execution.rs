@@ -29,8 +29,7 @@ use crate::{
     templates::{
         code_quality_execution_context, code_quality_requirements_for_task,
         frontend_quality_self_check_applies, frontend_self_check_applies,
-        runtime_delivery_evidence_applies, task_result_required_top_level_fields,
-        task_result_schema_shape, task_result_template_with_code_quality,
+        runtime_delivery_evidence_applies, task_result_contract, task_result_contract_read_fields,
     },
 };
 
@@ -451,10 +450,16 @@ fn existing_execution_next_if_current(
     else {
         return Ok(None);
     };
-    let Some(result_file) = phase.latest_refs.get("taskExecutionResultFile") else {
+    let Some(result_file) = action
+        .details
+        .as_ref()
+        .and_then(|details| details.get("resultFile"))
+        .and_then(Value::as_str)
+    else {
         return Ok(None);
     };
-    execute_task_next_from_request(project_root, request_ref, task, result_file.clone()).map(Some)
+    execute_task_next_from_request(project_root, request_ref, task, result_file.to_string())
+        .map(Some)
 }
 
 fn build_execution_request(
@@ -505,7 +510,11 @@ fn build_execution_request(
         .map(|profile| browser_verification_context(root, task_plan, profile));
     let architecture_projection =
         task_scoped_architecture_projection(&aac, project_api_contract.as_ref(), &request_task);
-    let schema_shape = task_result_schema_shape(&request_task, browser_verification_profile);
+    let result_contract = task_result_contract(
+        &request_task,
+        &code_quality_requirements,
+        browser_verification_profile,
+    );
     let dependency_results = dependency_results(run, task);
     let read_groups = task_execution_read_groups(
         &request_task,
@@ -595,18 +604,14 @@ fn build_execution_request(
                 "required": true,
                 "description": "Write the TaskResult JSON for this planned task."
             }],
-            "requiredTopLevelFields": task_result_required_top_level_fields(&request_task),
+            "requiredTopLevelFields": result_contract["requiredTopLevelFields"].clone(),
             "blockedReasonOptions": [
                 {"code": "DESIGN_INSUFFICIENT", "nextNode": "architecture_artifact_repair"},
                 {"code": "TASKPLAN_INVALID", "nextNode": "taskplan_repair"},
                 {"code": "DEPENDENCY_NOT_READY", "nextNode": "wait_dependency"}
             ],
-            "schemaShape": schema_shape,
-            "resultTemplate": task_result_template_with_code_quality(
-                &request_task,
-                &code_quality_requirements,
-                browser_verification_profile,
-            ),
+            "schemaShape": result_contract["schemaShape"].clone(),
+            "resultTemplate": result_contract["resultTemplate"].clone(),
             "resultRules": result_rules
         },
         "requestReadPlan": { "groups": read_groups }
@@ -1178,47 +1183,12 @@ fn task_execution_read_groups(
         "enumRefs.verificationStatus",
         "enumRefs.verificationEvidence",
         "enumRefs.selfRepairStopReason",
-        "outputContract.resultFile",
-        "outputContract.requiredTopLevelFields",
-        "outputContract.resultTemplate",
-        "outputContract.schemaShape.properties.status",
-        "outputContract.schemaShape.properties.changedFiles",
-        "outputContract.schemaShape.properties.noChangeReason",
-        "outputContract.schemaShape.properties.verificationResults",
-        "outputContract.schemaShape.properties.selfRepairSummary",
-        "outputContract.schemaShape.properties.failure",
-        "outputContract.schemaShape.properties.executionContinuity",
-        "outputContract.schemaShape.properties.notes",
-        "outputContract.schemaShape.properties.requirementDetailEvidence",
-        "outputContract.schemaShape.properties.blockedReasons",
-        "outputContract.resultRules",
-        "outputContract.blockedReasonOptions",
         "executionRules.completionBarrier",
         "executionRules.finalResponseGuard",
         "executionRules.completionContinuityRequirement",
         "executionRules.verificationCommandSchedulingRules",
     ];
-    if frontend_self_check_applies(task) {
-        result_fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
-    }
-    if frontend_quality_self_check_applies(task) {
-        result_fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
-    }
-    if runtime_delivery_evidence_applies(task) {
-        result_fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
-    }
-    if !task.concept_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.conceptEvidence");
-    }
-    if !task.architecture_quality_requirement_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.architectureQualityEvidence");
-    }
-    if !task.api_contract_requirement_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.apiContractEvidence");
-    }
-    if !task.code_quality_requirement_refs.is_empty() {
-        result_fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
-    }
+    result_fields.extend(task_result_contract_read_fields(task));
 
     let mut groups = vec![
         json!({
@@ -1413,33 +1383,69 @@ fn task_needs_controlled_runtime_probe_rules(task: &TaskDefinition) -> bool {
 }
 
 pub(crate) fn runtime_delivery_requirement_read_fields(task: &TaskDefinition) -> Vec<&'static str> {
+    runtime_delivery_requirement_read_fields_for_prefix(task, false)
+}
+
+pub(crate) fn task_projection_runtime_delivery_requirement_read_fields(
+    task: &TaskDefinition,
+) -> Vec<&'static str> {
+    runtime_delivery_requirement_read_fields_for_prefix(task, true)
+}
+
+fn runtime_delivery_requirement_read_fields_for_prefix(
+    task: &TaskDefinition,
+    task_projection: bool,
+) -> Vec<&'static str> {
     let Some(requirement) = task.runtime_delivery_requirement.as_ref() else {
         return vec![];
     };
-    let mut fields = vec![
-        "task.runtimeDeliveryRequirement.appliesToThisTask",
-        "task.runtimeDeliveryRequirement.reason",
-    ];
+    let (applies, reason, runtime_ref, affected, checks, expected, forbidden, source, failure_ref) =
+        if task_projection {
+            (
+                "taskProjection.runtimeDeliveryRequirement.appliesToThisTask",
+                "taskProjection.runtimeDeliveryRequirement.reason",
+                "taskProjection.runtimeDeliveryRequirement.runtimeDeliveryRef",
+                "taskProjection.runtimeDeliveryRequirement.affectedContractFields",
+                "taskProjection.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                "taskProjection.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+                "taskProjection.runtimeDeliveryRequirement.forbiddenActions",
+                "taskProjection.runtimeDeliveryRequirement.source",
+                "taskProjection.runtimeDeliveryRequirement.deploymentFailureRef",
+            )
+        } else {
+            (
+                "task.runtimeDeliveryRequirement.appliesToThisTask",
+                "task.runtimeDeliveryRequirement.reason",
+                "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
+                "task.runtimeDeliveryRequirement.affectedContractFields",
+                "task.runtimeDeliveryRequirement.requiredCodeLevelChecks",
+                "task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult",
+                "task.runtimeDeliveryRequirement.forbiddenActions",
+                "task.runtimeDeliveryRequirement.source",
+                "task.runtimeDeliveryRequirement.deploymentFailureRef",
+            )
+        };
+    let mut fields = vec![applies, reason];
     if requirement.runtime_delivery_ref.is_some() {
-        fields.push("task.runtimeDeliveryRequirement.runtimeDeliveryRef");
+        fields.push(runtime_ref);
     }
     if !requirement.affected_contract_fields.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.affectedContractFields");
+        fields.push(affected);
     }
     if !requirement.required_code_level_checks.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.requiredCodeLevelChecks");
+        fields.push(checks);
     }
     if !requirement.evidence_expected_in_task_result.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.evidenceExpectedInTaskResult");
+        fields.push(expected);
     }
     if !requirement.forbidden_actions.is_empty() {
-        fields.push("task.runtimeDeliveryRequirement.forbiddenActions");
+        fields.push(forbidden);
     }
     if requirement.source.is_some() {
-        fields.push("task.runtimeDeliveryRequirement.source");
+        fields.push(source);
     }
     if requirement.deployment_failure_ref.is_some() {
-        fields.push("task.runtimeDeliveryRequirement.deploymentFailureRef");
+        fields.push(failure_ref);
     }
     fields
 }
@@ -2869,10 +2875,6 @@ fn update_route_for_execution(
             "taskExecutionRequestRef".to_string(),
             request_ref.to_string(),
         );
-        phase.latest_refs.insert(
-            "taskExecutionResultFile".to_string(),
-            result_file.to_string(),
-        );
         phase.next_action = Some(RouteAction {
             kind: RouteActionKind::ContinueExecution,
             source: "task_execution_request".to_string(),
@@ -2883,7 +2885,8 @@ fn update_route_for_execution(
             details: Some(json!({
                 "taskId": task.task_id,
                 "groupId": task.group_id,
-                "taskPlanRunId": run.run_id
+                "taskPlanRunId": run.run_id,
+                "resultFile": result_file
             })),
             target_phase_id: None,
         });

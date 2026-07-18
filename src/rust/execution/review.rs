@@ -1158,6 +1158,7 @@ where
     };
     let persisted = review_result_file(root, &locator, &result.review_id);
     state::store::write_json_atomic(&persisted, &result)?;
+    discard_agent_candidate(root, &target.path)?;
     let result_ref = to_project_relative(root, &persisted)?;
     state::store::write_json_atomic(
         &review_latest_file(root, &locator),
@@ -2606,6 +2607,7 @@ where
     let persisted =
         manual_review_resolution_file(root, &locator, &resolution.manual_review_resolution_id);
     state::store::write_json_atomic(&persisted, &resolution)?;
+    discard_agent_candidate(root, &target.path)?;
     let resolution_ref = to_project_relative(root, &persisted)?;
     apply_browser_quality_resolution(&input.project_root, &locator, &resolution, &fields)?;
     let effective_action = effective_manual_review_action(&resolution);
@@ -3363,7 +3365,7 @@ fn update_delivery_after_manual_review_resolution(
         );
     }
     if effective_action.kind == RouteActionKind::Done {
-        delivery.status = DeliveryLifecycleStatus::Completed;
+        delivery.status = DeliveryLifecycleStatus::CompletedWithOverride;
     }
     delivery.updated_at = state::store::now_string();
     store
@@ -3418,6 +3420,16 @@ fn write_review_result(
             }),
         ),
     ))
+}
+
+fn discard_agent_candidate(
+    project_root: &Path,
+    relative_path: &str,
+) -> Result<(), state::store::StateError> {
+    if !relative_path.starts_with(".loom/agent-writable/") {
+        return Ok(());
+    }
+    state::store::remove_file_if_exists(&from_project_relative(project_root, relative_path)?)
 }
 
 fn load_task_results(

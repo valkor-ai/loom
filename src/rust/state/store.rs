@@ -39,6 +39,14 @@ pub fn path_exists(path: &Path) -> bool {
     path.exists()
 }
 
+pub fn remove_file_if_exists(path: &Path) -> StateResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(StateError::Io(error)),
+    }
+}
+
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> StateResult<T> {
     let raw = fs::read_to_string(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {

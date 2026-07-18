@@ -172,8 +172,18 @@ impl TransitionStore for FileTransitionStore {
         }
         write_json_atomic(&file, diagnostic)
             .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
-        write_json_atomic(&latest, diagnostic)
-            .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
+        let decision_ref = crate::paths::to_project_relative(&paths.root, &file)
+            .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))?;
+        write_json_atomic(
+            &latest,
+            &serde_json::json!({
+                "schemaVersion": "1.0",
+                "decisionId": diagnostic.decision_id,
+                "decisionRef": decision_ref,
+                "updatedAt": diagnostic.created_at
+            }),
+        )
+        .map_err(|error| LoomCoreError::failure("STATE_ERROR", error.to_string()))
     }
 
     fn now_millis(&self) -> u128 {

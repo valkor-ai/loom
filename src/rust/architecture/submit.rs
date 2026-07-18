@@ -25,8 +25,8 @@ use state::{
 
 use crate::{
     paths::{
-        architecture_contract_file, architecture_latest_file, architecture_section_snapshot_file,
-        project_api_contract_file, section_name,
+        architecture_contract_file, architecture_latest_file, project_api_contract_file,
+        section_name,
     },
     request::{
         architecture_quality_template_from_candidate_plan, architecture_read_groups,
@@ -319,16 +319,9 @@ where
         delivery_id: delivery_id.clone(),
         phase_id: phase_id.clone(),
     };
-    let snapshot_file = architecture_section_snapshot_file(
-        project_root,
-        &locator,
-        &authorized.request_id,
-        candidate.section,
-    );
     if candidate_normalized {
         state::store::write_json_atomic(&candidate_file, &candidate)?;
     }
-    state::store::write_json_atomic(&snapshot_file, &candidate)?;
 
     let next_section = next_section(candidate.section);
     if let Some(next_section) = next_section {

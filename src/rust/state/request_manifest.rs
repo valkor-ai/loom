@@ -14,8 +14,8 @@ use crate::{
         select_source_ref_registry, select_value, selector_parts,
     },
     paths::{
-        from_project_relative, request_file_for_id, request_refs_dir,
-        request_storage_manifest_file, to_project_relative,
+        from_project_relative, request_file_for_id, request_storage_manifest_file,
+        shared_request_refs_dir, to_project_relative,
     },
     project::initialize_project,
     read_audit::{now_for_audit, record_request_size_audit, ReadPlanSizeWarning, RequestSizeAudit},
@@ -23,8 +23,8 @@ use crate::{
         upsert_request_index_entry, validate_request_id, RequestIndexEntry, RequestSourceProtocol,
     },
     store::{
-        now_string, read_json, read_json_value, read_text, write_json_atomic, StateError,
-        StateResult,
+        ensure_dir, now_string, read_json, read_json_value, read_text, write_json_atomic,
+        StateError, StateResult,
     },
 };
 
@@ -182,12 +182,7 @@ pub fn write_native_request(
         )?;
         canonicalize_context_refs(root_object, &read_groups);
         let used_ref_keys = used_storage_ref_keys(root_object, &read_groups);
-        let manifest_refs = write_storage_refs(
-            &project_paths.root,
-            &request_file,
-            root_object,
-            &used_ref_keys,
-        )?;
+        let manifest_refs = write_storage_refs(&project_paths.root, root_object, &used_ref_keys)?;
         let read_plan_warnings = validate_read_plan_contract(
             &project_paths.root,
             root_object,
@@ -426,18 +421,16 @@ fn read_group_ref_from_value(
 
 fn write_storage_refs(
     project_root: &Path,
-    request_file: &Path,
     root_object: &mut Map<String, Value>,
     used_ref_keys: &BTreeSet<String>,
 ) -> StateResult<BTreeMap<String, RequestStorageManifestRef>> {
-    let refs_dir = request_refs_dir(request_file);
     let mut refs = BTreeMap::new();
     for key in SPLITTABLE_REF_KEYS {
         let Some(value) = root_object.remove(*key) else {
             continue;
         };
         if used_ref_keys.contains(*key) {
-            write_ref(project_root, &refs_dir, key, value, &mut refs)?;
+            write_ref(project_root, key, value, &mut refs)?;
         }
     }
     Ok(refs)
@@ -445,12 +438,14 @@ fn write_storage_refs(
 
 fn write_ref(
     project_root: &Path,
-    refs_dir: &Path,
     key: &str,
     value: Value,
     refs: &mut BTreeMap<String, RequestStorageManifestRef>,
 ) -> StateResult<()> {
-    let ref_file = refs_dir.join(format!("{}.json", kebab_case(key)));
+    let fingerprint = delivery_core::contract_fingerprint(&value).replace(':', "-");
+    let refs_dir = shared_request_refs_dir(project_root);
+    ensure_dir(&refs_dir)?;
+    let ref_file = refs_dir.join(format!("{fingerprint}.json"));
     write_json_atomic(&ref_file, &value)?;
     let relative = to_project_relative(project_root, &ref_file)?;
     refs.insert(
@@ -458,7 +453,7 @@ fn write_ref(
         RequestStorageManifestRef {
             ref_key: format!("{key}Ref"),
             r#ref: relative.clone(),
-            purpose: format!("Private storage ref for {key}. Not agent-facing."),
+            purpose: format!("Content-addressed private storage ref for {key}. Not agent-facing."),
         },
     );
     Ok(())
@@ -841,23 +836,6 @@ fn string_field(object: &Map<String, Value>, key: &str) -> StateResult<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| StateError::InvalidArgument(format!("{key} is required")))
-}
-
-fn kebab_case(value: &str) -> String {
-    let mut output = String::new();
-    for (index, ch) in value.chars().enumerate() {
-        if ch.is_ascii_uppercase() {
-            if index > 0 {
-                output.push('-');
-            }
-            output.push(ch.to_ascii_lowercase());
-        } else if ch == '_' || ch == ' ' {
-            output.push('-');
-        } else {
-            output.push(ch);
-        }
-    }
-    output
 }
 
 pub fn encode_component(value: &str) -> String {

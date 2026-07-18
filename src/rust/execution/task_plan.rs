@@ -460,7 +460,14 @@ fn taskplan_read_groups(
         "contextProjection.requirementDetailTransfer.acceptanceDetails",
         "contextProjection.requirementDetailTransfer.businessFlowDetails",
         "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-        "contextProjection.requirementDetailTransfer.architectureDetails",
+        "contextProjection.requirementDetailTransfer.architectureDetails.modules",
+        "contextProjection.requirementDetailTransfer.architectureDetails.applicationInteractions",
+        "contextProjection.requirementDetailTransfer.architectureDetails.entities",
+        "contextProjection.requirementDetailTransfer.architectureDetails.interfaces",
+        "contextProjection.requirementDetailTransfer.architectureDetails.userFlows",
+        "contextProjection.requirementDetailTransfer.architectureDetails.stateMachines",
+        "contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails",
+        "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality",
         "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
         "contextProjection.requirementDetailTransfer.conceptRefs",
         "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
@@ -959,6 +966,11 @@ where
             "updatedAt": run.updated_at
         }),
     )?;
+    state::store::remove_file_if_exists(&from_project_relative(root, &outline_ref)?)?;
+    for group in &outline.groups {
+        let group_file = group_pattern.replace("{groupId}", &group.group_id);
+        state::store::remove_file_if_exists(&from_project_relative(root, &group_file)?)?;
+    }
 
     let store = FileTransitionStore;
     let mut status = store
@@ -3434,12 +3446,12 @@ fn requirement_detail_transfer(
             "evidenceRule": "TaskResult must be able to show which concrete behavior was implemented or verified."
         },
         "architectureDetails": {
-            "modules": aac.modules,
+            "modules": compact_artifact_values(&aac.modules, &["moduleId", "name", "responsibilities", "layer", "scopeRefs", "acceptanceRefs"]),
             "applicationInteractions": compact_application_interactions(aac),
-            "entities": aac.data_model.get("entities").cloned().unwrap_or(Value::Array(vec![])),
-            "interfaces": aac.interfaces,
-            "userFlows": aac.user_flows,
-            "stateMachines": aac.state_machines,
+            "entities": compact_artifact_array(aac.data_model.get("entities"), &["entityId", "name", "fields", "relationships", "scopeRefs", "acceptanceRefs"]),
+            "interfaces": aac.interfaces.iter().map(compact_api_interface_for_task_plan).collect::<Vec<_>>(),
+            "userFlows": compact_artifact_values(&aac.user_flows, &["flowId", "name", "kind", "steps", "actorRefs", "scopeRefs", "acceptanceRefs"]),
+            "stateMachines": compact_artifact_values(&aac.state_machines, &["stateMachineId", "name", "states", "transitions", "scopeRefs", "acceptanceRefs"]),
             "frontendOperationPathDetails": frontend_operation_path_details(aac),
             "architectureQuality": compact_architecture_quality(aac)
         },
@@ -3483,6 +3495,40 @@ fn compact_architecture_quality(aac: &ArchitectureArtifactContract) -> Value {
             "verificationHints": &risk.verification_hints
         })).collect::<Vec<_>>()
     })
+}
+
+fn compact_artifact_values(values: &[Value], keys: &[&str]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| compact_artifact_value(value, keys))
+        .collect()
+}
+
+fn compact_artifact_array(value: Option<&Value>, keys: &[&str]) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| compact_artifact_value(item, keys))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+fn compact_artifact_value(value: &Value, keys: &[&str]) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut compact = serde_json::Map::new();
+    for key in keys {
+        if let Some(value) = object.get(*key).filter(|value| !value.is_null()) {
+            compact.insert((*key).to_string(), value.clone());
+        }
+    }
+    Value::Object(compact)
 }
 
 fn compact_application_interactions(aac: &ArchitectureArtifactContract) -> Vec<Value> {

@@ -295,6 +295,64 @@ pub(crate) fn task_result_template_with_code_quality(
     template
 }
 
+pub(crate) fn task_result_contract(
+    task: &TaskDefinition,
+    code_quality_requirements: &[CodeQualityRequirement],
+    browser_profile: Option<&BrowserVerificationProfile>,
+) -> Value {
+    json!({
+        "requiredTopLevelFields": task_result_required_top_level_fields(task),
+        "schemaShape": task_result_schema_shape(task, browser_profile),
+        "resultTemplate": task_result_template_with_code_quality(
+            task,
+            code_quality_requirements,
+            browser_profile,
+        )
+    })
+}
+
+pub(crate) fn task_result_contract_read_fields(task: &TaskDefinition) -> Vec<&'static str> {
+    let mut fields = vec![
+        "outputContract.resultFile",
+        "outputContract.requiredTopLevelFields",
+        "outputContract.resultTemplate",
+        "outputContract.schemaShape.properties.status",
+        "outputContract.schemaShape.properties.changedFiles",
+        "outputContract.schemaShape.properties.noChangeReason",
+        "outputContract.schemaShape.properties.verificationResults",
+        "outputContract.schemaShape.properties.selfRepairSummary",
+        "outputContract.schemaShape.properties.failure",
+        "outputContract.schemaShape.properties.executionContinuity",
+        "outputContract.schemaShape.properties.notes",
+        "outputContract.schemaShape.properties.requirementDetailEvidence",
+        "outputContract.schemaShape.properties.blockedReasons",
+        "outputContract.resultRules",
+        "outputContract.blockedReasonOptions",
+    ];
+    if frontend_self_check_applies(task) {
+        fields.push("outputContract.schemaShape.properties.frontendExperienceSelfCheck");
+    }
+    if frontend_quality_self_check_applies(task) {
+        fields.push("outputContract.schemaShape.properties.frontendQualitySelfCheck");
+    }
+    if runtime_delivery_evidence_applies(task) {
+        fields.push("outputContract.schemaShape.properties.runtimeDeliveryEvidence");
+    }
+    if !task.concept_refs.is_empty() {
+        fields.push("outputContract.schemaShape.properties.conceptEvidence");
+    }
+    if architecture_quality_evidence_applies(task) {
+        fields.push("outputContract.schemaShape.properties.architectureQualityEvidence");
+    }
+    if api_contract_evidence_applies(task) {
+        fields.push("outputContract.schemaShape.properties.apiContractEvidence");
+    }
+    if code_quality_evidence_applies(task) {
+        fields.push("outputContract.schemaShape.properties.codeQualityEvidence");
+    }
+    fields
+}
+
 pub(crate) fn task_result_schema_shape(
     task: &TaskDefinition,
     browser_profile: Option<&BrowserVerificationProfile>,

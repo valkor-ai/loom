@@ -47,18 +47,6 @@ pub fn project_api_contract_file(project_root: &Path, delivery_id: &str) -> Path
         .join("current.json")
 }
 
-pub fn architecture_section_snapshot_file(
-    project_root: &Path,
-    locator: &DeliveryPhaseLocator,
-    request_id: &str,
-    section: ArchitectureSectionGroup,
-) -> PathBuf {
-    workspace_dir(project_root, locator)
-        .join("architecture-sections")
-        .join(request_id)
-        .join(format!("{}.json", section_name(section)))
-}
-
 pub fn section_name(section: ArchitectureSectionGroup) -> &'static str {
     match section {
         ArchitectureSectionGroup::Foundation => "foundation",

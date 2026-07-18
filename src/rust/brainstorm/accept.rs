@@ -214,6 +214,7 @@ where
             .map(|action| action.kind.clone()),
         &state::store::now_string(),
     )?;
+    state::store::remove_file_if_exists(&candidate_file)?;
 
     let store = FileTransitionStore;
     let mut delivery = store

@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -101,7 +104,12 @@ fn validate_project_id(project_id: &str) -> StateResult<()> {
 }
 
 fn register_user_project(project_id: &str, project_root: &str) -> StateResult<()> {
-    let mut registry = read_user_registry().unwrap_or(UserProjectRegistry {
+    // The registry is process-wide; protect its read-modify-write cycle when
+    // multiple delivery operations initialize projects concurrently.
+    let _guard = project_registry_lock()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let mut registry = read_user_registry_unlocked().unwrap_or(UserProjectRegistry {
         schema_version: 1,
         projects: vec![],
     });
@@ -127,6 +135,13 @@ fn register_user_project(project_id: &str, project_root: &str) -> StateResult<()
 }
 
 fn read_user_registry() -> StateResult<UserProjectRegistry> {
+    let _guard = project_registry_lock()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    read_user_registry_unlocked()
+}
+
+fn read_user_registry_unlocked() -> StateResult<UserProjectRegistry> {
     let file = user_registry_file()?;
     if !path_exists(&file) {
         return Ok(UserProjectRegistry {
@@ -135,6 +150,11 @@ fn read_user_registry() -> StateResult<UserProjectRegistry> {
         });
     }
     read_json(&file)
+}
+
+fn project_registry_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn user_registry_file() -> StateResult<PathBuf> {

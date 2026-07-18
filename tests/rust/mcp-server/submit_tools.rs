@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     process::Command,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{Mutex, OnceLock},
 };
 
 use delivery_core::{
@@ -26,7 +26,7 @@ fn submit_tool_returns_repairable_error_for_missing_target_file() {
         fixture.root_str(),
     );
 
-    assert_eq!(result["state"], "repairable_error");
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
     assert_eq!(result["targetFile"], ".loom/agent-writable/candidate.json");
     assert_eq!(result["targetIds"], json!(["candidate"]));
     assert_eq!(result["issues"][0]["code"], "TARGET_MISSING");
@@ -203,7 +203,7 @@ fn brainstorm_phase_scope_rejects_single_wide_capability_closure_query() {
 }
 
 #[test]
-fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
+fn brainstorm_submit_rejects_candidate_before_schema_parse_when_required_fields_are_missing() {
     let fixture = Fixture::new("submit-schema-invalid");
     let request_ref = start_brainstorm_candidate_write_request(&fixture);
     write_candidate_target(
@@ -226,11 +226,12 @@ fn brainstorm_submit_returns_repairable_error_for_schema_invalid_candidate() {
     );
 
     assert_eq!(result["state"], "repairable_error");
-    assert_eq!(
-        result["issues"][0]["code"],
-        "BRAINSTORM_CANDIDATE_SCHEMA_INVALID"
-    );
-    assert_eq!(result["resubmitTool"], "loom.brainstormAcceptFile");
+    assert!(result["issues"]
+        .as_array()
+        .expect("repair issues")
+        .iter()
+        .any(|issue| issue["code"] == "WRITE_CONTRACT_FIELD_REQUIRED"));
+    assert_eq!(result["resubmitTool"], "brainstormAcceptFile");
 }
 
 #[test]
@@ -524,13 +525,12 @@ fn brainstorm_submit_derives_glossary_update_ids_instead_of_repairing_agent_outp
         .rsplit('/')
         .next()
         .expect("brainstorm request id");
-    let stored_output_contract = read_json_value(
-        &fixture
-            .root
-            .join(".loom/requests")
-            .join(format!("{request_id}.refs/output-contract.json")),
-    )
-    .expect("read stored output contract");
+    let output_contract_ref =
+        state::request_manifest::request_storage_ref(&fixture.root, request_id, "outputContract")
+            .expect("read output contract ref")
+            .expect("output contract ref");
+    let stored_output_contract = read_json_value(&fixture.root.join(output_contract_ref))
+        .expect("read stored output contract");
     let glossary_update_schema = &stored_output_contract["schemaShape"]["$defs"]["GlossaryUpdate"];
     assert!(glossary_update_schema["properties"]
         .get("updateId")
@@ -633,14 +633,11 @@ fn brainstorm_submit_rejects_flattened_glossary_concept_fields() {
     );
 
     assert_eq!(result["state"], "repairable_error", "{result:#}");
-    assert_eq!(
-        result["issues"][0]["code"],
-        "BRAINSTORM_CANDIDATE_SCHEMA_INVALID"
-    );
-    assert!(result["issues"][0]["message"]
-        .as_str()
-        .expect("schema issue message")
-        .contains("unknown field"));
+    assert!(result["issues"]
+        .as_array()
+        .expect("repair issues")
+        .iter()
+        .any(|issue| issue["code"] == "WRITE_CONTRACT_FIELD_UNKNOWN"));
 }
 
 #[test]
@@ -2853,9 +2850,17 @@ fn architecture_coverage_submit_persists_aac_and_routes_to_taskplan_generation()
         .iter()
         .filter(|(field, _)| field.starts_with("sourceRefs."))
         .all(|(_, field)| !field.value.is_null()));
-    let architecture_quality = &taskplan_core_fields
-        ["contextProjection.requirementDetailTransfer.architectureDetails"]
-        .value["architectureQuality"];
+    let architecture_quality = &state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: taskplan_request_ref.to_string(),
+        fields: vec![
+            "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality"
+                .to_string(),
+        ],
+    })
+    .expect("read compact architecture quality")
+    .fields["contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality"]
+        .value;
     assert!(architecture_quality["decisions"]
         .as_array()
         .is_some_and(|items| !items.is_empty()));
@@ -3677,20 +3682,24 @@ fn task_result_repair_carries_compact_frontend_quality_context() {
         .flat_map(read_group_fields_from_json)
         .collect::<BTreeSet<_>>();
     assert!(!repair_read_fields
-        .contains("task.frontendExperienceRequirement.executionGuidance.uiQuality"));
-    assert!(!repair_read_fields.contains("task.frontendExperienceRequirement.uiQualityContractRef"));
-    assert!(repair_read_fields
-        .contains("task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"));
-    assert!(repair_read_fields
-        .contains("task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"));
-    assert!(repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiSurfaceDecisionContractRef"));
-    assert!(!repair_read_fields.iter().any(|field| field
-        .contains("task.frontendExperienceRequirement.uiQualityContract.referenceProfile")));
-    assert!(!repair_read_fields.iter().any(|field| field
-        .contains("task.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan")));
+        .contains("taskProjection.frontendExperienceRequirement.executionGuidance.uiQuality"));
     assert!(!repair_read_fields
-        .contains("task.frontendExperienceRequirement.uiQualityContract.qualityGates"));
+        .contains("taskProjection.frontendExperienceRequirement.uiQualityContractRef"));
+    assert!(repair_read_fields.contains(
+        "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"
+    ));
+    assert!(repair_read_fields
+        .contains("taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan"));
+    assert!(repair_read_fields
+        .contains("taskProjection.frontendExperienceRequirement.uiSurfaceDecisionContractRef"));
+    assert!(!repair_read_fields.iter().any(|field| field.contains(
+        "taskProjection.frontendExperienceRequirement.uiQualityContract.referenceProfile"
+    )));
+    assert!(!repair_read_fields.iter().any(|field| field.contains(
+        "taskProjection.frontendExperienceRequirement.uiQualityContract.designTokenAssetPlan"
+    )));
+    assert!(!repair_read_fields
+        .contains("taskProjection.frontendExperienceRequirement.uiQualityContract.qualityGates"));
     assert!(repair_read_fields
         .contains("outputContract.schemaShape.properties.frontendQualitySelfCheck"));
     let repair_fields = state::read_request_fields(ReadRequestFieldsInput {
@@ -3811,13 +3820,14 @@ fn continue_refreshes_stale_frontend_task_result_repair_contract() {
         request_ref: refreshed_repair_ref.to_string(),
         fields: vec![
             "repairContract.issueConflicts".to_string(),
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"
+                .to_string(),
         ],
     })
     .expect("read refreshed repair contract")
     .fields;
     let ui_production_brief = &refreshed_fields
-        ["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
+        ["taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
         .value;
     assert!(
         ui_production_brief["surfaceDecisionContract"].is_object(),
@@ -4061,7 +4071,7 @@ fn browser_quality_waiver_completes_without_rewriting_blocked_evidence() {
             .expect("read delivery status"),
     )
     .expect("parse delivery status");
-    assert_eq!(status["deliveries"][0]["status"], "completed");
+    assert_eq!(status["deliveries"][0]["status"], "completed_with_override");
     let task_results = find_json_files_containing(
         &fixture.root.join(".loom/deliveries"),
         "system-browser-environment-",
@@ -4235,8 +4245,10 @@ fn review_execution_repair_carries_frontend_execution_guidance() {
         project_root: fixture.root_str().to_string(),
         request_ref: repair_request_ref.to_string(),
         fields: vec![
-            "task.frontendExperienceRequirement.executionGuidance.uiProductionBrief".to_string(),
-            "task.frontendExperienceRequirement.executionGuidance.styleAssetPlan".to_string(),
+            "taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"
+                .to_string(),
+            "taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan"
+                .to_string(),
             "outputContract.resultTemplate".to_string(),
             "outputContract.schemaShape.properties.frontendQualitySelfCheck".to_string(),
         ],
@@ -4244,7 +4256,7 @@ fn review_execution_repair_carries_frontend_execution_guidance() {
     .expect("read frontend repair execution fields")
     .fields;
     let ui_production_brief = &repair_fields
-        ["task.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
+        ["taskProjection.frontendExperienceRequirement.executionGuidance.uiProductionBrief"]
         .value;
     let surface_contract = &ui_production_brief["surfaceDecisionContract"];
     assert!(surface_contract.is_object(), "{ui_production_brief:#}");
@@ -4260,11 +4272,10 @@ fn review_execution_repair_carries_frontend_execution_guidance() {
         .as_array()
         .expect("repair quality rules in scope")
         .is_empty());
-    assert!(
-        repair_fields["task.frontendExperienceRequirement.executionGuidance.styleAssetPlan"]
-            .value
-            .is_object()
-    );
+    assert!(repair_fields
+        ["taskProjection.frontendExperienceRequirement.executionGuidance.styleAssetPlan"]
+        .value
+        .is_object());
     let frontend_quality_template =
         &repair_fields["outputContract.resultTemplate"].value["frontendQualitySelfCheck"];
     assert!(frontend_quality_template
@@ -4429,7 +4440,7 @@ fn task_result_submit_normalizes_machine_owned_refs_before_validation() {
         persisted["verificationResults"][0]["verificationId"],
         json!(expected_verification_id)
     );
-    assert!(persisted.get("failure").is_none());
+    assert!(persisted["failure"].is_null());
     assert_eq!(
         persisted["requirementDetailEvidence"][0]["detailId"],
         json!(expected_detail_id)
@@ -7757,7 +7768,6 @@ fn review_accept_hydrates_execution_repair_targets_from_all_review_signals() {
             ]);
         },
     );
-
     write_review_result_candidate(
         &fixture,
         &review_request_ref,
@@ -7955,7 +7965,8 @@ fn review_execution_repair_materializes_repair_task() {
     let repair_core_fields = repair_core.expanded_fields();
     assert!(!repair_core_fields.contains(&"repairContext.attemptCount".to_string()));
     assert!(repair_core_fields.contains(&"repairContext.findingRefs".to_string()));
-    assert!(repair_core_fields.contains(&"task.architectureQualityRequirementRefs".to_string()));
+    assert!(repair_core_fields
+        .contains(&"taskProjection.architectureQualityRequirementRefs".to_string()));
     assert!(
         repair_core_fields.contains(&"sourceContext.architectureQualityRequirements".to_string())
     );
@@ -9473,38 +9484,39 @@ fn write_brainstorm_request(
         )
         .expect("write target");
     }
+    let request_root = json!({
+        "outputContract": {
+            "artifactKind": "brainstorm_candidate",
+            "submitTool": "loom.brainstormAcceptFile",
+            "writeMode": "single_json",
+            "writeTargets": [{
+                "targetId": "candidate",
+                "path": ".loom/agent-writable/candidate.json",
+                "required": true,
+                "description": "Brainstorm candidate JSON."
+            }]
+        },
+        "requestReadPlan": {
+            "groups": [{
+                "groupId": "core",
+                "required": true,
+                "purpose": "Read core fields.",
+                "whenToRead": "Before writing.",
+                "selectors": delivery_core::read_selectors_value_from_paths([
+                    "outputContract.writeTargets"
+                ])
+            }]
+        }
+    });
     write_native_request(
         fixture.root_str(),
         NativeRequestInput {
             request_id: request_id.to_string(),
             request_kind: "brainstorm_candidate".to_string(),
             request_file: None,
-            delivery_id: Some("delivery_1".to_string()),
-            phase_id: Some("phase_1".to_string()),
-            root: json!({
-                "outputContract": {
-                    "artifactKind": "brainstorm_candidate",
-                    "submitTool": "loom.brainstormAcceptFile",
-                    "writeMode": "single_json",
-                    "writeTargets": [{
-                        "targetId": "candidate",
-                        "path": ".loom/agent-writable/candidate.json",
-                        "required": true,
-                        "description": "Brainstorm candidate JSON."
-                    }]
-                },
-                "requestReadPlan": {
-                    "groups": [{
-                        "groupId": "core",
-                        "required": true,
-                        "purpose": "Read core fields.",
-                        "whenToRead": "Before writing.",
-                        "selectors": delivery_core::read_selectors_value_from_paths([
-                            "outputContract.writeTargets"
-                        ])
-                    }]
-                }
-            }),
+            delivery_id: None,
+            phase_id: None,
+            root: request_root,
         },
     )
     .expect("write request")
@@ -11140,6 +11152,54 @@ fn complete_frontend_quality_surface_evidence_for_test(
     );
 }
 
+fn complete_runtime_delivery_evidence_for_test(
+    result: &mut Value,
+    affected_fields: Option<Value>,
+    runtime_checks: Option<Value>,
+) {
+    let Some(evidence) = result
+        .get_mut("runtimeDeliveryEvidence")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if let Some(fields) = affected_fields.filter(Value::is_array) {
+        evidence.insert("checkedFields".to_string(), fields);
+    }
+    if let Some(checks) = runtime_checks.and_then(|value| value.as_array().cloned()) {
+        let mut evidence_items = evidence
+            .get("codeLevelChecks")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for (index, check) in checks.iter().enumerate() {
+            let item = evidence_items
+                .get_mut(index)
+                .and_then(Value::as_object_mut)
+                .cloned()
+                .unwrap_or_default();
+            let mut item = item;
+            item.insert("status".to_string(), json!("passed"));
+            item.insert(
+                "evidence".to_string(),
+                json!(format!(
+                    "The runtime code-level check {} passed.",
+                    check
+                        .get("objective")
+                        .and_then(Value::as_str)
+                        .unwrap_or("declared runtime check")
+                )),
+            );
+            if index < evidence_items.len() {
+                evidence_items[index] = Value::Object(item);
+            } else {
+                evidence_items.push(Value::Object(item));
+            }
+        }
+        evidence.insert("codeLevelChecks".to_string(), Value::Array(evidence_items));
+    }
+}
+
 fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
     let verification_id = result
         .get("verificationResults")
@@ -11162,6 +11222,60 @@ fn complete_architecture_quality_evidence_for_test(result: &mut Value) {
         evidence["summary"] = json!(
             "The task implementation respects the assigned architecture quality requirement and links it to verification evidence."
         );
+    }
+}
+
+fn complete_code_quality_evidence_for_test(result: &mut Value, context: Option<Value>) {
+    let Some(requirements) = context.and_then(|value| value.as_array().cloned()) else {
+        return;
+    };
+    let verification_id = result
+        .get("verificationResults")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("verificationId"))
+        .and_then(Value::as_str)
+        .unwrap_or("verify-account-001")
+        .to_string();
+    let Some(evidence_items) = result
+        .get_mut("codeQualityEvidence")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for evidence in evidence_items {
+        let requirement_id = evidence
+            .get("requirementId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let requirement = requirements
+            .iter()
+            .find(|item| item["requirementId"] == json!(requirement_id));
+        let requirement = requirement.or_else(|| requirements.first());
+        evidence["status"] = json!("satisfied");
+        evidence["verificationIds"] = json!([verification_id]);
+        evidence["changedFiles"] = json!(["src/main.tsx"]);
+        evidence["commandsRun"] = json!([]);
+        evidence["knownGaps"] = json!([]);
+        evidence["summary"] = json!(
+            "The changed files follow the selected code quality references and repository style."
+        );
+        if let Some(requirement) = requirement {
+            evidence["referenceGroupsChecked"] = requirement
+                .get("referenceGroups")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            evidence["referenceFilesChecked"] = json!(requirement
+                .get("referenceLoadPlan")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.get("path").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default());
+        }
     }
 }
 
@@ -11253,17 +11367,52 @@ fn write_task_result_candidate_with_detail_evidence(
     include_detail_evidence: bool,
     include_large_text: bool,
 ) {
+    let inspected = state::inspect_request(InspectRequestInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+    })
+    .expect("inspect task result request");
+    let request_kind = inspected.request_kind;
+    let task_prefix = if request_kind == "task_execution_request" {
+        "task"
+    } else {
+        "taskProjection"
+    };
+    let requirement_detail_refs_field = format!("{task_prefix}.requirementDetailRefs");
+    let verification_intents_field = format!("{task_prefix}.verificationIntents");
+    let runtime_affected_fields_field =
+        format!("{task_prefix}.runtimeDeliveryRequirement.affectedContractFields");
+    let runtime_checks_field =
+        format!("{task_prefix}.runtimeDeliveryRequirement.requiredCodeLevelChecks");
+    let code_quality_context_field = "sourceContext.codeQualityExecutionContext";
+    let allowed_fields = inspected
+        .read_groups
+        .iter()
+        .flat_map(delivery_core::ReadGroupRef::expanded_fields)
+        .collect::<BTreeSet<_>>();
+    let mut requested_fields = vec![
+        "source.taskPlanId".to_string(),
+        "source.taskId".to_string(),
+        requirement_detail_refs_field.clone(),
+        verification_intents_field.clone(),
+        "outputContract.resultFile".to_string(),
+        "outputContract.resultTemplate".to_string(),
+    ];
+    if allowed_fields.contains("source.taskExecutionRequestRef") {
+        requested_fields.push("source.taskExecutionRequestRef".to_string());
+    }
+    for field in [&runtime_affected_fields_field, &runtime_checks_field] {
+        if allowed_fields.contains(field.as_str()) {
+            requested_fields.push(field.clone());
+        }
+    }
+    if allowed_fields.contains(code_quality_context_field) {
+        requested_fields.push(code_quality_context_field.to_string());
+    }
     let fields = state::read_request_fields(ReadRequestFieldsInput {
         project_root: fixture.root_str().to_string(),
         request_ref: request_ref.to_string(),
-        fields: vec![
-            "source.taskPlanId".to_string(),
-            "source.taskId".to_string(),
-            "task.requirementDetailRefs".to_string(),
-            "task.verificationIntents".to_string(),
-            "outputContract.resultFile".to_string(),
-            "outputContract.resultTemplate".to_string(),
-        ],
+        fields: requested_fields,
     })
     .expect("read execution request fields")
     .fields;
@@ -11277,11 +11426,11 @@ fn write_task_result_candidate_with_detail_evidence(
         .as_str()
         .expect("resultFile");
     let detail_id = fields
-        .get("task.requirementDetailRefs")
+        .get(&requirement_detail_refs_field)
         .and_then(|field| field.value.as_array())
         .and_then(|items| items.first())
         .and_then(Value::as_str);
-    let verification_id = fields["task.verificationIntents"].value[0]["verificationId"]
+    let verification_id = fields[&verification_intents_field].value[0]["verificationId"]
         .as_str()
         .expect("verification id");
     let mut result = fields["outputContract.resultTemplate"].value.clone();
@@ -11356,6 +11505,38 @@ fn write_task_result_candidate_with_detail_evidence(
     result["notes"] = result_notes;
     result["requirementDetailEvidence"] = requirement_detail_evidence;
     result["blockedReasons"] = json!([]);
+    complete_runtime_delivery_evidence_for_test(
+        &mut result,
+        fields
+            .get(&runtime_affected_fields_field)
+            .map(|field| field.value.clone()),
+        fields
+            .get(&runtime_checks_field)
+            .map(|field| field.value.clone()),
+    );
+    complete_architecture_quality_evidence_for_test(&mut result);
+    let mut code_quality_context = fields
+        .get(code_quality_context_field)
+        .map(|field| field.value.clone());
+    if code_quality_context
+        .as_ref()
+        .is_none_or(|value| value.as_array().is_none_or(Vec::is_empty))
+    {
+        if let Some(source_ref) = fields
+            .get("source.taskExecutionRequestRef")
+            .and_then(|field| field.value.as_str())
+        {
+            code_quality_context = state::read_request_fields(ReadRequestFieldsInput {
+                project_root: fixture.root_str().to_string(),
+                request_ref: source_ref.to_string(),
+                fields: vec![code_quality_context_field.to_string()],
+            })
+            .ok()
+            .and_then(|read| read.fields.get(code_quality_context_field).cloned())
+            .map(|field| field.value);
+        }
+    }
+    complete_code_quality_evidence_for_test(&mut result, code_quality_context);
     result["createdAt"] = json!("2026-06-24T10:05:00+08:00");
     result["updatedAt"] = json!("2026-06-24T10:05:00+08:00");
     if let Some(self_check) = result
@@ -11724,7 +11905,7 @@ fn task_result_repair_submit_preserves_required_architecture_evidence_when_repai
         .as_str()
         .expect("repair request ref");
 
-    mutate_private_request_storage_value(&fixture, repair_request_ref, "task", |task| {
+    mutate_private_request_storage_value(&fixture, repair_request_ref, "taskProjection", |task| {
         task["architectureQualityRequirementRefs"] = Value::Null;
     });
     mutate_private_request_storage_value(
@@ -13255,14 +13436,76 @@ fn mutate_private_request_storage_value<F>(
         .nth(1)
         .expect("request id in ref");
     let relative = state::request_manifest::request_storage_ref(&fixture.root, request_id, key)
-        .expect("read private request storage ref")
-        .unwrap_or_else(|| panic!("private {key} storage ref"));
+        .expect("read private request storage ref");
+    let Some(relative) = relative else {
+        if key == "task" {
+            let source_ref = state::read_request_fields(ReadRequestFieldsInput {
+                project_root: fixture.root_str().to_string(),
+                request_ref: request_ref.to_string(),
+                fields: vec!["source.taskExecutionRequestRef".to_string()],
+            })
+            .expect("read source execution request ref")
+            .fields["source.taskExecutionRequestRef"]
+                .value
+                .as_str()
+                .expect("source execution request ref")
+                .to_string();
+            mutate_private_request_storage_value(fixture, &source_ref, key, mutate);
+            return;
+        }
+        if key == "taskProjection" {
+            let index =
+                state::request_index::get_request_index_entry(fixture.root_str(), request_id)
+                    .expect("request index entry");
+            let request_path = fixture.root.join(index.request_file);
+            let mut root: Value = serde_json::from_str(
+                &std::fs::read_to_string(&request_path).expect("read request root"),
+            )
+            .expect("parse request root");
+            mutate(
+                root.get_mut("taskProjection")
+                    .expect("inline taskProjection"),
+            );
+            write_json_atomic(&request_path, &root).expect("write request root");
+            return;
+        }
+        panic!("private {key} storage ref");
+    };
     let path = fixture.root.join(relative);
     let mut value: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("read private request value"))
             .expect("parse private request value");
     mutate(&mut value);
+    if key == "outputContract" {
+        refresh_output_contract_fingerprint(&mut value);
+    }
     write_json_atomic(&path, &value).expect("write private request value");
+}
+
+fn refresh_output_contract_fingerprint(contract_value: &mut Value) {
+    let Some(contract) = contract_value.as_object_mut() else {
+        return;
+    };
+    let mut fingerprint_source = Value::Object(contract.clone());
+    let source = fingerprint_source
+        .as_object_mut()
+        .expect("fingerprint source object");
+    for field in [
+        "contractFingerprint",
+        "writeTargets",
+        "resultFile",
+        "candidateFile",
+        "outlineFile",
+        "groupFilePattern",
+        "path",
+    ] {
+        source.remove(field);
+    }
+    let fingerprint = delivery_core::contract_fingerprint(&fingerprint_source);
+    contract.insert("contractFingerprint".to_string(), json!(fingerprint));
+    assert!(delivery_core::contract_fingerprint_matches(&Value::Object(
+        contract.clone()
+    )));
 }
 
 fn latest_ref_for_phase(project_root: &str, delivery_id: &str, key: &str) -> String {
@@ -13902,29 +14145,37 @@ fn candidate_with_planning_details_json() -> Value {
 
 struct Fixture {
     root: std::path::PathBuf,
-    _guard: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        static ENV_LOCK: Mutex<()> = Mutex::new(());
-        let guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        shared_test_loom_home();
         let root = std::env::temp_dir().join(format!(
             "loom-mcp-submit-{name}-{}-{}",
             std::process::id(),
             state::store::now_millis()
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
-        std::env::set_var("LOOM_HOME", root.join(".loom-home"));
-        Self {
-            root,
-            _guard: guard,
-        }
+        Self { root }
     }
 
     fn root_str(&self) -> &str {
         self.root.to_str().expect("fixture path utf8")
     }
+}
+
+fn shared_test_loom_home() -> &'static PathBuf {
+    static HOME: OnceLock<PathBuf> = OnceLock::new();
+    HOME.get_or_init(|| {
+        let home = std::env::temp_dir().join(format!(
+            "loom-mcp-submit-home-{}-{}",
+            std::process::id(),
+            state::store::now_millis()
+        ));
+        std::fs::create_dir_all(&home).expect("create shared test Loom home");
+        std::env::set_var("LOOM_HOME", &home);
+        home
+    })
 }
 
 impl Drop for Fixture {

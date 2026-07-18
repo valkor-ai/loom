@@ -496,7 +496,15 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "phasePlan.current.phaseId",
             "conceptGrounding.glossaryUpdates[].updateId",
         ],
-        "repository_context_candidate" => &["source", "requestLens"],
+        "repository_context_candidate" => &[
+            "source",
+            "requestLens",
+            "repoOverview",
+            "relevantSurfaces",
+            "recommendedReadRefs",
+            "contextQuality",
+            "warnings",
+        ],
         "architecture_section_candidate" => &[
             "schemaVersion",
             "requestId",
@@ -537,6 +545,7 @@ fn mcp_normalized_fields_for_artifact(artifact_kind: &str) -> &'static [&'static
             "phaseId",
             "createdAt",
         ],
+        "technical_baseline_candidate" => &["projectKind", "source"],
         "deploy_execution_repair_result" => &["schemaVersion", "repairId", "deploymentFailureRef"],
         _ => &[],
     }
@@ -661,6 +670,9 @@ fn validate_contract_node(
     domain_validation_paths: &BTreeSet<String>,
     issues: &mut Vec<RepairIssue>,
 ) {
+    if is_mcp_normalized_field(path, mcp_normalized_fields) {
+        return;
+    }
     let expected_type = contract.get("type").and_then(Value::as_str);
     if let Some(expected_type) = expected_type.filter(|kind| *kind != "unknown") {
         let valid = match expected_type {

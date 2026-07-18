@@ -197,10 +197,9 @@ fn native_request_read_protocol_resolves_declared_fields() {
     assert!(refs.contains_key("rules"));
     assert!(refs.contains_key("outputContract"));
     assert!(!refs.contains_key("agentAction"));
-    assert_eq!(
-        storage_manifest["refs"]["task"]["ref"],
-        json!(".loom/requests/req_native_1.refs/task.json")
-    );
+    assert!(storage_manifest["refs"]["task"]["ref"]
+        .as_str()
+        .is_some_and(|path| path.starts_with(".loom/refs/requests/sha256-")));
 
     let inspected = state::inspect_request(delivery_core::InspectRequestInput {
         project_root: fixture.root_str().to_string(),
@@ -947,7 +946,7 @@ struct Fixture {
 impl Fixture {
     fn new(name: &str) -> Self {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
-        let guard = ENV_LOCK.lock().expect("env lock");
+        let guard = ENV_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         let root = std::env::temp_dir().join(format!(
             "loom-mcp-state-{name}-{}-{}",
             std::process::id(),
