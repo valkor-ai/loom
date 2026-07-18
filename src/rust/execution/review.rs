@@ -2091,12 +2091,26 @@ fn normalize_approved_next_phase(
     {
         return Ok(None);
     }
-    brainstorm::materialize_next_phase_from_preview(
+    materialize_approved_next_phase_from_preview(
         project_root,
         delivery_id,
         phase_id,
-        result.next_action.target_phase_id.as_deref(),
+        &result.next_action.r#type,
     )
+}
+
+fn materialize_approved_next_phase_from_preview(
+    project_root: &str,
+    delivery_id: &str,
+    phase_id: &str,
+    action_type: &str,
+) -> Result<Option<brainstorm::NextPhaseHandoff>, state::store::StateError> {
+    if !matches!(action_type, "done" | "continue_to_next_phase") {
+        return Ok(None);
+    }
+    // The accepted phase preview is the source of truth for the handoff. The
+    // agent must not be able to select a different phase by writing a target id.
+    brainstorm::materialize_next_phase_from_preview(project_root, delivery_id, phase_id, None)
 }
 
 fn materialize_manual_review_request(
@@ -2550,6 +2564,37 @@ where
             authorized,
             target.path.clone(),
             issues,
+            "loom.reviewResolveFile",
+            "manual_review_resolution_candidate_only",
+        ));
+    }
+    let approved_next_phase = if matches!(
+        resolution.decision.as_str(),
+        "approve_override" | "approve_quality_waiver"
+    ) {
+        materialize_approved_next_phase_from_preview(
+            &input.project_root,
+            &delivery_id,
+            &phase_id,
+            &resolution.next_action.r#type,
+        )?
+    } else {
+        None
+    };
+    if let Some(handoff) = approved_next_phase {
+        resolution.next_action.r#type = "continue_to_next_phase".to_string();
+        resolution.next_action.target_phase_id = Some(handoff.phase_id);
+        resolution.next_action.reason = handoff.reason;
+    } else if resolution.next_action.r#type == "continue_to_next_phase" {
+        return Ok(repairable_with_tool(
+            input,
+            authorized,
+            target.path.clone(),
+            vec![issue(
+                "MANUAL_REVIEW_NEXT_PHASE_UNAVAILABLE",
+                "nextAction.type",
+                "continue_to_next_phase requires an accepted nextPhasePreview candidate. Use done when no next phase is available.",
+            )],
             "loom.reviewResolveFile",
             "manual_review_resolution_candidate_only",
         ));

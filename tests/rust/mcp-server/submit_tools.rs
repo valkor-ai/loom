@@ -8168,6 +8168,129 @@ fn manual_review_resolution_routes_to_execution_repair() {
 }
 
 #[test]
+fn manual_review_approval_materializes_next_phase_from_preview() {
+    let fixture = Fixture::new("manual-review-approval-next-phase");
+    let review_request_ref = complete_task_execution_to_review_with_candidate(
+        &fixture,
+        candidate_with_next_phase_preview(),
+    );
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "blocked",
+        "manual_review",
+        vec![json!({
+            "findingId": "finding-manual-next-phase",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "manual",
+            "failureClass": "review_limitation",
+            "category": "review_limitation",
+            "summary": "Manual decision is required before the phase can close.",
+            "evidence": "The review requires user judgment.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "current_task",
+            "scopeRelation": "in_scope",
+            "introducedByCurrentTask": "no",
+            "recommendedNextAction": "manual_review"
+        })],
+    );
+    let gate = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    assert_eq!(gate["state"], "user_gate", "{gate:#}");
+    let manual_request_ref = gate["requestRef"]
+        .as_str()
+        .expect("manual review requestRef")
+        .to_string();
+    write_manual_review_approval_candidate(&fixture, &manual_request_ref, "done");
+
+    let result = call_submit(
+        "loom.reviewResolveFile",
+        &manual_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "auto_runnable", "{result:#}");
+    assert_eq!(
+        result["next"]["artifactKind"],
+        "repository_context_candidate"
+    );
+    let delivery_id = request_delivery_id(fixture.root_str(), &review_request_ref);
+    assert_eq!(active_phase_id(fixture.root_str(), &delivery_id), "phase-2");
+    let index_path = fixture
+        .root
+        .join(".loom/deliveries")
+        .join(&delivery_id)
+        .join("index.json");
+    let index: Value =
+        serde_json::from_str(&std::fs::read_to_string(index_path).expect("read delivery index"))
+            .expect("parse delivery index");
+    assert_eq!(index["status"], "planning");
+    let phase_2 = index["phases"]
+        .as_array()
+        .expect("phases")
+        .iter()
+        .find(|phase| phase["phaseId"] == "phase-2")
+        .expect("materialized phase-2");
+    assert_eq!(phase_2["nextAction"]["kind"], "repository_context_request");
+    assert_eq!(phase_2["nextAction"]["details"]["fromPhaseId"], "phase-1");
+    assert_eq!(phase_2["nextAction"]["details"]["phaseId"], "phase-2");
+}
+
+#[test]
+fn manual_review_continue_without_preview_returns_repairable_contract_error() {
+    let fixture = Fixture::new("manual-review-continue-without-preview");
+    let review_request_ref = complete_task_execution_to_review(&fixture);
+    write_review_result_candidate(
+        &fixture,
+        &review_request_ref,
+        "blocked",
+        "manual_review",
+        vec![json!({
+            "findingId": "finding-manual-no-next-phase",
+            "severity": "major",
+            "severityClass": "blocking",
+            "evidenceKind": "manual",
+            "failureClass": "review_limitation",
+            "category": "review_limitation",
+            "summary": "Manual decision is required.",
+            "evidence": "The review requires user judgment.",
+            "readRefs": [{"type": "review_packet", "ref": "reviewPacket", "reason": "Review packet was inspected."}],
+            "taskRelevance": "current_task",
+            "scopeRelation": "in_scope",
+            "introducedByCurrentTask": "no",
+            "recommendedNextAction": "manual_review"
+        })],
+    );
+    let gate = call_submit(
+        "loom.reviewAcceptFile",
+        &review_request_ref,
+        fixture.root_str(),
+    );
+    let manual_request_ref = gate["requestRef"]
+        .as_str()
+        .expect("manual review requestRef")
+        .to_string();
+    write_manual_review_approval_candidate(&fixture, &manual_request_ref, "continue_to_next_phase");
+
+    let result = call_submit(
+        "loom.reviewResolveFile",
+        &manual_request_ref,
+        fixture.root_str(),
+    );
+
+    assert_eq!(result["state"], "repairable_error", "{result:#}");
+    assert_eq!(
+        result["issues"][0]["code"],
+        "MANUAL_REVIEW_NEXT_PHASE_UNAVAILABLE"
+    );
+    assert_eq!(result["issues"][0]["fieldPath"], "nextAction.type");
+}
+
+#[test]
 fn taskplan_submit_repairs_runtime_requirement_shape_before_parse() {
     let fixture = Fixture::new("taskplan-runtime-requirement-shape");
     let architecture_request_ref = start_existing_project_architecture_flow(&fixture);
@@ -12260,6 +12383,40 @@ fn write_manual_review_resolution_candidate(fixture: &Fixture, request_ref: &str
         }),
     )
     .expect("write manual review resolution");
+}
+
+fn write_manual_review_approval_candidate(
+    fixture: &Fixture,
+    request_ref: &str,
+    next_action_type: &str,
+) {
+    let fields = state::read_request_fields(ReadRequestFieldsInput {
+        project_root: fixture.root_str().to_string(),
+        request_ref: request_ref.to_string(),
+        fields: vec!["outputContract.resultFile".to_string()],
+    })
+    .expect("read manual review fields")
+    .fields;
+    let result_file = fields["outputContract.resultFile"]
+        .value
+        .as_str()
+        .expect("manual review resolution file");
+    write_json_atomic(
+        &fixture.root.join(result_file),
+        &json!({
+            "userAnswer": {
+                "text": "接受本次审查结论，继续推进阶段交付。",
+                "selectedShortReply": "approve_override"
+            },
+            "decision": "approve_override",
+            "changeRequest": null,
+            "nextAction": {
+                "type": next_action_type,
+                "reason": "用户接受当前审查结论。"
+            }
+        }),
+    )
+    .expect("write manual review approval");
 }
 
 fn request_id_from_ref(request_ref: &str) -> String {
