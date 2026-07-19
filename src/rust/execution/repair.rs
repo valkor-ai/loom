@@ -1070,12 +1070,28 @@ fn materialize_taskplan_repair_action(
             .join(format!("{request_id}.json")),
     )?;
 
-    let core_fields = state::read_field_group_flat(ReadFieldGroupInput {
+    let mut context_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
         group_id: "taskplan_core_context".to_string(),
     })?
     .fields;
+    context_fields.extend(
+        state::read_field_group_flat(ReadFieldGroupInput {
+            project_root: project_root.to_string(),
+            request_ref: original_request_ref.clone(),
+            group_id: "taskplan_requirement_context".to_string(),
+        })?
+        .fields,
+    );
+    context_fields.extend(
+        state::read_field_group_flat(ReadFieldGroupInput {
+            project_root: project_root.to_string(),
+            request_ref: original_request_ref.clone(),
+            group_id: "taskplan_artifact_context".to_string(),
+        })?
+        .fields,
+    );
     let rule_fields = state::read_field_group_flat(ReadFieldGroupInput {
         project_root: project_root.to_string(),
         request_ref: original_request_ref.clone(),
@@ -1089,7 +1105,7 @@ fn materialize_taskplan_repair_action(
     })?
     .fields;
     let source_refs = repair_source_refs_from_fields(
-        &core_fields,
+        &context_fields,
         &[
             (
                 "technicalBaselineRef",
@@ -1124,37 +1140,37 @@ fn materialize_taskplan_repair_action(
         ],
     )?;
     let allowed_refs = json!({
-        "scopeRefs": value_field(&core_fields, "allowedRefs.scopeRefs"),
-        "acceptanceRefs": value_field(&core_fields, "allowedRefs.acceptanceRefs"),
-        "deferredScopeRefs": value_field(&core_fields, "allowedRefs.deferredScopeRefs"),
-        "excludedScopeRefs": value_field(&core_fields, "allowedRefs.excludedScopeRefs"),
-        "requirementDetailIds": value_field(&core_fields, "allowedRefs.requirementDetailIds"),
-        "moduleRefs": value_field(&core_fields, "allowedRefs.moduleRefs"),
-        "entityRefs": value_field(&core_fields, "allowedRefs.entityRefs"),
-        "interfaceRefs": value_field(&core_fields, "allowedRefs.interfaceRefs"),
-        "userFlowRefs": value_field(&core_fields, "allowedRefs.userFlowRefs"),
-        "stateMachineRefs": value_field(&core_fields, "allowedRefs.stateMachineRefs"),
-        "decisionRefs": value_field(&core_fields, "allowedRefs.decisionRefs"),
-        "nfrRefs": value_field(&core_fields, "allowedRefs.nfrRefs"),
-        "riskRefs": value_field(&core_fields, "allowedRefs.riskRefs")
+        "scopeRefs": value_field(&context_fields, "allowedRefs.scopeRefs"),
+        "acceptanceRefs": value_field(&context_fields, "allowedRefs.acceptanceRefs"),
+        "deferredScopeRefs": value_field(&context_fields, "allowedRefs.deferredScopeRefs"),
+        "excludedScopeRefs": value_field(&context_fields, "allowedRefs.excludedScopeRefs"),
+        "requirementDetailIds": value_field(&context_fields, "allowedRefs.requirementDetailIds"),
+        "moduleRefs": value_field(&context_fields, "allowedRefs.moduleRefs"),
+        "entityRefs": value_field(&context_fields, "allowedRefs.entityRefs"),
+        "interfaceRefs": value_field(&context_fields, "allowedRefs.interfaceRefs"),
+        "userFlowRefs": value_field(&context_fields, "allowedRefs.userFlowRefs"),
+        "stateMachineRefs": value_field(&context_fields, "allowedRefs.stateMachineRefs"),
+        "decisionRefs": value_field(&context_fields, "allowedRefs.decisionRefs"),
+        "nfrRefs": value_field(&context_fields, "allowedRefs.nfrRefs"),
+        "riskRefs": value_field(&context_fields, "allowedRefs.riskRefs")
     });
     let context_projection = json!({
-        "phaseId": field_value(&core_fields, "contextProjection.phaseId")?,
-        "planningContractId": field_value(&core_fields, "contextProjection.planningContractId")?,
-        "architectureArtifactContractId": field_value(&core_fields, "contextProjection.architectureArtifactContractId")?,
+        "phaseId": field_value(&context_fields, "contextProjection.phaseId")?,
+        "planningContractId": field_value(&context_fields, "contextProjection.planningContractId")?,
+        "architectureArtifactContractId": field_value(&context_fields, "contextProjection.architectureArtifactContractId")?,
         "requirementDetailTransfer": {
-            "requirementDetailAssignment": field_value(&core_fields, "contextProjection.requirementDetailTransfer.requirementDetailAssignment")?,
-            "currentPhaseScope": field_value(&core_fields, "contextProjection.requirementDetailTransfer.currentPhaseScope")?,
-            "acceptanceDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.acceptanceDetails")?,
-            "businessFlowDetails": field_value(&core_fields, "contextProjection.requirementDetailTransfer.businessFlowDetails")?,
-            "objectOperationDetailRules": field_value(&core_fields, "contextProjection.requirementDetailTransfer.objectOperationDetailRules")?,
+            "requirementDetailAssignment": field_value(&context_fields, "contextProjection.requirementDetailTransfer.requirementDetailAssignment")?,
+            "currentPhaseScope": field_value(&context_fields, "contextProjection.requirementDetailTransfer.currentPhaseScope")?,
+            "acceptanceDetails": field_value(&context_fields, "contextProjection.requirementDetailTransfer.acceptanceDetails")?,
+            "businessFlowDetails": field_value(&context_fields, "contextProjection.requirementDetailTransfer.businessFlowDetails")?,
+            "objectOperationDetailRules": field_value(&context_fields, "contextProjection.requirementDetailTransfer.objectOperationDetailRules")?,
             "architectureDetails": projected_field_value(
-                &core_fields,
+                &context_fields,
                 "contextProjection.requirementDetailTransfer.architectureDetails",
             )?,
-            "workflowClosureRequirements": field_value(&core_fields, "contextProjection.requirementDetailTransfer.workflowClosureRequirements")?,
-            "conceptRefs": field_value(&core_fields, "contextProjection.requirementDetailTransfer.conceptRefs")?,
-            "taskPlanningFieldMapping": field_value(&core_fields, "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping")?
+            "workflowClosureRequirements": field_value(&context_fields, "contextProjection.requirementDetailTransfer.workflowClosureRequirements")?,
+            "conceptRefs": field_value(&context_fields, "contextProjection.requirementDetailTransfer.conceptRefs")?,
+            "taskPlanningFieldMapping": field_value(&context_fields, "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping")?
         }
     });
     let mut generation_rules = json!({

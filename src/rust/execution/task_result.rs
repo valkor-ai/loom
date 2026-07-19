@@ -35,8 +35,8 @@ use crate::{
         code_quality_evidence_applies, code_quality_execution_context,
         frontend_quality_self_check_applies, frontend_self_check_applies,
         runtime_delivery_evidence_applies, task_result_contract,
-        task_result_required_top_level_fields, task_result_template_with_code_quality,
-        FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
+        task_result_required_top_level_fields, task_result_schema_shape,
+        task_result_template_with_code_quality, FRONTEND_QUALITY_CONTRACT_READ_FIELDS,
     },
 };
 
@@ -342,7 +342,6 @@ where
                 run_id,
                 task,
                 result_file,
-                required_top_level_fields,
                 blocked_output,
                 submitted_result: normalized_result.clone(),
                 previous_changed_files,
@@ -3544,7 +3543,6 @@ struct RepairContextInput {
     run_id: String,
     task: TaskDefinition,
     result_file: String,
-    required_top_level_fields: Vec<String>,
     blocked_output: Value,
     submitted_result: Value,
     previous_changed_files: Vec<String>,
@@ -3763,7 +3761,6 @@ pub(crate) fn refresh_stale_task_result_repair_action(
         run_id,
         task: hydrated_task,
         result_file,
-        required_top_level_fields,
         blocked_output,
         submitted_result: normalized_result,
         previous_changed_files,
@@ -3816,23 +3813,44 @@ fn materialize_task_result_repair(
         &code_quality_contract,
         context.browser_profile.as_ref(),
     );
-    let schema_shape = result_contract["schemaShape"].clone();
-    let result_template = task_result_repair_template(&context, &issues);
+    let mut schema_shape = result_contract["schemaShape"].clone();
+    let mut result_template = task_result_repair_template(&context, &issues);
+    let required_top_level_fields = task_result_required_top_level_fields(&context.task)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let mut contract_recovery = None;
     if let Some(missing_fields) = task_result_repair_contract_missing_fields(
         &context.task,
-        &context.required_top_level_fields,
+        &required_top_level_fields,
         &schema_shape,
         &result_template,
     ) {
-        return Ok(failed(
-            &input.project_root,
-            "TASK_RESULT_REPAIR_CONTRACT_INCONSISTENT",
-            format!(
-                "TaskResult repair contract cannot represent the current task evidence contract: {}.",
-                missing_fields.join(", ")
-            ),
-            "task_result_repair",
-        ));
+        // This request is generated from the same TaskDefinition that validates
+        // the result. A stale or partially materialized contract is therefore
+        // recoverable inside Loom and must never become a terminal workflow
+        // failure. Rebuild both projections from the canonical task contract.
+        schema_shape = task_result_schema_shape(&context.task, context.browser_profile.as_ref());
+        result_template = task_result_template_with_code_quality(
+            &context.task,
+            &code_quality_contract,
+            context.browser_profile.as_ref(),
+        );
+        merge_submitted_task_result_fields(
+            &mut result_template,
+            &context.submitted_result,
+            &issues,
+        );
+        ensure_repair_contract_fields(
+            &required_top_level_fields,
+            &mut schema_shape,
+            &mut result_template,
+        );
+        contract_recovery = Some(json!({
+            "mode": "canonical_rebuild",
+            "fields": missing_fields,
+            "authority": "task_definition_and_task_result_contract"
+        }));
     }
     let browser_repair_reference_load_plan = if issues
         .iter()
@@ -3974,7 +3992,7 @@ fn materialize_task_result_repair(
                 "required": true,
                 "description": "Rewrite the TaskResult JSON for the original task execution request."
             }],
-            "requiredTopLevelFields": context.required_top_level_fields,
+            "requiredTopLevelFields": required_top_level_fields,
             "blockedReasonOptions": context.blocked_output
                 .get("blockedReasons")
                 .cloned()
@@ -4005,6 +4023,9 @@ fn materialize_task_result_repair(
             ]
         }
     });
+    if let Some(recovery) = contract_recovery {
+        root_value["repairContract"]["canonicalRebuild"] = recovery;
+    }
     if !context.code_quality_requirements.is_empty() {
         root_value["sourceContext"] = json!({
             "codeQualityExecutionContext": code_quality_execution_context(&context.code_quality_requirements)
@@ -4051,12 +4072,404 @@ fn materialize_task_result_repair(
 }
 
 fn task_projection(task: &TaskDefinition) -> Value {
-    let mut projection = serde_json::to_value(task).unwrap_or_else(|_| json!({}));
-    if let Some(object) = projection.as_object_mut() {
-        object.remove("conceptResponsibilities");
-        object.remove("conceptVerificationIntents");
+    let full = serde_json::to_value(task).unwrap_or_else(|_| json!({}));
+    let mut projection = serde_json::Map::new();
+    projection.insert(
+        "projectionKind".to_string(),
+        json!("task_scoped_repair_contract"),
+    );
+    for key in [
+        "taskId",
+        "groupId",
+        "title",
+        "taskKind",
+        "implementationActions",
+        "objective",
+        "dependsOn",
+        "scopeRefs",
+        "acceptanceRefs",
+        "requirementDetailRefs",
+        "conceptRefs",
+        "engineeringQualityRequirementRefs",
+        "architectureQualityRequirementRefs",
+        "apiContractRequirementRefs",
+        "codeQualityRequirementRefs",
+    ] {
+        if let Some(value) = full.get(key) {
+            projection.insert(key.to_string(), value.clone());
+        }
+    }
+    projection.insert(
+        "writeBoundary".to_string(),
+        compact_write_boundary(full.get("writeBoundary")),
+    );
+    projection.insert(
+        "verificationIntents".to_string(),
+        compact_verification_intents(full.get("verificationIntents")),
+    );
+    if let Some(requirement) = full.get("frontendExperienceRequirement") {
+        projection.insert(
+            "frontendExperienceRequirement".to_string(),
+            compact_frontend_experience_requirement(requirement),
+        );
+    }
+    if let Some(requirement) = full.get("runtimeDeliveryRequirement") {
+        projection.insert(
+            "runtimeDeliveryRequirement".to_string(),
+            compact_runtime_delivery_requirement(requirement),
+        );
+    }
+    Value::Object(projection)
+}
+
+fn compact_write_boundary(value: Option<&Value>) -> Value {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return json!({"forbiddenPaths": [".loom"], "artifactRefs": {}});
+    };
+    json!({
+        "forbiddenPaths": object.get("forbiddenPaths").cloned().unwrap_or_else(|| json!([".loom"])),
+        "artifactRefs": object.get("artifactRefs").cloned().unwrap_or_else(|| json!({}))
+    })
+}
+
+fn compact_verification_intents(value: Option<&Value>) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|intent| {
+                compact_object_fields(
+                    intent,
+                    &[
+                        "verificationId",
+                        "acceptanceRefs",
+                        "requirementDetailRefs",
+                        "behavior",
+                        "preferredEvidence",
+                        "acceptableEvidence",
+                    ],
+                )
+            })
+            .collect(),
+    )
+}
+
+fn compact_frontend_experience_requirement(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "frontendExperienceRef",
+            "experienceLevel",
+            "mustSatisfy",
+            "uiSurfaceRegistryRef",
+            "uiSurfaceDecisionContractRef",
+        ],
+    );
+    let Some(projection_object) = projection.as_object_mut() else {
+        return projection;
+    };
+    let guidance = object
+        .get("executionGuidance")
+        .and_then(Value::as_object)
+        .or_else(|| Some(object));
+    let Some(guidance) = guidance else {
+        return projection;
+    };
+    let mut compact_guidance = serde_json::Map::new();
+    if let Some(value) = guidance.get("closureRequirementRefs") {
+        compact_guidance.insert("closureRequirementRefs".to_string(), value.clone());
+    }
+    if let Some(value) = guidance.get("uiTaskScope") {
+        compact_guidance.insert("uiTaskScope".to_string(), compact_ui_task_scope(value));
+    }
+    if let Some(value) = guidance.get("uiProductionBrief") {
+        compact_guidance.insert(
+            "uiProductionBrief".to_string(),
+            compact_ui_production_brief(value),
+        );
+    }
+    if let Some(value) = guidance.get("styleAssetPlan") {
+        compact_guidance.insert(
+            "styleAssetPlan".to_string(),
+            compact_style_asset_plan(value),
+        );
+    }
+    projection_object.insert(
+        "executionGuidance".to_string(),
+        Value::Object(compact_guidance),
+    );
+    projection
+}
+
+fn compact_ui_task_scope(value: &Value) -> Value {
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "ownershipDimensions",
+            "surfacesInScope",
+            "dataViewsInScope",
+            "actionsInScope",
+            "operationPathsInScope",
+            "frontendBackendBindings",
+            "stateExpectation",
+            "regionsInScope",
+            "actionsInContract",
+            "statesInContract",
+            "qualityRulesInScope",
+            "layoutBaseline",
+            "informationModel",
+            "contentBoundary",
+            "bindingContract",
+            "contractRef",
+            "patternDecision",
+        ],
+    );
+    if let Some(object) = value.as_object() {
+        for (source_key, item_keys) in [
+            (
+                "surfacesInScope",
+                ["surfaceId", "name", "kind", "purpose", "role"].as_slice(),
+            ),
+            (
+                "dataViewsInScope",
+                ["viewId", "name", "purpose", "fieldRefs", "interfaceRefs"].as_slice(),
+            ),
+            (
+                "actionsInScope",
+                [
+                    "actionId",
+                    "name",
+                    "label",
+                    "purpose",
+                    "interfaceRefs",
+                    "operationPathRefs",
+                ]
+                .as_slice(),
+            ),
+            (
+                "operationPathsInScope",
+                [
+                    "pathId",
+                    "name",
+                    "purpose",
+                    "interfaceRefs",
+                    "actionRefs",
+                    "stateRefs",
+                ]
+                .as_slice(),
+            ),
+            (
+                "regionsInScope",
+                [
+                    "regionId",
+                    "name",
+                    "role",
+                    "layout",
+                    "informationModel",
+                    "density",
+                ]
+                .as_slice(),
+            ),
+            (
+                "actionsInContract",
+                [
+                    "actionId",
+                    "name",
+                    "label",
+                    "purpose",
+                    "interfaceRefs",
+                    "operationPathRefs",
+                ]
+                .as_slice(),
+            ),
+            (
+                "statesInContract",
+                ["state", "stateId", "trigger", "userMeaning"].as_slice(),
+            ),
+            (
+                "qualityRulesInScope",
+                ["ruleId", "category", "requirement", "verification"].as_slice(),
+            ),
+        ] {
+            if let Some(items) = object.get(source_key) {
+                projection[source_key] = compact_array_items(items, item_keys);
+            }
+        }
+        if let Some(bindings) = object.get("frontendBackendBindings") {
+            projection["frontendBackendBindings"] = Value::Array(
+                bindings
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|binding| {
+                        let mut compact = compact_object_fields(
+                            binding,
+                            &[
+                                "bindingId",
+                                "workflowRefs",
+                                "operationPathRefs",
+                                "completionRule",
+                            ],
+                        );
+                        if let Some(interfaces) = binding.get("interfaces") {
+                            compact["interfaces"] = compact_array_items(
+                                interfaces,
+                                &["interfaceId", "name", "type", "method", "path", "role"],
+                            );
+                        }
+                        compact
+                    })
+                    .collect(),
+            );
+        }
     }
     projection
+}
+
+fn compact_ui_production_brief(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "schemaVersion",
+            "briefKind",
+            "appliesTo",
+            "productIntent",
+            "layoutContract",
+            "informationContract",
+            "actionContract",
+            "stateContract",
+            "visualContract",
+            "contentBoundary",
+        ],
+    );
+    if let Some(contract) = object.get("surfaceDecisionContract") {
+        projection["surfaceDecisionContract"] = compact_ui_surface_contract(contract);
+    }
+    projection
+}
+
+fn compact_ui_surface_contract(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection = compact_object_fields(
+        value,
+        &[
+            "contractRef",
+            "selectionMode",
+            "patternDecision",
+            "semanticFacts",
+            "layoutModel",
+            "contentBoundary",
+            "compositionConstraints",
+            "layoutBaseline",
+            "informationModel",
+        ],
+    );
+    for (source_key, target_key, item_keys) in [
+        (
+            "regionsInScope",
+            "regionsInScope",
+            [
+                "regionId",
+                "name",
+                "role",
+                "layout",
+                "informationModel",
+                "density",
+            ]
+            .as_slice(),
+        ),
+        (
+            "actionsInScope",
+            "actionsInScope",
+            [
+                "actionId",
+                "name",
+                "label",
+                "purpose",
+                "interfaceRefs",
+                "operationPathRefs",
+            ]
+            .as_slice(),
+        ),
+        (
+            "statesInScope",
+            "statesInScope",
+            ["state", "stateId", "trigger", "userMeaning"].as_slice(),
+        ),
+        (
+            "qualityRulesInScope",
+            "qualityRulesInScope",
+            ["ruleId", "category", "requirement", "verification"].as_slice(),
+        ),
+    ] {
+        if let Some(value) = object.get(source_key) {
+            projection[target_key] = compact_array_items(value, item_keys);
+        }
+    }
+    projection
+}
+
+fn compact_style_asset_plan(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut projection =
+        compact_object_fields(value, &["source", "strategy", "designTokenAssetPlan"]);
+    if let Some(reference_plan) = object.get("referencePlan") {
+        projection["referencePlan"] =
+            compact_array_items(reference_plan, &["refId", "path", "reason", "required"]);
+    }
+    projection
+}
+
+fn compact_runtime_delivery_requirement(value: &Value) -> Value {
+    compact_object_fields(
+        value,
+        &[
+            "appliesToThisTask",
+            "reason",
+            "runtimeDeliveryRef",
+            "source",
+            "deploymentFailureRef",
+            "affectedContractFields",
+            "requiredCodeLevelChecks",
+            "evidenceExpectedInTaskResult",
+            "forbiddenActions",
+        ],
+    )
+}
+
+fn compact_array_items(value: &Value, keys: &[&str]) -> Value {
+    Value::Array(
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|item| compact_object_fields(item, keys))
+            .collect(),
+    )
+}
+
+fn compact_object_fields(value: &Value, keys: &[&str]) -> Value {
+    let Some(object) = value.as_object() else {
+        return value.clone();
+    };
+    let mut compact = serde_json::Map::new();
+    for key in keys {
+        if let Some(value) = object.get(*key).filter(|value| !value.is_null()) {
+            compact.insert((*key).to_string(), value.clone());
+        }
+    }
+    Value::Object(compact)
 }
 
 fn task_result_repair_contract_missing_fields(
@@ -4081,6 +4494,39 @@ fn task_result_repair_contract_missing_fields(
         .map(str::to_string)
         .collect::<Vec<_>>();
     (!missing.is_empty()).then_some(missing)
+}
+
+fn ensure_repair_contract_fields(
+    required_top_level_fields: &[String],
+    schema_shape: &mut Value,
+    result_template: &mut Value,
+) {
+    let Some(properties) = schema_shape
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let Some(template) = result_template.as_object() else {
+        return;
+    };
+    for field in required_top_level_fields {
+        if properties.contains_key(field) {
+            continue;
+        }
+        let Some(value) = template.get(field) else {
+            continue;
+        };
+        let shape = match value {
+            Value::Array(_) => json!([{}]),
+            Value::Object(_) => json!({"shape": "object"}),
+            Value::Null => json!({"shape": "value or null"}),
+            Value::Bool(_) => json!("boolean"),
+            Value::Number(_) => json!("number"),
+            Value::String(_) => json!("string"),
+        };
+        properties.insert(field.clone(), shape);
+    }
 }
 
 fn previous_persisted_changed_files(
@@ -4486,11 +4932,10 @@ fn task_result_architecture_quality_conflict(
     base["expectedArchitectureQualityRequirementRefs"] =
         json!(context.task.architecture_quality_requirement_refs);
     base["current"] = json!({
-        "architectureQualityEvidence": context
-            .submitted_result
-            .get("architectureQualityEvidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "architectureQualityEvidence": compact_task_result_evidence_entries(
+            context.submitted_result.get("architectureQualityEvidence"),
+            "requirementId",
+        )
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced architecture quality requirements, add architectureQualityEvidence entries for every task.architectureQualityRequirementRefs item and cite task verificationIds.",
@@ -4502,11 +4947,10 @@ fn task_result_architecture_quality_conflict(
 fn task_result_api_contract_conflict(context: &RepairContextInput, mut base: Value) -> Value {
     base["expectedApiContractRequirementRefs"] = json!(context.task.api_contract_requirement_refs);
     base["current"] = json!({
-        "apiContractEvidence": context
-            .submitted_result
-            .get("apiContractEvidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "apiContractEvidence": compact_task_result_evidence_entries(
+            context.submitted_result.get("apiContractEvidence"),
+            "requirementId",
+        )
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced API contract requirements, add apiContractEvidence entries for every task.apiContractRequirementRefs item and cite task verificationIds.",
@@ -4531,17 +4975,67 @@ fn task_result_code_quality_conflict(context: &RepairContextInput, mut base: Val
         })
         .collect::<Vec<_>>());
     base["current"] = json!({
-        "codeQualityEvidence": context
-            .submitted_result
-            .get("codeQualityEvidence")
-            .cloned()
-            .unwrap_or_else(|| json!([]))
+        "codeQualityEvidence": compact_task_result_evidence_entries(
+            context.submitted_result.get("codeQualityEvidence"),
+            "requirementId",
+        )
     });
     base["validRepairChoices"] = json!([
         "If the implementation satisfies the referenced code quality requirements, add codeQualityEvidence entries for every task.codeQualityRequirementRefs item and cite task verificationIds.",
         "If selected language or framework reference evidence or verification is missing, keep status below completed or record the gap instead of claiming satisfied evidence."
     ]);
     base
+}
+
+fn compact_task_result_evidence_entries(value: Option<&Value>, id_key: &str) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                let object = entry.as_object();
+                let mut compact = serde_json::Map::new();
+                compact.insert(
+                    id_key.to_string(),
+                    object
+                        .and_then(|item| item.get(id_key))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                compact.insert(
+                    "status".to_string(),
+                    object
+                        .and_then(|item| item.get("status"))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                compact.insert(
+                    "verificationIdCount".to_string(),
+                    json!(object
+                        .and_then(|item| item.get("verificationIds"))
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0)),
+                );
+                compact.insert(
+                    "evidencePresent".to_string(),
+                    json!(object
+                        .and_then(|item| item.get("evidence"))
+                        .is_some_and(|value| !value.is_null())),
+                );
+                compact.insert(
+                    "knownGapCount".to_string(),
+                    json!(object
+                        .and_then(|item| item.get("knownGaps"))
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0)),
+                );
+                Value::Object(compact)
+            })
+            .collect(),
+    )
 }
 
 fn task_result_minimal_repair_rules(issues: &[delivery_core::RepairIssue]) -> Vec<&'static str> {
@@ -5366,6 +5860,102 @@ mod tests {
             },
             "referencePlanFilesChecked": ["plugins/shared/loom/references/uix/core.md"]
         })
+    }
+
+    fn compact_projection_task() -> TaskDefinition {
+        TaskDefinition {
+            task_id: "task-ui".to_string(),
+            group_id: "group-ui".to_string(),
+            title: "Implement the workbench".to_string(),
+            task_kind: TaskKind::FrontendExperience,
+            implementation_actions: vec![],
+            objective: "Implement the task-owned workbench flow.".to_string(),
+            depends_on: vec![],
+            scope_refs: vec!["scope-ui".to_string()],
+            acceptance_refs: vec!["accept-ui".to_string()],
+            requirement_detail_refs: vec!["detail-ui".to_string()],
+            write_boundary: contracts::TaskWriteBoundary {
+                forbidden_paths: vec![".loom".to_string()],
+                artifact_refs: contracts::TaskArtifactRefs::default(),
+            },
+            verification_intents: vec![],
+            concept_refs: vec![],
+            concept_responsibilities: vec![],
+            concept_verification_intents: vec![],
+            frontend_experience_requirement: Some(json!({
+                "uiSurfaceDecisionContractRef": "surface-contract",
+                "executionGuidance": {
+                    "closureRequirementRefs": ["closure:workbench:submit"],
+                    "uiProductionBrief": {
+                        "appliesTo": {"surfaceIds": ["surface-workbench"]},
+                        "surfaceDecisionContract": {
+                            "contractRef": "surface-contract",
+                            "semanticFacts": {"businessObject": "ticket"},
+                            "regionsInScope": [{"regionId": "region-main", "name": "Main"}],
+                            "actionsInScope": [{"actionId": "action-submit", "label": "Submit"}],
+                            "statesInScope": [{"state": "loading"}],
+                            "qualityRulesInScope": [{"ruleId": "rule-density"}],
+                            "unrelatedLargeSource": "do not copy this source"
+                        }
+                    },
+                    "styleAssetPlan": {
+                        "referencePlan": [{"path": "uix/core.md", "reason": "UI quality"}],
+                        "designTokenAssetPlan": {"strategy": "reuse_existing"}
+                    }
+                }
+            })),
+            runtime_delivery_requirement: None,
+            engineering_quality_requirement_refs: vec![],
+            architecture_quality_requirement_refs: vec![],
+            api_contract_requirement_refs: vec![],
+            code_quality_requirement_refs: vec![],
+        }
+    }
+
+    #[test]
+    fn task_result_repair_projection_keeps_task_contract_without_full_task_copy() {
+        let projection = task_projection(&compact_projection_task());
+
+        assert_eq!(projection["projectionKind"], "task_scoped_repair_contract");
+        assert!(projection.get("conceptResponsibilities").is_none());
+        assert!(projection
+            .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/regionsInScope/0/regionId")
+            .is_some());
+        assert!(projection
+            .pointer("/frontendExperienceRequirement/executionGuidance/styleAssetPlan/referencePlan/0/path")
+            .is_some());
+        assert!(projection
+            .pointer("/frontendExperienceRequirement/executionGuidance/uiProductionBrief/surfaceDecisionContract/unrelatedLargeSource")
+            .is_none());
+    }
+
+    #[test]
+    fn task_result_repair_contract_rebuild_has_no_terminal_failure_path() {
+        let task = compact_projection_task();
+        let required = task_result_required_top_level_fields(&task)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let mut schema = json!({"type": "object", "properties": {}});
+        let mut template = json!({
+            "status": "completed",
+            "frontendQualitySelfCheck": {}
+        });
+
+        assert!(
+            task_result_repair_contract_missing_fields(&task, &required, &schema, &template)
+                .is_some()
+        );
+        let canonical_schema = task_result_schema_shape(&task, None);
+        let canonical_template = task_result_template_with_code_quality(&task, &[], None);
+        schema = canonical_schema;
+        template = canonical_template;
+        ensure_repair_contract_fields(&required, &mut schema, &mut template);
+
+        assert!(
+            task_result_repair_contract_missing_fields(&task, &required, &schema, &template)
+                .is_none()
+        );
     }
 
     #[test]

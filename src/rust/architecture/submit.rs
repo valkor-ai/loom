@@ -567,6 +567,49 @@ fn normalize_architecture_candidate_envelope(
             request_root.pointer("/architectureQualitySeed/candidatePlan"),
         );
     }
+    if matches!(current_section, ArchitectureSectionGroup::RuntimeDelivery) {
+        normalize_runtime_dependency_field_names(object.get_mut("content"));
+    }
+}
+
+fn normalize_runtime_dependency_field_names(content: Option<&mut Value>) {
+    let Some(dependencies) = content
+        .and_then(|value| value.pointer_mut("/runtimeDelivery/runtimeDependencies"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for dependency in dependencies {
+        let Some(object) = dependency.as_object_mut() else {
+            continue;
+        };
+        if !object.contains_key("requiredFor") {
+            if let Some(value) = object.remove("affectedCapability") {
+                object.insert(
+                    "requiredFor".to_string(),
+                    match value {
+                        Value::Array(_) => value,
+                        value => Value::Array(vec![value]),
+                    },
+                );
+            }
+        } else {
+            object.remove("affectedCapability");
+        }
+        if !object.contains_key("observability") {
+            if let Some(value) = object.remove("observableSignal") {
+                object.insert(
+                    "observability".to_string(),
+                    match value {
+                        Value::Array(_) => value,
+                        value => Value::Array(vec![value]),
+                    },
+                );
+            }
+        } else {
+            object.remove("observableSignal");
+        }
+    }
 }
 
 fn normalize_architecture_quality_candidate_fields(
@@ -1873,7 +1916,7 @@ fn validate_runtime_rules(
                             issues.push(issue(
                                 "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
                                 &format!("{path}.{field}"),
-                                "Runtime dependencies must identify affected capabilities and observable signals.",
+                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
                             ));
                             continue;
                         };
@@ -1881,7 +1924,7 @@ fn validate_runtime_rules(
                             issues.push(issue(
                                 "RUNTIME_DEPENDENCY_EVIDENCE_REQUIRED",
                                 &format!("{path}.{field}"),
-                                "Runtime dependencies must identify affected capabilities and observable signals.",
+                                "Runtime dependencies must identify requiredFor capabilities and observability signals.",
                             ));
                         }
                         validate_array_entries_are_strings(
@@ -3432,6 +3475,8 @@ fn update_request_for_next_section(
         root["outputContract"]["schemaProjection"]["requiredContentKeys"] =
             serde_json::to_value(crate::request::required_content_keys(next_section))
                 .map_err(state::store::StateError::Json)?;
+        root["outputContract"]["schemaProjection"]["requiredTopLevelFields"] =
+            json!(["section", "status", "content"]);
     }
     let frontend_experience_source = root
         .get("frontendExperienceSource")
@@ -4849,6 +4894,8 @@ fn update_output_contract_ref(
     output_contract["schemaProjection"]["requiredContentKeys"] =
         serde_json::to_value(crate::request::required_content_keys(next_section))
             .map_err(state::store::StateError::Json)?;
+    output_contract["schemaProjection"]["requiredTopLevelFields"] =
+        json!(["section", "status", "content"]);
     delivery_core::finalize_output_contract(&mut output_contract, field_policies);
     state::store::write_json_atomic(&output_contract_file, &output_contract)
 }

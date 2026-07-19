@@ -455,22 +455,6 @@ fn taskplan_read_groups(
         "contextProjection.planningContractId",
         "contextProjection.architectureArtifactContractId",
         "contextProjection.technicalBaseline.stack",
-        "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
-        "contextProjection.requirementDetailTransfer.currentPhaseScope",
-        "contextProjection.requirementDetailTransfer.acceptanceDetails",
-        "contextProjection.requirementDetailTransfer.businessFlowDetails",
-        "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
-        "contextProjection.requirementDetailTransfer.architectureDetails.modules",
-        "contextProjection.requirementDetailTransfer.architectureDetails.applicationInteractions",
-        "contextProjection.requirementDetailTransfer.architectureDetails.entities",
-        "contextProjection.requirementDetailTransfer.architectureDetails.interfaces",
-        "contextProjection.requirementDetailTransfer.architectureDetails.userFlows",
-        "contextProjection.requirementDetailTransfer.architectureDetails.stateMachines",
-        "contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails",
-        "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality",
-        "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
-        "contextProjection.requirementDetailTransfer.conceptRefs",
-        "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
         "allowedRefs.scopeRefs",
         "allowedRefs.acceptanceRefs",
         "allowedRefs.deferredScopeRefs",
@@ -503,9 +487,43 @@ fn taskplan_read_groups(
         json!({
             "groupId": "taskplan_core_context",
             "required": true,
-            "purpose": "Read current phase source refs, requirement transfer, and allowed refs before writing the TaskPlan outline.",
+            "purpose": "Read the compact phase identity, technical baseline signal, and allowed ownership indexes before writing the TaskPlan outline.",
             "whenToRead": "Read first.",
             "selectors": read_selectors_value_from_paths(core_fields)
+        }),
+        json!({
+            "groupId": "taskplan_requirement_context",
+            "required": true,
+            "purpose": "Read the current-phase requirement detail index, acceptance and business-flow summaries, workflow closure requirements, and task field mapping.",
+            "whenToRead": "Read after taskplan_core_context and before assigning task ownership.",
+            "projectionMode": "semantic_index",
+            "selectors": read_selectors_value_from_paths([
+                "contextProjection.requirementDetailTransfer.requirementDetailAssignment",
+                "contextProjection.requirementDetailTransfer.currentPhaseScope",
+                "contextProjection.requirementDetailTransfer.acceptanceDetails",
+                "contextProjection.requirementDetailTransfer.businessFlowDetails",
+                "contextProjection.requirementDetailTransfer.objectOperationDetailRules",
+                "contextProjection.requirementDetailTransfer.workflowClosureRequirements",
+                "contextProjection.requirementDetailTransfer.conceptRefs",
+                "contextProjection.requirementDetailTransfer.taskPlanningFieldMapping"
+            ])
+        }),
+        json!({
+            "groupId": "taskplan_artifact_context",
+            "required": true,
+            "purpose": "Read compact artifact ownership, interface, runtime, UI operation-path, architecture-quality, and verification projections.",
+            "whenToRead": "Read after taskplan_requirement_context and before writing group files.",
+            "projectionMode": "artifact_ownership_projection",
+            "selectors": read_selectors_value_from_paths([
+                "contextProjection.requirementDetailTransfer.architectureDetails.modules",
+                "contextProjection.requirementDetailTransfer.architectureDetails.applicationInteractions",
+                "contextProjection.requirementDetailTransfer.architectureDetails.entities",
+                "contextProjection.requirementDetailTransfer.architectureDetails.interfaces",
+                "contextProjection.requirementDetailTransfer.architectureDetails.userFlows",
+                "contextProjection.requirementDetailTransfer.architectureDetails.stateMachines",
+                "contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails",
+                "contextProjection.requirementDetailTransfer.architectureDetails.architectureQuality"
+            ])
         }),
         json!({
             "groupId": "taskplan_generation_rules",
@@ -858,6 +876,11 @@ where
     issues.extend(validate_taskplan_refs(&groups, &tasks, &allowed_refs));
     issues.extend(validate_runtime_delivery_requirements(&tasks));
     if !issues.is_empty() {
+        // Preserve the actionable ownership diagnosis even when an earlier
+        // structural check already requires repair. Otherwise a candidate
+        // with no eligible owner is reported only as a generic preflight
+        // failure and the agent cannot repair the missing assignment.
+        issues.extend(validate_requirement_detail_assignments(&tasks, &pgc, &aac));
         return Ok(repairable(input, authorized, outline_ref, issues, mode));
     }
 
@@ -1864,6 +1887,41 @@ fn normalize_artifact_refs(tasks: &mut [TaskDefinition], aac: &ArchitectureArtif
         "nfrs",
         "risks",
     ] {
+        let occurrences = tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| is_business_owner_task(task))
+            .flat_map(|(index, task)| {
+                artifact_refs_for_field(&task.write_boundary.artifact_refs, field)
+                    .iter()
+                    .cloned()
+                    .map(move |artifact_ref| (artifact_ref, index))
+            })
+            .fold(
+                BTreeMap::<String, Vec<usize>>::new(),
+                |mut map, (artifact_ref, index)| {
+                    map.entry(artifact_ref).or_default().push(index);
+                    map
+                },
+            );
+        let duplicate_owners = if field == "interfaces" {
+            // An interface ref is a shared contract binding: the backend
+            // implementation and a client/integration task may both consume
+            // it. It is not duplicated ownership, so keep every valid binding
+            // while still filtering refs that AAC does not declare.
+            BTreeMap::new()
+        } else {
+            occurrences
+                .iter()
+                .filter(|(_, indices)| indices.len() > 1)
+                .map(|(artifact_ref, indices)| {
+                    (
+                        artifact_ref.clone(),
+                        choose_artifact_owner(artifact_ref, field, indices, tasks, aac),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
         for task in tasks.iter_mut() {
             if !is_business_owner_task(task) {
                 continue;
@@ -1873,8 +1931,137 @@ fn normalize_artifact_refs(tasks: &mut [TaskDefinition], aac: &ArchitectureArtif
                 allowed
                     .get(field)
                     .is_some_and(|accepted| accepted.contains(artifact_ref))
+                    && duplicate_owners
+                        .get(artifact_ref)
+                        .is_none_or(|owner| owner == &task.task_id)
             });
         }
+    }
+}
+
+fn choose_artifact_owner(
+    artifact_ref: &str,
+    field: &str,
+    candidate_indices: &[usize],
+    tasks: &[TaskDefinition],
+    aac: &ArchitectureArtifactContract,
+) -> String {
+    let workflow_owners = candidate_indices
+        .iter()
+        .copied()
+        .filter(|index| {
+            task_is_workflow_closure_artifact_owner(&tasks[*index], field, artifact_ref, aac)
+        })
+        .collect::<Vec<_>>();
+    let detail_owners = candidate_indices
+        .iter()
+        .copied()
+        .filter(|index| {
+            tasks[*index]
+                .requirement_detail_refs
+                .iter()
+                .any(|detail_id| {
+                    aac.detail_coverage
+                        .iter()
+                        .find(|coverage| coverage.detail_id == *detail_id)
+                        .is_some_and(|coverage| {
+                            coverage_status_is_covered(coverage)
+                                && coverage_artifact_refs_contain(
+                                    &coverage.artifact_refs,
+                                    field,
+                                    artifact_ref,
+                                )
+                        })
+                })
+        })
+        .collect::<Vec<_>>();
+    let candidates = if !workflow_owners.is_empty() {
+        workflow_owners
+    } else if detail_owners.len() == 1 {
+        detail_owners
+    } else {
+        candidate_indices.to_vec()
+    };
+    candidates
+        .into_iter()
+        .max_by(|left, right| {
+            task_owner_rank(&tasks[*left])
+                .cmp(&task_owner_rank(&tasks[*right]))
+                .then_with(|| tasks[*right].task_id.cmp(&tasks[*left].task_id))
+        })
+        .map(|index| tasks[index].task_id.clone())
+        .unwrap_or_default()
+}
+
+fn task_is_workflow_closure_artifact_owner(
+    task: &TaskDefinition,
+    field: &str,
+    artifact_ref: &str,
+    aac: &ArchitectureArtifactContract,
+) -> bool {
+    if !task.frontend_experience_requirement.is_some()
+        || !task
+            .implementation_actions
+            .iter()
+            .any(|action| matches!(action, ImplementationAction::WireReferenceInApiOrUi))
+    {
+        return false;
+    }
+    workflow_closure_requirements(aac)
+        .iter()
+        .any(|requirement| {
+            let workflow_matches = field == "user_flows"
+                && requirement.get("workflowRef").and_then(Value::as_str) == Some(artifact_ref);
+            let interface_matches = field == "interfaces"
+                && string_array_at(requirement, "interfaceRefs")
+                    .iter()
+                    .any(|reference| reference == artifact_ref);
+            (workflow_matches || interface_matches)
+                && requirement
+                    .get("workflowRef")
+                    .and_then(Value::as_str)
+                    .is_some_and(|workflow_ref| {
+                        task.write_boundary
+                            .artifact_refs
+                            .user_flows
+                            .iter()
+                            .any(|reference| reference == workflow_ref)
+                    })
+        })
+}
+
+fn coverage_status_is_covered(coverage: &ArchitectureDetailCoverageEntry) -> bool {
+    matches!(coverage.coverage_status, CoverageStatus::Covered)
+}
+
+fn coverage_artifact_refs_contain(
+    refs: &contracts::architecture::DetailCoverageArtifactRefs,
+    field: &str,
+    artifact_ref: &str,
+) -> bool {
+    match field {
+        "modules" => refs.modules.as_slice(),
+        "entities" => refs.entities.as_slice(),
+        "interfaces" => refs.interfaces.as_slice(),
+        "user_flows" => refs.user_flows.as_slice(),
+        "state_machines" => refs.state_machines.as_slice(),
+        _ => &[],
+    }
+    .iter()
+    .any(|reference| reference == artifact_ref)
+}
+
+fn artifact_refs_for_field<'a>(refs: &'a TaskArtifactRefs, field: &str) -> &'a [String] {
+    match field {
+        "modules" => refs.modules.as_slice(),
+        "entities" => refs.entities.as_slice(),
+        "interfaces" => refs.interfaces.as_slice(),
+        "user_flows" => refs.user_flows.as_slice(),
+        "state_machines" => refs.state_machines.as_slice(),
+        "decisions" => refs.decisions.as_slice(),
+        "nfrs" => refs.nfrs.as_slice(),
+        "risks" => refs.risks.as_slice(),
+        _ => &[],
     }
 }
 
@@ -3983,20 +4170,7 @@ fn validate_browser_verification_assignments(
 ) -> Vec<delivery_core::RepairIssue> {
     tasks
         .iter()
-        .filter(|task| task_requires_browser_verification(task))
-        .filter(|task| {
-            !task
-                .frontend_experience_requirement
-                .as_ref()
-                .and_then(|requirement| requirement.get("uiTaskScope"))
-                .and_then(Value::as_object)
-                .is_some_and(|scope| {
-                    scope_object_ids(scope, "qualityRulesInScope", "ruleId")
-                        .iter()
-                        .any(|rule| rule == "verify.rendered_viewports")
-                        && !task.verification_intents.is_empty()
-                })
-        })
+        .filter(|task| task_requires_explicit_browser_owner(task))
         .filter(|task| {
             !task.verification_intents.iter().any(|intent| {
                 intent
@@ -4018,6 +4192,24 @@ fn validate_browser_verification_assignments(
             )
         })
         .collect()
+}
+
+fn task_requires_explicit_browser_owner(task: &TaskDefinition) -> bool {
+    let explicitly_requests_browser_evidence = task.verification_intents.iter().any(|intent| {
+        intent
+            .preferred_evidence
+            .iter()
+            .chain(intent.acceptable_evidence.iter())
+            .any(|evidence| matches!(evidence, VerificationEvidence::BrowserAutomation))
+    });
+    let owns_browser_suite_setup = matches!(task.task_kind, TaskKind::VerificationIncrement)
+        && task.implementation_actions.iter().any(|action| {
+            matches!(
+                action,
+                ImplementationAction::AddOrUpdateTests | ImplementationAction::AddOrUpdateConfig
+            )
+        });
+    explicitly_requests_browser_evidence || owns_browser_suite_setup
 }
 
 fn materialize_browser_quality_closure(
@@ -4937,17 +5129,332 @@ fn frontend_operation_path_details(aac: &ArchitectureArtifactContract) -> Value 
     let Some(frontend) = aac.frontend_experience.as_ref() else {
         return Value::Null;
     };
+    let surfaces = frontend
+        .get("surfaces")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "surfaceId",
+                            "name",
+                            "kind",
+                            "purpose",
+                            "dataViewRefs",
+                            "actionRefs",
+                            "stateRefs",
+                            "operationPathRefs",
+                            "workflowRefs",
+                            "interfaceRefs",
+                            "regionRefs",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let data_views = frontend
+        .get("dataViews")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "viewId",
+                            "name",
+                            "purpose",
+                            "objectRefs",
+                            "fieldRefs",
+                            "interfaceRefs",
+                            "stateRefs",
+                            "surfaceRefs",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let actions = frontend
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "actionId",
+                            "name",
+                            "label",
+                            "purpose",
+                            "interfaceRefs",
+                            "operationPathRefs",
+                            "stateRefs",
+                            "surfaceRefs",
+                            "workflowRefs",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let operation_paths = frontend
+        .get("operationPaths")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "pathId",
+                            "name",
+                            "purpose",
+                            "surfaceRef",
+                            "workflowRef",
+                            "dataViewRefs",
+                            "actionRefs",
+                            "stateRefs",
+                            "interfaceRefs",
+                            "steps",
+                            "scopeRefs",
+                            "acceptanceRefs",
+                        ],
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let decision_contract = frontend
+        .get("uiSurfaceDecisionContract")
+        .map(compact_ui_surface_decision_contract)
+        .unwrap_or(Value::Null);
     json!({
         "required": frontend.get("required").cloned().unwrap_or(Value::Bool(false)),
         "experienceLevel": frontend.get("experienceLevel").cloned().unwrap_or(Value::Null),
-        "surfaces": frontend.get("surfaces").cloned().unwrap_or(Value::Array(vec![])),
-        "dataViews": frontend.get("dataViews").cloned().unwrap_or(Value::Array(vec![])),
-        "actions": frontend.get("actions").cloned().unwrap_or(Value::Array(vec![])),
-        "operationPaths": frontend.get("operationPaths").cloned().unwrap_or(Value::Array(vec![])),
-        "uiSurfaceRegistry": frontend.get("uiSurfaceRegistry").cloned().unwrap_or(Value::Null),
-        "uiSurfaceDecisionContract": frontend.get("uiSurfaceDecisionContract").cloned().unwrap_or(Value::Null),
-        "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null)
+        "surfaces": surfaces,
+        "dataViews": data_views,
+        "actions": actions,
+        "operationPaths": operation_paths,
+        "uiSurfaceRegistry": compact_ui_surface_registry(frontend.get("uiSurfaceRegistry")),
+        "uiSurfaceDecisionContract": decision_contract,
+        "sourceRefs": frontend.get("sourceRefs").cloned().unwrap_or(Value::Null),
+        "fullSource": "sourceRefs.architectureArtifactContractRef#/frontendExperience"
     })
+}
+
+fn compact_ui_surface_registry(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    if let Some(items) = value.as_array() {
+        return Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    compact_artifact_value(
+                        item,
+                        &[
+                            "surfaceId",
+                            "name",
+                            "regionRefs",
+                            "dataViewRefs",
+                            "actionRefs",
+                            "stateRefs",
+                            "operationPathRefs",
+                            "workflowRefs",
+                        ],
+                    )
+                })
+                .collect(),
+        );
+    }
+    compact_artifact_value(
+        value,
+        &[
+            "surfaceRefs",
+            "regionRefs",
+            "dataViewRefs",
+            "actionRefs",
+            "stateRefs",
+            "operationPathRefs",
+            "workflowRefs",
+        ],
+    )
+}
+
+fn compact_ui_surface_decision_contract(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+    let mut compact = serde_json::Map::new();
+    if let Some(value) = object.get("contractId").filter(|value| !value.is_null()) {
+        compact.insert("contractId".to_string(), value.clone());
+    }
+    if let Some(value) = object.get("patternDecision") {
+        compact.insert(
+            "patternDecision".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "mode",
+                    "knownPattern",
+                    "primaryKnownPattern",
+                    "customPattern",
+                ],
+            ),
+        );
+    }
+    for (key, id_key, fields) in [
+        (
+            "regionModel",
+            "regionId",
+            [
+                "regionId",
+                "role",
+                "label",
+                "purpose",
+                "layout",
+                "dataViewRefs",
+                "actionRefs",
+                "stateRefs",
+                "required",
+            ]
+            .as_slice(),
+        ),
+        (
+            "actionModel",
+            "actionId",
+            [
+                "actionId",
+                "kind",
+                "label",
+                "purpose",
+                "interfaceRefs",
+                "operationPathRefs",
+                "stateRefs",
+                "feedbackRefs",
+                "required",
+            ]
+            .as_slice(),
+        ),
+        (
+            "stateModel",
+            "state",
+            [
+                "state",
+                "description",
+                "trigger",
+                "feedback",
+                "blocking",
+                "required",
+            ]
+            .as_slice(),
+        ),
+        (
+            "qualityRules",
+            "ruleId",
+            ["ruleId", "category", "requirement", "verification", "scope"].as_slice(),
+        ),
+    ] {
+        compact.insert(
+            key.to_string(),
+            compact_surface_contract_array(object.get(key), id_key, fields),
+        );
+    }
+    if let Some(value) = object.get("layoutModel") {
+        compact.insert(
+            "layoutModel".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "density",
+                    "shell",
+                    "responsiveModel",
+                    "navigationPlacement",
+                    "contentPlacement",
+                    "primaryWorkRegionId",
+                ],
+            ),
+        );
+    }
+    if let Some(value) = object.get("informationModel") {
+        compact.insert(
+            "informationModel".to_string(),
+            compact_artifact_value(
+                value,
+                &["primaryObjects", "fields", "scanOrder", "secondaryObjects"],
+            ),
+        );
+    }
+    if let Some(value) = object.get("contentBoundary") {
+        compact.insert(
+            "contentBoundary".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "forbiddenUserVisibleContent",
+                    "allowedUserVisibleContent",
+                    "requiredBusinessCopy",
+                    "copyTone",
+                ],
+            ),
+        );
+    }
+    if let Some(value) = object.get("semanticFacts") {
+        compact.insert(
+            "semanticFacts".to_string(),
+            compact_artifact_value(
+                value,
+                &[
+                    "userJobs",
+                    "informationShapes",
+                    "operationModels",
+                    "riskFactors",
+                    "navigationModel",
+                    "devicePosture",
+                    "productMode",
+                ],
+            ),
+        );
+    }
+    if let Some(value) = object.get("sourceRefs").filter(|value| !value.is_null()) {
+        compact.insert("sourceRefs".to_string(), value.clone());
+    }
+    Value::Object(compact)
+}
+
+fn compact_surface_contract_array(value: Option<&Value>, id_key: &str, fields: &[&str]) -> Value {
+    Value::Array(
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|item| {
+                let mut compact = compact_artifact_value(item, fields);
+                if compact.get(id_key).is_none() {
+                    if let Some(id) = item.get(id_key) {
+                        compact[id_key] = id.clone();
+                    }
+                }
+                compact
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn workflow_closure_requirements(aac: &ArchitectureArtifactContract) -> Vec<Value> {
@@ -5230,7 +5737,8 @@ fn generation_rules(aac: &ArchitectureArtifactContract, code_quality_seed: &Valu
             "assignmentRule": "For every covered current-phase detail row, choose the task that owns the matching artifactRefHints through task.writeBoundary.artifactRefs. Use kind, impactTags, and lifecycleStage to break ties between implementation tasks.",
             "ownerTaskBoundary": "Assign business requirement details to implementation owner tasks, not broad verification, runtime closure, or handoff tasks.",
             "verificationRule": "After assigning a detail to a task, include the same detailId in that task's verificationIntents[].requirementDetailRefs.",
-            "acceptNormalization": "loom.taskPlanAcceptFile deterministically fills a missing detail owner only when exactly one owner task can be inferred; ambiguous ownership remains repairable."
+            "acceptNormalization": "loom.taskPlanAcceptFile deterministically assigns each covered detail to exactly one owner task (the canonical implementation owner) and removes duplicate detail, scope, acceptance, and artifact ownership from verification or closure tasks.",
+            "artifactOwnershipNormalization": "When candidate tasks repeat the same accepted artifact ref, Loom keeps the detail-derived owner; otherwise it selects one deterministic implementation owner before deriving quality and API requirements."
         },
         "conceptGroundingRules": {
             "phaseConceptGroundingRef": "sourceRefs.phaseConceptGroundingRef",
@@ -6402,7 +6910,7 @@ fn task_directly_owns_persistence_mapping(task: &TaskDefinition) -> bool {
 }
 
 fn task_backend_consumes_persistence_mapping(task: &TaskDefinition) -> bool {
-    if task_is_frontend_task(task) || task.write_boundary.artifact_refs.entities.is_empty() {
+    if task_is_frontend_task(task) {
         return false;
     }
     matches!(
@@ -7266,7 +7774,7 @@ mod tests {
     }
 
     #[test]
-    fn ui_surface_ownership_template_keeps_task_scope_compact() {
+    fn ui_surface_decision_projection_keeps_task_contract_compact() {
         let surface_contract = json!({
             "patternDecision": {
                 "mode": "known",
@@ -7291,37 +7799,31 @@ mod tests {
             }]
         });
 
-        let ownership = ui_surface_ownership_template(&surface_contract);
+        let projection = compact_ui_surface_decision_contract(&surface_contract);
 
         assert_eq!(
-            ownership
+            projection
                 .pointer("/patternDecision/mode")
                 .and_then(Value::as_str),
             Some("known")
         );
         assert!(
-            ownership.get("referencePlan").is_none(),
-            "TaskPlan ownership must not copy the full UI reference plan"
+            projection.get("referencePlan").is_none(),
+            "TaskPlan projection must not copy the full UI reference plan"
         );
         assert!(
-            ownership.get("qualityRules").is_none(),
-            "TaskPlan ownership must not copy the full UI rule list"
+            projection["qualityRules"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty()),
+            "TaskPlan projection must keep the scoped quality rule ids"
         );
         assert!(
-            ownership
-                .get("availableRegionIds")
-                .and_then(Value::as_array)
+            projection["regionModel"]
+                .as_array()
                 .is_some_and(|items| items
                     .iter()
-                    .any(|item| item.as_str() == Some("region_primary"))),
-            "TaskPlan ownership must expose available region ids"
-        );
-        assert!(
-            ownership
-                .get("regionIdsInScope")
-                .and_then(Value::as_array)
-                .is_some_and(|items| items.is_empty()),
-            "TaskPlan ownership scope starts empty so the agent selects task-owned ids"
+                    .any(|item| item["regionId"] == json!("region_primary"))),
+            "TaskPlan projection must expose compact region ids"
         );
     }
 
@@ -7353,7 +7855,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_verification_intents_require_explicit_browser_owner() {
+    fn multiple_verification_intents_are_left_for_browser_closure() {
         let mut tasks = vec![browser_task(2)];
 
         normalize_browser_verification_assignments(&mut tasks);
@@ -7362,9 +7864,10 @@ mod tests {
         assert!(!tasks[0].verification_intents.iter().any(|intent| intent
             .acceptable_evidence
             .contains(&VerificationEvidence::BrowserAutomation)));
-        assert!(issues
-            .iter()
-            .any(|issue| issue.code == "TASKPLAN_BROWSER_VERIFICATION_REQUIRED"));
+        assert!(
+            issues.is_empty(),
+            "business UI tasks are closed by the MCP browser task"
+        );
     }
 
     #[test]

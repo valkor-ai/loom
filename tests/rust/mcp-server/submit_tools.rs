@@ -2038,6 +2038,18 @@ fn architecture_section_submit_advances_same_request_to_next_section() {
         architecture_section_contract(&fixture, &architecture_request_ref, "coverage")
             ["resultTemplate"]["content"]
             .clone();
+    assert!(
+        coverage_template["architectureQuality"]["decisions"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "coverage request must carry the MCP-derived architecture quality candidate plan"
+    );
+    assert!(
+        coverage_template["architectureQuality"]["nfrs"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()),
+        "coverage request must carry MCP-derived NFR candidates"
+    );
     assert_eq!(
         coverage_template["acceptanceMatrix"][0]["acceptanceId"],
         json!("acc_1")

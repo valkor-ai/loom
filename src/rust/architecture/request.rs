@@ -282,6 +282,7 @@ fn build_request_root(
             "schemaShape": current_output.schema_shape.clone(),
             "schemaProjection": {
                 "requiredTopLevelFields": [
+                    "section",
                     "status",
                     "content"
                 ],
@@ -2326,7 +2327,7 @@ pub fn section_generation_rules(
                 .to_string(),
             "Represent observability and runtime failure implications only when they affect current-phase build, start, probe, environment, or runtime surfaces."
                 .to_string(),
-            "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state startup requirement, affected capability, failure behavior, recovery strategy, and observable signal. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
+            "Write runtimeDependencies as an explicit array. List only current build/start/runtime dependencies; for each dependency, state requiredFor capabilities, startup requirement, failure behavior, recovery strategy, and observability signals. Use an empty array when none apply, and do not invent deployment infrastructure here.".to_string(),
             "Use runtimeDependencySeed as the MCP-derived applicability authority. Preserve each seeded dependencyId, kind, startupRequirement, and provider when present; complete its current-phase semantics without deleting seeded dependencies or adding legacy fields. runtimeDependencies may be empty only when runtimeDependencySeed.candidates is empty.".to_string(),
         ],
         ArchitectureSectionGroup::Coverage => vec![

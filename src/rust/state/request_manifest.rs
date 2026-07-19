@@ -177,30 +177,35 @@ pub fn write_native_request(
         let root_object = root.as_object_mut().ok_or_else(|| {
             StateError::InvalidArgument("native request root must be a JSON object".to_string())
         })?;
-        let read_groups = canonicalize_read_plan(
+        let initial_read_groups = canonicalize_read_plan(
             root_object,
             &request_ref,
             &config.project_id,
             &input.request_id,
         )?;
-        canonicalize_context_refs(root_object, &read_groups);
-        let used_ref_keys = used_storage_ref_keys(root_object, &read_groups);
+        canonicalize_context_refs(root_object, &initial_read_groups);
+        let used_ref_keys = used_storage_ref_keys(root_object, &initial_read_groups);
         let manifest_refs = write_storage_refs(&project_paths.root, root_object, &used_ref_keys)?;
+        // Re-project after private sidecars are materialized. The initial root
+        // can no longer resolve a field whose parent was moved to a sidecar;
+        // validating against that incomplete view was the source of false
+        // oversized-field failures in TaskPlan requests.
+        let read_groups = reproject_resolved_read_groups(
+            &project_paths.root,
+            root_object,
+            &manifest_refs,
+            &initial_read_groups,
+            &request_ref,
+            &config.project_id,
+            &input.request_id,
+        )?;
+        write_canonical_read_plan(root_object, &request_ref, &read_groups);
         let read_plan_warnings = validate_read_plan_contract(
             &project_paths.root,
             root_object,
             &manifest_refs,
             &read_groups,
         )?;
-        if let Some(error) = read_plan_warnings
-            .iter()
-            .find(|warning| warning.level == "error")
-        {
-            return Err(StateError::InvalidArgument(format!(
-                "requestReadPlan projection exceeds the lossless budget: {}",
-                error.message
-            )));
-        }
         (read_groups, manifest_refs, read_plan_warnings)
     };
     let ref_count = manifest_refs.len();
@@ -329,12 +334,15 @@ fn canonicalize_read_plan(
         let root = Value::Object(root_object.clone());
         let batches =
             lossless_projection_batches(&root, &fields, MAX_READ_FIELD_BYTES, MAX_READ_GROUP_BYTES)
-                .map_err(|error| {
-                    StateError::InvalidArgument(format!(
-                        "requestReadPlan group {} cannot be projected losslessly: {}",
-                        group_ref.group_id, error
-                    ))
-                })?;
+                // A budget miss is an audit condition, not a request-write failure.
+                // Keep the original lossless field when it cannot be split safely;
+                // validate_read_plan_contract records the warning after persistence.
+                .unwrap_or_else(|_| {
+                    vec![delivery_core::ProjectionBatch {
+                        mode: delivery_core::ProjectionMode::Targeted,
+                        fields: fields.clone(),
+                    }]
+                });
         let split = batches.len() > 1
             || batches
                 .first()
@@ -372,7 +380,129 @@ fn canonicalize_read_plan(
             canonical_groups.push(batch_ref);
         }
     }
-    let group_values = canonical_groups
+    write_canonical_read_plan(root_object, request_ref, &canonical_groups);
+    Ok(canonical_groups)
+}
+
+fn reproject_resolved_read_groups(
+    project_root: &Path,
+    root_object: &Map<String, Value>,
+    refs: &BTreeMap<String, RequestStorageManifestRef>,
+    groups: &[ReadGroupRef],
+    request_ref: &str,
+    project_id: &str,
+    request_id: &str,
+) -> StateResult<Vec<ReadGroupRef>> {
+    let mut canonical_groups = Vec::new();
+    for group in groups {
+        let mut fields = Vec::new();
+        let mut split = false;
+        for field in group.expanded_fields() {
+            match resolve_field_for_validation(project_root, root_object, refs, &field) {
+                Ok(value) => match split_resolved_field(&value, &field, MAX_READ_FIELD_BYTES) {
+                    Ok(paths) => {
+                        split |= paths.len() != 1 || paths.first() != Some(&field);
+                        fields.extend(paths);
+                    }
+                    Err(_) => fields.push(field),
+                },
+                // Keep an unresolved field in the read contract. It will be
+                // audited below, but a storage lookup problem must not turn a
+                // request-size concern into a workflow failure.
+                Err(_) => fields.push(field),
+            }
+        }
+        fields.sort();
+        fields.dedup();
+        if fields.is_empty() {
+            fields = group.expanded_fields();
+        }
+
+        let mut batches: Vec<Vec<String>> = Vec::new();
+        let mut current = Vec::new();
+        let mut current_bytes = 0usize;
+        for field in fields {
+            let bytes = resolve_field_for_validation(project_root, root_object, refs, &field)
+                .ok()
+                .map(|value| pretty_len(&value))
+                .unwrap_or_default();
+            if !current.is_empty() && current_bytes.saturating_add(bytes) > MAX_READ_GROUP_BYTES {
+                batches.push(std::mem::take(&mut current));
+                current_bytes = 0;
+            }
+            current_bytes = current_bytes.saturating_add(bytes);
+            current.push(field);
+        }
+        if !current.is_empty() {
+            batches.push(current);
+        }
+        if batches.is_empty() {
+            batches.push(group.expanded_fields());
+        }
+
+        let batch_count = batches.len();
+        for (batch_index, batch_fields) in batches.into_iter().enumerate() {
+            let mut batch = group.clone();
+            let needs_batch_id = split || batch_count > 1;
+            if needs_batch_id {
+                batch.group_id = format!("{}__resolved_batch_{}", group.group_id, batch_index + 1);
+                batch.purpose = format!(
+                    "{} Resolved semantic projection batch {} of {}.",
+                    group.purpose,
+                    batch_index + 1,
+                    batch_count
+                );
+                batch.projection_mode = "batch".to_string();
+            }
+            batch.order = (canonical_groups.len() + 1) as u32;
+            batch.selectors = read_selectors_from_paths(batch_fields);
+            batch.resource_uri = format!(
+                "loom://projects/{project_id}/requests/{request_id}/field-groups/{}",
+                encode_component(&batch.group_id)
+            );
+            canonical_groups.push(batch);
+        }
+    }
+    if canonical_groups.is_empty() {
+        return Err(StateError::InvalidArgument(format!(
+            "request {request_ref} has no readable request groups"
+        )));
+    }
+    Ok(canonical_groups)
+}
+
+fn split_resolved_field(value: &Value, field: &str, budget: usize) -> Result<Vec<String>, String> {
+    if pretty_len(value) <= budget {
+        return Ok(vec![field.to_string()]);
+    }
+    match value {
+        Value::Object(object) if !object.is_empty() => object
+            .iter()
+            .map(|(key, child)| {
+                split_resolved_field(child, &format!("{field}.{key}"), budget)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|paths| paths.into_iter().flatten().collect()),
+        Value::Array(items) if !items.is_empty() => items
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                split_resolved_field(child, &format!("{field}.{index}"), budget)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|paths| paths.into_iter().flatten().collect()),
+        _ => Err(format!(
+            "request projection field {field} exceeds {budget} bytes and cannot be split without truncation"
+        )),
+    }
+}
+
+fn write_canonical_read_plan(
+    root_object: &mut Map<String, Value>,
+    request_ref: &str,
+    groups: &[ReadGroupRef],
+) {
+    let group_values = groups
         .iter()
         .map(|group| {
             serde_json::json!({
@@ -394,7 +524,6 @@ fn canonicalize_read_plan(
             "groups": group_values,
         }),
     );
-    Ok(canonical_groups)
 }
 
 fn augment_write_contract_fields(group: &mut ReadGroupRef) {
@@ -506,6 +635,11 @@ fn write_storage_refs(
         };
         if used_ref_keys.contains(*key) {
             write_ref(project_root, key, value, &mut refs)?;
+        } else {
+            // Removing an unused optional projection source would silently
+            // change the request payload. Keep it inline when no read group
+            // selected it; storage compaction must never be data loss.
+            root_object.insert((*key).to_string(), value);
         }
     }
     Ok(refs)
@@ -719,16 +853,24 @@ fn validate_read_plan_contract(
                 Ok(value) => value,
                 Err(error) if is_field_not_found(&error) => continue,
                 Err(error) => {
-                    return Err(StateError::InvalidArgument(format!(
-                        "requestReadPlan field validation failed: request group {} field {}: {}",
-                        group.group_id, field, error
-                    )));
+                    warnings.push(ReadPlanSizeWarning {
+                        level: "warn",
+                        group_id: group.group_id.clone(),
+                        field: Some(field.clone()),
+                        bytes: 0,
+                        limit_bytes: MAX_READ_FIELD_BYTES,
+                        message: format!(
+                            "requestReadPlan field {} in group {} could not be measured: {}; request remains persisted for later read resolution",
+                            field, group.group_id, error
+                        ),
+                    });
+                    continue;
                 }
             };
             let field_bytes = pretty_len(&value);
             if field_bytes > MAX_READ_FIELD_BYTES {
                 warnings.push(ReadPlanSizeWarning {
-                    level: "error",
+                    level: "warn",
                     group_id: group.group_id.clone(),
                     field: Some(field.clone()),
                     bytes: field_bytes,
@@ -743,7 +885,7 @@ fn validate_read_plan_contract(
         }
         if group_bytes > MAX_READ_GROUP_BYTES {
             warnings.push(ReadPlanSizeWarning {
-                level: "error",
+                level: "warn",
                 group_id: group.group_id.clone(),
                 field: None,
                 bytes: group_bytes,

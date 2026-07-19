@@ -532,9 +532,9 @@ fn native_request_projection_splits_large_objects_without_warnings() {
 }
 
 #[test]
-fn native_request_rejects_unsplittable_large_scalar() {
+fn native_request_persists_unsplittable_large_scalar_and_audits_warning() {
     let fixture = Fixture::new("native-size-scalar");
-    let error = write_native_request(
+    let stored = write_native_request(
         fixture.root_str(),
         NativeRequestInput {
             request_id: "req_size_scalar_1".to_string(),
@@ -556,8 +556,17 @@ fn native_request_rejects_unsplittable_large_scalar() {
             }),
         },
     )
-    .expect_err("unsplittable semantic scalar must fail request generation");
-    assert!(error.to_string().contains("cannot be projected losslessly"));
+    .expect("request size audit must not block request generation");
+    assert_eq!(stored.read_groups.len(), 1);
+    let audit = read_to_string(fixture.root.join(".loom/metrics/request-size-audit.jsonl"))
+        .expect("read request size audit");
+    let entry: serde_json::Value =
+        serde_json::from_str(audit.lines().last().unwrap()).expect("parse audit entry");
+    assert_eq!(entry["readPlanWarnings"][0]["level"], json!("warn"));
+    assert_eq!(
+        entry["readPlanWarnings"][0]["field"],
+        json!("context.largeField")
+    );
 }
 
 #[test]

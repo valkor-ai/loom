@@ -329,7 +329,6 @@ fn build_review_request(
                 project_api_contract,
             )
         },
-        "changeSet": change_set,
         "changeContext": change_context,
         "conceptReviewMatrix": concept_review_matrix,
         "detailReviewMatrix": detail_review_matrix,
